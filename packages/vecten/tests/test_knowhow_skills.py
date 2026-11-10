@@ -16,6 +16,7 @@ from vecten.knowhow import load_skill, skill_body, skill_frontmatter, skill_name
 from vecten.knowhow.mcp_servers import mcp_servers_document
 from vecten.knowhow.render import (
     GUIDE_DOCUMENT,
+    MARKETPLACE_DESCRIPTION,
     MARKETPLACE_FILE,
     PLUGIN_DESCRIPTION,
     PLUGIN_DIR,
@@ -476,6 +477,7 @@ def test_plugin_layout_lists_every_skill():
 def test_marketplace_lists_the_plugin():
     doc = json.loads((REPO / MARKETPLACE_FILE).read_text(encoding="utf-8"))
     assert doc["name"] == "vecten" and doc["owner"] == {"name": "Vecten"}
+    assert doc["description"] == MARKETPLACE_DESCRIPTION
     assert doc["plugins"] == [
         {
             "name": "vecten",
@@ -548,3 +550,15 @@ def test_connector_skill_says_fixture_replays_never_run_the_connector_code():
     body = flat("connector")
     assert "never runs `connector.py`" in body
     assert "`vecten connector run <name> --json` is the live proof" in body
+
+
+def test_plugin_icon_meets_the_directory_rules():
+    import struct
+
+    icon = PLUGIN / ".claude-plugin" / "icon.png"
+    data = icon.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR"
+    width, height = struct.unpack(">II", data[16:24])
+    # The plugin directory takes a square PNG or JPEG of 512 to 2048 px under 2 MB.
+    assert width == height and 512 <= width <= 2048
+    assert len(data) < 2 * 1024 * 1024

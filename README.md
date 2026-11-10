@@ -79,8 +79,10 @@ Plain HTTP on `http://airflow.localhost:8480` redirects to HTTPS, and the Airflo
 `http://127.0.0.1:8482` for the agent's Airflow MCP server. On Snowflake the laptop stack runs
 Airflow alone, because the MCP's Snowflake login works deployed only. With an agent: point
 Claude Code at an empty directory, say what you want, and it runs `vecten next --json` and
-follows the items. When it is time for the cloud, [deploy to AWS](docs/deploy-aws.md) or
-[to Scaleway](docs/deploy-scaleway.md): `vecten estimate` tells you what it will cost first.
+follows the items. The skills it uses install as a Claude Code plugin:
+`/plugin install vecten --marketplace vecten/vecten-open`. When it is time for the cloud,
+[deploy to AWS](docs/deploy-aws.md) or [to Scaleway](docs/deploy-scaleway.md): `vecten estimate`
+tells you what it will cost first.
 
 ## What v0.1 does and does not do
 

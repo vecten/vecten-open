@@ -29,6 +29,10 @@ def _describe(names: list[str]) -> str:
 
 
 PLUGIN_DESCRIPTION = _describe(skill_names())
+MARKETPLACE_DESCRIPTION = (
+    "The Vecten Open plugin: the skills an agent uses to build and run a Vecten Open data"
+    " platform and its MCP."
+)
 
 
 def _json_text(doc: object) -> str:
@@ -63,6 +67,7 @@ def marketplace_text() -> str:
         {
             "name": "vecten",
             "owner": {"name": "Vecten"},
+            "description": MARKETPLACE_DESCRIPTION,
             "plugins": [
                 {
                     "name": "vecten",

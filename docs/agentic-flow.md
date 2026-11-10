@@ -36,10 +36,11 @@ that true:
   entry point), `connector`, `model`, `semantic` and `operate`. `vecten init` vendors them into
   the project under `skills/`, so an agent in the project works without any plugin; the entry
   skill is `skills/guide/SKILL.md`, and `vecten guide` prints the same text. The same skills form
-  the Claude Code plugin at `plugins/vecten`: `claude plugin marketplace add <path or URL of the
-  checkout>` then `claude plugin install vecten@vecten`, or `claude --plugin-dir plugins/vecten`
-  for one session. A platform project also gets a `.mcp.json` with the Airflow and dbt MCP
-  servers, so the agent reads task logs and dbt results without a browser. The rendered guide
+  the Claude Code plugin at `plugins/vecten`: `claude plugin marketplace add vecten/vecten-open`
+  (or `<path or URL of the checkout>`) then `claude plugin install vecten@vecten`, or
+  `claude --plugin-dir plugins/vecten` for one session. A platform project also gets a
+  `.mcp.json` with the Airflow and dbt MCP servers, so the agent reads task logs and dbt
+  results without a browser. The rendered guide
   is [here](agent-guide.md); its evaluations are [here](skill-evaluations.md).
 - **The specs are the source of truth.** The requirements the software is built to are
   published with it, under `.ai/openspec/specs/`, and the agent is pointed at them.
