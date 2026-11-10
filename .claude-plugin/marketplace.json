@@ -3,6 +3,7 @@
   "owner": {
     "name": "Vecten"
   },
+  "description": "The Vecten Open plugin: the skills an agent uses to build and run a Vecten Open data platform and its MCP.",
   "plugins": [
     {
       "name": "vecten",

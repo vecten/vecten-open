@@ -175,10 +175,15 @@ def test_agentic_flow_page_gives_the_loop_and_loads_the_plugin():
         "priority order",
         "`.mcp.json`",
         "`claude --plugin-dir plugins/vecten`",
-        "`claude plugin marketplace add <path or URL of the checkout>`",
+        "`<path or URL of the checkout>`",
         "`claude plugin install vecten@vecten`",
+        "`claude plugin marketplace add vecten/vecten-open`",
     ):
         assert phrase in flat, phrase
+
+
+def test_readme_installs_the_plugin_from_the_public_marketplace():
+    assert "/plugin install vecten --marketplace vecten/vecten-open" in README.read_text()
 
 
 FIGURE = re.compile(r"\d+(?:\.\d+)?%|\b\d+/\d+\b")
