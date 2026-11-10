@@ -1,0 +1,29 @@
+{
+  "version": "0.1.1",
+  "semantic_model": [
+    {
+      "name": "acme_metrics",
+      "datasets": [],
+      "metrics": [
+        {
+          "name": "total_pipeline",
+          "description": "Sum of deal amounts.",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(sales_pipeline.amount)"}]}
+        },
+        {
+          "name": "deal_count",
+          "description": "Number of deals.",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(sales_pipeline.deal_id)"}]}
+        },
+        {
+          "name": "company_total",
+          "description": "Sum of per-company totals.",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(company_overview.total_amount)"}]},
+          "custom_extensions": [
+            {"vendor_name": "COMMON", "data": "{\"vecten\": {\"dataset\": \"company_overview\"}}"}
+          ]
+        }
+      ]
+    }
+  ]
+}

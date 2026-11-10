@@ -1,0 +1,63 @@
+# Every external version the product promises, pinned to a minor. `vecten update`
+# is the only path that changes a value here. CI checks the pyproject dependency pins,
+# the images in the generated Compose file, and the Terraform constraint and engine in
+# rendered templates against this table.
+vecten = "0.1.0"
+python = "3.14"
+
+[images]
+airflow = "apache/airflow:3.3.2-python3.14"
+postgres_major = "17"
+nginx = "nginx:1.30-alpine"
+log_cleaner = "alpine:3.24"
+mcp_base = "python:3.14-slim"
+# Exact: certbot publishes no minor tag.
+certbot = "certbot/certbot:v5.8.0"
+
+[python_packages]
+dbt_core = "1.12"
+dbt_postgres = "1.11"
+dbt_snowflake = "1.12"
+fakesnow = "0.11"
+dlt = "1.31"
+mcp_sdk = "2.3"
+sqlglot = "30.22"
+airflow_mcp_server = "0.9"
+dbt_mcp = "2.7"
+# Its minor must match the botocore the pinned apache/airflow image ships: the image installs
+# vecten-shared beside its own aiobotocore, which pins botocore to one minor.
+boto3 = "1.43"
+psycopg = "3.3"
+
+[terraform]
+engine = "1.16"
+module_ref = "v0.1.0"
+aws_provider = "6.69"
+snowflake_provider = "2.22"
+scaleway_provider = "2.87"
+random_provider = "3.9"
+
+# Exact, because each release is downloaded by tag. The AWS module's user data installs them
+# on every VM from its own copy of these values, which a test holds equal.
+[tools]
+docker_compose_plugin = "5.5.1"
+# Compose builds through buildx; without the plugin it falls back to the classic builder.
+docker_buildx_plugin = "0.37.2"
+# The linter a rendered project's CI runs; exact, since each release changes its default rules.
+ruff = "0.17.1"
+
+# Each action by the commit its release tag names, since a tag can be moved to other code; the
+# comment keeps the release readable. The rendered workflows and the repository's CI use these.
+[github_actions]
+runner = "ubuntu-24.04"
+checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1"
+setup_uv = "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0"
+setup_terraform = "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1"
+configure_aws_credentials = "aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0"
+
+[dbt_packages]
+vecten_convention = "0.1.0"
+
+[specs]
+ossie = "0.1.1"
+schema_convention = 1

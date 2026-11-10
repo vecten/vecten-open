@@ -1,0 +1,16 @@
+"""{{ name }}: the dlt verified source, wired by `vecten connector add`.
+
+Credentials come only through `secret(...)`; store them with `vecten secret set <NAME>`.
+"""
+
+from vecten_platform.sync import secret
+
+from .source import {{ source_function }} as _source
+
+
+def source():
+    return _source(
+{%- for param, secret_name in secrets %}
+        {{ param }}=secret("{{ secret_name }}"),
+{%- endfor %}
+    )

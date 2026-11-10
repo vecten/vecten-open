@@ -1,0 +1,95 @@
+{
+  "version": "0.1.1",
+  "semantic_model": [
+    {
+      "name": "tpcds_metrics",
+      "datasets": [],
+      "metrics": [
+        {
+          "name": "total_sales",
+          "description": "Sales revenue: the extended sales price summed over sales lines.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(store_sales.SS_EXT_SALES_PRICE)"
+              }
+            ]
+          },
+          "ai_context": {
+            "synonyms": [
+              "total revenue",
+              "gross sales"
+            ],
+            "examples": [
+              "What were total sales per store?"
+            ]
+          }
+        },
+        {
+          "name": "total_profit",
+          "description": "Net profit summed over sales lines.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(store_sales.SS_NET_PROFIT)"
+              }
+            ]
+          },
+          "ai_context": {
+            "synonyms": [
+              "net profit",
+              "profit"
+            ],
+            "examples": [
+              "How much profit did each store make?"
+            ]
+          }
+        },
+        {
+          "name": "net_paid",
+          "description": "What customers paid, net of discounts and coupons, summed over sales lines.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(store_sales.SS_NET_PAID)"
+              }
+            ]
+          },
+          "ai_context": {
+            "synonyms": [
+              "amount paid",
+              "takings"
+            ],
+            "examples": [
+              "How much did customers pay at each store?"
+            ]
+          }
+        },
+        {
+          "name": "sales_count",
+          "description": "Number of sales lines.",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "COUNT(store_sales.SS_ITEM_SK)"
+              }
+            ]
+          },
+          "ai_context": {
+            "synonyms": [
+              "number of sales",
+              "line items sold"
+            ],
+            "examples": [
+              "How many sales lines did each store record?"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

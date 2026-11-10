@@ -1,0 +1,42 @@
+[project]
+name = "vecten-platform"
+version = "0.1.0"
+description = "Airflow, dlt and dbt runtime for Vecten Open"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [{ name = "Vecten" }]
+keywords = ["vecten", "dlt", "airflow", "dbt", "data platform"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX",
+    "Topic :: Database",
+]
+dependencies = [
+    "vecten-shared==0.1.0",
+    "dlt[duckdb,postgres,snowflake,sql_database,filesystem]>=1.31,<1.32",
+    "httpx>=0.28,<1",
+    "pyyaml>=6.0,<7",
+    "dbt-core>=1.12,<1.13",
+    "dbt-postgres>=1.11,<1.12",
+    "dbt-snowflake>=1.12,<1.13",
+    "fakesnow>=0.11,<0.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/vecten/vecten-open"
+Source = "https://github.com/vecten/vecten-open"
+Documentation = "https://github.com/vecten/vecten-open/blob/main/docs/README.md"
+Issues = "https://github.com/vecten/vecten-open/issues"
+Changelog = "https://github.com/vecten/vecten-open/blob/main/CHANGELOG.md"
+Security = "https://github.com/vecten/vecten-open/security/policy"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vecten_platform"]

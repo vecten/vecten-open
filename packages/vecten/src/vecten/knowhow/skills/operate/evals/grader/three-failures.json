@@ -1,0 +1,71 @@
+{
+  "scenario": "three-failures",
+  "env": "prod",
+  "issues": {
+    "env": "prod",
+    "sources": {"airflow": "ok", "dbt": "ok", "gaps": "ok"},
+    "issues": [
+      {
+        "id": "iss_airflow_sync_hubspot_default_sync.deals_KeyError",
+        "source": "airflow",
+        "kind": "skill",
+        "title": "hubspot object deals fails with KeyError",
+        "resolution": "connector",
+        "occurrences": 3,
+        "first_seen": "2026-10-18T02:00:00Z",
+        "last_seen": "2026-10-20T02:00:00Z",
+        "evidence": {
+          "untrusted": true,
+          "run_id": "scheduled__2026-10-20T02:00:00+00:00",
+          "error_class": "KeyError",
+          "location": "s3://acme-prod-artifacts/platform/logs/dag_id=sync_hubspot_default/run_id=scheduled__2026-10-20T02:00:00+00:00/task_id=sync/map_index=0/attempt=3.log"
+        }
+      },
+      {
+        "id": "iss_dbt_not_null_sales_pipeline_amount",
+        "source": "dbt",
+        "kind": "skill",
+        "title": "dbt test not_null_sales_pipeline_amount fails (fail)",
+        "resolution": "model",
+        "occurrences": 2,
+        "first_seen": "2026-10-19T03:05:00Z",
+        "last_seen": "2026-10-20T03:05:00Z",
+        "evidence": {
+          "untrusted": true,
+          "run_id": "asset_triggered__2026-10-20T03:00:00+00:00",
+          "node": "test.acme.not_null_sales_pipeline_amount.4f2a",
+          "location": "s3://acme-prod-artifacts/platform/dbt/runs/asset_triggered__2026-10-20T03_00_00_00_00/build/run_results.json"
+        }
+      },
+      {
+        "id": "iss_gap_0123456789abcdef01234567",
+        "source": "gaps",
+        "kind": "skill",
+        "title": "Semantic gap: wrong_definition, revenue includes refunds",
+        "resolution": "semantic",
+        "occurrences": 2,
+        "first_seen": "2026-10-17T09:12:00Z",
+        "last_seen": "2026-10-19T14:40:00Z",
+        "evidence": {"untrusted": true, "gap_id": "gap-0123456789abcdef01234567"}
+      }
+    ]
+  },
+  "show": {
+    "iss_airflow_sync_hubspot_default_sync.deals_KeyError": {
+      "excerpt": "info GET https://api.hubapi.com/crm/v3/objects/deals with Authorization: Bearer [redacted]\nerror Task failed with exception\n  File \"vecten_platform/sync/airflow_dag.py\", line 45, in sync_one\nObjectSyncError: hubspot.deals: KeyError: 'dealname'",
+      "error": "hubspot.deals: KeyError: 'dealname'"
+    },
+    "iss_dbt_not_null_sales_pipeline_amount": {
+      "status": "fail",
+      "failures": 14,
+      "message": "Got 14 results, configured to fail if != 0"
+    },
+    "iss_gap_0123456789abcdef01234567": {
+      "question": "What was revenue by country last month?",
+      "expected": "Revenue net of refunds",
+      "returned": "Gross revenue including refunds"
+    }
+  },
+  "upstream_change": "HubSpot renamed the deal property dealname to deal_name. The demo API now sends open deals without an amount, so 14 sales_pipeline rows have a null amount. Refunds reach core as deal.refunded_amount, but the sales_pipeline mart and the total_revenue metric leave them out.",
+  "after_merges": {"env": "prod", "sources": {"airflow": "ok", "dbt": "ok", "gaps": "ok"}, "issues": []}
+}

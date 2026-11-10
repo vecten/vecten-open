@@ -1,0 +1,1045 @@
+# Runbook
+
+Local: `vecten up` starts the stack, `vecten down` stops it. Logs: `docker compose --project-directory .vecten/stack --env-file .env -f .vecten/stack/docker-compose.yml logs`.
+Cloud sections are added by `vecten init --deploy`.
+[% if 'platform' in components %]
+## Connectors
+
+Each source lives under `connectors/<source>/` with `connector.py` exposing `source()`. Credentials:
+`vecten secret set <NAME>`, read in code with `secret("<NAME>")`; the stack passes every secret the
+declaration names into the Airflow containers on the next `vecten up`. Run locally: `vecten connector run
+<source> [--object <name>]`; record fixtures: `vecten connector run <source> --record`; inspect:
+`vecten raw schema <source> --json`. Each object syncs through its own dlt pipeline, so a failing object
+neither blocks nor resets the others; the sync DAGs are `orchestration/dags/sync_<source>_<group>.py`.
+A connector's Python dependencies are installed in the Airflow image from `vecten.toml`; install them
+where `vecten` runs as well, for example `uv tool install vecten --with <package>`. Failures post to
+`ALERT_WEBHOOK_URL` when that secret is set, each with its issue id. `vecten issues` (the laptop) or
+`vecten issues --env <env>` lists every failure that has not run green since, `vecten issues show
+<id>` prints its redacted log excerpt, and `skills/operate/SKILL.md` works through the list.
+
+`--record` reloads the object from the start so the fixture is complete; run it on the first sync or
+whenever the fixture should be refreshed. It writes `connectors/<source>/fixtures/<object>.jsonl` only
+for objects that synced and yielded records; the test `connectors/<source>/test_<source>.py` replays
+them into DuckDB with the network blocked and is skipped until fixtures exist. That test and
+`vecten dbt-build-local` load the fixtures straight into the raw tables and never run `connector.py`,
+so a code change that breaks every live sync still passes CI while the fixtures are unchanged; after
+changing `connector.py`, `vecten connector run <source> --json` is the live proof. Fixtures hold real
+records from the source (up to 200 per object) and are committed to the project, so check them for
+personal data before the repository is shared.
+
+After changing which secrets a connector reads, update the `secrets` list of its declaration in
+`vecten.toml` and run `vecten up` again.
+
+Known limits:
+
+- A dlt verified source that exposes only `@dlt.resource` functions and no `@dlt.source` is refused by
+  `vecten connector add`; start it from a generic scaffold (`--from rest`, `--from sql` or
+  `--from filesystem`) instead.
+- The wrapper passes a verified source's `dlt.secrets.value` parameters as `secret("<SOURCE>_<PARAM>")`
+  but does not wire its `dlt.config.value` parameters; pass those in `connector.py`.
+- Editing a generic scaffold's `connector.py` re-declares the source as `source = "custom"` on its next
+  `vecten connector run`.
+[% endif %][% if 'platform' in components %]
+## dbt
+
+The DAG `dbt_build` (`orchestration/dags/dbt_build.py`) builds the dbt project once every sync
+asset `raw_<source>.<group>` has updated since its last run; with no connectors it runs only when
+triggered. Its tasks: `deps` resolves the dbt packages, then `build` and `freshness` run side by
+side, then `convention` runs the convention tests against what `build` produced, then
+`mark_built`. A failed task retries once after ten minutes and posts to `ALERT_WEBHOOK_URL` when
+that secret is set.
+
+Each run's results are archived under its run id, so a failed run's results outlive the next run:
+
+- `dbt/runs/<run_id>/build/run_results.json`
+- `dbt/runs/<run_id>/convention/run_results.json`
+- `dbt/runs/<run_id>/freshness/sources.json`
+
+On the laptop stack they land in the project's `.vecten/artifacts`, which the Airflow containers
+mount at `/opt/airflow/artifacts`, the default root that `VECTEN_ARTIFACT_DIR` moves when set;
+for example `ls .vecten/artifacts/dbt/runs`. On a deployed VM they land in the deployment's
+bucket under `platform/` with the same keys. `vecten issues` reads them from either place and
+lists each failing test, model and stale source; see `docs/operations.md` in the Vecten
+repository.
+
+`mark_built` writes the commit of the shipped bundle to `dbt/built_commit` after a green build and
+convention run. It reads the commit from `VECTEN_BUNDLE_COMMIT`, which only a shipped bundle sets,
+so on the laptop stack it writes nothing.
+
+`freshness` runs `dbt source freshness` on the sources `vecten connector add` declares in
+`dbt/models/staging/sources.yml`, timed by dlt's load id: a source last loaded more than 36 hours
+ago is `warn`, more than 72 hours ago `error`. The task logs each stale source with its status and
+succeeds once `sources.json` is archived; it fails only when dbt could not write that file.
+Freshness does not gate the build, because stale sources are a likely cause of a red build and
+their record must exist either way.
+
+The DAG keeps dbt's build output and installed packages in `/tmp/vecten-dbt` inside the Airflow
+container (`DBT_TARGET_PATH`, `DBT_PACKAGES_INSTALL_PATH`), and `freshness` writes to its own
+target there, so on the laptop stack the container never shares `dbt/target` or
+`dbt/dbt_packages` with the host. The laptop stack and the host each resolve dbt dependencies
+before every run and keep separate build directories.
+
+On a laptop, `vecten dbt-build-local` runs the same build and convention steps on a disposable
+warehouse from the connectors' recorded fixtures; `vecten dbt <args>` runs dbt against the stack's
+Postgres.
+[% endif %][% if render_deploy and cloud == 'aws' %]
+## AWS deployment
+
+An environment such as `prod` runs in one AWS account: an EC2 virtual machine (VM) per host,
+RDS Postgres instances in private subnets, a Route 53 record per component (`airflow.<domain>`
+for the platform, `mcp.<domain>` for the MCP), and an S3 bucket for bundles, dbt artifacts and
+Airflow logs. Under the `standard` profile the hosts are `platform` and `mcp`, one per component
+the project has; under `minimal` one host, `main`, runs everything. The RDS instances are
+`state`, which holds the `airflow` and `mcp_state` databases, and, when the platform builds a
+Postgres warehouse, `warehouse`; under `minimal` the `state` instance holds all three databases
+and then takes the warehouse class and storage of the tier `size` selects. After a deploy,
+`.vecten/environments/<env>.json` holds the environment's Terraform outputs: each host's
+instance id and address, the setup host, each instance's address and master secret, and the
+bucket.
+
+GitHub Actions does the deploying. `vecten deploy --env <env>` on the laptop dispatches the
+`terraform-apply` workflow, which runs Terraform and then ships every host; every push to the
+default branch runs the `ship` workflow, which ships the content without Terraform; a pull
+request that changes `deploy/` or `vecten.toml` runs the `terraform-plan` workflow and gets the
+plan as a comment. No VM accepts SSH: `vecten ship` reaches each VM through AWS Systems Manager
+(SSM) Run Command.
+
+At v0.1 the workflows that run on their own, the pull-request plan and the ship on every push,
+cover `prod` only; any other environment is deployed and shipped when you dispatch it with
+`vecten deploy --env <env>` or `vecten ship --env <env>`. Each ship recreates the stack's
+containers on the host, so Airflow tasks running at that moment restart. A ship that fails
+on the host prints, after its error, the last lines of `docker compose`'s own output (a failed
+pull, build or port) and of each failing container's log, with secrets masked; on a VM without
+a shell, that is where a failed start shows its cause.
+
+In the commands below, `<prefix>` is `vecten-<project>-<env>`, the project's and the
+environment's names lowercased with each run of other characters as one `-`, the project part
+shortened when the two names are long. `aws rds describe-db-instances` lists the instances by
+that prefix.
+
+### What `vecten bootstrap` creates
+
+`vecten bootstrap --env <env>` runs once per environment, from the laptop, with your own AWS
+login (`aws sso login`). Running it again is safe. It creates or updates:
+
+- The Terraform state bucket `vecten-<project>-<env>-state-<account id>`: private, versioned,
+  encrypted and reachable over TLS only. `vecten destroy` keeps it.
+- The GitHub Actions OIDC provider. OIDC lets a GitHub job exchange a short-lived token GitHub
+  issues for temporary AWS credentials, so no AWS key is stored in GitHub.
+- The permissions boundary `<prefix>-boundary`, the IAM policy that caps every host role: this
+  environment's `platform` and `mcp` secrets, the RDS master secrets, the artifacts bucket, the
+  SSM agent and CloudWatch Logs, and no IAM.
+- The deploy role `<prefix>-deploy`, which the apply and ship jobs assume. It holds AWS's
+  managed PowerUserAccess policy, which leaves out IAM, plus IAM actions limited to this
+  environment's host role and instance profile names and to roles that carry the boundary. Only
+  a job in this repository that declares `environment: <env>` may assume it.
+- The plan role `<prefix>-plan`, which pull-request plans and plans on pushes to the default
+  branch assume. It reads only what a Terraform plan refreshes, writes only Terraform's lock
+  objects in the state bucket, and reads no secret.
+- On GitHub: the environment `<env>` with the variables `VECTEN_AWS_ROLE_ARN`,
+  `VECTEN_AWS_REGION` and `VECTEN_STATE_BUCKET`, and the repository variable
+  `VECTEN_AWS_PLAN_ROLE_ARN_<ENV>`, the environment's name uppercased with `-` as `_`.
+
+Bootstrap in a member account of an AWS Organization, never in the organization's management
+account: PowerUserAccess includes `sso:*` and `identitystore:*`, which in the management account
+administer IAM Identity Center, the sign-in for every account of the organization. The deploy
+role may also rewrite the trust policy of this environment's host roles
+(`iam:UpdateAssumeRolePolicy`), and IAM offers no condition on a trust policy's content; the
+boundary still caps what any such role can do.
+
+### Protect the deploy environment
+
+The GitHub environment `<env>` is the deploy role's only gate: any workflow job in this
+repository that declares `environment: <env>` can assume the role and change the AWS account.
+When `vecten bootstrap` creates the environment, it limits deployments to the default branch.
+GitHub offers that rule, a deployment branch policy, on public repositories and on paid plans.
+On a private repository whose plan lacks it, bootstrap leaves the environment unrestricted and
+prints a warning naming this section; anyone who can push a branch can then run a job that
+deploys. Protect the environment by hand under the repository's Settings, Environments, `<env>`:
+add required reviewers where the plan offers them, or move to a plan that offers branch
+policies and limit the environment to the default branch. Bootstrap never rewrites an existing
+environment, so rules added by hand survive a rerun; when an environment it finds has no
+deployment branch restriction, it prints the same warning and leaves it as it is.
+
+### Secrets
+
+Every secret has an environment-variable-style name, and its prefix picks the scope it is
+stored under in AWS Secrets Manager, as `vecten/[[ project_name ]]/<env>/<scope>/<NAME>`:
+
+| Name | Scope | Read by a VM |
+|---|---|---|
+| `MCP_*` | `mcp` | the MCP VM |
+| `DEPLOY_*` | `deploy` | none: credentials CI deploys with |
+| `ADMIN_*` | `admin` | none: passwords from `vecten user add-admin` |
+| any other name | `platform` | the platform VM |
+
+Under `minimal` the one VM reads both `platform` and `mcp`. The deploy role reads and writes
+all four scopes, as does an administrator's own AWS login. `vecten secret set <NAME> --env
+<env>` stores a secret from a hidden prompt or standard input, `--from-local` copies it from
+`.env`, and `vecten secret list --env <env>` prints names only.
+
+The setup host is the one VM that reads the RDS master credentials: the MCP VM when the project
+has the `mcp` component, else the platform VM, and `main` under `minimal`. On every ship it runs
+the setup SQL on each instance, which creates the databases, their owner roles and the service
+roles and is safe to repeat, and it generates the database passwords the stack uses:
+`AIRFLOW_DB_PASSWORD` and `LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`,
+`MCP_PROVISIONER_PASSWORD` and `MCP_IMPERSONATOR_PASSWORD` in the `mcp` scope, each only when the
+project has what it serves. Its role may create, write and read back exactly those names, so
+that a replaced instance gets the same passwords again. The platform VM generates the Airflow
+application secrets (`AIRFLOW_FERNET_KEY`, `AIRFLOW_API_SECRET_KEY`, `AIRFLOW_JWT_SECRET`,
+`AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_BASIC_AUTH_PASSWORD`) on its first ship; its role may create
+them but never write a new value, so DAG code cannot rewrite them. A ship stops naming any of
+them that exists without a value; delete that secret without recovery and ship again. When an
+MCP VM exists, the platform VM, which runs DAG code, holds no master credential.
+
+Containers receive their secrets as environment variables. Docker keeps each container's
+environment in `/var/lib/docker/containers/<id>/config.v2.json`, readable by root only, on the
+VM's encrypted root volume. The two files the stack needs with secret content, the Airflow
+passwords file and a basic-auth file that only an older release's NGINX reads, kept so a
+rollback to one finds it, live under `/run/vecten/`, a memory-backed directory (tmpfs) with
+mode 0600 that the VM agent rebuilds on every ship and at boot. vecten writes no other file
+holding a secret on a VM.
+
+Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
+`AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
+console's Secrets Manager page.
+
+### Admin access
+[% if 'platform' in components and warehouse == 'postgres' %]
+`vecten user add-admin <firstname> --env <env>` creates the warehouse login `admin_<firstname>`
+with `rds_superuser` and CONNECT on `warehouse`, and stores its password as
+`ADMIN_<FIRSTNAME>_PASSWORD` in the `admin` scope; it prints only the secret's id. It runs from
+the laptop with your AWS login and needs the AWS CLI and its Session Manager plugin
+(`session-manager-plugin`): it reaches the private instance through an SSM port-forwarding
+tunnel via the setup host and signs in with the instance's master credential. Run again, it
+keeps an existing login's password, or gives the login a new one when the secret is missing.
+Read the password with
+`aws secretsmanager get-secret-value --secret-id vecten/[[ project_name ]]/<env>/admin/ADMIN_<FIRSTNAME>_PASSWORD --query SecretString --output text`.
+[% elif warehouse == 'snowflake' and 'platform' in components %]
+`vecten user add-admin` covers Postgres warehouses only; create the admin user in Snowflake.
+The tunnel below reaches the `state` instance.
+[% else %]
+The warehouse is your existing one, where the admin already has an account; vecten creates no
+account there. There the MCP reads only the `core` and `marts` schemas:
+`vecten mcp provisioner-script` grants on those two and nothing else, so the tables people
+query belong there, as tables or views. The tunnel below reaches the `state` instance.
+[% endif %]
+For a manual `psql` session, open an SSM tunnel in one terminal; it needs the Session Manager
+plugin and stays open until you stop it:
+
+    aws ssm start-session --region <region> --target <setup host instance id> \
+      --document-name AWS-StartPortForwardingSessionToRemoteHost \
+      --parameters host=<instance host>,portNumber=5432,localPortNumber=15432
+
+and connect in another:
+[% if 'platform' in components and warehouse == 'postgres' %]
+    psql "host=127.0.0.1 port=15432 dbname=warehouse user=admin_<firstname> sslmode=require gssencmode=disable"
+[% else %]
+    psql "host=127.0.0.1 port=15432 dbname=postgres user=vecten_master sslmode=require gssencmode=disable"
+[% endif %]
+`.vecten/environments/<env>.json` names the setup host (`setup_host`), each host's instance id
+(`hosts.<host>.instance_id`) and each instance's address (`postgres.<instance>.host`). The
+master credential of an instance is the secret its `postgres.<instance>.master_secret` names,
+which RDS creates and rotates; its JSON holds `username` (`vecten_master`) and `password`.
+`sslmode=require` rather than `verify-full`, because the certificate names the RDS endpoint,
+not `127.0.0.1`; the connection is still encrypted end to end.
+`gssencmode=disable`, because a `psql` built with Kerberos support first asks for GSS
+encryption, and through the tunnel that request hangs without an error.
+[% if 'platform' in components and warehouse == 'postgres' %]
+### Restore the warehouse
+
+Every instance keeps automated backups with seven days of point-in-time recovery, and
+`vecten destroy` adds a final snapshot. A restore creates a new RDS instance beside the
+current one; Terraform then adopts it under the current one's name. Under `standard`, restoring
+`warehouse` leaves the `state` instance, with Airflow's metadata[% if 'mcp' in components %] and
+the MCP audit[% endif %], untouched.
+Under `minimal` the one instance, `state`, holds all three databases, which return to the same
+point together; read `state` for `warehouse` in the instance names and the Terraform address
+below.
+
+1. After a destroy, run `vecten deploy --env <env>` first, so the network, the subnet group and
+   an empty instance exist.
+2. Restore under a new identifier into the current instance's subnet group, security group and
+   parameter group. `aws rds describe-db-instances --db-instance-identifier <prefix>-warehouse`
+   shows the security group id. A point-in-time restore needs the current instance, so after
+   a destroy restore from the final snapshot. To a point in time:
+
+       aws rds restore-db-instance-to-point-in-time \
+         --source-db-instance-identifier <prefix>-warehouse \
+         --target-db-instance-identifier <prefix>-warehouse-restored \
+         --restore-time 2026-01-31T09:30:00Z \
+         --db-subnet-group-name <prefix>-warehouse \
+         --vpc-security-group-ids <security group id> \
+         --db-parameter-group-name <prefix>-warehouse-pg[[ postgres_major ]] \
+         --no-publicly-accessible
+
+   Or from a snapshot; `aws rds describe-db-snapshots --db-instance-identifier
+   <prefix>-warehouse` lists them, and a final snapshot is named
+   `<prefix>-warehouse-final-<UTC yyyymmddHHMMSS>`:
+
+       aws rds restore-db-instance-from-db-snapshot \
+         --db-instance-identifier <prefix>-warehouse-restored \
+         --db-snapshot-identifier <snapshot> \
+         --db-subnet-group-name <prefix>-warehouse \
+         --vpc-security-group-ids <security group id> \
+         --db-parameter-group-name <prefix>-warehouse-pg[[ postgres_major ]] \
+         --no-publicly-accessible
+
+   Then `aws rds wait db-instance-available --db-instance-identifier <prefix>-warehouse-restored`.
+3. Check the restored data through the tunnel above, with the restored instance's address from
+   `aws rds describe-db-instances`, signing in as an `admin_<firstname>` login from
+   `vecten user add-admin`: its password is in the restored data and in the secrets store.
+4. Swap the names. Rename the current instance out of the way, wait for it, then give the
+   restored one the current name; the address follows the name, so the stack reaches the
+   restored data at the address it already uses:
+
+       aws rds modify-db-instance --db-instance-identifier <prefix>-warehouse \
+         --new-db-instance-identifier <prefix>-warehouse-old --apply-immediately
+       aws rds wait db-instance-available --db-instance-identifier <prefix>-warehouse-old
+       aws rds modify-db-instance --db-instance-identifier <prefix>-warehouse-restored \
+         --new-db-instance-identifier <prefix>-warehouse --apply-immediately
+
+5. Point Terraform at the restored instance. A restored instance has no RDS-managed master
+   secret, which the setup host reads and Terraform refuses to adopt an instance without, so
+   turn it on first and wait until the secret's status reads `active`:
+
+       aws rds modify-db-instance --db-instance-identifier <prefix>-warehouse \
+         --manage-master-user-password --apply-immediately
+       aws rds describe-db-instances --db-instance-identifier <prefix>-warehouse \
+         --query 'DBInstances[0].MasterUserSecret.SecretStatus' --output text
+       aws rds wait db-instance-available --db-instance-identifier <prefix>-warehouse
+
+   Terraform tracks an RDS instance by its resource id, which a rename keeps, so its state
+   still names the old instance: remove that entry and import the restored instance by its
+   name. From `deploy/terraform/aws`, with your AWS login and `state_bucket` from
+   `[environments.<env>]` in `vecten.toml`:
+
+       terraform init -reconfigure -backend-config=bucket=<state bucket> \
+         -backend-config=key=<env>/aws.tfstate -backend-config=region=<region> \
+         -backend-config=encrypt=true -backend-config=use_lockfile=true
+       terraform state rm 'module.environment.module.postgres["warehouse"].aws_db_instance.this'
+       terraform import -var-file=../../envs/<env>.tfvars \
+         'module.environment.module.postgres["warehouse"].aws_db_instance.this' <prefix>-warehouse
+[%- if 'mcp' in components and profile == 'standard' %]
+
+   After a destroy, restore `state` as well, from the final snapshot the same destroy took, by
+   steps 2 to 5 with `state` for `warehouse`: the deploy in step 1 created an empty `state`, so
+   the MCP's registry of the people it signs in no longer matches their roles in the restored
+   warehouse, and the MCP refuses to start until the two agree.
+[%- endif %]
+
+6. Run `vecten deploy --env <env>`. Terraform brings each restored instance to the module's
+   settings, deletion protection and backups among them, the outputs follow, and the ship runs
+   the setup SQL on the restored instances.
+7. Once the restored instances serve, delete each old one. On `prod` lift its deletion
+   protection first:
+
+       aws rds modify-db-instance --db-instance-identifier <prefix>-warehouse-old \
+         --no-deletion-protection --apply-immediately
+       aws rds delete-db-instance --db-instance-identifier <prefix>-warehouse-old \
+         --final-snapshot-identifier <prefix>-warehouse-old-final
+[% endif %]
+### Destroy
+
+`vecten destroy --env <env>` runs from the laptop with your AWS login. It asks you to type the
+environment's name back; `--confirm <env>` gives the name without a prompt and is required with
+`--json`, without a terminal and inside GitHub Actions. There is no `--yes`. Then it:
+
+1. Takes a final snapshot of every RDS instance in the environment's outputs, named
+   `<prefix>-<instance>-final-<UTC yyyymmddHHMMSS>`, waits until each is available and prints
+   its identifier. `--delete-data <env>` takes no snapshot.
+2. Lifts deletion protection with an apply of `destroying=true` limited to the RDS instances and
+   the artifacts bucket that the Terraform state still holds, then runs `terraform destroy`.
+3. Keeps the state bucket and every secret vecten stores, so a later `vecten deploy` finds its
+   credentials (RDS deletes the master secrets it manages together with their instances),
+   and clears `deployed_commit` in `vecten.toml`. Push that with `vecten github push`, so the
+   `ship` workflow stops shipping.
+[%- if 'mcp' in components %]
+   A new deploy starts with an empty `state` database unless you restore its final snapshot,
+   so destroy also clears in `vecten.toml` the MCP steps recorded there: the first user, the
+   admin link and the connector grants. `vecten next` walks them again.
+[%- endif %]
+
+Running destroy again after a partial run is safe: a Terraform root whose state is empty is
+reported and left alone, and an instance AWS reports gone gets neither a snapshot nor a
+protection lift. Without stored outputs, destroy cannot tell which databases to snapshot and refuses unless `--delete-data <env>` is given. When the lift's
+plan would create or delete anything, destroy refuses and applies nothing: the environment
+differs from the committed `deploy/` files in a way that would replace a resource, and a person
+reconciles the two, starting from `terraform plan` in `deploy/terraform/aws`, before running
+destroy again.
+
+### Choose before the first deploy
+
+- `database_public_cidrs` in `deploy/envs/<env>.tfvars` opens the instances on port 5432 to the
+  listed address ranges; the default, empty, keeps every instance private and reachable only
+  through the tunnel. Decide before the first deploy: changing it later moves an instance's
+  subnet group between the private and the public subnets, which RDS refuses for a running
+  instance.
+- `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
+  `instance_type_overrides` replaces the instance type of a host or an instance by its key.
+- The Terraform root's provider lock file, `deploy/terraform/aws/.terraform.lock.hcl`, is
+  committed. The first local `vecten deploy --env <env> --plan-only` writes it; commit and push
+  it with `vecten github push`, because `vecten deploy` refuses while `deploy/` holds changes
+  GitHub does not have.
+[% if 'platform' in components and warehouse == 'postgres' %]
+### Postgres log prefix
+
+The instance holding `warehouse` starts each log line with the session user and the application
+name[% if 'mcp' in components %], so a person's query through the MCP shows `impersonator` as the
+user and the person's warehouse name as the application[% endif %]. The module sets
+`log_line_prefix` in that instance's parameter group to
+`[% raw %]%m:%r:%u@%d:[%p]:%l:%e:%s:%v:%x:%c:%q%a:[% endraw %]`. RDS for PostgreSQL accepts only
+two values for `log_line_prefix`, that one and its default, and refuses the same prefix without
+the final colon. If a later RDS version refuses it, the apply fails on the parameter group; set
+the RDS default in `deploy/envs/<env>.tfvars` and deploy again:
+
+    [% raw %]log_line_prefix = "%t:%r:%u@%d:[%p]:"[% endraw %]
+
+An instance that already runs picks up a changed prefix at its next reboot
+(`aws rds reboot-db-instance --db-instance-identifier <prefix>-[% if profile == 'minimal' %]state[% else %]warehouse[% endif %]`).[% if 'mcp' in components %]
+With the RDS default the person is still named by `application_name` in `pg_stat_activity` and
+by the MCP audit.[% endif %]
+[% endif %][% elif render_deploy and cloud == 'scaleway' %]
+## Scaleway deployment
+
+An environment such as `prod` runs in two Scaleway projects of your organization. The resources
+project `<prefix>` holds an Instance, a virtual machine (VM), per host; Managed Database for
+PostgreSQL instances on a private network; the environment's Secret Manager secrets; an Object
+Storage bucket for bundles, dbt artifacts and Airflow logs; and a Domains and DNS record per
+component (`airflow.<domain>` for the platform, `mcp.<domain>` for the MCP). The state project
+`<prefix>-state` holds the Terraform state bucket and nothing else, so no key a VM holds can
+reach the state. Under the `standard` profile the hosts are `platform` and `mcp`, one per
+component the project has; under `minimal` one host, `main`, runs everything. The database
+instances are `state`, which holds the `airflow` and `mcp_state` databases, and, when the
+platform builds a Postgres warehouse, `warehouse`; under `minimal` the `state` instance holds
+all three databases. Every resource sits in the region `deploy/envs/<env>.tfvars` names, and
+every zonal one in the zone `<region>-1`. After a deploy, `.vecten/environments/<env>.json`
+holds the environment's Terraform outputs: each host's server id and address, the setup host,
+each instance's address and admin secret, and the bucket.
+
+GitHub Actions does the deploying. `vecten deploy --env <env>` on the laptop dispatches the
+`terraform-apply` workflow, which runs Terraform and then ships every host; every push to the
+default branch runs the `ship` workflow, which ships the content without Terraform; a pull
+request that changes `deploy/` or `vecten.toml` runs the `terraform-plan` workflow and gets the
+plan as a comment. No VM accepts SSH and Scaleway offers no run-command API, so each VM pulls
+its bundles from the bucket; "Shipping" below describes how.
+
+At v0.1 the workflows that run on their own, the pull-request plan and the ship on every push,
+cover `prod` only; any other environment is deployed and shipped when you dispatch it with
+`vecten deploy --env <env>` or `vecten ship --env <env>`. Each ship recreates the stack's
+containers on the host, so Airflow tasks running at that moment restart. A ship that fails
+on the host prints, after its error, the last lines of `docker compose`'s own output (a failed
+pull, build or port) and of each failing container's log, with secrets masked; on a VM without
+a shell, that is where a failed start shows its cause.
+
+In the commands below, `<prefix>` is `vecten-<project>-<env>`, the project's and the
+environment's names lowercased with each run of other characters as one `-`, the project part
+shortened when the two names are long; `<region>` is the region in `deploy/envs/<env>.tfvars`;
+`<project id>` and `<state project id>` are `cloud_ids["project"]` and
+`cloud_ids["state_project"]` under `[environments.<env>]` in `vecten.toml`; and `scw` is the
+Scaleway CLI, logged in with `scw init`.
+
+### What `vecten bootstrap` creates
+
+`vecten bootstrap --env <env>` runs once per environment, from the laptop, with your own
+Scaleway login: `scw init`, or `SCW_ACCESS_KEY`, `SCW_SECRET_KEY` and
+`SCW_DEFAULT_ORGANIZATION_ID` in the environment. It creates projects and IAM applications,
+policies and keys, so it needs an administrator's key, such as the Organization Owner's or one
+holding IAMManager and the right to create projects. Running it again is safe. It creates or
+updates:
+
+- The two projects, each claimed by its description, `vecten:<role>:<project>:<env>` with
+  `<role>` `resources` or `state`. A project of the expected name whose description differs is
+  refused, and the message names the description bootstrap expects; set it in the project's
+  settings when the project is this environment's. An environment name ending in `-state` is
+  refused, because `<prefix>-state` names a state project.
+- The Terraform state bucket `vecten-<project>-<env>-state-<8 hex>`, the last part the start of
+  the state project's id: versioned, with versions older than the current one expiring after
+  90 days. `vecten destroy` keeps it. Its bucket policy lets the deploy application read and
+  write every object, the plan application read every object and write only the
+  `<env>/*.tflock` lock objects, and the operator who ran bootstrap manage the bucket. The
+  policy names its operator, so another operator's rerun replaces the first one in it, and the
+  first gets the bucket back by running bootstrap again; the Organization Owner can always
+  rewrite the policy. `vecten deploy --plan-only` and `vecten destroy` on the laptop read the
+  state with your key, so they need you to be the operator the policy names.
+- IAM applications and their policies. None holds an IAM permission set, so no key CI holds can
+  widen a key, its own included.
+  - `<prefix>-deploy`, which the apply and ship jobs sign with: full access to Instances,
+    Block Storage (the volumes POP2 servers boot from), private networks, Managed Databases,
+    Secret Manager and Object Storage in the resources project, read access to its IP
+    addresses, full access to Domains and DNS in the project holding the DNS zone, and object
+    access in the state project.
+  - `<prefix>-plan`, which pull-request plans sign with: object access in the state project
+    only, which the bucket policy cuts down to reading the state and writing lock objects. It
+    reads nothing in the resources project, so a pull-request plan runs without a refresh and
+    compares the change with the stored state, not with the live resources.
+  - `<prefix>-<host>` per host, described in "The VM's key".
+- An API key per application, expiring 365 days after its creation; "Keys and rotation" covers
+  renewing them.
+- On GitHub: the environment `<env>` with the variables `VECTEN_SCW_PROJECT_ID`,
+  `VECTEN_SCW_STATE_PROJECT_ID`, `VECTEN_SCW_REGION` and `VECTEN_STATE_BUCKET`, and the deploy
+  key as its secrets `VECTEN_SCW_ACCESS_KEY` and `VECTEN_SCW_SECRET_KEY`; and the plan key as
+  the repository secrets `VECTEN_SCW_PLAN_ACCESS_KEY_<ENV>` and
+  `VECTEN_SCW_PLAN_SECRET_KEY_<ENV>`, the environment's name uppercased with `-` as `_`.
+  Scaleway IAM offers no OIDC federation, so these keys are how GitHub Actions signs in. A
+  repository secret reaches every workflow run a pushed branch starts, which is why the plan key
+  holds only what a plan needs.
+- In `vecten.toml`, under `[environments.<env>]`: `bootstrapped`, `state_bucket` and
+  `cloud_ids`, the ids of the projects, the applications and the CI keys and when each key
+  expires (`expires_deploy`, `expires_plan`, `expires_<host>`), and the operator who ran
+  bootstrap (`operator_user` or `operator_application`), none of them secret. `vecten deploy`
+  gives that operator full access to the artifacts bucket, whose policy otherwise names no
+  person: a laptop plan refreshes the bucket, `vecten destroy` empties and deletes it, and
+  `vecten issues --env <env>` reads dbt's run results there. After another person runs
+  bootstrap, the next deploy hands that access to them.
+
+The DNS zone `dns_zone` in `deploy/envs/<env>.tfvars` names must exist in Domains and DNS in
+one of the organization's projects, such as its default project, before bootstrap runs.
+Bootstrap finds that project through the Domains and DNS API, gives the deploy key full access
+to Domains and DNS there, and records it as `cloud_ids["dns_project"]`, which `vecten deploy`
+hands to Terraform. When no project of the organization holds the zone, bootstrap creates
+nothing and exits naming the zone.
+
+Run `vecten bootstrap --env <env>` again after changing `components` or `profile`, then
+`vecten deploy --env <env>` straight after. Bootstrap gives a new host its application and key
+and deletes those of a host the configuration no longer has; that host's VM keeps running until
+the deploy replaces it, and without its key its containers lose access to their secrets and the
+bucket.
+
+### Protect the deploy environment
+
+The GitHub environment `<env>` is the deploy key's only gate: GitHub hands the environment's
+secrets to any workflow job in this repository that declares `environment: <env>`, and the
+deploy key can change everything in the resources project. When `vecten bootstrap` creates the
+environment, it limits deployments to the default branch.
+GitHub offers that rule, a deployment branch policy, on public repositories and on paid plans.
+On a private repository whose plan lacks it, bootstrap leaves the environment unrestricted and
+prints a warning naming this section; anyone who can push a branch can then run a job that
+deploys. Protect the environment by hand under the repository's Settings, Environments, `<env>`:
+add required reviewers where the plan offers them, or move to a plan that offers branch
+policies and limit the environment to the default branch. Bootstrap never rewrites an existing
+environment, so rules added by hand survive a rerun; when an environment it finds has no
+deployment branch restriction, it prints the same warning and leaves it as it is.
+
+### Keys and rotation
+
+Every key bootstrap creates, the deploy key, the plan key and each VM's key, expires 365 days
+after its creation, and bootstrap records each expiry in `vecten.toml` as
+`cloud_ids["expires_<owner>"]`. Once a key is within 30 days of its expiry, `vecten next` leads
+with `vecten bootstrap --env <env>` and `vecten deploy` prints a warning naming the key and the
+date; the deploy itself goes on. An expired key stops whatever signs with it: CI's jobs for the
+deploy and plan keys, a VM's containers and watcher for its key.
+
+Run `vecten bootstrap --env <env>` within those 30 days to rotate the key; a key further from
+its expiry is kept. A rotated CI key's successor goes to GitHub, and the old key stays valid,
+recorded as `cloud_ids["retiring_deploy"]` or `cloud_ids["retiring_plan"]`, so a workflow run
+already under way finishes with it; the next bootstrap run deletes it. A rotated VM key's
+successor becomes the newest version of the host's key secret; the next `vecten deploy` hands it
+to the VM, whose watcher acknowledges it and recreates the stack's containers with it, and
+`vecten next` leads with that deploy until a deploy from the laptop has run. The old
+key stays valid until then, because the running containers sign with it, and the next bootstrap
+after the acknowledgement deletes it. Bootstrap's result lists the hosts that have not
+acknowledged a new key under `awaiting_ack`. `scw iam api-key list` shows each key's expiry.
+
+An organization can enforce a maximum API key duration (Organization settings, Security,
+Credentials maximum duration); one shorter than 365 days makes Scaleway refuse every key
+bootstrap creates, and bootstrap then exits naming that setting. Keep the maximum at 365 days
+or more.
+
+Every Scaleway organization has a group, "All Applications", that holds every IAM application.
+A policy attached to it applies to the deploy, plan and VM keys as well and widens what each can
+reach, so attach none to it in an organization that runs vecten.
+
+### The VM's key
+
+Scaleway has no instance identity: a VM signs its calls with an API key of its own application,
+`<prefix>-<host>`. This key, kept on the VM's disk, is the one exception to the rule that no
+long-lived credential sits on a disk. Its policy reaches the resources project only: it reads
+the VM's own secret scopes and may list secret names and metadata there, never another scope's
+value, because Secret Manager finds a secret by listing before it reads it; it adds versions to
+the secrets the VM generates; and it reads and writes the artifacts bucket, which the bucket's
+policy cuts down to the VM's bundles and its components' prefixes.
+
+`vecten bootstrap` creates the key and stores it in Secret Manager as `HOST_KEY_<HOST>` in the
+`deploy` scope, which only the deploy key reads. After Terraform applies, `vecten deploy` reads
+it and sets it on the server as the user data entry `vecten-key` through the Instances API,
+never through Terraform. The VM's watcher reads the entry from the metadata server, writes it to
+`/var/lib/vecten/scw-key` (owned by root, mode 0600), where it survives a reboot, and
+acknowledges it by writing `<first component>/key-ack/<SHA-256 of the access key>.json` to the
+bucket. `vecten deploy` waits up to 15 minutes for that object, then deletes the user data
+entry, because the Terraform provider copies every user data entry into state on a refresh; a
+missing acknowledgement fails the deploy naming the host, and the entry is deleted all the same.
+Every deploy and every destroy also deletes a `vecten-key` entry a cancelled deploy left
+behind, before Terraform refreshes. Containers receive the key in their environment, as
+`SCW_ACCESS_KEY` and `SCW_SECRET_KEY` for Secret Manager and as the S3 credentials for the
+bucket and Airflow's remote logs.
+
+A rule in Docker's `DOCKER-USER` chain drops container traffic to the metadata server, so a
+container cannot read the user data entry. Two gaps remain. The setup SQL runs in a container
+on the host's network (`docker run --network host`), which that rule does not filter. After a
+reboot, dockerd restarts the containers before the systemd unit adds the rule. Both matter only
+while the key sits in the metadata, which is the placement window between `vecten deploy`
+setting the entry and deleting it after the acknowledgement, so the risk is low.
+
+### Secrets
+
+Every secret has an environment-variable-style name, and its prefix picks the scope it is
+stored under in the resources project's Secret Manager: the secret `<NAME>` at the path
+`/vecten/[[ project_name ]]/<env>/<scope>`, which IAM sees as
+`/vecten/[[ project_name ]]/<env>/<scope>/<NAME>`:
+
+| Name | Scope | Read by a VM |
+|---|---|---|
+| `MCP_*` | `mcp` | the MCP VM |
+| `DEPLOY_*` | `deploy` | none: credentials CI deploys with; bootstrap also keeps the VM keys here |
+| `ADMIN_*` | `admin` | none: passwords from `vecten user add-admin` |
+| `SETUP_*` | `setup` | the setup host: each database instance's admin credential |
+| any other name | `platform` | the platform VM |
+
+Under `minimal` the one VM reads `platform`, `mcp` and `setup`. The deploy key reads and writes
+every scope, as does an administrator's own login. `vecten secret set <NAME> --env <env>`
+stores a secret from a hidden prompt or standard input, creating it at its scope's path when it
+does not exist yet, `--from-local` copies it from `.env`, and `vecten secret list --env <env>`
+prints names only.
+
+The setup host is the one VM that reads the database instances' admin credentials: the MCP VM
+when the project has the `mcp` component, else the platform VM, and `main` under `minimal`.
+Each instance's credential is the secret `SETUP_<INSTANCE>_ADMIN_PASSWORD`, a JSON with
+`username` (`vecten_admin`) and `password`. Terraform generates each password in its own memory
+during an apply and hands it to the instance and to the secret through write-only arguments, so
+neither the state nor a plan holds it; raising `state_admin_password_version` or
+`warehouse_admin_password_version` in `deploy/envs/<env>.tfvars` sets a new password on that
+instance and in its secret together. The admin password in Secret Manager is the truth: every
+`vecten deploy` resets the instance to it after the apply, so a password changed in the console
+is overwritten on the next deploy. On every ship the setup host runs the setup SQL on each
+instance, which creates the databases, their owner roles and the service roles and is safe to
+repeat, and it generates the database passwords the stack uses: `AIRFLOW_DB_PASSWORD` and
+`LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`, `MCP_PROVISIONER_PASSWORD`
+and `MCP_IMPERSONATOR_PASSWORD` in the `mcp` scope, each only when the project has what it
+serves. Terraform creates each of those secrets empty, so a VM key only ever adds a version to a
+secret that exists; the setup host's key may add versions to and read back exactly those names,
+so that a replaced instance gets the same passwords again. The platform VM generates the Airflow
+application secrets (`AIRFLOW_FERNET_KEY`, `AIRFLOW_API_SECRET_KEY`, `AIRFLOW_JWT_SECRET`,
+`AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_BASIC_AUTH_PASSWORD`) on its first ship, and its key may add
+versions to exactly those five names, which DAG code on that VM can do as well. When an MCP VM
+exists, the platform VM, which runs DAG code, holds no admin credential.
+
+Containers receive their secrets as environment variables. Docker keeps each container's
+environment in `/var/lib/docker/containers/<id>/config.v2.json`, readable by root only. The two
+files the stack needs with secret content, the Airflow passwords file and a basic-auth file
+that only an older release's NGINX reads, kept so a rollback to one finds it, live under
+`/run/vecten/`, a memory-backed directory (tmpfs) with mode 0600 that the VM agent rebuilds on
+every ship and at boot. Apart from those and the VM's key, vecten writes no file holding a
+secret on a VM.
+
+Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
+`AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
+console's Secret Manager page of the project `<prefix>`.
+
+### Shipping
+
+CI never reaches into a VM. `vecten ship` uploads each host's bundle to
+`bundles/<host>/<commit>.tar.gz` in the artifacts bucket and rewrites
+`bundles/<host>/pointer.json` with the commit and the time of the request. On each VM the
+systemd timer `vecten-watch.timer` runs the watcher every 15 seconds; when the pointer names a
+request it has not handled, the watcher downloads the bundle, ships it with the same VM agent
+AWS VMs run, and writes `<first component>/ship-status/<commit>.json` with the outcome and the
+agent's last line. CI waits for that status, 15 minutes for a host's first ship and 10 minutes
+after, and 15 minutes for every host the same `vecten deploy` handed a key to, since its
+server may be new; then it polls each component's health URL. When a poll fails, CI points the
+host back at the previous commit, waits for its status, and fails naming the component. A
+failed agent run restores the previous release by itself and says so in its line; its status
+names the commit the host runs afterwards, and CI points the pointer at that commit, so the
+pointer always names the host's last good release and a later rollback never lands on a
+rejected one. A rejected first ship leaves no pointer. A ship of the commit a host already runs
+marks the pointer `force`, which makes the watcher ship it again and recreate its containers. A
+ship that finds no status within its window fails naming the host: the VM may still be booting,
+or may not hold its key yet, which `vecten deploy` hands it.
+
+A server that replaced another starts with no release and finds the pointer its predecessor
+shipped. Its watcher skips a pointer requested before the moment it acknowledged its key, which
+it takes from the modification time of its acknowledgement marker in `/var/lib/vecten`, and
+ships the newer pointer the same deploy writes. This compares CI's clock with the VM's, both
+kept by NTP.
+
+The VM's user data writes the watcher's settings, `/etc/vecten/watch.json` (the host, its
+components, the bucket, the region, the project and the secret prefix), at first boot only, and
+the watcher files its acknowledgements and statuses under the first component listed there.
+Under `minimal`, a change to `components` that changes the first one, such as adding `platform`
+to an MCP-only project, leaves ships and key handovers waiting on that VM until it is replaced.
+
+### Network
+
+One VPC private network holds the VMs and the database instances. Each VM has a flexible IP and
+a security group that drops every inbound connection except on ports 80 and 443; outbound
+traffic is open. Security groups filter public traffic only: inside the private network every
+VM reaches every instance on any port, and the database credentials are the gate. The
+instances have no public endpoint unless `database_public_cidrs` lists address ranges.
+
+### Admin access
+
+Scaleway offers no SSH and no run-command API to tunnel through, and a private network admits
+no laptop, so admin access goes through the instances' public endpoint. It exists only while
+`database_public_cidrs` in `deploy/envs/<env>.tfvars` lists the address ranges you connect
+from, for example `["203.0.113.7/32"]`: `vecten deploy` adds the endpoint with those ranges as
+its allow-list, and once the setting is empty again the next deploy deletes it.
+[% if 'platform' in components and warehouse == 'postgres' %]
+`vecten user add-admin <firstname> --env <env>` creates the warehouse login `admin_<firstname>`
+as a member of `warehouse_owner` and `loader` with CONNECT on `warehouse`, and stores its
+password as `ADMIN_<FIRSTNAME>_PASSWORD` in the `admin` scope; it prints only the secret's id.
+Managed Databases grant no superuser, and those two roles own and load every warehouse object.
+It runs from the laptop with your Scaleway login and refuses while `database_public_cidrs` is
+empty. It signs in as `vecten_admin` with the credential in
+`SETUP_[% if profile == 'minimal' %]STATE[% else %]WAREHOUSE[% endif %]_ADMIN_PASSWORD`, checks the
+server against the instance's own certificate authority, which it fetches from the Managed
+Databases API, with `sslmode=verify-ca` (the certificate names the instance's private address,
+not the public endpoint, so `verify-full` fails and the name goes unchecked), and accepts SCRAM
+authentication only. Run
+again, it keeps an existing login's password, or gives the login a new one when the secret is
+missing.
+[% elif warehouse == 'snowflake' and 'platform' in components %]
+`vecten user add-admin` covers Postgres warehouses only; create the admin user in Snowflake.
+The endpoint below reaches the `state` instance.
+[% else %]
+The warehouse is your existing one, where the admin already has an account; vecten creates no
+account there. There the MCP reads only the `core` and `marts` schemas:
+`vecten mcp provisioner-script` grants on those two and nothing else, so the tables people
+query belong there, as tables or views. The endpoint below reaches the `state` instance.
+[% endif %]
+For a manual `psql` session, find the instance, read its public endpoint's address and port in
+the `endpoints` that `scw rdb instance get` prints, save its certificate authority, and connect:
+
+    scw rdb instance list region=<region> project-id=<project id> name=<prefix>-<instance>
+    scw rdb instance get <instance id> region=<region>
+    scw rdb instance get-certificate <instance id> region=<region> > ca.pem
+    psql "host=<endpoint address> port=<endpoint port> dbname=[% if 'platform' in components and warehouse == 'postgres' %]warehouse user=admin_<firstname>[% else %]postgres user=vecten_admin[% endif %] sslmode=verify-ca sslrootcert=ca.pem"
+
+The password is [% if 'platform' in components and warehouse == 'postgres' %]the value of `ADMIN_<FIRSTNAME>_PASSWORD`[% else %]the `password` field of `SETUP_STATE_ADMIN_PASSWORD`[% endif %], shown in the console's
+Secret Manager page of the project `<prefix>`.
+[% if 'platform' in components and warehouse == 'postgres' %]
+### Restore the warehouse
+
+Every instance keeps a daily backup of each database for seven days, and `vecten destroy` adds a
+final snapshot of every instance. Managed Databases offer no point-in-time recovery, so a
+restore returns to a backup or a snapshot. A restore from a snapshot creates a new instance
+beside the current one; Terraform then adopts it under the current one's name. Under
+`standard`, restoring `warehouse` leaves the `state` instance, with Airflow's metadata[% if 'mcp' in components %] and the
+MCP audit[% endif %], untouched.
+Under `minimal` the one instance, `state`, holds all three databases, which return to the same
+point together; read `state` for `warehouse` in the instance names and the Terraform address
+below.
+
+1. After a destroy, run `vecten deploy --env <env>` first, so the network, the secrets and an
+   empty instance exist.
+2. Create an instance from the snapshot. `scw rdb snapshot list region=<region>
+   project-id=<project id>` lists the snapshots, which outlive their instance until their
+   `expires_at`: Scaleway deletes a snapshot at most 365 days after it was taken and accepts no
+   later date. To keep one longer, restore it by this step and take a new snapshot of the
+   restored instance (`scw rdb snapshot create instance-id=<restored instance id>
+   region=<region> name=<name>`). A final snapshot is named
+   `<prefix>-warehouse-final-<UTC yyyymmddHHMMSS>`. Take the node type from
+   `scw rdb instance get` of the current instance:
+
+       scw rdb snapshot restore <snapshot id> region=<region> \
+         instance-name=<prefix>-warehouse-restored node-type=<node type> is-ha-cluster=false
+       scw rdb instance wait <restored instance id> region=<region>
+
+   The restored instance comes back with a public endpoint and no private one. Limit the
+   public endpoint's allowed addresses to your own until step 5:
+
+       scw rdb acl set <your address>/32 instance-id=<restored instance id> region=<region>
+3. Rename the current instance out of the way, so the name `<prefix>-warehouse` names one
+   instance only:
+
+       scw rdb instance update <current instance id> region=<region> name=<prefix>-warehouse-old
+
+4. Point Terraform at the restored instance. Terraform tracks a Managed Database instance by its
+   id, so remove the current one from the state and import the restored one. From
+   `deploy/terraform/scaleway`, as the operator the state bucket's policy names, with your
+   Scaleway login for the provider and your key for the state backend, whose credentials take
+   the form `<access key>@<state project id>`; `<app ids>` are the `cloud_ids["app_<key>"]`
+   values in `vecten.toml`, as `{deploy="<id>",plan="<id>",<host>="<id>"}` for every key, and
+   `<dns project id>` is `cloud_ids["dns_project"]`. The module reads the instance's
+   private-network endpoint, so the import fails on `private_network` until the restored
+   instance has one; attach it to the environment's network first, whose id
+   `scw vpc private-network list region=<region> project-id=<project id> name=<prefix>` prints:
+
+       scw rdb endpoint create <restored instance id> region=<region> \
+         private-network.private-network-id=<private network id> private-network.enable-ipam=true
+       scw rdb instance wait <restored instance id> region=<region>
+       export AWS_ACCESS_KEY_ID=<access key>@<state project id> AWS_SECRET_ACCESS_KEY=<secret key>
+       terraform init -reconfigure -backend-config=bucket=<state bucket> \
+         -backend-config=key=<env>/scaleway.tfstate
+       terraform state rm 'module.environment.module.postgres["warehouse"].scaleway_rdb_instance.this'
+       terraform import -var-file=../../envs/<env>.tfvars -var project_id=<project id> \
+         -var dns_project_id=<dns project id> -var 'application_ids=<app ids>' \
+         'module.environment.module.postgres["warehouse"].scaleway_rdb_instance.this' \
+         <region>/<restored instance id>
+
+   When `database_public_cidrs` is set, also remove the current instance's allow-list:
+   `terraform state rm 'module.environment.module.postgres["warehouse"].scaleway_rdb_acl.public[0]'`.
+
+   The restored instance keeps its snapshot's admin password, and the next deploy resets it to
+   the password in `SETUP_[% if profile == 'minimal' %]STATE[% else %]WAREHOUSE[% endif %]_ADMIN_PASSWORD`.
+[%- if 'mcp' in components and profile == 'standard' %]
+
+   After a destroy, restore `state` as well, from the final snapshot the same destroy took, by
+   steps 2 to 4 with `state` for `warehouse`: the deploy in step 1 created an empty `state`, so
+   the MCP's registry of the people it signs in no longer matches their roles in the restored
+   warehouse, and the MCP refuses to start until the two agree.
+[%- endif %]
+5. Run `vecten deploy --env <env> --plan-only` and read `.vecten/plans/<env>.txt`: the
+   instance must show as updated in place (`~`), never as replaced (`-/+`), because a
+   replacement would create an empty instance in its stead. An import leaves the instance's
+   `password_wo_version` empty in state, so the plan also sets it, and the admin secret's
+   version is replaced alongside. Then run
+   `vecten deploy --env <env>`. Terraform gives the restored instance the module's name,
+   network and settings, the outputs follow, and the ship runs the setup SQL on it. When
+   `database_public_cidrs` is empty, the deploy deletes any public endpoint the instance has.
+   After a destroy this deploy's ship fails and rolls back, because the services sign in with
+   passwords the restored roles do not have (`password authentication failed`); step 6 fixes
+   that.
+6. After a destroy, also reset the service roles' passwords: destroy deleted the secrets
+   Terraform created, so the deploy in step 1 generated new passwords while the restored roles
+   keep the old ones. Read each new value in the console's Secret Manager page of the project
+   `<prefix>`; `vecten secret` prints names only. With `database_public_cidrs` set, sign in as
+   `vecten_admin` as "Admin access" shows and run:
+
+       ALTER ROLE loader PASSWORD '<value of LOADER_PASSWORD>';
+[%- if 'mcp' in components %]
+       ALTER ROLE provisioner PASSWORD '<value of MCP_PROVISIONER_PASSWORD>';
+       ALTER ROLE impersonator PASSWORD '<value of MCP_IMPERSONATOR_PASSWORD>';
+[%- endif %]
+[%- if profile == 'minimal' %]
+       ALTER ROLE airflow PASSWORD '<value of AIRFLOW_DB_PASSWORD>';
+[%- if 'mcp' in components %]
+       ALTER ROLE mcp_state PASSWORD '<value of MCP_STATE_DB_PASSWORD>';
+[%- endif %]
+[%- elif 'mcp' in components %]
+
+   And on the restored `state` instance:
+
+       ALTER ROLE airflow PASSWORD '<value of AIRFLOW_DB_PASSWORD>';
+       ALTER ROLE mcp_state PASSWORD '<value of MCP_STATE_DB_PASSWORD>';
+[%- endif %]
+
+   Then run `vecten deploy --env <env>` again: it ships with the passwords the roles now have
+   and finishes the steps the failed run left.
+[%- if profile == 'minimal' or 'mcp' in components %] The restored `state` instance holds
+   Airflow's metadata, and the deploy generated a new `AIRFLOW_FERNET_KEY`, so the Airflow
+   connections and variables stored encrypted with the old key can no longer be read: set them
+   again in Airflow.
+[%- endif %]
+7. Check the restored data, signing in as an `admin_<firstname>` login from
+   `vecten user add-admin`: its password is in the restored data and in the secrets store. Once
+   the restored instances serve, delete each old one:
+
+       scw rdb instance delete <old instance id> region=<region>
+
+A daily backup restores one database into an instance of your choosing, under another
+database name, for example to copy rows back by hand:
+`scw rdb backup list region=<region> instance-id=<instance id>` lists them, and
+`scw rdb backup restore <backup id> region=<region> instance-id=<instance id> database-name=warehouse_restored`
+restores one.
+[% endif %]
+### Destroy
+
+`vecten destroy --env <env>` runs from the laptop with your Scaleway login, as the operator the
+state bucket's policy names. It asks you to type the environment's name back; `--confirm <env>`
+gives the name without a prompt and is required with `--json`, without a terminal and inside
+GitHub Actions. There is no `--yes`. Then it:
+
+1. Takes a final snapshot of every database instance in the environment's outputs through the
+   Managed Databases API, named `<prefix>-<instance>-final-<UTC yyyymmddHHMMSS>`, waits until
+   each is ready and prints its name, then the date Scaleway deletes them: 365 days after they
+   were taken, the longest it keeps a snapshot. To keep the data longer, restore a snapshot
+   before then[% if 'platform' in components and warehouse == 'postgres' %] ("Restore the warehouse", step 2)[% endif %] and take a new snapshot of the restored
+   instance. `--delete-data <env>` takes no
+   snapshot. Managed Databases offer no deletion protection, so these snapshots are the
+   databases' only guard.
+2. Applies `destroying=true` to the artifacts bucket that the Terraform state still holds, so
+   Terraform may empty it, then runs `terraform destroy`.
+3. Keeps both projects, the state bucket, the applications and keys bootstrap made, the VM keys
+   in the `deploy` scope, and the secrets `vecten secret set` and `vecten user add-admin`
+   stored. The secrets Terraform created go with the environment: the instances' admin
+   credentials and the passwords the VMs generate. It clears `deployed_commit` in
+   `vecten.toml`; push that with `vecten github push`, so the `ship` workflow stops shipping.
+[%- if 'mcp' in components %]
+   A new deploy starts with an empty `state` database unless you restore its final snapshot,
+   so destroy also clears in `vecten.toml` the MCP steps recorded there: the first user, the
+   admin link and the connector grants. `vecten next` walks them again.
+[%- endif %]
+
+Running destroy again after a partial run is safe: a Terraform root whose state is empty is
+reported and left alone, and an instance Scaleway reports gone gets no snapshot. Without stored
+outputs, destroy cannot tell which databases to snapshot and refuses unless
+`--delete-data <env>` is given. When the plan of step 2 would create or delete anything,
+destroy refuses and applies nothing: the environment differs from the committed `deploy/` files
+in a way that would replace a resource, and a person reconciles the two, starting from
+`terraform plan` in `deploy/terraform/scaleway`, before running destroy again.
+
+### Choose before the first deploy
+
+- `region` in `deploy/envs/<env>.tfvars` must equal `region` under `[deploy]` in
+  `vecten.toml`, which was written into `deploy/terraform/scaleway/backend.tf` when the deploy
+  layer was rendered and in which bootstrap creates the state bucket; bootstrap, deploy and
+  destroy refuse a tfvars `region` that differs, naming both values.
+- `database_public_cidrs` opens every instance's public endpoint to the listed address ranges;
+  the default, empty, keeps every instance on the private network only. `vecten user add-admin`
+  needs it. Adding the endpoint to a running instance is not verified to happen in place, so
+  set it before the first deploy when you will want admin access.
+- `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
+  `instance_type_overrides` replaces the server or node type of a host or an instance by its
+  key: `platform`, `mcp`, `main`, `state` or `warehouse`.
+- The Terraform root's provider lock file, `deploy/terraform/scaleway/.terraform.lock.hcl`, is
+  committed. The first local `vecten deploy --env <env> --plan-only` writes it; commit and push
+  it with `vecten github push`, because `vecten deploy` refuses while `deploy/` holds changes
+  GitHub does not have.
+
+### Changes that replace a server or a database
+
+- A change of a VM's server type, through `size`, `platform_size` or
+  `instance_type_overrides`, replaces the VM rather than migrating it: Scaleway cannot move a
+  server between the DEV1 types (the `small` tier, and the `minimal` profile's VM), which boot
+  from a local volume, and the POP2 types (`medium` and `large`), which boot from a Block
+  Storage (SBS) volume. The VM keeps its flexible IP, so its hostnames keep resolving; the new
+  server gets its key and its release from the same `vecten deploy`, and anything kept only on
+  the old server's disk is lost.
+- An SBS volume can grow but never shrink. Lowering a POP2 VM's size or a database instance's
+  storage takes a new volume, so it replaces the VM, or the instance by the procedure below.
+- An apply that would delete or replace a database instance is refused: `vecten deploy` exits
+  4 naming the instance and applies nothing, because Managed Databases offer no deletion
+  protection. Revert the change that causes it, or replace the instance deliberately, by hand:
+  take a snapshot (`scw rdb snapshot create instance-id=<instance id> region=<region>
+  name=<prefix>-<instance>-before-replace`), wait until `scw rdb snapshot get <snapshot id>
+  region=<region>` reports `ready`, run `terraform apply` in `deploy/terraform/scaleway` with
+  the deploy key, then restore the data from the snapshot as "Restore the warehouse" describes.
+[% if 'platform' in components and warehouse == 'postgres' %]
+### Postgres log prefix
+
+Managed Databases do not let a customer set `log_line_prefix`, so the instance holding
+`warehouse` logs in Scaleway's own format, which the module leaves as it is:
+`[% raw %]%t [%p]: user=%u,db=%d,app=%a,client=%h[% endraw %]`. At the instance's default settings the log
+holds checkpoints and server events but no line per client session or failed statement, so it
+does not trace a query to a person.[% if 'mcp' in components %]
+A person's query through the MCP runs as `impersonator` with the person's warehouse name as
+`application_name`: it names the person in `pg_stat_activity`, `pg_stat_statements` attributes
+the query to the person's role, and the MCP audit records it; the audit is the record of who
+ran what.[% endif %] Cockpit's PostgreSQL dashboard can show no data for the project; read the
+instance's log from the Managed Databases API instead, a whole UTC day per file:
+
+    scw rdb log download <instance id> region=<region> from=<RFC 3339> to=<RFC 3339> output=<file>
+[% endif %][% endif %][% if render_deploy %]
+### One queue per environment
+
+Apply and ship runs for an environment share the GitHub Actions concurrency group
+`deploy-<env>`. GitHub runs one at a time and keeps at most one pending run per group, so a
+newer run cancels the pending one: a ship queued behind a running apply can cancel a pending
+apply, or the reverse. `vecten deploy` on the laptop then reports that its run ended
+`cancelled`, with the run's address; run it again.
+
+### Certificates
+
+On a host's first ship the VM agent waits up to five minutes for each of its hostnames to
+resolve to the VM's address, then requests a Let's Encrypt certificate with certbot, at most
+three attempts per ship. Let's Encrypt allows five failed validations per hostname per hour, so
+two failed ships within an hour can reach that limit; wait an hour before shipping again. The
+module creates A records only, so a stale AAAA (IPv6) record for the same name in the zone can
+send the validation to another server: remove it. A systemd timer on the VM renews the
+certificates daily.
+[% if warehouse == 'snowflake' and 'platform' in components %]
+### Snowflake
+
+`vecten deploy` also applies the Terraform root `deploy/terraform/snowflake`, with its state at
+`<env>/snowflake.tfstate` in the state bucket. It creates in your Snowflake account the
+database, the schemas `STAGING`, `SNAPSHOTS`, `CORE` and `MARTS`, the roles `ANALYST`, `LOADER`
+and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a warehouse named
+`<PROJECT>_<ENV>_WH`.
+
+- The account is the `ORGANIZATION-ACCOUNT` identifier in `snowflake_account` in
+  `deploy/envs/<env>.tfvars` and `account` under `[warehouse]` in `vecten.toml`, which
+  `vecten deploy` refuses unless they agree. `vecten answer snowflake_account <ORG-ACCOUNT>`
+  followed by `vecten init --deploy` writes both for `prod`.
+- One environment per Snowflake account: the role names, the `LOADER` user and the database's
+  name are the same for every environment, so a second environment in the same account collides
+  with the first. They also collide with roles or a user of the same names already in the
+  account; check before the first deploy.
+- Terraform signs in as a deploy user with key-pair authentication. Create that user with a
+  default role that holds
+  CREATE DATABASE, CREATE WAREHOUSE, CREATE ROLE, CREATE USER and MANAGE GRANTS
+  on the account. MANAGE GRANTS lets the first apply set the future grants in `CORE` and
+  `MARTS` through which `ANALYST` reads every table dbt builds there. Then store the user's
+  name and private key:
+  `vecten secret set DEPLOY_SNOWFLAKE_USER --env <env>` and
+  `vecten secret set DEPLOY_SNOWFLAKE_PRIVATE_KEY --env <env> < <private key file>`.
+  `vecten deploy` refuses while either is missing.
+- The first plan generates the `LOADER` user's key pair and stores the private key as
+  `SNOWFLAKE_LOADER_PRIVATE_KEY`; only the public key reaches Terraform.
+- Pull-request plans cover the [% if cloud == 'aws' %]AWS root only, because the plan role reads no `deploy` secret[% else %]Scaleway root only, because the plan key reads no secret[% endif %];
+  the Snowflake root is planned when the `terraform-apply` workflow is dispatched.
+- `vecten destroy` keeps the Snowflake database, and its Terraform root, unless
+  `--delete-data <env>` is given.
+[%- if 'mcp' in components %] Either way the users and roles `PROVISIONER` created stay,
+  and destroy clears the provisioner script's confirmation, so the next deploy ships no host
+  until the script has run again. Its last query lists a `DROP` for each user and role
+  `PROVISIONER` owns: after a restore of the `state` snapshot they are the MCP's own and stay;
+  without one the new MCP state knows none of them and refuses to start beside them, so have
+  an ACCOUNTADMIN run those `DROP`s. The query before it prints a `REVOKE` for each grant
+  `PROVISIONER` holds outside this project's database and warehouse, which an install in
+  another database left and the MCP equally refuses.
+[%- endif %]
+[% if 'mcp' in components -%]
+- The MCP signs in to Snowflake as `VECTEN_PROVISIONER`, which only an ACCOUNTADMIN can set up,
+  in the database the first deploy creates. So the first deploy ships no host. Then run
+  `vecten mcp provisioner-script --env <env>`, which stores the provisioner's key pair as
+  `MCP_PROVISIONER_PRIVATE_KEY` and prints the SQL. Have an ACCOUNTADMIN run it, record it with
+  `--confirm-run`, and `vecten github push`: the ship workflow then ships every host.
+[% endif -%]
+[% endif %][% endif %]
+[% if render_deploy and 'mcp' in components %]
+## First sign-in to the MCP
+
+After the first deploy, `vecten next` walks these steps; this is what each one does.
+
+- **OIDC, the default.** Record the issuer and client id with
+  `vecten answer mcp.oidc_issuer <url>` and `vecten answer mcp.oidc_client_id <id>`, and the
+  first admin with `vecten answer mcp.admins <email>`. Register
+  `https://mcp.[[ domain ]]/oidc/callback` as an allowed redirect for that client in the
+  identity provider. If the provider issued a client secret, store it with
+  `vecten secret set MCP_OIDC_CLIENT_SECRET --env <env>`. Then
+  `vecten answer oidc_registered.<env> yes`. The first login of an address in `[mcp] admins`
+  makes that person an admin.
+- **Password sign-in.** `vecten answer mcp.auth password` opts out of OIDC. Then
+  `vecten mcp admin-link --env <env>` prints the set-password page and a one-time token that
+  sets the first admin's password once, within 15 minutes; run it again if it lapses. It runs with your cloud credentials, so it also
+  recovers an admin who lost their password.
+- **Push and wait.** Each answer changes `vecten.toml`; `vecten github push` commits it and
+  waits for the ship that carries it to the MCP.
+- **Sign in on this machine.** `vecten login --env <env>` signs the admin in; `vecten user`,
+  `group` and `grant` then act as that person. The session lasts up to seven days;
+  `vecten logout --env <env>` ends it.
+[% endif %]
+
+## Upgrading this project
+
+Install the desired Vecten release, keeping all four Vecten packages at that version, then
+run `vecten update --json`. The installed CLI supplies the target release; the command does
+not download software, restart the stack or deploy infrastructure. Commit the project first.
+Keep `.copier-answers.yml` and `.copier-baseline.json` in Git: they record the original
+answers and pristine generated files used to merge your edits with later releases.
+
+A successful result lists changed paths. A conflict exits 4 and lists paths while leaving
+all files unchanged. Back up your edited files, compare each with its pristine baseline and
+the new template, reconcile overlapping edits and retry. Do not delete the baseline to force
+an update. An internal project without a baseline must initialize it with its original CLI
+release before installing a newer release.
+
+[% if 'platform' in components %]
+Run `vecten dbt-build-local --check` after the update. It tests the model conventions and
+checks that the generated semantic datasets agree with the models. If model definitions
+changed, run without `--check` first, review the regenerated datasets, then check again.
+[% endif %]
+Run `vecten mcp validate`, review and commit the changed files. The next local `vecten up`
+uses the installed release's images. A deployed project ships content when changes reach its
+default branch after the first deployment; infrastructure changes require a separate reviewed
+plan and approved `vecten deploy --env <env>`.

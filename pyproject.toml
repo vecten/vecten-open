@@ -1,0 +1,60 @@
+[project]
+name = "vecten-open-workspace"
+version = "0.0.0"
+requires-python = ">=3.14"
+description = "Workspace root for Vecten Open; not published."
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+vecten = { workspace = true }
+vecten-platform = { workspace = true }
+vecten-mcp = { workspace = true }
+vecten-shared = { workspace = true }
+
+[dependency-groups]
+browser = [
+    "playwright>=1.56,<2",
+]
+dev = [
+    "pytest>=9.1,<10",
+    "pytest-timeout>=2.3,<3",
+    "ruff>=0.17,<0.18",
+    "httpx>=0.28,<1",
+    "packaging>=24,<27",
+    "psycopg[binary]>=3.3,<3.4",
+    "moto[s3,secretsmanager,iam,sts,ssm,rds]>=5.2,<6",
+    "pytest-xdist>=3.8,<4",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["packages/vecten/src", "packages/vecten-platform/src", "packages/vecten-mcp/src", "packages/vecten-shared/src"]
+
+# The VM agent runs on the host's system python3, 3.9 on Amazon Linux 2023.
+[tool.ruff.per-file-target-version]
+"packages/vecten/src/vecten/deploy/vm/apply.py" = "py39"
+"terraform/scaleway/modules/host/agent/apply.py" = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/vecten/tests", "packages/vecten-platform/tests", "packages/vecten-mcp/tests", "packages/vecten-shared/tests"]
+markers = [
+    "browser: runs Chromium and WebKit against local fixtures",
+    "docker: needs a reachable Docker daemon",
+    "network: reaches GitHub or PyPI",
+    "terraform: runs the terraform binary with providers from the registry",
+    "snowflake_live: runs against a real Snowflake account (the snowflake-live workflow)",
+]
+addopts = ["--import-mode=importlib"]
+timeout = 600
+filterwarnings = [
+    "error",
+]

@@ -1,0 +1,21 @@
+{
+  "context": {
+    "datasets": [
+      "store_sales",
+      "item"
+    ],
+    "relationship": {
+      "from": "store_sales",
+      "from_columns": [
+        "SS_ITEM_SK"
+      ],
+      "name": "store_sales_to_item",
+      "to": "item",
+      "to_columns": [
+        "I_ITEM_SK"
+      ]
+    }
+  },
+  "reason": "join_required",
+  "skeleton": "SELECT /* complete the requested calculation */ * FROM VECTEN_CI.MARTS.STORE_SALES AS \"store_sales\" JOIN VECTEN_CI.CORE.ITEM AS \"item\" ON \"store_sales\".\"SS_ITEM_SK\" = \"item\".\"I_ITEM_SK\""
+}

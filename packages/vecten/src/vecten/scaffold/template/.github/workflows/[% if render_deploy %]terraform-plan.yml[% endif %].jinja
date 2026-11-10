@@ -1,0 +1,91 @@
+name: terraform-plan
+on:
+  pull_request:
+    paths: ["deploy/**", "vecten.toml"]
+  push:
+    branches: [main]
+    paths: ["deploy/**", "vecten.toml"]
+permissions:
+  contents: read
+jobs:
+[%- if cloud == 'aws' %]
+  # Reads vecten.toml only: before `vecten bootstrap` there is no role to assume, and the
+  # workflow must still finish green.
+[%- else %]
+  # Reads vecten.toml only: before `vecten bootstrap` there is no plan key to sign with, and
+  # the workflow must still finish green.
+[%- endif %]
+  gate:
+    runs-on: [[ github_runner ]]
+    permissions:
+      contents: read
+    outputs:
+      bootstrapped: ${{ steps.facts.outputs.bootstrapped }}
+    steps:
+      - uses: [[ action_checkout ]]
+      - uses: [[ action_setup_uv ]]
+      - run: uv tool install "vecten==[[ vecten_version ]]"
+      - id: facts
+        run: vecten deploy --env prod --check
+  plan:
+    needs: gate
+    if: needs.gate.outputs.bootstrapped == 'true'
+    runs-on: [[ github_runner ]]
+    permissions:
+[%- if cloud == 'aws' %]
+      id-token: write
+[%- endif %]
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: [[ action_checkout ]]
+      - uses: [[ action_setup_uv ]]
+      - uses: [[ action_setup_terraform ]]
+        with:
+          terraform_version: "~[[ terraform_engine ]].0"
+          # The wrapper adds a [command] line to stdout, which breaks `terraform output -json`.
+          terraform_wrapper: false
+      - run: uv tool install "vecten==[[ vecten_version ]]"
+[%- if cloud == 'aws' %]
+      # A pull request's code runs in this job, so it declares no environment and assumes the
+      # read-only plan role, never the deploy role.
+      - uses: [[ action_configure_aws_credentials ]]
+        with:
+          role-to-assume: ${{ vars.VECTEN_AWS_PLAN_ROLE_ARN_PROD }}
+          aws-region: [[ region | tojson ]]
+      # The plan role reads no deploy-scope secret, so a Snowflake root is planned on dispatch.
+      - run: vecten deploy --env prod --plan-only --cloud-only --json
+[%- else %]
+      # A pull request's code runs in this job, so it declares no environment and signs with
+      # the plan key, never the deploy key. Scaleway IAM offers no OIDC federation, so
+      # `vecten bootstrap` stores that key as repository secrets. The plan key reads Terraform
+      # state, writes only its lock objects and reads no secret, so a Snowflake root is planned
+      # on dispatch.
+      - run: vecten deploy --env prod --plan-only --cloud-only --json
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.VECTEN_SCW_PLAN_ACCESS_KEY_PROD }}
+          SCW_SECRET_KEY: ${{ secrets.VECTEN_SCW_PLAN_SECRET_KEY_PROD }}
+[%- endif %]
+      - name: Comment the plan
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plan=.vecten/plans/prod.txt
+          body="$RUNNER_TEMP/plan-comment.md"
+          # GitHub refuses a comment over 65,536 characters; a byte count bounds the
+          # character count from above.
+          limit=60000
+          {
+            echo "Terraform plan for prod, cloud root:"
+            echo
+            echo '````diff'
+            head -c "$limit" "$plan"
+            echo
+            echo '````'
+            if [ "$(wc -c < "$plan")" -gt "$limit" ]; then
+              echo
+              echo "The plan was truncated to its first $limit bytes; \`vecten deploy --env prod --plan-only\` writes it whole to $plan."
+            fi
+          } > "$body"
+          gh pr comment ${{ github.event.pull_request.number }} --body-file "$body"

@@ -1,0 +1,54 @@
+[project]
+name = "vecten"
+version = "0.1.0"
+description = "Vecten Open: one CLI over a data platform bootstrap and a data MCP"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [{ name = "Vecten" }]
+keywords = ["cli", "data platform", "mcp", "dlt", "airflow", "dbt", "semantic layer", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX",
+    "Topic :: Database",
+    "Topic :: Software Development :: Build Tools",
+    "Environment :: Console",
+]
+dependencies = [
+    "vecten-shared==0.1.0",
+    "vecten-platform==0.1.0",
+    "typer>=0.15,<1",
+    "copier>=9.4,<10",
+    "packaging>=24,<27",
+    "tomlkit>=0.15,<1",
+    "jinja2>=3.1,<4",
+    "pyyaml>=6.0,<7",
+    "cryptography>=50,<51",
+    "httpx>=0.28,<1",
+    "psycopg[binary]>=3.3,<3.4",
+    "snowflake-connector-python>=4.8,<4.9",
+    "filelock>=3.32,<4",
+]
+
+[project.urls]
+Homepage = "https://github.com/vecten/vecten-open"
+Source = "https://github.com/vecten/vecten-open"
+Documentation = "https://github.com/vecten/vecten-open/blob/main/docs/README.md"
+Issues = "https://github.com/vecten/vecten-open/issues"
+Changelog = "https://github.com/vecten/vecten-open/blob/main/CHANGELOG.md"
+Security = "https://github.com/vecten/vecten-open/security/policy"
+
+[project.scripts]
+vecten = "vecten.cli.app:main"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vecten"]
+# The skill evals are test material read from the source tree; the wheel ships the skills only.
+exclude = ["src/vecten/knowhow/skills/*/evals/**"]

@@ -1,0 +1,151 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  UV_PYTHON: "3.14"
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --all-packages
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - name: extension contracts and edition boundary in release wheels
+        run: |
+          uv build --all-packages --wheel --out-dir /tmp/vecten-extension-wheels
+          uv build packages/vecten/tests/fixtures/extension --wheel --out-dir /tmp/vecten-extension-wheels
+          uv run python scripts/check_extension_wheels.py /tmp/vecten-extension-wheels
+      - name: versions table agrees with image build args
+        run: |
+          expected=$(uv run python -c "import tomllib;print(tomllib.load(open('packages/vecten-shared/src/vecten_shared/versions.toml','rb'))['images']['airflow'])")
+          tag=${expected##*:}
+          version=${tag%%-*}
+          args=$(uv run vecten dev build-images --print --json)
+          grep -qF "AIRFLOW_IMAGE=${expected}\"" <<<"$args"
+          grep -qF "AIRFLOW_VERSION=${version}\"" <<<"$args"
+  test:
+    runs-on: ubuntu-24.04
+    # The unmarked tests include dbt builds on the Snowflake emulation, each under a minute.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --all-packages
+      # --shard deals every sixth test to this job, and loadgroup keeps an xdist_group on one
+      # worker, as the shard keeps it in one job.
+      - run: >-
+          uv run pytest -m "not docker and not network and not terraform and not browser and not snowflake_live"
+          -q -n auto --dist loadgroup --shard ${{ matrix.shard }}/6
+  browser-auth:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --all-packages --group browser
+      - run: uv run --group browser playwright install --with-deps chromium webkit
+      - run: uv run --group browser pytest packages/vecten-mcp/tests/test_oauth_browser.py packages/vecten/tests/test_eval_harness_person_tools.py -q
+
+  render-matrix:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --all-packages
+      - name: Read pinned Terraform version
+        id: terraform
+        run: echo "version=$(uv run python -c 'from vecten_shared.versions import VERSIONS; print(VERSIONS.terraform)')" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ~${{ steps.terraform.outputs.version }}.0
+          terraform_wrapper: false
+      # The unmarked tests of these modules run in the test shards. Each terraform test inits
+      # its own root and downloads its providers, so the tests wait on the network side by side.
+      - run: >-
+          uv run pytest packages/vecten/tests/test_terraform_modules.py -m terraform -q -n 4
+          --shard ${{ matrix.shard }}/2 --durations=20
+
+  laptop-e2e:
+    runs-on: ubuntu-24.04
+    # Every part that runs a stack test builds the Airflow base image (about 3 GB) from scratch.
+    # pytest's --timeout bounds each test at 40 minutes and is the binding limit: the job limit
+    # sits above a part's two longest tests so that a hang fails as a test, with its traceback.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # The longest e2e tests each get a runner; every other docker or network test, including
+        # any new one, falls to the two `rest` halves. Each runner has its own ports, so the
+        # stack tests, which publish fixed ones, never meet.
+        include:
+          - part: connector
+            tests: packages/vecten/tests/test_connector_e2e.py
+          - part: pipeline
+            tests: packages/vecten/tests/test_laptop_pipeline_e2e.py
+          - part: images
+            tests: >-
+              packages/vecten-platform/tests/test_sync_dag_in_image.py
+              packages/vecten-platform/tests/test_dbt_dag_in_image.py
+              packages/vecten/tests/test_up_e2e.py
+          - part: rest-1
+            tests: --shard 1/2 $REST
+          - part: rest-2
+            tests: --shard 2/2 $REST
+    env:
+      REST: >-
+        packages/vecten-shared/tests packages/vecten-mcp/tests
+        packages/vecten-platform/tests/test_dbt_local_warehouse.py packages/vecten/tests
+        --ignore=packages/vecten/tests/test_connector_e2e.py
+        --ignore=packages/vecten/tests/test_laptop_pipeline_e2e.py
+        --ignore=packages/vecten/tests/test_up_e2e.py
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --all-packages
+      - run: docker info
+      # The local stack binds 127.0.0.1:55432, which a holder outside the tests occasionally
+      # takes; only root sees docker-proxy's process. Logged before the tests and again on
+      # failure, since an earlier test's stack in the same run can hold it too.
+      - name: Who holds port 55432
+        run: |
+          sudo ss -ltnp 'sport = :55432'
+          docker ps --format '{{.ID}} {{.Names}} {{.Ports}}'
+      - run: uv run pytest -m "docker or network" -q -x --timeout 2400 --durations=20 ${{ matrix.tests }}
+      - name: Who holds port 55432 after a failure
+        if: failure()
+        run: |
+          sudo ss -ltnp 'sport = :55432'
+          docker ps -a --format '{{.ID}} {{.Names}} {{.Status}} {{.Ports}}'

@@ -1,0 +1,34 @@
+# Thin root module. The module body is owned by the vecten release named in `ref`;
+# `vecten update` is the only thing that moves it.
+terraform {
+  required_version = "~> [[ terraform_engine ]].0"
+
+  required_providers {
+    snowflake = {
+      source  = "snowflakedb/snowflake"
+      version = "~> [[ terraform_snowflake_provider ]].0"
+    }
+  }
+}
+
+# `vecten deploy` signs in as the deploy user from the SNOWFLAKE_* environment it builds
+# from the secrets store, so no credential is written here or reaches the state. The module
+# reads the role Terraform runs as, a preview data source no environment variable enables.
+provider "snowflake" {
+  preview_features_enabled = ["snowflake_current_role_datasource"]
+}
+
+module "snowflake" {
+  source = "git::https://github.com/vecten/vecten-open.git//terraform/snowflake?ref=[[ terraform_module_ref ]]"
+
+  environment  = var.environment
+  project_name = var.project_name
+  size         = var.size
+  components   = var.components
+  account      = var.snowflake_account
+
+  database_name     = var.database_name
+  warehouse_name    = var.warehouse_name
+  warehouse_size    = var.warehouse_size
+  loader_public_key = var.loader_public_key
+}

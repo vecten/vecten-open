@@ -1,0 +1,357 @@
+"""One content bundle per host: the project's content at a commit and the stack for that host.
+
+The VM agent extracts a bundle to `/opt/vecten/releases/<commit>/` and runs from it, so the
+layout here is the agent's contract: `.vecten/ship/host.json` (every key in
+`vm.apply.HOST_KEYS`), `.vecten/ship/apply.py`, `.vecten/ship/warehouse_setup.sql`,
+`.vecten/environments/<env>.json` and `.vecten/stack/` rendered in vm mode.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+import os
+import re
+import shutil
+import tarfile
+import tempfile
+from importlib import resources
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from vecten.deploy.feedback import feedback_manifest
+from vecten.deploy.names import name_prefix
+from vecten.deploy.outputs import outputs_text
+from vecten.deploy.sizing import tier
+from vecten.deploy.tfvars import check_tfvars
+from vecten.deploy.vm.apply import HOST_KEYS, PLUGIN_DIRS
+from vecten.github.gh import ToolRunner, get_git
+from vecten.stack.compose import (
+    PROJECT_MOUNTS,
+    STACK_DIR,
+    connector_secrets,
+    generate_compose,
+    vm_hostnames,
+    write_extension_dag_loader,
+)
+from vecten.stack.images import write_project_layer
+from vecten.stack.nginx import write_nginx
+from vecten.stack.up import PUBLISHED_REGISTRY
+from vecten_shared.config import VectenConfig
+from vecten_shared.output import ExitCode, Failure
+from vecten_shared.provider.environment import EnvironmentOutputs
+from vecten_shared.records import write_text_atomic
+from vecten_shared.sql import setup_sql_path
+from vecten_shared.versions import VERSIONS
+
+CONTENT: tuple[str, ...] = (
+    "vecten.toml",
+    "requirements.txt",
+    "requirements.lock",
+    "requirements-airflow.lock",
+    "requirements-mcp.lock",
+    "orchestration/dags",
+    "orchestration/docker-compose.override.yml",
+    "connectors",
+    "dbt",
+    "osi",
+    "evals",
+)
+SHIP_DIR = Path(".vecten") / "ship"
+DBT_DIR = "dbt"
+ENVIRONMENTS_DIR = Path(".vecten") / "environments"
+SKIPPED_NAMES = frozenset({".git", ".venv", "__pycache__", ".terraform", ".DS_Store"})
+SKIPPED_SUFFIXES = (".pyc",)
+# dbt writes these on every run and vecten regenerates the package files before each build,
+# so they belong to the machine that ran dbt, not to the commit.
+SKIPPED_PATHS = frozenset(
+    {"dbt/target", "dbt/logs", "dbt/dbt_packages", "dbt/packages.yml", "dbt/package-lock.yml"}
+)
+# Every member carries this mtime and owner, so a bundle's bytes depend on its content only.
+MEMBER_MTIME = 0
+DEFAULT_PLATFORM_SIZE = "small"
+# The commit names the release directory on the VM and appears in its shell commands.
+_COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
+
+def check_commit(commit: str) -> str:
+    if not _COMMIT.fullmatch(commit):
+        raise Failure(ExitCode.INTERNAL, f"{commit!r} is not a full git commit id")
+    return commit
+
+
+def head_commit(git: ToolRunner, project_root: Path) -> str:
+    result = git.run(["rev-parse", "HEAD"], project_root)
+    commit = result.stdout.strip()
+    if result.returncode != 0 or not _COMMIT.fullmatch(commit):
+        raise Failure(
+            ExitCode.TOOL_FAILED,
+            f"git rev-parse HEAD named no commit in {project_root}; ship from a git checkout",
+        )
+    return commit
+
+
+def bundle_name(host: str, commit: str) -> str:
+    return f"{host}-{commit}.tar.gz"
+
+
+def build_lineage(project_root: Path, commit: str) -> dict:
+    check_commit(commit)
+    try:
+        result = get_git().run(["rev-list", commit], project_root)
+    except OSError:
+        return {"commit": commit, "ancestors": []}
+    commits = result.stdout.splitlines() if result.returncode == 0 else []
+    if not commits or commits[0] != commit or not all(_COMMIT.fullmatch(c) for c in commits):
+        commits = []
+    # A shallow checkout proves only the ancestors present in it; omitted ancestry
+    # leaves the model waiting for an exact build instead of guessing commit order.
+    return {"commit": commit, "ancestors": sorted(set(commits) - {commit})}
+
+
+def compose_project(config: VectenConfig, env: str) -> str:
+    """The Compose project on a VM; one per environment, independent of any checkout path."""
+    return name_prefix(config.project.name, env)
+
+
+def _skipped(rel: str, name: str) -> bool:
+    return (
+        name in SKIPPED_NAMES
+        or name == ".env"
+        or name.startswith(".env.")
+        or name.endswith(SKIPPED_SUFFIXES)
+        or rel in SKIPPED_PATHS
+    )
+
+
+def _refuse_link(rel: str) -> Failure:
+    # A link could point anywhere on the machine that builds the bundle or on the VM.
+    return Failure(ExitCode.CONFIG, f"{rel} is a symbolic link; a shipped project holds files only")
+
+
+def _copy_tree(project_root: Path, stage: Path, top: str) -> None:
+    source = project_root / top
+    for directory, dirs, files in os.walk(source):
+        here = Path(directory)
+        rel_dir = here.relative_to(project_root).as_posix()
+        (stage / rel_dir).mkdir(parents=True, exist_ok=True)
+        kept = []
+        for name in sorted(dirs):
+            rel = f"{rel_dir}/{name}"
+            if (here / name).is_symlink():
+                raise _refuse_link(rel)
+            if not _skipped(rel, name):
+                kept.append(name)
+        dirs[:] = kept
+        for name in sorted(files):
+            rel = f"{rel_dir}/{name}"
+            if (here / name).is_symlink():
+                raise _refuse_link(rel)
+            if not _skipped(rel, name):
+                shutil.copyfile(here / name, stage / rel)
+
+
+def _copy_content(project_root: Path, stage: Path) -> None:
+    for entry in CONTENT:
+        source = project_root / entry
+        if source.is_symlink():
+            raise _refuse_link(entry)
+        if source.is_file():
+            (stage / entry).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, stage / entry)
+        elif source.is_dir():
+            _copy_tree(project_root, stage, entry)
+
+
+def _render_stack(
+    stage: Path,
+    config: VectenConfig,
+    outputs: EnvironmentOutputs,
+    components: list[str],
+    project: str,
+) -> None:
+    stack_dir = stage / STACK_DIR
+    stack_dir.mkdir(parents=True, exist_ok=True)
+    for source, empty, _ in PROJECT_MOUNTS:
+        if not (stack_dir / source).is_dir():
+            (stack_dir / "empty" / empty).mkdir(parents=True, exist_ok=True)
+    write_extension_dag_loader(stack_dir)
+    hosts = vm_hostnames(outputs)
+    doc = generate_compose(config, "vm", components, stack_dir, project=project, hosts=hosts)
+    write_text_atomic(stack_dir / "docker-compose.yml", yaml.safe_dump(doc, sort_keys=False))
+    write_nginx(
+        stack_dir,
+        components,
+        hosts,
+        "vm",
+        admin_panel=config.mcp.admin_panel,
+        admin_allow=config.mcp.admin_allow,
+    )
+    write_project_layer(stack_dir, config, PUBLISHED_REGISTRY)
+
+
+def _host_tier(host: str, cloud: str, tfvars: dict[str, Any]) -> dict[str, Any]:
+    # The platform VM runs untrusted DAG code and stays small unless tfvars says otherwise;
+    # every other host follows the environment's size.
+    size = (
+        tfvars.get("platform_size", DEFAULT_PLATFORM_SIZE) if host == "platform" else tfvars["size"]
+    )
+    return tier(cloud, size)
+
+
+def _project_id(config: VectenConfig, env: str, cloud: str) -> str:
+    """The Scaleway resources project the VM's Secret Manager calls name; empty on AWS."""
+    if cloud != "scaleway":
+        return ""
+    facts = config.environments.get(env)
+    project_id = facts.cloud_ids.get("project") if facts else None
+    if not project_id:
+        raise Failure(
+            ExitCode.CONFIG,
+            f'vecten.toml: [environments.{env}] cloud_ids["project"] is not set; '
+            f"run `vecten bootstrap --env {env}`",
+        )
+    return project_id
+
+
+def host_document(
+    config: VectenConfig,
+    env: str,
+    outputs: EnvironmentOutputs,
+    host: str,
+    commit: str,
+    tfvars: dict[str, Any],
+) -> dict[str, Any]:
+    if config.deploy is None:
+        raise Failure(ExitCode.REFUSED, "no deploy answers; run `vecten init --deploy` first")
+    cloud = config.deploy.cloud
+    sizing = _host_tier(host, cloud, tfvars)
+    doc = {
+        "host": host,
+        "cloud": cloud,
+        "components": list(outputs.hosts[host].components),
+        "env": env,
+        "project": config.project.name,
+        "region": outputs.region,
+        "project_id": _project_id(config, env, cloud),
+        "bucket": outputs.bucket,
+        "commit": commit,
+        "setup_host": outputs.setup_host == host,
+        "hostnames": list(outputs.hosts[host].hostnames),
+        "secret_prefix": outputs.secret_prefix,
+        "compose_project": compose_project(config, env),
+        "connector_secrets": connector_secrets(config),
+        "private_package_index": config.packages.private_index,
+        "compose_plugin_version": VERSIONS.docker_compose_plugin,
+        "buildx_plugin_version": VERSIONS.docker_buildx_plugin,
+        "certbot_image": VERSIONS.certbot_image,
+        "postgres_image": f"postgres:{VERSIONS.postgres_major}",
+        "airflow_parallelism": sizing["airflow_parallelism"],
+        "mcp_pool_cap": sizing["mcp_pool_cap"],
+        "plugin_dir": PLUGIN_DIRS[cloud],
+    }
+    if set(doc) != set(HOST_KEYS):
+        raise Failure(ExitCode.INTERNAL, "host.json keys differ from the agent's HOST_KEYS")
+    return doc
+
+
+def _write_ship_files(stage: Path, env: str, outputs: EnvironmentOutputs, host_doc: dict) -> None:
+    (stage / ENVIRONMENTS_DIR).mkdir(parents=True, exist_ok=True)
+    write_text_atomic(stage / ENVIRONMENTS_DIR / f"{env}.json", outputs_text(outputs))
+    ship_dir = stage / SHIP_DIR
+    ship_dir.mkdir(parents=True, exist_ok=True)
+    write_text_atomic(ship_dir / "host.json", json.dumps(host_doc, indent=2, sort_keys=True) + "\n")
+    agent = resources.files("vecten.deploy.vm").joinpath("apply.py").read_text(encoding="utf-8")
+    write_text_atomic(ship_dir / "apply.py", agent)
+    shutil.copyfile(setup_sql_path(), ship_dir / "warehouse_setup.sql")
+
+
+def _normalised(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    info.mtime = MEMBER_MTIME
+    # Airflow runs in group 0 and dbt writes into its own project directory.
+    writable = info.name == DBT_DIR or info.name.startswith(f"{DBT_DIR}/")
+    # No file needs an execute bit: the agent is started as `python3 <path>`.
+    if info.isdir():
+        info.mode = 0o775 if writable else 0o755
+    else:
+        info.mode = 0o664 if writable else 0o644
+    return info
+
+
+def _write_tarball(stage: Path, target: Path) -> None:
+    entries = sorted((p.relative_to(stage).as_posix(), p) for p in stage.rglob("*"))
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with (
+            os.fdopen(fd, "wb") as raw,
+            gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz,
+            tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar,
+        ):
+            for name, path in entries:
+                info = _normalised(tar.gettarinfo(str(path), arcname=name))
+                if info.isfile():
+                    with path.open("rb") as handle:
+                        tar.addfile(info, handle)
+                else:
+                    tar.addfile(info)
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def prepare_bundle_metadata(project_root, config, commit, *, with_mcp=True):
+    """Collect external verification before any host in an environment is changed."""
+    lineage = build_lineage(project_root, commit)
+    feedback = (
+        feedback_manifest(project_root, config, commit, lineage)
+        if with_mcp
+        else {**lineage, "resolutions": [], "unreviewed": []}
+    )
+    return lineage, feedback
+
+
+def build_host_bundle(
+    project_root: Path,
+    config: VectenConfig,
+    env: str,
+    outputs: EnvironmentOutputs,
+    host: str,
+    commit: str,
+    out_dir: Path,
+    *,
+    metadata: tuple | None = None,
+) -> Path:
+    """Write `<out_dir>/<host>-<commit>.tar.gz`; equal inputs give byte-identical tarballs."""
+    check_commit(commit)
+    if host not in outputs.hosts:
+        raise Failure(
+            ExitCode.INTERNAL,
+            f"host {host!r} is not in the outputs of {env!r}; hosts: {', '.join(outputs.hosts)}",
+        )
+    tfvars = check_tfvars(project_root, config, env)
+    host_doc = host_document(config, env, outputs, host, commit, tfvars)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / bundle_name(host, commit)
+    with tempfile.TemporaryDirectory(dir=out_dir, prefix=".bundle-") as tmp:
+        stage = Path(tmp)
+        _copy_content(project_root, stage)
+        _render_stack(stage, config, outputs, host_doc["components"], host_doc["compose_project"])
+        _write_ship_files(stage, env, outputs, host_doc)
+        lineage, feedback = metadata or prepare_bundle_metadata(
+            project_root, config, commit, with_mcp="mcp" in host_doc["components"]
+        )
+        write_text_atomic(
+            stage / SHIP_DIR / "build-lineage.json",
+            json.dumps(lineage, sort_keys=True) + "\n",
+        )
+        write_text_atomic(
+            stage / SHIP_DIR / "feedback.json",
+            json.dumps(feedback, sort_keys=True) + "\n",
+        )
+        _write_tarball(stage, target)
+    return target

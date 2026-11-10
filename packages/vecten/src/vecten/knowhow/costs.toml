@@ -1,0 +1,41 @@
+# Approximate monthly list prices in USD, dated `gathered_on`, awaiting a maintainer
+# check against the public price pages. `estimate` sums the lines for the chosen
+# components and profile.
+gathered_on = 2026-10-16
+
+[aws.vm]
+small = 35      # t3.medium, 2 vCPU 4 GB, with an Elastic IP
+medium = 70     # t3.large
+large = 140     # t3.xlarge
+minimal = 70    # one t3.large, 8 GB floor
+
+[aws.postgres]
+state = 15      # db.t4g.micro, smallest class, 20 GB
+small = 30      # db.t4g.small, 50 GB
+medium = 120    # db.m6g.large, 200 GB
+large = 300     # db.m6g.xlarge, 500 GB
+
+[aws.fixed]
+storage_dns = 5
+
+# Scaleway lists prices in EUR excluding VAT (fr-par, 730 hours a month, read 2026-10-18); each
+# figure is the EUR sum times 1.08 USD per EUR, rounded to whole dollars. Backups and egress are
+# left out.
+[scaleway.vm]
+small = 20      # DEV1-M, 3 vCPU 4 GB, local SSD, with a flexible IP: 14.74 + 3.65 EUR
+medium = 65     # POP2-2C-8G, 30 GB SBS root, flexible IP: 53.66 + 2.85 + 3.65 EUR
+large = 125     # POP2-4C-16G, 50 GB SBS root, flexible IP: 107.31 + 4.75 + 3.65 EUR
+minimal = 38    # one DEV1-L, 4 vCPU 8 GB, the 8 GB floor, flexible IP: 31.27 + 3.65 EUR
+
+[scaleway.postgres]
+state = 36      # DB-PLAY2-NANO, 20 GB sbs_5k: 31.54 + 1.99 EUR
+small = 24      # DB-PLAY2-PICO, 50 GB sbs_5k: 17.01 + 4.97 EUR
+medium = 108    # DB-PRO2-XXS, 200 GB sbs_5k: 80.30 + 19.86 EUR
+large = 227     # DB-PRO2-XS, 500 GB sbs_5k: 160.60 + 49.65 EUR
+
+# The single instance of the minimal profile, where its class differs from the warehouse's.
+[scaleway.postgres_minimal]
+small = 39      # DB-PLAY2-NANO, 50 GB sbs_5k: 31.54 + 4.97 EUR
+
+[scaleway.fixed]
+storage_dns = 7  # DNS zone about 5 EUR, Object Storage and Secret Manager versions about 1 EUR each

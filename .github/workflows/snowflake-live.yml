@@ -1,0 +1,30 @@
+name: snowflake-live
+# Live checks cost real money, so this runs only when started before a release.
+on:
+  workflow_dispatch:
+# The provisioner script's role, user and integration names are account-wide.
+concurrency:
+  group: snowflake-live
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  UV_PYTHON: "3.14"
+jobs:
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VECTEN_SF_CI_ACCOUNT: ${{ vars.VECTEN_SF_CI_ACCOUNT }}
+      VECTEN_SF_CI_PRIVATE_KEY: ${{ secrets.VECTEN_SF_CI_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.14
+      - run: uv sync --locked --all-packages
+      # Without them every test skips and the run would look green.
+      - name: the account and key are configured
+        run: test -n "$VECTEN_SF_CI_ACCOUNT" && test -n "$VECTEN_SF_CI_PRIVATE_KEY"
+      - run: uv run pytest -m snowflake_live -p no:randomly -rs -q packages/vecten-mcp/tests/test_snowflake_live.py

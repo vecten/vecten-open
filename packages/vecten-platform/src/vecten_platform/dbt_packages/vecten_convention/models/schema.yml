@@ -1,0 +1,11 @@
+version: 2
+models:
+  - name: metricflow_time_spine
+    description: Daily calendar from 2000-01-01, which dbt's semantic layer requires once a metric exists.
+    time_spine:
+      standard_granularity_column: date_day
+    columns:
+      - name: date_day
+        description: Calendar day.
+        granularity: day
+        data_tests: [unique, not_null]

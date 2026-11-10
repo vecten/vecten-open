@@ -1,0 +1,524 @@
+/* The Vecten design system for the MCP's sign-in pages and admin panel. Same-origin only: the
+   pages' CSP admits no other source for styles or fonts. */
+
+@font-face {
+  font-family: "Geist";
+  src: url("/assets/fonts/Geist-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/assets/fonts/GeistMono-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light dark;
+
+  --midnight-50: #eef3f9;
+  --midnight-100: #dae4f1;
+  --midnight-200: #b5c9e3;
+  --midnight-300: #80a2cf;
+  --midnight-500: #2b5080;
+  --midnight-700: #22385a;
+  --midnight-900: #10233c;
+  --midnight-950: #0a1728;
+  --stone-50: #f4f4f2;
+  --stone-100: #e7e6e3;
+  --paper: #fcfcfb;
+  --white: #ffffff;
+  --gold-400: #f3b838;
+  --gold-500: #f9aa0b;
+  --forge: #a84832;
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --r-sm: 8px;
+  --r-control: 10px;
+  --r-md: 12px;
+  --r-lg: 16px;
+
+  --bg: var(--stone-50);
+  --surface: var(--paper);
+  --surface-sunken: var(--stone-50);
+  --fg: var(--midnight-900);
+  --fg-muted: #4a5a76;
+  --border: rgba(11, 26, 46, 0.1);
+  --border-strong: rgba(11, 26, 46, 0.22);
+  --link-hover: var(--midnight-500);
+  --primary: var(--midnight-900);
+  --primary-hover: var(--midnight-700);
+  --primary-fg: var(--white);
+  --secondary-hover: var(--stone-100);
+  /* Gold on white is under 3:1, too faint for a focus ring on light surfaces. */
+  --focus: var(--midnight-500);
+  --notice-bg: var(--midnight-50);
+  --notice-border: var(--midnight-200);
+  --error-bg: #fbefec;
+  --error-border: rgba(168, 72, 50, 0.35);
+  --error-fg: var(--forge);
+  --header-bg: var(--midnight-900);
+  --header-fg: var(--white);
+  --header-muted: var(--midnight-200);
+  --shadow-sm: 0 2px 6px rgba(11, 26, 46, 0.06), 0 1px 2px rgba(11, 26, 46, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: var(--midnight-950);
+    --surface: var(--midnight-900);
+    --surface-sunken: var(--midnight-700);
+    --fg: var(--white);
+    --fg-muted: var(--midnight-200);
+    --border: rgba(255, 255, 255, 0.1);
+    --border-strong: rgba(255, 255, 255, 0.22);
+    --link-hover: var(--midnight-200);
+    --primary: var(--gold-400);
+    --primary-hover: var(--gold-500);
+    --primary-fg: var(--midnight-900);
+    --secondary-hover: var(--midnight-700);
+    --focus: var(--gold-400);
+    --notice-bg: var(--midnight-700);
+    --notice-border: rgba(255, 255, 255, 0.12);
+    --error-bg: rgba(168, 72, 50, 0.18);
+    --error-border: rgba(232, 160, 143, 0.4);
+    --error-fg: #eeb3a5;
+    --header-bg: var(--midnight-900);
+    --header-muted: var(--midnight-200);
+    --shadow-sm: none;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 28px;
+  line-height: 1.15;
+  margin: 0 0 var(--space-4);
+}
+
+h2 {
+  font-size: 20px;
+  line-height: 1.25;
+  margin: var(--space-6) 0 var(--space-3);
+}
+
+h3 {
+  font-size: 16px;
+  line-height: 1.25;
+  margin: var(--space-5) 0 var(--space-2);
+}
+
+p {
+  margin: 0 0 var(--space-4);
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  color: var(--link-hover);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--gold-400);
+  color: var(--midnight-900);
+}
+
+code,
+pre,
+.number {
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.logo {
+  display: block;
+  height: 22px;
+  width: auto;
+  color: var(--fg);
+}
+
+.eyebrow {
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: 0 0 var(--space-3);
+}
+
+/* Controls */
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  padding: 11px 14px;
+  min-width: 0;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+button {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--primary-fg);
+  background: var(--primary);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  padding: 12px 20px;
+  cursor: pointer;
+  transition: background-color 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+button:hover {
+  background: var(--primary-hover);
+}
+
+button:active {
+  transform: scale(0.99);
+}
+
+button.secondary {
+  color: var(--fg);
+  background: transparent;
+  border-color: var(--border-strong);
+}
+
+button.secondary:hover {
+  background: var(--secondary-hover);
+}
+
+.notice,
+.error {
+  border-radius: var(--r-control);
+  padding: var(--space-3) var(--space-4);
+  font-size: 14px;
+}
+
+.notice {
+  background: var(--notice-bg);
+  border: 1px solid var(--notice-border);
+}
+
+.error {
+  color: var(--error-fg);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+}
+
+/* Sign-in pages: one card, centred, usable at phone width. */
+
+body.signin main {
+  max-width: 440px;
+  margin: 12vh auto var(--space-7);
+  padding: var(--space-6);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+body.signin .logo {
+  margin-bottom: var(--space-6);
+}
+
+body.signin form {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+body.signin form + form {
+  margin-top: var(--space-4);
+}
+
+body.signin form button {
+  width: 100%;
+}
+
+body.signin form.client {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+body.signin form.client button {
+  width: auto;
+  font-size: 14px;
+  padding: 8px 14px;
+}
+
+@media (max-width: 520px) {
+  body.signin main {
+    margin: var(--space-4);
+    padding: var(--space-5);
+  }
+}
+
+/* Admin panel */
+
+body.panel header {
+  background: var(--header-bg);
+  color: var(--header-fg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-6);
+}
+
+body.panel header .logo {
+  color: var(--header-fg);
+  height: 20px;
+}
+
+body.panel header .brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--header-muted);
+}
+
+body.panel nav {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+}
+
+body.panel nav ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+body.panel nav a {
+  color: var(--header-muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+body.panel nav a:hover {
+  color: var(--header-fg);
+}
+
+body.panel nav form.inline {
+  margin-left: auto;
+}
+
+body.panel nav form.inline button {
+  color: var(--header-fg);
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+body.panel nav form.inline button:hover {
+  background: var(--midnight-700);
+}
+
+body.panel main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5) var(--space-7);
+}
+
+@media (max-width: 720px) {
+  body.panel nav {
+    flex-basis: 100%;
+  }
+
+  body.panel main {
+    padding: var(--space-5) var(--space-4) var(--space-6);
+  }
+
+  /* A wide table scrolls inside itself rather than widening the page. */
+  table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
+body.panel main h1 {
+  font-size: 32px;
+  margin-bottom: var(--space-5);
+}
+
+body.panel form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-5);
+}
+
+body.panel form.inline {
+  display: inline-flex;
+  margin: 0;
+}
+
+body.panel form button {
+  font-size: 14px;
+  padding: 10px 16px;
+}
+
+body.panel form.inline button {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: var(--space-3) 0 var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  font-size: 14px;
+}
+
+th,
+td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  background: var(--surface-sunken);
+  white-space: nowrap;
+}
+
+th:first-child {
+  border-top-left-radius: calc(var(--r-md) - 1px);
+}
+
+th:last-child {
+  border-top-right-radius: calc(var(--r-md) - 1px);
+}
+
+td {
+  border-top: 1px solid var(--border);
+}
+
+td.number,
+th.number {
+  text-align: right;
+}
+
+pre {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--space-3);
+}
+
+.empty,
+.hint {
+  color: var(--fg-muted);
+}
+
+/* Evidence a person typed: framed whole, never with a coloured edge. */
+.untrusted {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-control);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0 var(--space-5);
+}

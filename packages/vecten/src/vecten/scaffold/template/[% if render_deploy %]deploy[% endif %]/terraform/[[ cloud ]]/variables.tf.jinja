@@ -1,0 +1,66 @@
+variable "environment" { type = string }
+variable "project_name" { type = string }
+variable "domain" { type = string }
+variable "dns_zone" { type = string }
+variable "region" { type = string }
+variable "github_repository" { type = string }
+variable "components" { type = list(string) }
+variable "profile" { type = string }
+variable "size" { type = string }
+variable "warehouse" { type = string }
+[% if warehouse == 'snowflake' -%]
+variable "snowflake_account" { type = string }
+[% endif -%]
+
+# Optional in tfvars: null hands the module its own default.
+variable "platform_size" {
+  type    = string
+  default = null
+}
+
+variable "instance_type_overrides" {
+  type    = map(string)
+  default = null
+}
+
+variable "database_public_cidrs" {
+  type    = list(string)
+  default = null
+}
+
+[%- if cloud == 'aws' %]
+
+variable "log_line_prefix" {
+  type    = string
+  default = null
+}
+[%- endif %]
+
+variable "destroying" {
+  type    = bool
+  default = null
+}
+[%- if cloud == 'scaleway' %]
+
+# Raising one sets a new admin password on that instance and in its secret together.
+variable "state_admin_password_version" {
+  type    = number
+  default = null
+}
+
+variable "warehouse_admin_password_version" {
+  type    = number
+  default = null
+}
+
+# `vecten deploy` sets these with -var on every plan from the IDs bootstrap records in
+# vecten.toml, so none of them belongs in tfvars.
+variable "project_id" { type = string }
+variable "application_ids" { type = map(string) }
+variable "dns_project_id" { type = string }
+# Set by `vecten deploy` once bootstrap has recorded who ran it; null grants no operator.
+variable "operator_principal" {
+  type    = string
+  default = null
+}
+[%- endif %]

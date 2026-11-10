@@ -1,0 +1,66 @@
+name: deploy-platform
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+[%- if cloud != 'aws' %]
+    # Required, so a caller that does not pass the deploy key fails instead of shipping
+    # with an empty one.
+    secrets:
+      VECTEN_SCW_ACCESS_KEY:
+        required: true
+      VECTEN_SCW_SECRET_KEY:
+        required: true
+[%- endif %]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to ship to
+        required: true
+        default: prod
+permissions:
+  contents: read
+jobs:
+  ship:
+    runs-on: [[ github_runner ]]
+[%- if cloud == 'aws' %]
+    # The deploy role trusts only jobs that declare the environment it was bootstrapped for.
+    environment: ${{ inputs.environment }}
+[%- else %]
+    # The deploy key is an environment secret, which GitHub hands only to jobs that declare
+    # the environment, and in a called workflow only when the caller passes it by name.
+    environment: ${{ inputs.environment }}
+[%- endif %]
+    permissions:
+[%- if cloud == 'aws' %]
+      id-token: write
+[%- endif %]
+      contents: read
+      pull-requests: read
+    # The apply workflow holds the same group, so a ship never runs beside an apply. Callers
+    # hold no group, or this job would wait on its own caller.
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: [[ action_checkout ]]
+        with:
+          fetch-depth: 0
+      - uses: [[ action_setup_uv ]]
+      - run: uv tool install "vecten==[[ vecten_version ]]"
+[%- if cloud == 'aws' %]
+      # The session keeps IAM's default hour, the longest the deploy role allows.
+      - uses: [[ action_configure_aws_credentials ]]
+        with:
+          role-to-assume: ${{ vars.VECTEN_AWS_ROLE_ARN }}
+          aws-region: [[ region | tojson ]]
+[%- endif %]
+      - run: vecten ship --env ${{ inputs.environment }} --json
+        env:
+          GH_TOKEN: ${{ github.token }}
+[%- if cloud != 'aws' %]
+          SCW_ACCESS_KEY: ${{ secrets.VECTEN_SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.VECTEN_SCW_SECRET_KEY }}
+[%- endif %]

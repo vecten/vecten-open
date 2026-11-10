@@ -1,0 +1,42 @@
+name: ship
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+# No group here: the called workflow's job holds the environment's group.
+jobs:
+  # Reads vecten.toml only: before the first `vecten deploy` there are no hosts to ship to,
+  # and the workflow must still finish green.
+  gate:
+    runs-on: [[ github_runner ]]
+    permissions:
+      contents: read
+    outputs:
+      deployed: ${{ steps.facts.outputs.deployed }}
+    steps:
+      - uses: [[ action_checkout ]]
+      - uses: [[ action_setup_uv ]]
+      - run: uv tool install "vecten==[[ vecten_version ]]"
+      - id: facts
+        run: vecten ship --env prod --check
+  ship:
+    needs: gate
+    if: needs.gate.outputs.deployed == 'true'
+    # A called workflow's token holds at most what the calling job grants.
+    permissions:
+[%- if cloud == 'aws' %]
+      id-token: write
+[%- endif %]
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/deploy-platform.yml
+    with:
+      environment: prod
+[%- if cloud != 'aws' %]
+    # A called workflow gets an environment secret only when its caller passes it by name;
+    # inheriting instead would also hand the ship job the repository's plan keys.
+    secrets:
+      VECTEN_SCW_ACCESS_KEY: ${{ secrets.VECTEN_SCW_ACCESS_KEY }}
+      VECTEN_SCW_SECRET_KEY: ${{ secrets.VECTEN_SCW_SECRET_KEY }}
+[%- endif %]

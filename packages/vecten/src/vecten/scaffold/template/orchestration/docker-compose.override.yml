@@ -1,0 +1,5 @@
+# Project-owned additions merged into the stack `vecten up` and `vecten ship` generate.
+# Add services, environment or volumes here; never copy the generated file.
+# Relative paths in this file resolve against .vecten/stack, the Compose project
+# directory, not against this file.
+services: {}

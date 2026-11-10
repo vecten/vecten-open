@@ -1,0 +1,66 @@
+[project]
+name = "vecten-mcp"
+version = "0.1.0"
+description = "The MCP server of Vecten Open"
+requires-python = ">=3.14"
+license = "Apache-2.0 AND OFL-1.1"
+license-files = ["LICENSE", "src/vecten_mcp/assets/static/fonts/OFL.txt"]
+readme = "README.md"
+authors = [{ name = "Vecten" }]
+keywords = ["vecten", "mcp", "model context protocol", "semantic layer", "warehouse"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX",
+    "Topic :: Database",
+]
+dependencies = [
+    "vecten-shared==0.1.0",
+    "starlette>=1.9,<2",
+    "uvicorn>=0.54,<1",
+    "mcp>=2.3,<2.4",
+    "sqlalchemy>=2.1,<2.2",
+    "psycopg[binary]>=3.3,<3.4",
+    "pyjwt[crypto]>=2.10,<3",
+    "argon2-cffi>=25,<26",
+    "httpx>=0.28,<1",
+    "text-unidecode>=1.3,<2",
+    "snowflake-connector-python>=4.8,<4.9",
+    "python-multipart>=0.0.20,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/vecten/vecten-open"
+Source = "https://github.com/vecten/vecten-open"
+Documentation = "https://github.com/vecten/vecten-open/blob/main/docs/README.md"
+Issues = "https://github.com/vecten/vecten-open/issues"
+Changelog = "https://github.com/vecten/vecten-open/blob/main/CHANGELOG.md"
+Security = "https://github.com/vecten/vecten-open/security/policy"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vecten_mcp"]
+
+[project.entry-points."vecten.mcp.tools"]
+"describe" = "vecten_mcp.tools:describe_tool"
+"search" = "vecten_mcp.tools:search_tool"
+"sql-exec" = "vecten_mcp.tools:sql_exec_tool"
+"query_metrics" = "vecten_mcp.tools:query_metrics_tool"
+"report_feedback" = "vecten_mcp.tools:report_feedback_tool"
+"verify_receipt" = "vecten_mcp.tools:verify_receipt_tool"
+"list_gaps" = "vecten_mcp.tools:list_gaps_tool"
+"read_gap" = "vecten_mcp.tools:read_gap_tool"
+"set_gap_status" = "vecten_mcp.tools:set_gap_status_tool"
+"list_users" = "vecten_mcp.tools:list_users_tool"
+"list_groups" = "vecten_mcp.tools:list_groups_tool"
+"usage" = "vecten_mcp.tools:usage_tool"
+"model_health" = "vecten_mcp.tools:model_health_tool"
+"connected_clients" = "vecten_mcp.tools:connected_clients_tool"
+"usage_view" = "vecten_mcp.tools:usage_view_tool"
+"search_audit" = "vecten_mcp.tools:search_audit_tool"
+"read_audit_row" = "vecten_mcp.tools:read_audit_row_tool"
+"list_grants" = "vecten_mcp.tools:list_grants_tool"
+"read_settings" = "vecten_mcp.tools:read_settings_tool"

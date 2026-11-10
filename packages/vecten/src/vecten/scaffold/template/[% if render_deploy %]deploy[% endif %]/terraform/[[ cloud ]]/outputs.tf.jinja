@@ -1,0 +1,28 @@
+# `vecten deploy` reads these at the top level of `terraform output -json`.
+output "environment" {
+  value = module.environment.environment
+}
+
+output "region" {
+  value = module.environment.region
+}
+
+output "hosts" {
+  value = module.environment.hosts
+}
+
+output "setup_host" {
+  value = module.environment.setup_host
+}
+
+output "bucket" {
+  value = module.environment.bucket
+}
+
+output "secret_prefix" {
+  value = module.environment.secret_prefix
+}
+
+output "postgres" {
+  value = module.environment.postgres
+}

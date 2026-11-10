@@ -1,0 +1,26 @@
+[project]
+name = "vecten-test-extension"
+version = "1.0"
+requires-python = ">=3.14"
+dependencies = ["packaging>=24"]
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+[project.entry-points."vecten.connectors"]
+fixture = "vecten_test_extension:connector"
+[project.entry-points."vecten.dbt_packages"]
+fixture = "vecten_test_extension:dbt"
+[project.entry-points."vecten.dags"]
+fixture = "vecten_test_extension:dags"
+[project.entry-points."vecten.osi"]
+fixture = "vecten_test_extension:osi"
+[project.entry-points."vecten.skills"]
+fixture = "vecten_test_extension:skill"
+[project.entry-points."vecten.mcp.tools"]
+fixture = "vecten_test_extension:tool"
+[project.entry-points."vecten.mcp.auth"]
+fixture = "vecten_test_extension:identity"
+[project.entry-points."vecten.mcp.provisioning"]
+fixture = "vecten_test_extension:provision"
+[project.entry-points."vecten.mcp.audit_sinks"]
+fixture = "vecten_test_extension:audit"

@@ -1,0 +1,21 @@
+{
+  "context": {
+    "datasets": [
+      "orders",
+      "customers"
+    ],
+    "relationship": {
+      "from": "orders",
+      "from_columns": [
+        "customer_email"
+      ],
+      "name": "buyer",
+      "to": "customers",
+      "to_columns": [
+        "email"
+      ]
+    }
+  },
+  "reason": "join_required",
+  "skeleton": "SELECT /* complete the requested calculation */ * FROM marts.orders AS \"orders\" JOIN marts.customers AS \"customers\" ON \"orders\".\"customer_email\" = \"customers\".\"email\""
+}

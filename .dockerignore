@@ -1,0 +1,5 @@
+*
+!dist/*.whl
+!uv.lock
+!pyproject.toml
+!packages/*/pyproject.toml

@@ -1,0 +1,15 @@
+"""Replays the recorded fixtures for {{ name }} offline.
+
+The replay loads the fixtures straight into the raw tables and never runs connector.py, so it
+does not catch a code change that breaks a live sync; `vecten connector run {{ name }} --json`
+is the live proof. Skipped until `vecten connector run {{ name }} --record` has written
+connectors/{{ name }}/fixtures/.
+"""
+
+from pathlib import Path
+
+from vecten_platform.sync.testing import replay_connector_test
+
+
+def test_{{ name }}_replays_recorded_fixtures(tmp_path, monkeypatch):
+    replay_connector_test(Path(__file__).parent, "{{ name }}", tmp_path, monkeypatch)

@@ -1,0 +1,158 @@
+{
+  "version": "0.1.1",
+  "semantic_model": [
+    {
+      "name": "sales",
+      "datasets": [
+        {
+          "name": "orders",
+          "source": "marts.orders",
+          "fields": [
+            {"name": "order_id", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "order_id"}]}},
+            {"name": "amount", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "amount"}]}},
+            {"name": "discount", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "discount"}]}},
+            {"name": "net_amount", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "amount - discount"}]}},
+            {
+              "name": "country",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "UPPER(country_code)"}]},
+              "dimension": {},
+              "ai_context": {"synonyms": ["market"]}
+            },
+            {
+              "name": "channel",
+              "expression": {
+                "dialects": [
+                  {"dialect": "ANSI_SQL", "expression": "LOWER(channel)"},
+                  {"dialect": "SNOWFLAKE", "expression": "LOWER(TRIM(channel))"}
+                ]
+              },
+              "dimension": {}
+            },
+            {"name": "status", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "status"}]}, "dimension": {}},
+            {
+              "name": "customer_email",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "customer_email"}]},
+              "dimension": {}
+            },
+            {
+              "name": "order_date",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "order_date"}]},
+              "dimension": {"is_time": true}
+            }
+          ]
+        },
+        {
+          "name": "customers",
+          "source": "marts.customers",
+          "fields": [
+            {"name": "email", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "email"}]}, "dimension": {}},
+            {"name": "segment", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "segment"}]}, "dimension": {}},
+            {
+              "name": "signup_date",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "signup_date"}]},
+              "dimension": {"is_time": true}
+            }
+          ]
+        },
+        {
+          "name": "returns",
+          "source": "marts.returns",
+          "fields": [
+            {"name": "return_id", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "return_id"}]}},
+            {"name": "segment", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "segment"}]}, "dimension": {}},
+            {
+              "name": "returned_at",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "returned_at"}]},
+              "dimension": {"is_time": true}
+            }
+          ]
+        },
+        {
+          "name": "balances",
+          "source": "SELECT account_id, region, balance_month, balance FROM marts.balances WHERE region NOT LIKE 'test%'",
+          "custom_extensions": [{"vendor_name": "COMMON", "data": "{\"vecten\": {\"grain\": \"month\"}}"}],
+          "fields": [
+            {"name": "account_id", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "account_id"}]}, "dimension": {}},
+            {"name": "region", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "region"}]}, "dimension": {}},
+            {
+              "name": "balance_month",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "balance_month"}]},
+              "dimension": {"is_time": true}
+            },
+            {"name": "balance", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "balance"}]}}
+          ]
+        },
+        {
+          "name": "events",
+          "source": "marts.events",
+          "fields": [
+            {"name": "event_id", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "event_id"}]}},
+            {
+              "name": "created_at",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "created_at"}]},
+              "dimension": {"is_time": true}
+            },
+            {
+              "name": "processed_at",
+              "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "processed_at"}]},
+              "dimension": {"is_time": true}
+            }
+          ]
+        }
+      ],
+      "metrics": [
+        {
+          "name": "total_revenue",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(orders.amount)"}]},
+          "ai_context": {"synonyms": ["turnover", "gross sales"]}
+        },
+        {"name": "order_count", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(orders.order_id)"}]}},
+        {
+          "name": "discount_share",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(orders.discount) / SUM(orders.amount)"}]}
+        },
+        {"name": "net_revenue", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(orders.net_amount)"}]}},
+        {"name": "cents", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(orders.amount % 100)"}]}},
+        {"name": "customer_count", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(customers.email)"}]}},
+        {"name": "return_count", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(returns.return_id)"}]}},
+        {"name": "event_count", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(events.event_id)"}]}},
+        {
+          "name": "account_balance",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(balances.balance)"}]},
+          "custom_extensions": [
+            {"vendor_name": "COMMON", "data": "{\"vecten\": {\"additivity\": \"semi_additive\", \"non_additive_over\": \"time\"}}"}
+          ]
+        },
+        {
+          "name": "account_balance_last",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(balances.balance)"}]},
+          "custom_extensions": [
+            {
+              "vendor_name": "COMMON",
+              "data": "{\"vecten\": {\"additivity\": \"semi_additive\", \"non_additive_over\": \"time\", \"rollup\": \"last\"}}"
+            }
+          ]
+        },
+        {
+          "name": "account_balance_first",
+          "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "SUM(balances.balance)"}]},
+          "custom_extensions": [
+            {
+              "vendor_name": "COMMON",
+              "data": "{\"vecten\": {\"additivity\": \"semi_additive\", \"non_additive_over\": \"time\", \"rollup\": \"first\"}}"
+            }
+          ]
+        }
+      ],
+      "relationships": [
+        {
+          "name": "buyer",
+          "from": "orders",
+          "to": "customers",
+          "from_columns": ["customer_email"],
+          "to_columns": ["email"]
+        }
+      ]
+    }
+  ]
+}

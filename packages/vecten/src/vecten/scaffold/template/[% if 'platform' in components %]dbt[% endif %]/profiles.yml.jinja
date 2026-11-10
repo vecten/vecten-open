@@ -1,0 +1,26 @@
+vecten:
+  target: "{{ env_var('DBT_TARGET', 'local') }}"
+  outputs:
+[% if warehouse == 'postgres' %]
+    local:
+      type: postgres
+      host: "{{ env_var('WAREHOUSE_HOST', 'localhost') }}"
+      port: "{{ env_var('WAREHOUSE_PORT', '5432') | as_number }}"
+      user: "{{ env_var('WAREHOUSE_USER', 'loader') }}"
+      password: "{{ env_var('WAREHOUSE_PASSWORD', '') }}"
+      dbname: "{{ env_var('WAREHOUSE_DATABASE', 'warehouse') }}"
+      schema: public
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+[% else %]
+    local:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+      user: "{{ env_var('SNOWFLAKE_USER', 'loader') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD', '') }}"
+      private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'loader') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', '') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', '') }}"
+      schema: public
+      threads: "{{ env_var('DBT_THREADS', '4') | as_number }}"
+[% endif %]

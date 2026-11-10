@@ -1,0 +1,13 @@
+{
+  "context": {
+    "metric": "total_revenu",
+    "suggestions": [
+      "total_revenue",
+      "net_revenue",
+      "event_count",
+      "event_id"
+    ]
+  },
+  "reason": "unknown_metric",
+  "skeleton": null
+}

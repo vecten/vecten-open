@@ -1,0 +1,40 @@
+{
+  "scenario": "revoked-key",
+  "env": "prod",
+  "issues": {
+    "env": "prod",
+    "sources": {"airflow": "ok", "dbt": "ok", "gaps": "ok"},
+    "issues": [
+      {
+        "id": "iss_airflow_sync_hubspot_default_sync.deals_HTTPError",
+        "source": "airflow",
+        "kind": "command",
+        "title": "hubspot object deals fails with HTTPError",
+        "resolution": "vecten secret set HUBSPOT_TOKEN --env prod",
+        "occurrences": 1,
+        "first_seen": "2026-10-20T02:00:00Z",
+        "last_seen": "2026-10-20T02:00:00Z",
+        "evidence": {"untrusted": true, "run_id": "scheduled__2026-10-20T02:00:00+00:00", "error_class": "HTTPError"}
+      },
+      {
+        "id": "iss_airflow_sync_stripe_default_sync.charges_HTTPError",
+        "source": "airflow",
+        "kind": "ask",
+        "title": "stripe object charges fails with HTTPError",
+        "resolution": "The stripe source is failing upstream (HTTPError); nothing in the project needs to change. Tell the human, wait for the source to recover, and check again: the issue clears on the next green run.",
+        "occurrences": 1,
+        "first_seen": "2026-10-20T02:00:00Z",
+        "last_seen": "2026-10-20T02:00:00Z",
+        "evidence": {"untrusted": true, "run_id": "scheduled__2026-10-20T02:00:00+00:00", "error_class": "HTTPError"}
+      }
+    ]
+  },
+  "show": {
+    "iss_airflow_sync_hubspot_default_sync.deals_HTTPError": {
+      "error": "hubspot.deals: HTTPError: 401 Client Error: Unauthorized for url: https://api.hubapi.com/crm/v3/objects/deals"
+    },
+    "iss_airflow_sync_stripe_default_sync.charges_HTTPError": {
+      "error": "stripe.charges: HTTPError: 503 Server Error: Service Unavailable"
+    }
+  }
+}

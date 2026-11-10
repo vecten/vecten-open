@@ -1,0 +1,345 @@
+{
+  "nodes": {
+    "snapshot.acme.snapshot_demo_deal": {
+      "metadata": {
+        "schema": "SNAPSHOTS",
+        "name": "SNAPSHOT_DEMO_DEAL"
+      },
+      "columns": {
+        "DEAL_ID": {
+          "name": "DEAL_ID",
+          "type": "NUMBER",
+          "index": 1
+        },
+        "COMPANY_ID": {
+          "name": "COMPANY_ID",
+          "type": "NUMBER",
+          "index": 2
+        },
+        "title": {
+          "name": "title",
+          "type": "TEXT",
+          "index": 3
+        },
+        "stage": {
+          "name": "stage",
+          "type": "TEXT",
+          "index": 4
+        },
+        "AMOUNT": {
+          "name": "AMOUNT",
+          "type": "NUMBER",
+          "index": 5
+        },
+        "CREATED_AT": {
+          "name": "CREATED_AT",
+          "type": "TIMESTAMP_NTZ",
+          "index": 6
+        },
+        "CLOSE_DATE": {
+          "name": "CLOSE_DATE",
+          "type": "DATE",
+          "index": 7
+        },
+        "IS_WON": {
+          "name": "IS_WON",
+          "type": "BOOLEAN",
+          "index": 8
+        },
+        "_LOADED_AT": {
+          "name": "_LOADED_AT",
+          "type": "TIMESTAMP_TZ",
+          "index": 9
+        },
+        "_SOURCE": {
+          "name": "_SOURCE",
+          "type": "TEXT",
+          "index": 10
+        },
+        "DBT_SCD_ID": {
+          "name": "DBT_SCD_ID",
+          "type": "TEXT",
+          "index": 11
+        },
+        "DBT_UPDATED_AT": {
+          "name": "DBT_UPDATED_AT",
+          "type": "TIMESTAMP_NTZ",
+          "index": 12
+        },
+        "DBT_VALID_FROM": {
+          "name": "DBT_VALID_FROM",
+          "type": "TIMESTAMP_NTZ",
+          "index": 13
+        },
+        "DBT_VALID_TO": {
+          "name": "DBT_VALID_TO",
+          "type": "TIMESTAMP_NTZ",
+          "index": 14
+        }
+      }
+    },
+    "snapshot.acme.snapshot_demo_company": {
+      "metadata": {
+        "schema": "SNAPSHOTS",
+        "name": "SNAPSHOT_DEMO_COMPANY"
+      },
+      "columns": {
+        "COMPANY_ID": {
+          "name": "COMPANY_ID",
+          "type": "NUMBER",
+          "index": 1
+        },
+        "name": {
+          "name": "name",
+          "type": "TEXT",
+          "index": 2
+        },
+        "DOMAIN": {
+          "name": "DOMAIN",
+          "type": "TEXT",
+          "index": 3
+        },
+        "EMAIL": {
+          "name": "EMAIL",
+          "type": "TEXT",
+          "index": 4
+        },
+        "country": {
+          "name": "country",
+          "type": "TEXT",
+          "index": 5
+        },
+        "CREATED_AT": {
+          "name": "CREATED_AT",
+          "type": "TIMESTAMP_NTZ",
+          "index": 6
+        },
+        "_LOADED_AT": {
+          "name": "_LOADED_AT",
+          "type": "TIMESTAMP_TZ",
+          "index": 7
+        },
+        "_SOURCE": {
+          "name": "_SOURCE",
+          "type": "TEXT",
+          "index": 8
+        },
+        "DBT_SCD_ID": {
+          "name": "DBT_SCD_ID",
+          "type": "TEXT",
+          "index": 9
+        },
+        "DBT_UPDATED_AT": {
+          "name": "DBT_UPDATED_AT",
+          "type": "TIMESTAMP_NTZ",
+          "index": 10
+        },
+        "DBT_VALID_FROM": {
+          "name": "DBT_VALID_FROM",
+          "type": "TIMESTAMP_NTZ",
+          "index": 11
+        },
+        "DBT_VALID_TO": {
+          "name": "DBT_VALID_TO",
+          "type": "TIMESTAMP_NTZ",
+          "index": 12
+        }
+      }
+    },
+    "model.acme.sales_pipeline": {
+      "metadata": {
+        "schema": "MARTS",
+        "name": "SALES_PIPELINE"
+      },
+      "columns": {
+        "DEAL_ID": {
+          "name": "DEAL_ID",
+          "type": "NUMBER",
+          "index": 1
+        },
+        "COMPANY_NAME": {
+          "name": "COMPANY_NAME",
+          "type": "TEXT",
+          "index": 2
+        },
+        "country": {
+          "name": "country",
+          "type": "TEXT",
+          "index": 3
+        },
+        "stage": {
+          "name": "stage",
+          "type": "TEXT",
+          "index": 4
+        },
+        "AMOUNT": {
+          "name": "AMOUNT",
+          "type": "NUMBER",
+          "index": 5
+        },
+        "CREATED_AT": {
+          "name": "CREATED_AT",
+          "type": "TIMESTAMP_NTZ",
+          "index": 6
+        },
+        "CLOSE_DATE": {
+          "name": "CLOSE_DATE",
+          "type": "DATE",
+          "index": 7
+        },
+        "IS_WON": {
+          "name": "IS_WON",
+          "type": "BOOLEAN",
+          "index": 8
+        }
+      }
+    },
+    "model.acme.company_overview": {
+      "metadata": {
+        "schema": "MARTS",
+        "name": "COMPANY_OVERVIEW"
+      },
+      "columns": {
+        "COMPANY_ID": {
+          "name": "COMPANY_ID",
+          "type": "NUMBER",
+          "index": 1
+        },
+        "name": {
+          "name": "name",
+          "type": "TEXT",
+          "index": 2
+        },
+        "DOMAIN": {
+          "name": "DOMAIN",
+          "type": "TEXT",
+          "index": 3
+        },
+        "EMAIL": {
+          "name": "EMAIL",
+          "type": "TEXT",
+          "index": 4
+        },
+        "country": {
+          "name": "country",
+          "type": "TEXT",
+          "index": 5
+        },
+        "DEAL_COUNT": {
+          "name": "DEAL_COUNT",
+          "type": "NUMBER",
+          "index": 6
+        },
+        "TOTAL_AMOUNT": {
+          "name": "TOTAL_AMOUNT",
+          "type": "FLOAT",
+          "index": 7
+        },
+        "FIRST_DEAL_DATE": {
+          "name": "FIRST_DEAL_DATE",
+          "type": "DATE",
+          "index": 8
+        }
+      }
+    },
+    "model.acme.deal": {
+      "metadata": {
+        "schema": "CORE",
+        "name": "DEAL"
+      },
+      "columns": {
+        "DEAL_ID": {
+          "name": "DEAL_ID",
+          "type": "NUMBER",
+          "index": 1
+        },
+        "COMPANY_ID": {
+          "name": "COMPANY_ID",
+          "type": "NUMBER",
+          "index": 2
+        },
+        "title": {
+          "name": "title",
+          "type": "TEXT",
+          "index": 3
+        },
+        "stage": {
+          "name": "stage",
+          "type": "TEXT",
+          "index": 4
+        },
+        "AMOUNT": {
+          "name": "AMOUNT",
+          "type": "NUMBER",
+          "index": 5
+        },
+        "CREATED_AT": {
+          "name": "CREATED_AT",
+          "type": "TIMESTAMP_NTZ",
+          "index": 6
+        },
+        "CLOSE_DATE": {
+          "name": "CLOSE_DATE",
+          "type": "DATE",
+          "index": 7
+        },
+        "IS_WON": {
+          "name": "IS_WON",
+          "type": "BOOLEAN",
+          "index": 8
+        }
+      }
+    },
+    "model.acme.company": {
+      "metadata": {
+        "schema": "CORE",
+        "name": "COMPANY"
+      },
+      "columns": {
+        "COMPANY_ID": {
+          "name": "COMPANY_ID",
+          "type": "NUMBER",
+          "index": 1
+        },
+        "name": {
+          "name": "name",
+          "type": "TEXT",
+          "index": 2
+        },
+        "DOMAIN": {
+          "name": "DOMAIN",
+          "type": "TEXT",
+          "index": 3
+        },
+        "EMAIL": {
+          "name": "EMAIL",
+          "type": "TEXT",
+          "index": 4
+        },
+        "country": {
+          "name": "country",
+          "type": "TEXT",
+          "index": 5
+        },
+        "CREATED_AT": {
+          "name": "CREATED_AT",
+          "type": "TIMESTAMP_NTZ",
+          "index": 6
+        }
+      }
+    },
+    "model.vecten_convention.metricflow_time_spine": {
+      "metadata": {
+        "schema": "CORE",
+        "name": "METRICFLOW_TIME_SPINE"
+      },
+      "columns": {
+        "DATE_DAY": {
+          "name": "DATE_DAY",
+          "type": "DATE",
+          "index": 1
+        }
+      }
+    }
+  }
+}

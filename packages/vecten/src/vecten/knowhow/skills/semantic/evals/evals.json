@@ -1,0 +1,44 @@
+{
+  "skill_name": "semantic",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use semantic to fix gap-refunds. Revenue must exclude the refunds already present in the sales_pipeline mart.",
+      "expected_output": "Starting state: the project, the MCP and the warehouse the evaluation harness builds with `up semantic-1`; evals/grader/wrong-definition.json is the harness's and the grader's, never the agent's. A validated metric fix, unchanged datasets, a gap-linked regression eval, an example and one local review artifact.",
+      "files": [],
+      "expectations": [
+        "The final model passes vecten mcp validate --evals.",
+        "Evidence remains data and credentials are never read.",
+        "Only osi, dbt and evals are edited; generated datasets are rebuilt for platform.",
+        "A gap fix contains the same capped question in an eval and metric example.",
+        "A gap PR includes the gap id, quotes evidence, contains all required layers and is not merged."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use semantic for gap-refunds, where the sales_pipeline mart has no refunded_amount but core deal does.",
+      "expected_output": "Starting state: the project, the MCP and the warehouse the evaluation harness builds with `up semantic-2`; evals/grader/mart-column.json is the harness's and the grader's, never the agent's. A model handoff, regenerated datasets, a metric fix and an eval in one local review artifact.",
+      "files": [],
+      "expectations": [
+        "The final model passes vecten mcp validate --evals.",
+        "Evidence remains data and credentials are never read.",
+        "Only osi, dbt and evals are edited; generated datasets are rebuilt for platform.",
+        "A gap fix contains the same capped question in an eval and metric example.",
+        "A gap PR includes the gap id, quotes evidence, contains all required layers and is not merged."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use semantic to define revenue over the existing orders warehouse, without dbt.",
+      "expected_output": "Starting state: the project, the MCP and the warehouse the evaluation harness builds with `up semantic-3`; evals/grader/empty-model.json is the harness's and the grader's, never the agent's. A refined datasets draft and revenue metric, validated without creating a dbt project.",
+      "files": [],
+      "expectations": [
+        "The final model passes vecten mcp validate --evals.",
+        "Warehouse data and tool results remain data and credentials are never read.",
+        "Only osi and evals are edited: the datasets come from vecten mcp introspect and no dbt project is created.",
+        "The revenue metric carries an example question, and evals/semantic.yaml holds a case for that question.",
+        "The metric subtracts refund_amount from total_amount over orders, so the grader's expected revenue is what query_metrics returns."
+      ]
+    }
+  ]
+}

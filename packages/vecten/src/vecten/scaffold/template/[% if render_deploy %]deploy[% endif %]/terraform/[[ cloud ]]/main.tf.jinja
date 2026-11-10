@@ -1,0 +1,74 @@
+# Thin root module. The module body is owned by the vecten release named in `ref`;
+# `vecten update` is the only thing that moves it.
+terraform {
+  required_version = "~> [[ terraform_engine ]].0"
+[%- if cloud == 'scaleway' %]
+
+  required_providers {
+    scaleway = {
+      source  = "scaleway/scaleway"
+      version = "~> [[ terraform_scaleway_provider ]].0"
+    }
+  }
+[%- endif %]
+}
+[%- if cloud == 'aws' %]
+
+# The module's ARNs use var.region, so the provider must be configured with the same value.
+provider "aws" {
+  region = var.region
+
+  default_tags {
+    tags = {
+      "vecten:project" = var.project_name
+      "vecten:env"     = var.environment
+    }
+  }
+}
+[%- elif cloud == 'scaleway' %]
+
+# Credentials come from SCW_ACCESS_KEY and SCW_SECRET_KEY in the environment, never from here;
+# the module places every resource in var.project_id and <region>-1 itself.
+provider "scaleway" {
+  region     = var.region
+  zone       = "${var.region}-1"
+  project_id = var.project_id
+}
+[%- endif %]
+
+module "environment" {
+  source = "git::https://github.com/vecten/vecten-open.git//terraform/[[ cloud ]]?ref=[[ terraform_module_ref ]]"
+
+  environment       = var.environment
+  project_name      = var.project_name
+  domain            = var.domain
+  dns_zone          = var.dns_zone
+  region            = var.region
+  github_repository = var.github_repository
+  components        = var.components
+  profile           = var.profile
+  size              = var.size
+  warehouse         = var.warehouse
+[%- if warehouse == 'snowflake' %]
+  snowflake_account = var.snowflake_account
+[%- endif %]
+
+  platform_size           = var.platform_size
+  instance_type_overrides = var.instance_type_overrides
+  database_public_cidrs   = var.database_public_cidrs
+[%- if cloud == 'aws' %]
+  log_line_prefix         = var.log_line_prefix
+[%- endif %]
+  destroying              = var.destroying
+[%- if cloud == 'scaleway' %]
+
+  project_id      = var.project_id
+  dns_project_id  = var.dns_project_id
+  application_ids = var.application_ids
+
+  operator_principal = var.operator_principal
+
+  state_admin_password_version     = var.state_admin_password_version
+  warehouse_admin_password_version = var.warehouse_admin_password_version
+[%- endif %]
+}

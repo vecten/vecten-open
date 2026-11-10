@@ -1,0 +1,17 @@
+# The state bucket is created by `vecten bootstrap`; `vecten deploy` passes the key per environment.
+terraform {
+[%- if cloud == 'aws' %]
+  backend "s3" {}
+[%- else %]
+  backend "s3" {
+    region                      = "[[ region ]]"
+    endpoints                   = { s3 = "https://s3.[[ region ]].scw.cloud" }
+    use_path_style              = true
+    skip_credentials_validation = true
+    skip_region_validation      = true
+    skip_requesting_account_id  = true
+    skip_metadata_api_check     = true
+    use_lockfile                = true
+  }
+[%- endif %]
+}

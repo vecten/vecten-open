@@ -1,0 +1,48 @@
+_subdirectory: template
+_templates_suffix: .jinja
+_envops:
+  block_start_string: "[%"
+  block_end_string: "%]"
+  variable_start_string: "[["
+  variable_end_string: "]]"
+_exclude:
+  - "copier.yaml"
+  - "__pycache__"
+  - "*.py[co]"
+  - ".DS_Store"
+
+# Every question is answered by the CLI; none is ever prompted.
+cloud: {type: str, default: "", ask: false}
+region: {type: str, default: "", ask: false}
+warehouse: {type: str, default: postgres, ask: false}
+project_name: {type: str, ask: false}
+domain: {type: str, default: "", ask: false}
+dns_zone: {type: str, default: "", ask: false}
+github_repository: {type: str, default: "", ask: false}
+users: {type: int, ask: false}
+sources: {type: yaml, default: [], ask: false}
+size: {type: str, default: small, ask: false}
+components: {type: yaml, default: [platform, mcp], ask: false}
+profile: {type: str, default: standard, ask: false}
+has_warehouse: {type: bool, default: false, ask: false}
+warehouse_url: {type: str, default: "", ask: false}
+render_deploy: {type: bool, default: false, ask: false}
+vecten_version: {type: str, ask: false}
+airflow_image: {type: str, ask: false}
+postgres_major: {type: str, ask: false}
+terraform_module_ref: {type: str, ask: false}
+terraform_engine: {type: str, ask: false}
+terraform_snowflake_provider: {type: str, ask: false}
+terraform_scaleway_provider: {type: str, ask: false}
+github_runner: {type: str, ask: false}
+action_checkout: {type: str, ask: false}
+action_setup_uv: {type: str, ask: false}
+action_setup_terraform: {type: str, ask: false}
+action_configure_aws_credentials: {type: str, ask: false}
+convention_version: {type: int, ask: false}
+ossie_spec: {type: str, ask: false}
+warehouse_host: {type: str, default: "", ask: false}
+warehouse_port: {type: int, default: 0, ask: false}
+warehouse_database: {type: str, default: "", ask: false}
+warehouse_account: {type: str, default: "", ask: false}
+snowflake_account: {type: str, default: "", ask: false}

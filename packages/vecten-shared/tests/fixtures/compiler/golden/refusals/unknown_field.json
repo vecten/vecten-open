@@ -1,0 +1,7 @@
+{
+  "context": {
+    "field": "missing"
+  },
+  "reason": "unknown_field",
+  "skeleton": "SELECT /* complete the requested calculation */ * FROM marts.orders"
+}

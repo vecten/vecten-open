@@ -1,0 +1,15 @@
+# Filled by `vecten init` from the deploy answers. For a further environment, copy this file
+# to deploy/envs/ENV.tfvars, then change environment to ENV and domain to its own name.
+environment       = "prod"
+project_name      = [[ project_name | tojson ]]
+domain            = [[ domain | tojson ]]
+dns_zone          = [[ dns_zone | tojson ]]
+region            = [[ region | tojson ]]
+github_repository = [[ github_repository | tojson ]]
+components        = [[ components | tojson ]]
+profile           = [[ profile | tojson ]]
+size              = [[ size | tojson ]]
+warehouse         = [[ warehouse | tojson ]]
+[% if warehouse == 'snowflake' -%]
+snowflake_account = [[ warehouse_account | tojson ]]
+[% endif -%]

@@ -1,0 +1,2 @@
+-- parameters: ["paid", "paid", "web", "app", 1, 2, 1000, 999.5, "P%", 0, 50, "paid", "shipped"]
+SELECT COUNT(order_id) AS "order_count" FROM marts.orders WHERE (status = %s) AND (status = %s) AND (LOWER(channel) <> %s) AND (LOWER(channel) <> %s) AND (amount > %s) AND (amount >= %s) AND (amount < %s) AND (amount <= %s) AND (UPPER(country_code) LIKE %s) AND (discount BETWEEN %s AND %s) AND (customer_email IS NOT NULL) AND (status IS NULL) AND (status IN (%s, %s)) LIMIT 1000

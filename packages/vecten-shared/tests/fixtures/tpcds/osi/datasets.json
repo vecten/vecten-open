@@ -1,0 +1,1628 @@
+{
+  "version": "0.1.1",
+  "semantic_model": [
+    {
+      "name": "tpcds",
+      "datasets": [
+        {
+          "name": "customer",
+          "source": "VECTEN_CI.CORE.CUSTOMER",
+          "fields": [
+            {
+              "name": "C_CUSTOMER_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_CUSTOMER_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_CUSTOMER_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_CUSTOMER_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_CURRENT_CDEMO_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_CURRENT_CDEMO_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_CURRENT_HDEMO_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_CURRENT_HDEMO_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_CURRENT_ADDR_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_CURRENT_ADDR_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_FIRST_SHIPTO_DATE_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_FIRST_SHIPTO_DATE_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_FIRST_SALES_DATE_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_FIRST_SALES_DATE_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_SALUTATION",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_SALUTATION\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_FIRST_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_FIRST_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_LAST_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_LAST_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_PREFERRED_CUST_FLAG",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_PREFERRED_CUST_FLAG\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_BIRTH_DAY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_BIRTH_DAY\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_BIRTH_MONTH",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_BIRTH_MONTH\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_BIRTH_YEAR",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_BIRTH_YEAR\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "C_BIRTH_COUNTRY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_BIRTH_COUNTRY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_LOGIN",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_LOGIN\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_EMAIL_ADDRESS",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_EMAIL_ADDRESS\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "C_LAST_REVIEW_DATE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"C_LAST_REVIEW_DATE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": true
+              }
+            }
+          ],
+          "description": "Customers who bought in the slice's store sales.",
+          "primary_key": [
+            "C_CUSTOMER_SK"
+          ]
+        },
+        {
+          "name": "date_dim",
+          "source": "VECTEN_CI.CORE.DATE_DIM",
+          "fields": [
+            {
+              "name": "D_DATE_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_DATE_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_DATE_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_DATE_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_DATE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_DATE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": true
+              }
+            },
+            {
+              "name": "D_MONTH_SEQ",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_MONTH_SEQ\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_WEEK_SEQ",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_WEEK_SEQ\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_QUARTER_SEQ",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_QUARTER_SEQ\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_YEAR",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_YEAR\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_DOW",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_DOW\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_MOY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_MOY\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_DOM",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_DOM\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_QOY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_QOY\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_FY_YEAR",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_FY_YEAR\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_FY_QUARTER_SEQ",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_FY_QUARTER_SEQ\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_FY_WEEK_SEQ",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_FY_WEEK_SEQ\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_DAY_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_DAY_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_QUARTER_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_QUARTER_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_HOLIDAY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_HOLIDAY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_WEEKEND",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_WEEKEND\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_FOLLOWING_HOLIDAY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_FOLLOWING_HOLIDAY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_FIRST_DOM",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_FIRST_DOM\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_LAST_DOM",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_LAST_DOM\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_SAME_DAY_LY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_SAME_DAY_LY\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_SAME_DAY_LQ",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_SAME_DAY_LQ\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "D_CURRENT_DAY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_CURRENT_DAY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_CURRENT_WEEK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_CURRENT_WEEK\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_CURRENT_MONTH",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_CURRENT_MONTH\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_CURRENT_QUARTER",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_CURRENT_QUARTER\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "D_CURRENT_YEAR",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"D_CURRENT_YEAR\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            }
+          ],
+          "description": "Calendar dates of 2001 and 2002 with their calendar attributes.",
+          "primary_key": [
+            "D_DATE_SK"
+          ]
+        },
+        {
+          "name": "item",
+          "source": "VECTEN_CI.CORE.ITEM",
+          "fields": [
+            {
+              "name": "I_ITEM_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_ITEM_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "I_ITEM_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_ITEM_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_REC_START_DATE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_REC_START_DATE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": true
+              }
+            },
+            {
+              "name": "I_REC_END_DATE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_REC_END_DATE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": true
+              }
+            },
+            {
+              "name": "I_ITEM_DESC",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_ITEM_DESC\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_CURRENT_PRICE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_CURRENT_PRICE\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "I_WHOLESALE_COST",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_WHOLESALE_COST\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "I_BRAND_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_BRAND_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_BRAND",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_BRAND\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_CLASS_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_CLASS_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_CLASS",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_CLASS\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_CATEGORY_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_CATEGORY_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_CATEGORY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_CATEGORY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_MANUFACT_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_MANUFACT_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_MANUFACT",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_MANUFACT\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_SIZE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_SIZE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_FORMULATION",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_FORMULATION\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_COLOR",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_COLOR\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_UNITS",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_UNITS\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_CONTAINER",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_CONTAINER\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_MANAGER_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_MANAGER_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "I_PRODUCT_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"I_PRODUCT_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            }
+          ],
+          "description": "Products sold in the slice's store sales.",
+          "primary_key": [
+            "I_ITEM_SK"
+          ]
+        },
+        {
+          "name": "store",
+          "source": "VECTEN_CI.CORE.STORE",
+          "fields": [
+            {
+              "name": "S_STORE_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_STORE_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "S_STORE_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_STORE_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_REC_START_DATE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_REC_START_DATE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": true
+              }
+            },
+            {
+              "name": "S_REC_END_DATE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_REC_END_DATE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": true
+              }
+            },
+            {
+              "name": "S_CLOSED_DATE_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_CLOSED_DATE_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "S_STORE_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_STORE_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_NUMBER_EMPLOYEES",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_NUMBER_EMPLOYEES\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "S_FLOOR_SPACE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_FLOOR_SPACE\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "S_HOURS",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_HOURS\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_MANAGER",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_MANAGER\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_MARKET_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_MARKET_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_GEOGRAPHY_CLASS",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_GEOGRAPHY_CLASS\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_MARKET_DESC",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_MARKET_DESC\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_MARKET_MANAGER",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_MARKET_MANAGER\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_DIVISION_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_DIVISION_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_DIVISION_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_DIVISION_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_COMPANY_ID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_COMPANY_ID\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_COMPANY_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_COMPANY_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_STREET_NUMBER",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_STREET_NUMBER\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_STREET_NAME",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_STREET_NAME\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_STREET_TYPE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_STREET_TYPE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_SUITE_NUMBER",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_SUITE_NUMBER\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_CITY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_CITY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_COUNTY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_COUNTY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_STATE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_STATE\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_ZIP",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_ZIP\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_COUNTRY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_COUNTRY\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "S_GMT_OFFSET",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_GMT_OFFSET\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "S_TAX_PRECENTAGE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"S_TAX_PRECENTAGE\""
+                  }
+                ]
+              }
+            }
+          ],
+          "description": "Stores with their location and size.",
+          "primary_key": [
+            "S_STORE_SK"
+          ]
+        },
+        {
+          "name": "store_sales",
+          "source": "VECTEN_CI.MARTS.STORE_SALES",
+          "fields": [
+            {
+              "name": "SS_SOLD_DATE_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_SOLD_DATE_SK\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "SS_SOLD_TIME_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_SOLD_TIME_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_ITEM_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_ITEM_SK\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "SS_CUSTOMER_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_CUSTOMER_SK\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "SS_CDEMO_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_CDEMO_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_HDEMO_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_HDEMO_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_ADDR_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_ADDR_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_STORE_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_STORE_SK\""
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              }
+            },
+            {
+              "name": "SS_PROMO_SK",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_PROMO_SK\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_TICKET_NUMBER",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_TICKET_NUMBER\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_QUANTITY",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_QUANTITY\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_WHOLESALE_COST",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_WHOLESALE_COST\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_LIST_PRICE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_LIST_PRICE\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_SALES_PRICE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_SALES_PRICE\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_EXT_DISCOUNT_AMT",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_EXT_DISCOUNT_AMT\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_EXT_SALES_PRICE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_EXT_SALES_PRICE\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_EXT_WHOLESALE_COST",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_EXT_WHOLESALE_COST\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_EXT_LIST_PRICE",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_EXT_LIST_PRICE\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_EXT_TAX",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_EXT_TAX\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_COUPON_AMT",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_COUPON_AMT\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_NET_PAID",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_NET_PAID\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_NET_PAID_INC_TAX",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_NET_PAID_INC_TAX\""
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SS_NET_PROFIT",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "SNOWFLAKE",
+                    "expression": "\"SS_NET_PROFIT\""
+                  }
+                ]
+              }
+            }
+          ],
+          "description": "Store sales transactions, one row per line item of a ticket: the CI slice holds 2002-01-01 of stores 1 and 2.",
+          "primary_key": [
+            "SS_ITEM_SK",
+            "SS_TICKET_NUMBER"
+          ]
+        }
+      ],
+      "relationships": [
+        {
+          "name": "store_sales_to_date",
+          "from": "store_sales",
+          "to": "date_dim",
+          "from_columns": [
+            "SS_SOLD_DATE_SK"
+          ],
+          "to_columns": [
+            "D_DATE_SK"
+          ]
+        },
+        {
+          "name": "store_sales_to_customer",
+          "from": "store_sales",
+          "to": "customer",
+          "from_columns": [
+            "SS_CUSTOMER_SK"
+          ],
+          "to_columns": [
+            "C_CUSTOMER_SK"
+          ]
+        },
+        {
+          "name": "store_sales_to_item",
+          "from": "store_sales",
+          "to": "item",
+          "from_columns": [
+            "SS_ITEM_SK"
+          ],
+          "to_columns": [
+            "I_ITEM_SK"
+          ]
+        },
+        {
+          "name": "store_sales_to_store",
+          "from": "store_sales",
+          "to": "store",
+          "from_columns": [
+            "SS_STORE_SK"
+          ],
+          "to_columns": [
+            "S_STORE_SK"
+          ]
+        }
+      ]
+    }
+  ]
+}

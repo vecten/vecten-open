@@ -1,0 +1,11 @@
+{
+  "name": "vecten",
+  "description": "The vecten skills: connector, guide, model, operate and semantic.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Vecten"
+  },
+  "homepage": "https://github.com/vecten/vecten-open",
+  "repository": "https://github.com/vecten/vecten-open",
+  "license": "Apache-2.0"
+}

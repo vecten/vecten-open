@@ -1,0 +1,46 @@
+version: 2
+models:
+  - name: sales_pipeline
+    description: Every deal with the company it is with, for pipeline reporting.
+    columns:
+      - name: deal_id
+        description: Deal identifier in the demo source.
+        data_tests: [unique, not_null]
+      - name: company_name
+        description: Registered name of the company the deal is with.
+      - name: country
+        description: ISO 3166-1 alpha-2 country code of the company.
+        config:
+          meta: {osi: {synonyms: [market]}}
+      - name: stage
+        description: Pipeline stage, one of open, won or lost.
+      - name: amount
+        description: Deal value in the source currency.
+        config:
+          meta: {osi: {synonyms: [value, deal size]}}
+      - name: created_at
+        description: When the deal was created in the source, UTC.
+      - name: close_date
+        description: Day the deal closed; null while it is open.
+      - name: is_won
+        description: True when the deal closed as won.
+  - name: company_overview
+    description: One row per company with its deal totals.
+    columns:
+      - name: company_id
+        description: Company identifier in the demo source.
+        data_tests: [unique, not_null]
+      - name: name
+        description: Registered company name.
+      - name: domain
+        description: Apex web domain, lower-cased, without protocol, www or path.
+      - name: email
+        description: Contact email, lower-cased and trimmed; null when the source held none.
+      - name: country
+        description: ISO 3166-1 alpha-2 country code.
+      - name: deal_count
+        description: Number of deals with the company.
+      - name: total_amount
+        description: Sum of the company's deal values in the source currency.
+      - name: first_deal_date
+        description: Day the company's first deal was created.

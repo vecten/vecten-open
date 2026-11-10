@@ -1,0 +1,67 @@
+{
+  "compiled": {
+    "full_request": {
+      "metrics": ["total_revenue"],
+      "dimensions": ["country"],
+      "time": {"dimension": "order_date", "grain": "month", "start": "2026-01-01", "end": "2027-01-01"},
+      "filters": [{"field": "status", "op": "in", "value": ["paid", "shipped"]}],
+      "order_by": [{"field": "total_revenue", "dir": "desc"}],
+      "limit": 500
+    },
+    "limit_above_cap": {"metrics": ["total_revenue"], "limit": 5000},
+    "two_metrics": {
+      "metrics": ["total_revenue", "order_count"],
+      "dimensions": ["status"],
+      "order_by": [{"field": "status"}]
+    },
+    "ratio": {"metrics": ["discount_share"], "time": {"grain": "month"}},
+    "identifier_rewrite": {"metrics": ["net_revenue"], "dimensions": ["country"]},
+    "dialect_expression": {"metrics": ["total_revenue"], "dimensions": ["channel"]},
+    "default_time_dimension": {"metrics": ["order_count"], "time": {"grain": "week"}},
+    "time_range_without_grain": {
+      "metrics": ["total_revenue"],
+      "time": {"start": "2026-01-01", "end": "2027-01-01"}
+    },
+    "operators": {
+      "metrics": ["order_count"],
+      "filters": [
+        {"field": "status", "op": "=", "value": "paid"},
+        {"field": "status", "op": "equals", "value": "paid"},
+        {"field": "channel", "op": "!=", "value": "web"},
+        {"field": "channel", "op": "not equals", "value": "app"},
+        {"field": "amount", "op": ">", "value": 1},
+        {"field": "amount", "op": ">=", "value": 2},
+        {"field": "amount", "op": "<", "value": 1000},
+        {"field": "amount", "op": "<=", "value": 999.5},
+        {"field": "country", "op": "like", "value": "P%"},
+        {"field": "discount", "op": "between", "value": [0, 50]},
+        {"field": "customer_email", "op": "is null", "value": false},
+        {"field": "status", "op": "is null"},
+        {"field": "status", "op": "in", "value": ["paid", "shipped"]}
+      ]
+    },
+    "empty_in": {"metrics": ["order_count"], "filters": [{"field": "status", "op": "in", "value": []}]},
+    "subquery_source": {"metrics": ["account_balance"], "dimensions": ["region"], "time": {"grain": "month"}},
+    "semi_additive_last": {
+      "metrics": ["account_balance_last"],
+      "dimensions": ["region"],
+      "time": {"grain": "quarter", "start": "2026-01-01"},
+      "order_by": [{"field": "region"}]
+    },
+    "semi_additive_first": {"metrics": ["account_balance_first"], "time": {"grain": "year"}},
+    "modulo_metric": {"metrics": ["cents"], "filters": [{"field": "status", "op": "like", "value": "pa%"}]}
+  },
+  "refused": {
+    "join_required_dimension": {"metrics": ["total_revenue"], "dimensions": ["customers.segment"]},
+    "join_required_unqualified": {"metrics": ["total_revenue"], "dimensions": ["signup_date"]},
+    "join_required_metrics": {"metrics": ["total_revenue", "customer_count"]},
+    "unknown_metric": {"metrics": ["total_revenu"]},
+    "unknown_field": {"metrics": ["total_revenue"], "dimensions": ["missing"]},
+    "unknown_field_fact_as_dimension": {"metrics": ["total_revenue"], "dimensions": ["amount"]},
+    "unknown_field_time_default": {"metrics": ["event_count"], "time": {"grain": "day"}},
+    "unknown_field_order_by": {"metrics": ["total_revenue"], "order_by": [{"field": "country"}]},
+    "ambiguous_dataset": {"metrics": ["total_revenue"], "dimensions": ["segment"]},
+    "rollup_not_allowed_no_rule": {"metrics": ["account_balance"], "time": {"grain": "quarter"}},
+    "rollup_not_allowed_no_grain": {"metrics": ["account_balance"]}
+  }
+}

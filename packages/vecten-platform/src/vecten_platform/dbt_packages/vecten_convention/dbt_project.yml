@@ -1,0 +1,11 @@
+name: vecten_convention
+version: "0.1.0"
+config-version: 2
+require-dbt-version: [">=1.12.0", "<1.13.0"]
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+models:
+  vecten_convention:
+    +schema: core
+    +materialized: table

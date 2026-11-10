@@ -1,0 +1,220 @@
+"""`up` and `down`: the local stack from vecten.toml, nothing in the project."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+
+from vecten.cli.injection import load_runner
+from vecten.stack import SNOWFLAKE_MCP_NOTE, local_components
+from vecten.stack.certs import ensure_self_signed
+from vecten.stack.compose import (
+    LOCAL_AIRFLOW_API_PORT,
+    LOCAL_HTTPS_PORT,
+    STACK_DIR,
+    compose_project_name,
+    local_hostnames,
+    write_compose,
+)
+from vecten.stack.docker import DockerRunner, SubprocessDocker
+from vecten.stack.env import ensure_local_env
+from vecten.stack.images import base_image, write_project_layer
+from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, HOST_KEYS, write_nginx
+from vecten_shared.config import load_config
+from vecten_shared.output import ExitCode, Failure
+from vecten_shared.records import read_record, remove_record, write_record, write_text_atomic
+
+PUBLISHED_REGISTRY = "ghcr.io/vecten"
+NO_LOCAL_IMAGES_HINT = (
+    "no local base images found; build them with `vecten dev build-images` "
+    "from a vecten-open checkout"
+)
+# Each component's own verdict through NGINX, as the cloud ship polls it.
+FRONT_DOOR_CHECKS = {"airflow": (AIRFLOW_HEALTH_PATH, {200}), "mcp": ("/health", {200})}
+
+
+def get_runner() -> DockerRunner:
+    return load_runner("VECTEN_DOCKER_RUNNER", SubprocessDocker)
+
+
+@dataclass
+class UpResult:
+    profiles: list[str]
+    urls: dict[str, str]
+    stack_dir: Path
+    # The loopback Airflow API and its user for the Airflow MCP server; empty without platform.
+    airflow_api: dict[str, str]
+    left_out: list[str]
+
+
+@dataclass
+class DownResult:
+    stopped: bool
+    volumes_removed: bool = False
+
+
+def _compose_files(project_root: Path) -> list[Path]:
+    listing = project_root / STACK_DIR / "compose.project"
+    if not listing.is_file():
+        return []
+    return [Path(line) for line in listing.read_text().splitlines() if line]
+
+
+def _env(env: dict[str, str], key: str) -> str:
+    if not env.get(key):
+        raise Failure(ExitCode.INTERNAL, f"{key} missing from .env after ensure_local_env")
+    return env[key]
+
+
+def wait_for_front_doors(urls: dict[str, str], timeout: int) -> None:
+    deadline = time.monotonic() + timeout
+    with httpx.Client(verify=False, timeout=5) as client:
+        for component, url in urls.items():
+            path, expected = FRONT_DOOR_CHECKS[component]
+            host = url.removeprefix("https://")
+            # NGINX refuses a handshake without a known SNI name, and an IP URL sends none.
+            sni = {"sni_hostname": host.split(":", 1)[0]}
+            status: int | None = None
+            while True:
+                try:
+                    status = client.get(
+                        f"https://127.0.0.1:{LOCAL_HTTPS_PORT}{path}",
+                        headers={"Host": host},
+                        extensions=sni,
+                    ).status_code
+                except httpx.HTTPError:
+                    status = None
+                if status in expected:
+                    break
+                if time.monotonic() > deadline:
+                    raise Failure(
+                        ExitCode.TOOL_FAILED,
+                        f"{component} did not answer at {url} (last status {status})",
+                    )
+                time.sleep(2)
+
+
+def _registry(runner: DockerRunner, components: list[str]) -> str | None:
+    explicit = os.environ.get("VECTEN_IMAGE_REGISTRY")
+    if explicit:
+        return explicit
+    probe = base_image("airflow" if "platform" in components else "mcp", None)
+    return None if runner.image_exists(probe) else PUBLISHED_REGISTRY
+
+
+def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpResult:
+    if not runner.available():
+        raise Failure(
+            ExitCode.PREREQUISITE,
+            "Docker is not reachable; install Docker and start the daemon, "
+            "then run `vecten up` again",
+        )
+    config = load_config(project_root)
+    components = local_components(config)
+    if not components:
+        raise Failure(
+            ExitCode.REFUSED, f"{SNOWFLAKE_MCP_NOTE}, so there is no local stack to start"
+        )
+    env = ensure_local_env(project_root, config)
+    stack_dir = project_root / STACK_DIR
+    write_compose(project_root, config)
+    hosts = local_hostnames()
+    write_nginx(
+        stack_dir,
+        components,
+        hosts,
+        "local",
+        admin_panel=config.mcp.admin_panel,
+        admin_allow=config.mcp.admin_allow,
+    )
+    served = {HOST_KEYS[c]: hosts[HOST_KEYS[c]] for c in components}
+    ensure_self_signed(stack_dir, list(served.values()))
+    if "platform" in components:
+        passwords = {_env(env, "AIRFLOW_ADMIN_USER"): _env(env, "AIRFLOW_ADMIN_PASSWORD")}
+        write_text_atomic(stack_dir / "airflow_passwords.json", json.dumps(passwords), mode=0o600)
+    registry = _registry(runner, components)
+    write_project_layer(stack_dir, config, registry)
+    profiles = [*components, "local"]
+    # A restarting container resets its health check, so an unbounded --wait can block forever.
+    args = ["up", "-d", "--build", "--wait", "--wait-timeout", str(wait_seconds)]
+    result = runner.compose(project_root, _compose_files(project_root), profiles, args)
+    if result.returncode != 0:
+        message = f"docker compose up failed: {result.stderr[-2000:]}"
+        if registry == PUBLISHED_REGISTRY and not os.environ.get("VECTEN_IMAGE_REGISTRY"):
+            message += f"; {NO_LOCAL_IMAGES_HINT}"
+        raise Failure(ExitCode.TOOL_FAILED, message)
+    urls = {key: f"https://{host}" for key, host in served.items()}
+    wait_for_front_doors(urls, wait_seconds)
+    airflow_api = (
+        {
+            "airflow_api": f"http://127.0.0.1:{LOCAL_AIRFLOW_API_PORT}",
+            "airflow_user": _env(env, "AIRFLOW_ADMIN_USER"),
+        }
+        if "platform" in components
+        else {}
+    )
+    write_record(
+        project_root,
+        "up",
+        {"profiles": profiles, "urls": urls, "stack_dir": str(stack_dir), **airflow_api},
+    )
+    left_out = [c for c in config.components if c not in components]
+    return UpResult(
+        profiles=profiles,
+        urls=urls,
+        stack_dir=stack_dir,
+        airflow_api=airflow_api,
+        left_out=left_out,
+    )
+
+
+def down(project_root: Path, runner: DockerRunner, volumes: bool = False) -> DownResult:
+    if not runner.available():
+        if volumes:
+            raise Failure(
+                ExitCode.PREREQUISITE,
+                "Docker is not reachable, so the stack's volumes cannot be removed; "
+                "start the daemon, then run `vecten down --volumes` again",
+            )
+        return DownResult(stopped=False)
+    config = load_config(project_root)
+    files = _compose_files(project_root)
+    # Compose stops only the given profiles' services. A failed `up` after a components change
+    # leaves containers under both the recorded and the configured profiles, so stop the union.
+    started = read_record(project_root, "up") or read_record(project_root, "down")
+    recorded = (started or {}).get("profiles") or []
+    profiles = sorted(set(recorded) | {*config.components, "local"})
+    if not files or not all(f.is_file() for f in files):
+        if not volumes:
+            return DownResult(stopped=False)
+        _remove_labelled_volumes(runner, compose_project_name(project_root, config))
+        _record_down(project_root, profiles, volumes)
+        return DownResult(stopped=False, volumes_removed=True)
+    ps = runner.compose(project_root, files, profiles, ["ps", "-q"])
+    if ps.returncode != 0:
+        raise Failure(ExitCode.TOOL_FAILED, f"docker compose ps failed: {ps.stderr[-2000:]}")
+    running = bool(ps.stdout.strip())
+    # Volumes outlive the containers, so removing them is still due when nothing is running.
+    if not running and not volumes:
+        return DownResult(stopped=False)
+    result = runner.compose(project_root, files, profiles, ["down", "-v"] if volumes else ["down"])
+    if result.returncode != 0:
+        raise Failure(ExitCode.TOOL_FAILED, f"docker compose down failed: {result.stderr[-2000:]}")
+    _record_down(project_root, profiles, volumes)
+    return DownResult(stopped=running, volumes_removed=volumes)
+
+
+def _record_down(project_root: Path, profiles: list[str], volumes: bool) -> None:
+    write_record(project_root, "down", {"profiles": profiles, "volumes_removed": volumes})
+    remove_record(project_root, "up")
+
+
+def _remove_labelled_volumes(runner: DockerRunner, project: str) -> None:
+    result = runner.remove_volumes(runner.volumes_by_label(project))
+    if result.returncode != 0:
+        raise Failure(ExitCode.TOOL_FAILED, f"docker volume rm failed: {result.stderr[-2000:]}")

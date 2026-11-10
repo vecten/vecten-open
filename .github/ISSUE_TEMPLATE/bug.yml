@@ -1,0 +1,45 @@
+name: Bug report
+description: Something vecten did that it should not have, or did not do.
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `vecten version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: cloud
+    attributes:
+      label: Cloud
+      options: ["laptop only", "AWS", "Scaleway"]
+    validations:
+      required: true
+  - type: dropdown
+    id: warehouse
+    attributes:
+      label: Warehouse
+      options: ["Postgres", "Snowflake", "an existing warehouse"]
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: The command and its output
+      description: Run it with `--json` and paste the document, with secrets removed.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true

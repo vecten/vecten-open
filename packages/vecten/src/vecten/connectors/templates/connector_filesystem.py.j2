@@ -1,0 +1,18 @@
+"""{{ name }}: a dlt filesystem source. Fill in the TODO placeholders, then `vecten connector run {{ name }}`.
+
+The bucket URL is a secret because it can carry a token; store it with `vecten secret set {{ secrets[0] }}`.
+"""
+
+import dlt
+from dlt.sources.filesystem import filesystem, read_csv
+from vecten_platform.sync import secret
+
+
+@dlt.source(name="{{ name }}")
+def _files():
+    files = filesystem(bucket_url=secret("{{ secrets[0] }}"), file_glob="*.csv")  # TODO: the glob
+    yield (files | read_csv()).with_name("rows")  # TODO: one resource per file family
+
+
+def source():
+    return _files()

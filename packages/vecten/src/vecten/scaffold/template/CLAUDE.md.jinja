@@ -1,0 +1,79 @@
+# [[ project_name ]]
+
+This project was rendered by `vecten init` (vecten [[ vecten_version ]]). The agent drives it
+through the `vecten` CLI; every command takes `--json`. Start with `vecten next --json` and do
+what it says, or read `skills/guide/SKILL.md`.
+
+## Components
+
+`vecten.toml` names the components this deployment carries: [[ components | join(', ') ]].
+[% if has_warehouse %]The warehouse already exists ([[ warehouse ]]); only the `mcp` component is deployed over it.[% endif %]
+
+## Schema convention, version [[ convention_version ]]
+
+[% if 'platform' in components %]The full text is `docs/schema-convention.md`; read it before
+writing a model. Schemas: `raw_<source>`, `staging`, `snapshots`, `core`, `marts`. Models:
+`staging_<source>_<entity>`, `snapshot_<source>_<entity>`, core entities as singular nouns
+(`company`, `contact`, `deal`), marts prefixed by domain (`sales_pipeline`). Lowercase, single
+underscores, no leading digit. Rules no test can check: full words, never abbreviations, and
+singular nouns for core entities. Layering: staging casts every raw column to an explicit type and
+adds `_loaded_at` and `_source`; one snapshot per staging model, `check` strategy on business
+columns only; core reads the snapshots' current rows; marts are built from core and carry a domain
+prefix. Every core and mart model and column has a description in `schema.yml`. Every core entity
+declares a primary key tested `unique` and `not_null`; every mart declares one too, the same way
+or as a composite key under `meta.osi.primary_key`. Use `vecten_convention.normalize_domain`,
+`normalize_email` and `add_days` rather than writing those expressions by hand.
+
+The build runs in two steps, because the convention tests read the built graph:
+`dbt build --exclude package:vecten_convention,test_type:singular`, then
+`dbt test --select package:vecten_convention,test_type:singular`. `vecten dbt-build-local` and the
+`dbt_build` DAG run both; `vecten dbt build` forwards only what you pass it.
+[% else %]The full text is `docs/schema-convention.md`. This project runs only the MCP over an
+existing warehouse: the convention's dbt rules apply to whoever builds that warehouse, and its
+rules for `osi/` apply here.
+[% endif %]
+Semantic model: Apache Ossie [[ ossie_spec ]] JSON documents under `osi/`. `osi/metrics.json` is
+written by the `semantic` skill, with every column qualified by its dataset
+(`SUM(sales_pipeline.amount)`).
+[% if 'platform' in components %]`vecten dbt-build-local` is the only way to regenerate
+`osi/datasets.json`; never edit it by hand. To rename or drop a mart a metric uses, edit or remove
+the metric in `osi/metrics.json`, then run `vecten dbt-build-local`, which regenerates
+`osi/datasets.json` and checks `osi/` with `dbt parse`. Check the documents with
+`vecten mcp validate`.
+[% else %]`vecten mcp introspect` drafts `osi/datasets.json` from the warehouse, the `semantic` skill
+refines it with a human, and `vecten mcp validate` checks it.
+[% endif %][% if 'platform' in components %]
+## Connectors
+
+`connectors/<source>/connector.py` defines `source()` returning a dlt source; credentials only through
+`secret("<NAME>")` after `vecten secret set <NAME>`. Never put a credential, a host or a warehouse name in
+connector code; the destination comes from `vecten.toml` and the provider. Objects sync one pipeline each
+into `raw_<source>`. After changing a source: `vecten connector run <source> --record`, then
+`vecten raw schema <source> --json`.
+[% endif %]
+## Skills
+
+`vecten next --json` is the loop: it lists what the project needs now, in priority order, as
+`ask` items for the human, `command` items to run as printed and `skill` items to hand to a
+skill, and it reads only local files, run records and git. `skills/guide/SKILL.md` is the entry
+and says how to act on each kind; `vecten guide` prints the same text. `vecten init` vendored
+the skills from the installed vecten package under `skills/`; the ones this project uses:
+
+- `skills/guide/SKILL.md`: loops on `vecten next --json` until it prints no item.
+- `skills/semantic/SKILL.md`: authors metrics, refines warehouse drafts and repairs reported
+  gaps with regression evals and a reviewed pull request.
+[% if 'platform' in components %]- `skills/connector/SKILL.md`: set up a source end to end, credentials through `vecten secret set`.
+- `skills/model/SKILL.md`: stage, snapshot and model a raw source until `vecten dbt-build-local`
+  is green.
+[% endif %]- `skills/operate/SKILL.md`: after deploy, loops on `vecten issues --json` and resolves what
+  broke through the skills above, a command or a question, every code fix as a pull request.
+
+[% if 'platform' in components %]`.mcp.json` declares two MCP servers the skills read state through: `airflow`, Astronomer's, for
+DAG runs, task states and task logs on the local stack, and `dbt`, the dbt MCP server's local
+tools over `dbt/`, for the `model` skill. The client expands their `${VAR}` references from the
+environment it was started in. `AIRFLOW_API_URL` and `AIRFLOW_USERNAME` default to the local
+stack's Airflow API on `http://127.0.0.1:8482` and its `admin` user, so the human exports only
+`AIRFLOW_PASSWORD` and `DBT_PATH` in their terminal and starts the client from this directory;
+`skills/guide/SKILL.md` gives the lines. Change the project through `vecten` commands, never
+through these servers.
+[% endif %]

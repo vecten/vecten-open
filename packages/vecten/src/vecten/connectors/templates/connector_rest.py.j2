@@ -1,0 +1,37 @@
+"""{{ name }}: a dlt rest_api source. Fill in the TODO placeholders, then `vecten connector run {{ name }}`.
+
+Credentials come only through `secret(...)`; store them with `vecten secret set <NAME>`.
+"""
+
+from dlt.sources.rest_api import rest_api_source
+from vecten_platform.sync import secret
+
+
+def source():
+    config = {
+        "client": {
+            "base_url": "https://api.example.com/v1/",  # TODO: the API's base URL
+            "auth": {"type": "bearer", "token": secret("{{ secrets[0] }}")},
+            "paginator": {"type": "json_link", "next_url_path": "next"},  # TODO: the API's pagination
+        },
+        "resource_defaults": {
+            "write_disposition": "merge",
+            "primary_key": "id",  # TODO: the primary key every resource shares, or set it per resource
+        },
+        "resources": [
+            {
+                "name": "items",  # TODO: one entry per object to sync
+                "endpoint": {
+                    "path": "items",
+                    "params": {
+                        "updated_since": {  # TODO: incremental loading on an updated-at field
+                            "type": "incremental",
+                            "cursor_path": "updated_at",
+                            "initial_value": "1970-01-01T00:00:00Z",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+    return rest_api_source(config, name="{{ name }}")

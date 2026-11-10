@@ -1,0 +1,13 @@
+variable "environment" { type = string }
+variable "project_name" { type = string }
+variable "size" { type = string }
+variable "components" { type = list(string) }
+variable "snowflake_account" { type = string }
+
+# `vecten deploy` sets these with -var on every plan, from vecten.toml, the package's sizing
+# table and the loader key in the secrets store; the public key changes only when deploy
+# generates a new pair, so none of them belongs in tfvars.
+variable "database_name" { type = string }
+variable "warehouse_name" { type = string }
+variable "warehouse_size" { type = string }
+variable "loader_public_key" { type = string }

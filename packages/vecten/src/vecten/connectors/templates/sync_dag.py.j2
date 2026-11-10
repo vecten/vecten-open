@@ -1,0 +1,5 @@
+"""Sync DAG for {{ name }}, object group {{ group }}; rendered by `vecten connector add`, yours to edit."""
+
+from vecten_platform.sync.airflow_dag import build_sync_dag
+
+dag = build_sync_dag(connector="{{ name }}", group="{{ group }}", objects={{ objects | tojson }}, schedule="@daily")

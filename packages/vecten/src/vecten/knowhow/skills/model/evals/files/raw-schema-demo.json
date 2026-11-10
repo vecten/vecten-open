@@ -1,0 +1,37 @@
+{
+  "source": "demo",
+  "schema": "raw_demo",
+  "tables": [
+    {
+      "name": "company",
+      "columns": [
+        {"name": "id", "type": "bigint"},
+        {"name": "name", "type": "character varying"},
+        {"name": "domain", "type": "character varying"},
+        {"name": "email", "type": "character varying"},
+        {"name": "country", "type": "character varying"},
+        {"name": "created_at", "type": "timestamp with time zone"},
+        {"name": "updated_at", "type": "timestamp with time zone"},
+        {"name": "_dlt_load_id", "type": "character varying"},
+        {"name": "_dlt_id", "type": "character varying"}
+      ]
+    },
+    {
+      "name": "deal",
+      "columns": [
+        {"name": "id", "type": "bigint"},
+        {"name": "company_id", "type": "bigint"},
+        {"name": "title", "type": "character varying"},
+        {"name": "stage", "type": "character varying"},
+        {"name": "amount", "type": "double precision"},
+        {"name": "created_at", "type": "timestamp with time zone"},
+        {"name": "close_date", "type": "character varying"},
+        {"name": "is_won", "type": "boolean"},
+        {"name": "updated_at", "type": "timestamp with time zone"},
+        {"name": "_dlt_load_id", "type": "character varying"},
+        {"name": "_dlt_id", "type": "character varying"}
+      ]
+    }
+  ],
+  "ok": true
+}

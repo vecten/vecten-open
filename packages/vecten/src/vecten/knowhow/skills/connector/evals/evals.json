@@ -1,0 +1,22 @@
+{
+  "skill_name": "connector",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Connect the demo REST API at https://api.demo.test/v1 whose docs are in `docs/demo-api.md`; the token is in my clipboard",
+      "expected_output": "Starting state: a project rendered by `vecten init` with the platform component, `wanted = [\"demo\"]` in vecten.toml, the local stack up, and evals/files/demo-api.md copied to docs/demo-api.md; a stub that follows that document answers https://api.demo.test/v1, and the person running the evaluation plays the human, allowing every object to be recorded; they seeded the token with `vecten secret set DEMO_API_KEY` in their own terminal before the run, or run that command when the agent hands it over. The agent adds `demo` from the rest scaffold, has the token stored through `vecten secret set DEMO_API_KEY` by the human at a hidden prompt, without ever reading the clipboard or seeing the value, fills in connectors/demo/connector.py with bearer auth through secret(\"DEMO_API_KEY\"), cursor pagination and the updated_since filter for companies and deals, tells the human the fixtures are real data committed to the project before recording, records the first sync, and shows the raw tables.",
+      "files": ["evals/files/demo-api.md"],
+      "expectations": [
+        "The transcript contains `vecten connector add demo --from rest`",
+        "The transcript contains `vecten secret set DEMO_API_KEY` run without a value argument and without a pipe into it",
+        "No token value appears anywhere in the transcript, in connectors/demo/, in vecten.toml or in any committed file, and the agent never ran a clipboard command such as pbpaste",
+        "connectors/demo/connector.py reads the credential only through secret(\"DEMO_API_KEY\")",
+        "Before the first `--record` run, the agent told the human that fixtures hold real records committed to the project",
+        "The transcript contains `vecten connector run demo --record`, and its last run reports `ok: true` for every object",
+        "connectors/demo/fixtures/ holds one non-empty .jsonl file per object the connector defines",
+        "The transcript contains `vecten raw schema demo --json`, and the agent showed the human the tables and columns it printed",
+        "vecten.toml declares a connector named demo"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "context": {
+    "dimension": "time",
+    "metrics": [
+      "account_balance"
+    ],
+    "requires": "dataset grain and requested time grain"
+  },
+  "reason": "rollup_not_allowed",
+  "skeleton": "SELECT /* complete the requested calculation */ * FROM (SELECT account_id, region, balance_month, balance FROM marts.balances WHERE region NOT LIKE 'test%') AS \"balances\""
+}

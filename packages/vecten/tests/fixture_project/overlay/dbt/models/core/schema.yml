@@ -1,0 +1,38 @@
+version: 2
+models:
+  - name: company
+    description: Current version of every company from the demo source, one row per company.
+    columns:
+      - name: company_id
+        description: Company identifier in the demo source.
+        data_tests: [unique, not_null]
+      - name: name
+        description: Registered company name.
+      - name: domain
+        description: Apex web domain, lower-cased, without protocol, www or path.
+      - name: email
+        description: Contact email, lower-cased and trimmed; null when the source held none.
+      - name: country
+        description: ISO 3166-1 alpha-2 country code.
+      - name: created_at
+        description: When the company was created in the source, UTC.
+  - name: deal
+    description: Current version of every deal from the demo source, one row per deal.
+    columns:
+      - name: deal_id
+        description: Deal identifier in the demo source.
+        data_tests: [unique, not_null]
+      - name: company_id
+        description: The company the deal is with.
+      - name: title
+        description: Deal title as entered in the source.
+      - name: stage
+        description: Pipeline stage, one of open, won or lost.
+      - name: amount
+        description: Deal value in the source currency.
+      - name: created_at
+        description: When the deal was created in the source, UTC.
+      - name: close_date
+        description: Day the deal closed; null while it is open.
+      - name: is_won
+        description: True when the deal closed as won.

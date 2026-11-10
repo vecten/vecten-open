@@ -1,0 +1,20 @@
+{
+  "skill_name": "model",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Model the `demo` source into the warehouse. I also want a sales pipeline mart: every deal with the company it is with.",
+      "expected_output": "Starting state: a project rendered by `vecten init` with the platform component and a `demo` connector whose fixtures under connectors/demo/fixtures/ hold the company and deal rows, with no staging, snapshot, core or mart models yet; evals/files/raw-schema-demo.json is what `vecten raw schema demo --json` prints there. The agent reads docs/schema-convention.md and the raw schema, writes one staging view and one check-strategy snapshot per raw table, core models company and deal over the snapshots' current rows with descriptions and unique and not_null keys, and a sales_pipeline mart, then loops on `vecten dbt-build-local --json` until it exits 0 and regenerates osi/datasets.json, without editing that file or sources.yml by hand.",
+      "files": ["evals/files/raw-schema-demo.json"],
+      "expectations": [
+        "dbt/models/staging/staging_demo_company.sql and dbt/models/staging/staging_demo_deal.sql exist and each selects `_loaded_at` and `_source`",
+        "dbt/snapshots/ holds snapshot_demo_company.sql and snapshot_demo_deal.sql, each with strategy 'check' and check_cols that leave out _loaded_at",
+        "dbt/models/core/company.sql and dbt/models/core/deal.sql exist and read their snapshot with `dbt_valid_to is null`",
+        "A schema.yml under dbt/models/core/ describes company and deal and every column they build, and tests company_id on company and deal_id on deal with both unique and not_null",
+        "A mart named sales_pipeline exists under dbt/models/marts/ with a description, every column described and a key tested unique and not_null",
+        "The transcript shows a `vecten dbt-build-local` run that exited 0",
+        "osi/datasets.json differs from the rendered one and names a sales_pipeline dataset, and the transcript shows no direct edit of osi/datasets.json or dbt/models/staging/sources.yml"
+      ]
+    }
+  ]
+}

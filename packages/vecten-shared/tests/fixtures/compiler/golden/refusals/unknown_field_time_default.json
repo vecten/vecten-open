@@ -1,0 +1,11 @@
+{
+  "context": {
+    "candidates": [
+      "created_at",
+      "processed_at"
+    ],
+    "field": "time.dimension"
+  },
+  "reason": "unknown_field",
+  "skeleton": "SELECT /* complete the requested calculation */ * FROM marts.events"
+}

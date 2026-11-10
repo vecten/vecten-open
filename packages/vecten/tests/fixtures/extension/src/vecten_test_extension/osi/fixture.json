@@ -1,0 +1,140 @@
+{
+  "version": "0.1.1",
+  "semantic_model": [
+    {
+      "name": "acme",
+      "datasets": [
+        {
+          "name": "fixture_dataset",
+          "source": "warehouse.marts.company_overview",
+          "primary_key": [
+            "company_id"
+          ],
+          "description": "One row per company with its deal totals.",
+          "fields": [
+            {
+              "name": "company_id",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "company_id"
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              },
+              "description": "Company identifier in the demo source."
+            },
+            {
+              "name": "name",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "name"
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              },
+              "description": "Registered company name."
+            },
+            {
+              "name": "domain",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "domain"
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              },
+              "description": "Apex web domain, lower-cased, without protocol, www or path."
+            },
+            {
+              "name": "email",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "email"
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              },
+              "description": "Contact email, lower-cased and trimmed; null when the source held none."
+            },
+            {
+              "name": "country",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "country"
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": false
+              },
+              "description": "ISO 3166-1 alpha-2 country code."
+            },
+            {
+              "name": "deal_count",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "deal_count"
+                  }
+                ]
+              },
+              "description": "Number of deals with the company."
+            },
+            {
+              "name": "total_amount",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "total_amount"
+                  }
+                ]
+              },
+              "description": "Sum of the company's deal values in the source currency."
+            },
+            {
+              "name": "first_deal_date",
+              "expression": {
+                "dialects": [
+                  {
+                    "dialect": "ANSI_SQL",
+                    "expression": "first_deal_date"
+                  }
+                ]
+              },
+              "dimension": {
+                "is_time": true
+              },
+              "description": "Day the company's first deal was created."
+            }
+          ],
+          "custom_extensions": [
+            {
+              "vendor_name": "COMMON",
+              "data": "{\"vecten\": {\"snapshot_derived\": true}}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

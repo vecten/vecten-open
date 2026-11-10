@@ -1,0 +1,90 @@
+#!/bin/bash
+# cloud-init runs this once, at first boot; every step leaves the same state when rerun by hand.
+set -euo pipefail
+
+retry() {
+  local attempt=1
+  until "$@"; do
+    if [ "$attempt" -ge 10 ]; then
+      echo "vecten user data: gave up after $attempt attempts: $*" >&2
+      return 1
+    fi
+    attempt=$((attempt + 1))
+    sleep 15
+  done
+}
+
+retry dnf install -y docker python3 postgresql17
+
+# Docker, the boot unit and the renewal timer come before the plugin downloads, so a download
+# that gives up still leaves a host that restarts its stack after a reboot; the agent
+# installs a missing plugin on the next ship.
+systemctl enable --now docker
+
+install -d -m 0755 /opt/vecten/releases /var/www/certbot /etc/letsencrypt
+
+# /run/vecten is tmpfs and empty after a reboot; the agent rebuilds it before Compose starts.
+cat > /etc/systemd/system/vecten-boot.service <<'UNIT'
+[Unit]
+Description=Vecten: rebuild run files and start the current release
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/vecten/releases/current
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /opt/vecten/releases/current/.vecten/ship/apply.py boot
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# systemd expands $ in ExecStart lines, so the shell's command substitution is written $$( ).
+cat > /etc/systemd/system/vecten-certbot-renew.service <<'UNIT'
+[Unit]
+Description=Vecten: renew Let's Encrypt certificates and reload NGINX
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm -v /etc/letsencrypt:/etc/letsencrypt -v /var/www/certbot:/var/www/certbot ${certbot_image} renew --non-interactive --webroot -w /var/www/certbot
+ExecStartPost=-/bin/sh -c 'docker exec $$(docker ps -q --filter label=com.docker.compose.service=nginx) nginx -s reload'
+UNIT
+
+cat > /etc/systemd/system/vecten-certbot-renew.timer <<'UNIT'
+[Unit]
+Description=Vecten: daily Let's Encrypt renewal
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable vecten-boot.service
+systemctl enable --now vecten-certbot-renew.timer
+
+compose_url="https://github.com/docker/compose/releases/download/v${compose_plugin_version}/docker-compose-linux-x86_64"
+workdir="$(mktemp -d)"
+retry curl -fsSL -o "$workdir/docker-compose-linux-x86_64" "$compose_url"
+retry curl -fsSL -o "$workdir/docker-compose-linux-x86_64.sha256" "$compose_url.sha256"
+(cd "$workdir" && sha256sum -c docker-compose-linux-x86_64.sha256)
+install -D -m 0755 "$workdir/docker-compose-linux-x86_64" /usr/libexec/docker/cli-plugins/docker-compose
+rm -rf "$workdir"
+
+buildx_asset="buildx-v${buildx_plugin_version}.linux-amd64"
+workdir="$(mktemp -d)"
+retry curl -fsSL -o "$workdir/$buildx_asset" "https://github.com/docker/buildx/releases/download/v${buildx_plugin_version}/buildx-v${buildx_plugin_version}.linux-amd64"
+retry curl -fsSL -o "$workdir/checksums.txt" "https://github.com/docker/buildx/releases/download/v${buildx_plugin_version}/checksums.txt"
+# checksums.txt lists every platform, its names with or without sha256sum's binary marker `*`;
+# only this asset's line is checked.
+(cd "$workdir" && grep -E "^[0-9a-f]{64} [ *]$buildx_asset\$" checksums.txt | sha256sum -c -)
+install -D -m 0755 "$workdir/$buildx_asset" /usr/libexec/docker/cli-plugins/docker-buildx
+rm -rf "$workdir"

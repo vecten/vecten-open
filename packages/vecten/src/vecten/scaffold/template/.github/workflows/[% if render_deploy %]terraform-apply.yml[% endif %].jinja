@@ -1,0 +1,55 @@
+name: terraform-apply
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to apply
+        required: true
+        default: prod
+permissions:
+  contents: read
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+jobs:
+  apply:
+    runs-on: [[ github_runner ]]
+[%- if cloud == 'aws' %]
+    # The deploy role trusts only jobs that declare the environment it was bootstrapped for.
+    environment: ${{ inputs.environment }}
+[%- else %]
+    # The deploy key is an environment secret, which GitHub hands only to jobs that declare
+    # the environment.
+    environment: ${{ inputs.environment }}
+[%- endif %]
+    permissions:
+[%- if cloud == 'aws' %]
+      id-token: write
+[%- endif %]
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: [[ action_checkout ]]
+        with:
+          fetch-depth: 0
+      - uses: [[ action_setup_uv ]]
+      - uses: [[ action_setup_terraform ]]
+        with:
+          terraform_version: "~[[ terraform_engine ]].0"
+          # The wrapper adds a [command] line to stdout, which breaks `terraform output -json`.
+          terraform_wrapper: false
+      - run: uv tool install "vecten==[[ vecten_version ]]"
+[%- if cloud == 'aws' %]
+      # The session keeps IAM's default hour, the longest the deploy role allows.
+      - uses: [[ action_configure_aws_credentials ]]
+        with:
+          role-to-assume: ${{ vars.VECTEN_AWS_ROLE_ARN }}
+          aws-region: [[ region | tojson ]]
+[%- endif %]
+      - run: vecten deploy --env ${{ inputs.environment }} --json
+        env:
+          GH_TOKEN: ${{ github.token }}
+[%- if cloud != 'aws' %]
+          SCW_ACCESS_KEY: ${{ secrets.VECTEN_SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.VECTEN_SCW_SECRET_KEY }}
+[%- endif %]

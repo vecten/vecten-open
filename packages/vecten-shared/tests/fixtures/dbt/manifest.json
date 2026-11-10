@@ -1,0 +1,683 @@
+{
+  "nodes": {
+    "model.acme.staging_demo_company": {
+      "resource_type": "model",
+      "name": "staging_demo_company",
+      "alias": "staging_demo_company",
+      "schema": "staging",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "model.acme.staging_demo_company",
+      "path": "staging/staging_demo_company.sql",
+      "package_name": "acme",
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "source.acme.demo.company"
+        ]
+      }
+    },
+    "model.acme.staging_demo_deal": {
+      "resource_type": "model",
+      "name": "staging_demo_deal",
+      "alias": "staging_demo_deal",
+      "schema": "staging",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "model.acme.staging_demo_deal",
+      "path": "staging/staging_demo_deal.sql",
+      "package_name": "acme",
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "source.acme.demo.deal"
+        ]
+      }
+    },
+    "model.acme.company": {
+      "resource_type": "model",
+      "name": "company",
+      "alias": "company",
+      "schema": "core",
+      "database": "WAREHOUSE",
+      "description": "Current version of every company from the demo source, one row per company.",
+      "meta": {},
+      "unique_id": "model.acme.company",
+      "path": "core/company.sql",
+      "package_name": "acme",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "description": "Company identifier in the demo source.",
+          "meta": {}
+        },
+        "name": {
+          "name": "name",
+          "description": "Registered company name.",
+          "meta": {}
+        },
+        "domain": {
+          "name": "domain",
+          "description": "Apex web domain, lower-cased, without protocol, www or path.",
+          "meta": {}
+        },
+        "email": {
+          "name": "email",
+          "description": "Contact email, lower-cased and trimmed; null when the source held none.",
+          "meta": {}
+        },
+        "country": {
+          "name": "country",
+          "description": "ISO 3166-1 alpha-2 country code.",
+          "meta": {}
+        },
+        "created_at": {
+          "name": "created_at",
+          "description": "When the company was created in the source, UTC.",
+          "meta": {}
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "snapshot.acme.snapshot_demo_company"
+        ]
+      }
+    },
+    "model.acme.deal": {
+      "resource_type": "model",
+      "name": "deal",
+      "alias": "deal",
+      "schema": "core",
+      "database": "WAREHOUSE",
+      "description": "Current version of every deal from the demo source, one row per deal.",
+      "meta": {},
+      "unique_id": "model.acme.deal",
+      "path": "core/deal.sql",
+      "package_name": "acme",
+      "columns": {
+        "deal_id": {
+          "name": "deal_id",
+          "description": "Deal identifier in the demo source.",
+          "meta": {}
+        },
+        "company_id": {
+          "name": "company_id",
+          "description": "The company the deal is with.",
+          "meta": {}
+        },
+        "title": {
+          "name": "title",
+          "description": "Deal title as entered in the source.",
+          "meta": {}
+        },
+        "stage": {
+          "name": "stage",
+          "description": "Pipeline stage, one of open, won or lost.",
+          "meta": {}
+        },
+        "amount": {
+          "name": "amount",
+          "description": "Deal value in the source currency.",
+          "meta": {}
+        },
+        "created_at": {
+          "name": "created_at",
+          "description": "When the deal was created in the source, UTC.",
+          "meta": {}
+        },
+        "close_date": {
+          "name": "close_date",
+          "description": "Day the deal closed; null while it is open.",
+          "meta": {}
+        },
+        "is_won": {
+          "name": "is_won",
+          "description": "True when the deal closed as won.",
+          "meta": {}
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "snapshot.acme.snapshot_demo_deal"
+        ]
+      }
+    },
+    "model.acme.sales_pipeline": {
+      "resource_type": "model",
+      "name": "sales_pipeline",
+      "alias": "sales_pipeline",
+      "schema": "marts",
+      "database": "WAREHOUSE",
+      "description": "Every deal with the company it is with, for pipeline reporting.",
+      "meta": {},
+      "unique_id": "model.acme.sales_pipeline",
+      "path": "marts/sales_pipeline.sql",
+      "package_name": "acme",
+      "columns": {
+        "deal_id": {
+          "name": "deal_id",
+          "description": "Deal identifier in the demo source.",
+          "meta": {}
+        },
+        "company_name": {
+          "name": "company_name",
+          "description": "Registered name of the company the deal is with.",
+          "meta": {}
+        },
+        "country": {
+          "name": "country",
+          "description": "ISO 3166-1 alpha-2 country code of the company.",
+          "meta": {
+            "osi": {
+              "synonyms": [
+                "market"
+              ]
+            }
+          }
+        },
+        "stage": {
+          "name": "stage",
+          "description": "Pipeline stage, one of open, won or lost.",
+          "meta": {}
+        },
+        "amount": {
+          "name": "amount",
+          "description": "Deal value in the source currency.",
+          "meta": {
+            "osi": {
+              "synonyms": [
+                "value",
+                "deal size"
+              ]
+            }
+          }
+        },
+        "created_at": {
+          "name": "created_at",
+          "description": "When the deal was created in the source, UTC.",
+          "meta": {}
+        },
+        "close_date": {
+          "name": "close_date",
+          "description": "Day the deal closed; null while it is open.",
+          "meta": {}
+        },
+        "is_won": {
+          "name": "is_won",
+          "description": "True when the deal closed as won.",
+          "meta": {}
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "model.acme.deal",
+          "model.acme.company"
+        ]
+      }
+    },
+    "model.acme.company_overview": {
+      "resource_type": "model",
+      "name": "company_overview",
+      "alias": "company_overview",
+      "schema": "marts",
+      "database": "WAREHOUSE",
+      "description": "One row per company with its deal totals.",
+      "meta": {},
+      "unique_id": "model.acme.company_overview",
+      "path": "marts/company_overview.sql",
+      "package_name": "acme",
+      "columns": {
+        "company_id": {
+          "name": "company_id",
+          "description": "Company identifier in the demo source.",
+          "meta": {}
+        },
+        "name": {
+          "name": "name",
+          "description": "Registered company name.",
+          "meta": {}
+        },
+        "domain": {
+          "name": "domain",
+          "description": "Apex web domain, lower-cased, without protocol, www or path.",
+          "meta": {}
+        },
+        "email": {
+          "name": "email",
+          "description": "Contact email, lower-cased and trimmed; null when the source held none.",
+          "meta": {}
+        },
+        "country": {
+          "name": "country",
+          "description": "ISO 3166-1 alpha-2 country code.",
+          "meta": {}
+        },
+        "deal_count": {
+          "name": "deal_count",
+          "description": "Number of deals with the company.",
+          "meta": {}
+        },
+        "total_amount": {
+          "name": "total_amount",
+          "description": "Sum of the company's deal values in the source currency.",
+          "meta": {}
+        },
+        "first_deal_date": {
+          "name": "first_deal_date",
+          "description": "Day the company's first deal was created.",
+          "meta": {}
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "model.acme.company",
+          "model.acme.deal"
+        ]
+      }
+    },
+    "snapshot.acme.snapshot_demo_company": {
+      "resource_type": "snapshot",
+      "name": "snapshot_demo_company",
+      "alias": "snapshot_demo_company",
+      "schema": "snapshots",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "snapshot.acme.snapshot_demo_company",
+      "path": "snapshot_demo_company.sql",
+      "package_name": "acme",
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.staging_demo_company"
+        ]
+      }
+    },
+    "snapshot.acme.snapshot_demo_deal": {
+      "resource_type": "snapshot",
+      "name": "snapshot_demo_deal",
+      "alias": "snapshot_demo_deal",
+      "schema": "snapshots",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "snapshot.acme.snapshot_demo_deal",
+      "path": "snapshot_demo_deal.sql",
+      "package_name": "acme",
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.staging_demo_deal"
+        ]
+      }
+    },
+    "model.vecten_convention.metricflow_time_spine": {
+      "resource_type": "model",
+      "name": "metricflow_time_spine",
+      "alias": "metricflow_time_spine",
+      "schema": "core",
+      "database": "WAREHOUSE",
+      "description": "Daily calendar from 2000-01-01, which dbt's semantic layer requires once a metric exists.",
+      "meta": {},
+      "unique_id": "model.vecten_convention.metricflow_time_spine",
+      "path": "metricflow_time_spine.sql",
+      "package_name": "vecten_convention",
+      "columns": {
+        "date_day": {
+          "name": "date_day",
+          "description": "Calendar day.",
+          "meta": {}
+        }
+      },
+      "depends_on": {
+        "nodes": []
+      }
+    },
+    "test.vecten_convention.convention_core_primary_key": {
+      "resource_type": "test",
+      "name": "convention_core_primary_key",
+      "alias": "convention_core_primary_key",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.vecten_convention.convention_core_primary_key",
+      "path": "convention_core_primary_key.sql",
+      "package_name": "vecten_convention",
+      "columns": {},
+      "depends_on": {
+        "nodes": []
+      }
+    },
+    "test.vecten_convention.convention_descriptions": {
+      "resource_type": "test",
+      "name": "convention_descriptions",
+      "alias": "convention_descriptions",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.vecten_convention.convention_descriptions",
+      "path": "convention_descriptions.sql",
+      "package_name": "vecten_convention",
+      "columns": {},
+      "depends_on": {
+        "nodes": []
+      }
+    },
+    "test.vecten_convention.convention_model_naming": {
+      "resource_type": "test",
+      "name": "convention_model_naming",
+      "alias": "convention_model_naming",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.vecten_convention.convention_model_naming",
+      "path": "convention_model_naming.sql",
+      "package_name": "vecten_convention",
+      "columns": {},
+      "depends_on": {
+        "nodes": []
+      }
+    },
+    "test.vecten_convention.convention_staging_load_metadata": {
+      "resource_type": "test",
+      "name": "convention_staging_load_metadata",
+      "alias": "convention_staging_load_metadata",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.vecten_convention.convention_staging_load_metadata",
+      "path": "convention_staging_load_metadata.sql",
+      "package_name": "vecten_convention",
+      "columns": {},
+      "depends_on": {
+        "nodes": []
+      }
+    },
+    "test.acme.unique_company_company_id.c58f1f95b0": {
+      "resource_type": "test",
+      "name": "unique_company_company_id",
+      "alias": "unique_company_company_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.unique_company_company_id.c58f1f95b0",
+      "path": "unique_company_company_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.company",
+      "column_name": "company_id",
+      "test_metadata": {
+        "name": "unique",
+        "kwargs": {
+          "column_name": "company_id",
+          "model": "{{ get_where_subquery(ref('company')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.company"
+        ]
+      }
+    },
+    "test.acme.not_null_company_company_id.6cb436c079": {
+      "resource_type": "test",
+      "name": "not_null_company_company_id",
+      "alias": "not_null_company_company_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.not_null_company_company_id.6cb436c079",
+      "path": "not_null_company_company_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.company",
+      "column_name": "company_id",
+      "test_metadata": {
+        "name": "not_null",
+        "kwargs": {
+          "column_name": "company_id",
+          "model": "{{ get_where_subquery(ref('company')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.company"
+        ]
+      }
+    },
+    "test.acme.unique_deal_deal_id.0156dccfde": {
+      "resource_type": "test",
+      "name": "unique_deal_deal_id",
+      "alias": "unique_deal_deal_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.unique_deal_deal_id.0156dccfde",
+      "path": "unique_deal_deal_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.deal",
+      "column_name": "deal_id",
+      "test_metadata": {
+        "name": "unique",
+        "kwargs": {
+          "column_name": "deal_id",
+          "model": "{{ get_where_subquery(ref('deal')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.deal"
+        ]
+      }
+    },
+    "test.acme.not_null_deal_deal_id.4bb426043b": {
+      "resource_type": "test",
+      "name": "not_null_deal_deal_id",
+      "alias": "not_null_deal_deal_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.not_null_deal_deal_id.4bb426043b",
+      "path": "not_null_deal_deal_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.deal",
+      "column_name": "deal_id",
+      "test_metadata": {
+        "name": "not_null",
+        "kwargs": {
+          "column_name": "deal_id",
+          "model": "{{ get_where_subquery(ref('deal')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.deal"
+        ]
+      }
+    },
+    "test.acme.unique_sales_pipeline_deal_id.e36e46ab73": {
+      "resource_type": "test",
+      "name": "unique_sales_pipeline_deal_id",
+      "alias": "unique_sales_pipeline_deal_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.unique_sales_pipeline_deal_id.e36e46ab73",
+      "path": "unique_sales_pipeline_deal_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.sales_pipeline",
+      "column_name": "deal_id",
+      "test_metadata": {
+        "name": "unique",
+        "kwargs": {
+          "column_name": "deal_id",
+          "model": "{{ get_where_subquery(ref('sales_pipeline')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.sales_pipeline"
+        ]
+      }
+    },
+    "test.acme.not_null_sales_pipeline_deal_id.58d4357cd7": {
+      "resource_type": "test",
+      "name": "not_null_sales_pipeline_deal_id",
+      "alias": "not_null_sales_pipeline_deal_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.not_null_sales_pipeline_deal_id.58d4357cd7",
+      "path": "not_null_sales_pipeline_deal_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.sales_pipeline",
+      "column_name": "deal_id",
+      "test_metadata": {
+        "name": "not_null",
+        "kwargs": {
+          "column_name": "deal_id",
+          "model": "{{ get_where_subquery(ref('sales_pipeline')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.sales_pipeline"
+        ]
+      }
+    },
+    "test.acme.unique_company_overview_company_id.859e28a2b5": {
+      "resource_type": "test",
+      "name": "unique_company_overview_company_id",
+      "alias": "unique_company_overview_company_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.unique_company_overview_company_id.859e28a2b5",
+      "path": "unique_company_overview_company_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.company_overview",
+      "column_name": "company_id",
+      "test_metadata": {
+        "name": "unique",
+        "kwargs": {
+          "column_name": "company_id",
+          "model": "{{ get_where_subquery(ref('company_overview')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.company_overview"
+        ]
+      }
+    },
+    "test.acme.not_null_company_overview_company_id.e1dbe6d091": {
+      "resource_type": "test",
+      "name": "not_null_company_overview_company_id",
+      "alias": "not_null_company_overview_company_id",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.acme.not_null_company_overview_company_id.e1dbe6d091",
+      "path": "not_null_company_overview_company_id.sql",
+      "package_name": "acme",
+      "attached_node": "model.acme.company_overview",
+      "column_name": "company_id",
+      "test_metadata": {
+        "name": "not_null",
+        "kwargs": {
+          "column_name": "company_id",
+          "model": "{{ get_where_subquery(ref('company_overview')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.acme.company_overview"
+        ]
+      }
+    },
+    "test.vecten_convention.unique_metricflow_time_spine_date_day.ddb41ceac8": {
+      "resource_type": "test",
+      "name": "unique_metricflow_time_spine_date_day",
+      "alias": "unique_metricflow_time_spine_date_day",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.vecten_convention.unique_metricflow_time_spine_date_day.ddb41ceac8",
+      "path": "unique_metricflow_time_spine_date_day.sql",
+      "package_name": "vecten_convention",
+      "attached_node": "model.vecten_convention.metricflow_time_spine",
+      "column_name": "date_day",
+      "test_metadata": {
+        "name": "unique",
+        "kwargs": {
+          "column_name": "date_day",
+          "model": "{{ get_where_subquery(ref('metricflow_time_spine')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.vecten_convention.metricflow_time_spine"
+        ]
+      }
+    },
+    "test.vecten_convention.not_null_metricflow_time_spine_date_day.54acf49e8d": {
+      "resource_type": "test",
+      "name": "not_null_metricflow_time_spine_date_day",
+      "alias": "not_null_metricflow_time_spine_date_day",
+      "schema": "dbt_test__audit",
+      "database": "WAREHOUSE",
+      "description": "",
+      "meta": {},
+      "unique_id": "test.vecten_convention.not_null_metricflow_time_spine_date_day.54acf49e8d",
+      "path": "not_null_metricflow_time_spine_date_day.sql",
+      "package_name": "vecten_convention",
+      "attached_node": "model.vecten_convention.metricflow_time_spine",
+      "column_name": "date_day",
+      "test_metadata": {
+        "name": "not_null",
+        "kwargs": {
+          "column_name": "date_day",
+          "model": "{{ get_where_subquery(ref('metricflow_time_spine')) }}"
+        },
+        "namespace": null
+      },
+      "columns": {},
+      "depends_on": {
+        "nodes": [
+          "model.vecten_convention.metricflow_time_spine"
+        ]
+      }
+    }
+  }
+}

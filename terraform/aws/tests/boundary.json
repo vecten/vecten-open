@@ -1,0 +1,93 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EnvironmentSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:CreateSecret",
+        "secretsmanager:PutSecretValue"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:*:123456789012:secret:vecten/acme/prod/platform/*",
+        "arn:aws:secretsmanager:*:123456789012:secret:vecten/acme/prod/mcp/*"
+      ]
+    },
+    {
+      "Sid": "SecretsManagerKeys",
+      "Effect": "Allow",
+      "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "kms:ViaService": "secretsmanager.*.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "RdsMasterSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:123456789012:secret:rds!*"
+    },
+    {
+      "Sid": "ArtifactObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::vecten-acme-prod-artifacts-123456789012/*"
+    },
+    {
+      "Sid": "ArtifactBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::vecten-acme-prod-artifacts-123456789012"
+    },
+    {
+      "Sid": "SsmAgent",
+      "Effect": "Allow",
+      "Action": [
+        "ec2messages:*",
+        "ssm:DescribeAssociation",
+        "ssm:DescribeDocument",
+        "ssm:DescribeDocumentParameters",
+        "ssm:DescribeInstanceProperties",
+        "ssm:GetDeployablePatchSnapshotForInstance",
+        "ssm:GetDocument",
+        "ssm:GetManifest",
+        "ssm:ListAssociations",
+        "ssm:ListInstanceAssociations",
+        "ssm:PutComplianceItems",
+        "ssm:PutConfigurePackageResult",
+        "ssm:PutInventory",
+        "ssm:UpdateAssociationStatus",
+        "ssm:UpdateInstanceAssociationStatus",
+        "ssm:UpdateInstanceInformation",
+        "ssmmessages:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Logs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:123456789012:log-group:*"
+    }
+  ]
+}

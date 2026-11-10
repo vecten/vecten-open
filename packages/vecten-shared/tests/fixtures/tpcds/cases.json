@@ -1,0 +1,50 @@
+{
+  "compiled": {
+    "net_paid_and_lines_by_store": {
+      "metrics": [
+        "net_paid",
+        "sales_count"
+      ],
+      "dimensions": [
+        "SS_STORE_SK"
+      ],
+      "order_by": [
+        {
+          "field": "SS_STORE_SK"
+        }
+      ]
+    },
+    "sales_and_profit_by_day": {
+      "metrics": [
+        "total_sales",
+        "total_profit"
+      ],
+      "dimensions": [
+        "SS_SOLD_DATE_SK"
+      ],
+      "order_by": [
+        {
+          "field": "SS_SOLD_DATE_SK"
+        }
+      ]
+    },
+    "all_metrics": {
+      "metrics": [
+        "total_sales",
+        "total_profit",
+        "net_paid",
+        "sales_count"
+      ]
+    }
+  },
+  "refused": {
+    "sales_by_brand_needs_a_join": {
+      "metrics": [
+        "total_sales"
+      ],
+      "dimensions": [
+        "item.I_BRAND"
+      ]
+    }
+  }
+}

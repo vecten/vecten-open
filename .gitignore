@@ -1,0 +1,25 @@
+# Claude Code configuration is local to each developer
+.claude/
+
+# superpowers plans and execution ledgers are disposable
+.ai/plans/
+
+# Python and tooling
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.terraform/
+*.tfstate
+*.tfstate.*
+.env
+.env.*
+
+# Build output and local vecten state
+dist/
+.vecten/
+
+# Skill-evaluation runs: projects, command logs and the person's inbox
+.eval-runs/

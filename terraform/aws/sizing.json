@@ -1,0 +1,41 @@
+{
+  "minimal_vm": "t3.large",
+  "state_class": "db.t4g.micro",
+  "state_max_connections": 100,
+  "state_storage_gb": 20,
+  "tiers": {
+    "large": {
+      "airflow_parallelism": 32,
+      "max_connections": 1600,
+      "mcp_pool_cap": 5,
+      "minimal_class": "db.m6g.xlarge",
+      "users_max": 200,
+      "vm": "t3.xlarge",
+      "warehouse_class": "db.m6g.xlarge",
+      "warehouse_max_storage_gb": 2000,
+      "warehouse_storage_gb": 500
+    },
+    "medium": {
+      "airflow_parallelism": 16,
+      "max_connections": 800,
+      "mcp_pool_cap": 5,
+      "minimal_class": "db.m6g.large",
+      "users_max": 50,
+      "vm": "t3.large",
+      "warehouse_class": "db.m6g.large",
+      "warehouse_max_storage_gb": 1000,
+      "warehouse_storage_gb": 200
+    },
+    "small": {
+      "airflow_parallelism": 4,
+      "max_connections": 180,
+      "mcp_pool_cap": 3,
+      "minimal_class": "db.t4g.small",
+      "users_max": 10,
+      "vm": "t3.medium",
+      "warehouse_class": "db.t4g.small",
+      "warehouse_max_storage_gb": 200,
+      "warehouse_storage_gb": 50
+    }
+  }
+}

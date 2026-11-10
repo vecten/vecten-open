@@ -1,0 +1,16 @@
+"""{{ name }}: a dlt sql_database source. Fill in the TODO placeholders, then `vecten connector run {{ name }}`.
+
+Credentials come only through `secret(...)`; store the connection URL with `vecten secret set {{ secrets[0] }}`.
+"""
+
+from dlt.sources.sql_database import sql_database
+from vecten_platform.sync import secret
+
+
+def source():
+    # TODO: to keep only some of the tables' resources, chain .with_resources("a", "b"); with no names it keeps none
+    return sql_database(
+        credentials=secret("{{ secrets[0] }}"),
+        schema="public",  # TODO: the schema to read
+        table_names=["TODO_table"],  # TODO: the tables to sync; remove the argument to take every table
+    )

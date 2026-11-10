@@ -1,0 +1,12 @@
+{
+  "context": {
+    "dimension": "balance_month",
+    "metric": "account_balance",
+    "rules": [
+      "last",
+      "first"
+    ]
+  },
+  "reason": "rollup_not_allowed",
+  "skeleton": "SELECT /* complete the requested calculation */ * FROM (SELECT account_id, region, balance_month, balance FROM marts.balances WHERE region NOT LIKE 'test%') AS \"balances\""
+}

@@ -1,0 +1,42 @@
+{
+  "minimal_vm": "DEV1-L",
+  "state_class": "DB-PLAY2-NANO",
+  "state_max_connections": 100,
+  "state_storage_gb": 20,
+  "tiers": {
+    "large": {
+      "airflow_parallelism": 32,
+      "max_connections": 400,
+      "mcp_pool_cap": 5,
+      "minimal_class": "DB-PRO2-XS",
+      "users_max": 200,
+      "vm": "POP2-4C-16G",
+      "warehouse_class": "DB-PRO2-XS",
+      "warehouse_max_storage_gb": 500,
+      "warehouse_storage_gb": 500
+    },
+    "medium": {
+      "airflow_parallelism": 16,
+      "max_connections": 200,
+      "mcp_pool_cap": 3,
+      "minimal_class": "DB-PRO2-XXS",
+      "users_max": 50,
+      "vm": "POP2-2C-8G",
+      "warehouse_class": "DB-PRO2-XXS",
+      "warehouse_max_storage_gb": 200,
+      "warehouse_storage_gb": 200
+    },
+    "small": {
+      "airflow_parallelism": 4,
+      "max_connections": 50,
+      "mcp_pool_cap": 1,
+      "minimal_class": "DB-PLAY2-NANO",
+      "users_max": 10,
+      "vm": "DEV1-M",
+      "warehouse_class": "DB-PLAY2-PICO",
+      "warehouse_max_storage_gb": 50,
+      "warehouse_storage_gb": 50
+    }
+  },
+  "volume_type": "sbs_5k"
+}
