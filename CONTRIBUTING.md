@@ -84,11 +84,56 @@ The human who opens the pull request is responsible for it: they have read the d
 tests, and can answer questions about it. `AGENTS.md` at the root holds the commands and rules
 an agent needs in this repository.
 
+## Branches
+
+Work for the next version lands on its release branch, `release/<version>`; with 0.1.0
+released, that is `release/0.1.1`. Branch from it and open your pull request against it.
+`main` holds released code only: every commit on it is a release or a security hotfix, and CI
+fails a pull request to `main` from any other branch. The maintainers are
+[@m-puchala](https://github.com/m-puchala) and [@haxoza](https://github.com/haxoza).
+
+| Pull request into | From | Needs | Merged as |
+|---|---|---|---|
+| `release/<version>` | any branch or fork | a maintainer's approval; a maintainer's own pull request needs none | a squash |
+| `main` | `release/<version>` | the other maintainer's approval | a merge commit |
+| `main` | `hotfix/<name>` | the other maintainer's approval | a squash |
+
+Every merge also needs CI green. One release branch is open at a time. It opens as the next
+patch version; when a breaking change is accepted, a maintainer renames it to the next minor
+(`release/0.2.0`), which GitHub carries over to the open pull requests.
+
+A hotfix is for a vulnerability handled under [SECURITY.md](SECURITY.md) and nothing else: an
+urgent bug that is not a vulnerability goes to the release branch. A maintainer opens the
+`hotfix/<name>` branch from `main`.
+
 ## Commits and pull requests
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
-(`fix(mcp): …`, `docs: …`). Pull requests are squash-merged by a maintainer; the template asks
-what changed, why, which tests ran and whether a spec or a doc moved.
+(`fix(mcp): …`, `docs: …`). The template asks what changed, why, which tests ran and whether a
+spec or a doc moved. A change a user would notice adds a line under `[Unreleased]` in the
+[changelog](CHANGELOG.md), in the same pull request.
+
+## Releasing
+
+For maintainers. Versions follow [Semantic Versioning](https://semver.org/), the four
+distributions share one, and the tag is `v<version>`.
+
+1. As the last commit on the release branch: move the `[Unreleased]` entries of the changelog
+   under `## [<version>] - <date>`, update the compare links at its foot, run
+   `uv run vecten dev bump-version <version>` and confirm the lock with
+   `uv sync --locked --all-packages`. Until this commit the branch reports the released
+   version.
+2. Open the pull request from the release branch to `main`; the other maintainer approves and
+   merges it with a merge commit.
+3. Tag the merge commit `v<version>` with an annotated tag and push the tag. The Terraform
+   modules are fetched by this tag, so nothing deploys from the version before it exists.
+4. Publish the packages and the images, then run `uv run vecten dev check-images`.
+5. Create `release/<next patch>` from `main` and delete the merged branch.
+
+A hotfix carries its own version: the `hotfix/<name>` branch takes the next patch version, with
+the same bump and changelog entry as step 1, and is tagged and published as steps 3 and 4.
+The open release branch is then renamed to the patch version after it, and `main` is merged
+into it.
 
 ## What to expect
 
