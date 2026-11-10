@@ -1,11 +1,26 @@
 {
   "name": "vecten",
-  "description": "The vecten skills: connector, guide, model, operate and semantic.",
+  "displayName": "Vecten Open",
+  "description": "Build and run a Vecten Open data platform with your agent: connect sources, model the warehouse, define shared metrics and operate it through the vecten CLI. The skills: connector, guide, model, operate and semantic.",
   "version": "0.1.0",
   "author": {
     "name": "Vecten"
   },
   "homepage": "https://github.com/vecten/vecten-open",
   "repository": "https://github.com/vecten/vecten-open",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "keywords": [
+    "data-platform",
+    "data-warehouse",
+    "dlt",
+    "airflow",
+    "dbt",
+    "semantic-layer",
+    "postgres",
+    "snowflake"
+  ],
+  "documentationUrl": "https://github.com/vecten/vecten-open/blob/main/docs/README.md",
+  "supportUrl": "https://github.com/vecten/vecten-open/discussions",
+  "privacyPolicyUrl": "https://github.com/vecten/vecten-open/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/vecten/vecten-open/blob/main/LICENSE"
 }

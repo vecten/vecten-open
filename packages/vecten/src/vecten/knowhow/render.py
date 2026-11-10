@@ -25,10 +25,31 @@ GUIDE_PREAMBLE = (
 
 def _describe(names: list[str]) -> str:
     listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
-    return f"The vecten skills: {listed}."
+    return (
+        "Build and run a Vecten Open data platform with your agent: connect sources, model the"
+        " warehouse, define shared metrics and operate it through the vecten CLI. The skills:"
+        f" {listed}."
+    )
 
 
 PLUGIN_DESCRIPTION = _describe(skill_names())
+PLUGIN_KEYWORDS = [
+    "data-platform",
+    "data-warehouse",
+    "dlt",
+    "airflow",
+    "dbt",
+    "semantic-layer",
+    "postgres",
+    "snowflake",
+]
+# Read only by Anthropic's plugin directory for the listing; Claude Code ignores them.
+LISTING_LINKS = {
+    "documentationUrl": f"{PUBLIC_URL}/blob/main/docs/README.md",
+    "supportUrl": f"{PUBLIC_URL}/discussions",
+    "privacyPolicyUrl": f"{PUBLIC_URL}/blob/main/PRIVACY.md",
+    "termsOfServiceUrl": f"{PUBLIC_URL}/blob/main/LICENSE",
+}
 MARKETPLACE_DESCRIPTION = (
     "The Vecten Open plugin: the skills an agent uses to build and run a Vecten Open data"
     " platform and its MCP."
@@ -47,12 +68,15 @@ def plugin_manifest_text() -> str:
     return _json_text(
         {
             "name": "vecten",
+            "displayName": "Vecten Open",
             "description": PLUGIN_DESCRIPTION,
             "version": VERSIONS.vecten,
             "author": {"name": "Vecten"},
             "homepage": PUBLIC_URL,
             "repository": PUBLIC_URL,
             "license": "Apache-2.0",
+            "keywords": PLUGIN_KEYWORDS,
+            **LISTING_LINKS,
         }
     )
 

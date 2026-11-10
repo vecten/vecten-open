@@ -107,7 +107,8 @@ The MCP runs every query as the person's own warehouse identity, read-only, with
 timeout, and treats questions, tool arguments and SQL as untrusted data. Keep the admin flag to
 the people who administer the server, and give agents the groups their people have.
 [Identity and access](docs/mcp-identity.md) has the model; [SECURITY.md](SECURITY.md) says how
-to report a problem. Vecten collects no usage data and switches off dlt's and dbt's.
+to report a problem. Vecten collects no usage data and switches off dlt's and dbt's;
+[PRIVACY.md](PRIVACY.md) has the detail.
 
 ## Community
 
