@@ -17,6 +17,7 @@ ROOT_FILES = {
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
     "SECURITY.md",
+    "PRIVACY.md",
     "CHANGELOG.md",
     "pyproject.toml",
     "uv.lock",

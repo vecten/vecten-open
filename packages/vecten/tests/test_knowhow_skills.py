@@ -453,7 +453,7 @@ def test_plugin_carries_no_mcp_servers():
 
 
 def test_plugin_description_names_every_skill():
-    assert PLUGIN_DESCRIPTION.startswith("The vecten skills: ")
+    assert PLUGIN_DESCRIPTION.startswith("Build and run a Vecten Open data platform")
     for name in skill_names():
         assert name in PLUGIN_DESCRIPTION, name
     assert "MCP" not in PLUGIN_DESCRIPTION
@@ -465,6 +465,7 @@ def test_plugin_layout_lists_every_skill():
     assert manifest["license"] == "Apache-2.0" and manifest["author"] == {"name": "Vecten"}
     assert manifest["homepage"] == manifest["repository"] == PUBLIC_URL
     assert manifest["description"] == PLUGIN_DESCRIPTION
+    assert manifest["displayName"] == "Vecten Open" and manifest["keywords"]
     assert sorted(p.name for p in PLUGIN.iterdir()) == [".claude-plugin", "skills"]
     dirs = sorted(p.name for p in (PLUGIN / "skills").iterdir())
     assert dirs == skill_names()
@@ -562,3 +563,12 @@ def test_plugin_icon_meets_the_directory_rules():
     # The plugin directory takes a square PNG or JPEG of 512 to 2048 px under 2 MB.
     assert width == height and 512 <= width <= 2048
     assert len(data) < 2 * 1024 * 1024
+
+
+def test_listing_links_point_into_the_repository():
+    manifest = json.loads((PLUGIN / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    for field in ("documentationUrl", "supportUrl", "privacyPolicyUrl", "termsOfServiceUrl"):
+        url = manifest[field]
+        assert url.startswith(f"{PUBLIC_URL}/"), field
+        if "/blob/main/" in url:
+            assert (REPO / url.split("/blob/main/", 1)[1]).is_file(), field
