@@ -5,6 +5,14 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
+- `build_sync_dag` takes `stages` (objects that run in a declared order, each stage once the
+  one before it synced), `params` (run parameters passed to the connector's `source()`),
+  `pool`, `guard` (a function whose falsy return skips the run without failing it),
+  `timezone` (the zone a cron schedule is read in) and `paused_at_creation`. A DAG file that
+  passes none of them behaves as before.
+
 ### Fixed
 
 - A sync DAG no longer publishes its asset when an object failed, so `dbt_build` no longer
