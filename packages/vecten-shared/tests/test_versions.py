@@ -6,6 +6,7 @@ from importlib.metadata import distributions
 from pathlib import Path
 
 import pytest
+import yaml
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 
@@ -72,6 +73,7 @@ def test_table_has_every_governed_entry():
         "terraform_random_provider",
         "docker_compose_plugin",
         "docker_buildx_plugin",
+        "ci_playwright_image",
     ):
         assert getattr(VERSIONS, name), name
 
@@ -193,3 +195,26 @@ def test_repository_ci_uses_the_table_actions_and_runner():
     assert uses and runners
     assert set(uses) <= set(VERSIONS.github_actions.values())
     assert set(runners) == {VERSIONS.github_runner}
+
+
+def _locked_version(package: str) -> str:
+    lock = tomllib.loads((REPO / "uv.lock").read_text(encoding="utf-8"))
+    (version,) = {p["version"] for p in lock["package"] if p["name"] == package}
+    return version
+
+
+def test_ci_playwright_image_is_pinned_and_matches_the_locked_playwright():
+    # The image's browsers are the builds of one Playwright release; the locked package of
+    # another release would look for builds the image lacks.
+    image = VERSIONS.ci_playwright_image
+    match = re.fullmatch(
+        r"mcr\.microsoft\.com/playwright/python:v(\d+\.\d+\.\d+)-noble@sha256:[0-9a-f]{64}", image
+    )
+    assert match, image
+    assert match[1] == _locked_version("playwright")
+
+
+def test_repository_ci_runs_the_browser_tests_in_the_table_playwright_image():
+    jobs = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())["jobs"]
+    images = {name: job["container"]["image"] for name, job in jobs.items() if "container" in job}
+    assert images == {"browser-auth": VERSIONS.ci_playwright_image}
