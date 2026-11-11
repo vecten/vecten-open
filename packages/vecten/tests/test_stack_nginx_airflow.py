@@ -39,8 +39,16 @@ def test_allow_list_narrows_every_airflow_path_but_health():
     assert "set $upstream http://airflow-api-server:8080;" in root
     # The ship health poll comes from runners no list can name, so the exact path stays open.
     health = location(block, f"location = {AIRFLOW_HEALTH_PATH} {{")
-    assert "allow" not in health and "deny" not in health
+    assert "allow " not in health
     assert "set $upstream http://airflow-api-server:8080;" in health
+
+
+def test_open_health_location_forwards_only_the_health_path_and_only_reads():
+    conf = generate_nginx_conf(["platform"], HOSTS, "vm", airflow_allow=NETWORKS)
+    health = location(airflow_tls_block(conf), f"location = {AIRFLOW_HEALTH_PATH} {{")
+    assert f"proxy_pass $upstream{AIRFLOW_HEALTH_PATH};" in health
+    assert "limit_except GET {\n            deny all;\n        }" in health
+    assert "proxy_pass $upstream;" not in health
 
 
 def test_allow_list_leaves_the_challenge_and_redirect_on_port_80_open():

@@ -9,7 +9,7 @@
 ## 2. Airflow allow-list
 
 - [x] 2.1 `[airflow] allow` in `vecten.toml`, validated and normalised by the same function as `[mcp] admin_allow`; refused without the `platform` component
-- [x] 2.2 NGINX renders `allow … deny all` on `location /` of the Airflow TLS server, keeps `location = /api/v2/monitor/health` open, and leaves the server unchanged when the list is empty
+- [x] 2.2 NGINX renders `allow … deny all` on `location /` of the Airflow TLS server, keeps `location = /api/v2/monitor/health` open to reads that it forwards as exactly that path, and leaves the server unchanged when the list is empty
 - [x] 2.3 The bundle passes the list for deployed hosts; `up` does not pass it
 - [x] 2.4 `vecten issues --env` names the allow-list when the Airflow login answers 403
 - [x] 2.5 Tests: config validation and round trip, NGINX rendering with and without the list, the shipped NGINX file, the issues client's 403 message, and a Docker-tier test of the 403 and the open health path

@@ -2,7 +2,7 @@
 
 ### Requirement: An allow-list narrows who reaches the deployed Airflow host
 
-`[airflow] allow` in `vecten.toml` SHALL list the IPv4 or IPv6 networks that may reach `airflow.<domain>` on a deployed host. Each entry SHALL be parsed as a network, a bare address meaning that one address, and normalised to CIDR notation, as `[mcp] admin_allow` is. An entry that is not a network, or that has host bits set, SHALL be refused, and so SHALL a non-empty list in a project without the `platform` component. When the list is non-empty, NGINX on the host serving Airflow SHALL answer every request from another address with 403, except requests for Airflow's health path `/api/v2/monitor/health`, which SHALL stay open to every address, because `ship` polls it from wherever it runs. When the list is empty, the default, the Airflow server SHALL be rendered exactly as without the setting. The laptop's stack SHALL ignore the list. The certificate challenge and the redirect on port 80, and the MCP host, SHALL be unaffected by it. Airflow's own login SHALL still apply to every address the list admits.
+`[airflow] allow` in `vecten.toml` SHALL list the IPv4 or IPv6 networks that may reach `airflow.<domain>` on a deployed host. Each entry SHALL be parsed as a network, a bare address meaning that one address, and normalised to CIDR notation, as `[mcp] admin_allow` is. An entry that is not a network, or that has host bits set, SHALL be refused, and so SHALL a non-empty list in a project without the `platform` component. When the list is non-empty, NGINX on the host serving Airflow SHALL answer every request from another address with 403, except requests for Airflow's health path `/api/v2/monitor/health`, which SHALL stay open to every address, because `ship` polls it from wherever it runs. That opening SHALL admit only `GET` and `HEAD`, answering any other method with 403, and SHALL forward exactly `/api/v2/monitor/health` to Airflow, whatever form of the URI NGINX matched, so a request NGINX normalises onto the path reaches no other Airflow route. When the list is empty, the default, the Airflow server SHALL be rendered exactly as without the setting. The laptop's stack SHALL ignore the list. The certificate challenge and the redirect on port 80, and the MCP host, SHALL be unaffected by it. Airflow's own login SHALL still apply to every address the list admits.
 
 #### Scenario: Address outside the list
 
@@ -18,6 +18,11 @@
 
 - **WHEN** `ship` polls `https://airflow.<domain>/api/v2/monitor/health` from an address outside the list
 - **THEN** Airflow's health answer is served, and the ship is judged on it
+
+#### Scenario: Another request through the open health path
+
+- **WHEN** a client outside the list sends `POST /api/v2/monitor/health`, or a GET whose encoded path NGINX normalises to `/api/v2/monitor/health`
+- **THEN** the POST is answered 403, and the GET reaches Airflow as `GET /api/v2/monitor/health` and nothing else
 
 #### Scenario: Invalid entry
 

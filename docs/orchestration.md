@@ -77,7 +77,8 @@ applies to every environment. NGINX on the platform host enforces it, and Airflo
 applies to the networks it admits. One path stays open to everyone, Airflow's health path
 `/api/v2/monitor/health`. `vecten ship` polls it after each ship from wherever the ship runs,
 including GitHub's runners, whose addresses no list can name, and the path reports only
-component states. `vecten issues --env <env>` signs in to the API, so run it from a listed
+component states. NGINX lets only reads through it and forwards nothing but that path to
+Airflow. `vecten issues --env <env>` signs in to the API, so run it from a listed
 network. From anywhere else it reports that Airflow refused the login with HTTP 403. The setting
 takes effect at the next ship.
 

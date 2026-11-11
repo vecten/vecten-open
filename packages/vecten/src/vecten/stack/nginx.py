@@ -20,19 +20,27 @@ PROXY_HEADERS = """        proxy_http_version 1.1;
 RESOLVER = "resolver 127.0.0.11 valid=10s ipv6=off;\n"
 
 
-def _upstream(url: str) -> str:
-    return f"        set $upstream {url};\n        proxy_pass $upstream;\n"
+def _upstream(url: str, uri: str = "") -> str:
+    return f"        set $upstream {url};\n        proxy_pass $upstream{uri};\n"
 
 
+AIRFLOW_UPSTREAM = "http://airflow-api-server:8080"
 AIRFLOW_PROXY = (
-    _upstream("http://airflow-api-server:8080")
-    + PROXY_HEADERS
-    + "        proxy_set_header Host $http_host;\n"
+    _upstream(AIRFLOW_UPSTREAM) + PROXY_HEADERS + "        proxy_set_header Host $http_host;\n"
     "        proxy_set_header Upgrade $http_upgrade;\n"
     "        proxy_set_header Connection $connection_upgrade;\n"
     "        proxy_read_timeout 300s;\n"
 )
 AIRFLOW_HEALTH_PATH = "/api/v2/monitor/health"
+# NGINX matches a decoded, normalised URI but forwards the one the client sent, so a request
+# that normalises onto the open health path could name another Airflow route. Forwarding the
+# path itself, and reads only, keeps the opening to the health answer.
+AIRFLOW_HEALTH_PROXY = (
+    "        limit_except GET {\n            deny all;\n        }\n"
+    + _upstream(AIRFLOW_UPSTREAM, AIRFLOW_HEALTH_PATH)
+    + PROXY_HEADERS
+    + "        proxy_set_header Host $http_host;\n"
+)
 HOST_KEYS = {"platform": "airflow", "mcp": "mcp"}
 CONNECTION_UPGRADE_MAP = (
     "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
@@ -85,7 +93,7 @@ def _airflow_locations(airflow_allow: list[str]) -> str:
     # can name included, and the path answers component states only, without a login.
     return (
         f"    location = {AIRFLOW_HEALTH_PATH} {{\n"
-        + AIRFLOW_PROXY
+        + AIRFLOW_HEALTH_PROXY
         + "    }\n    location / {\n"
         + _allow_rules(airflow_allow)
         + AIRFLOW_PROXY
