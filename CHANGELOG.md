@@ -21,6 +21,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   awaited groups. A green build emits the `dbt_build` asset (`vecten://dbt/build`). A
   narrowed build skips `mark_built`, so the built commit still means the whole bundle built.
 
+### Changed
+
+- The `connector` skill names the `build_sync_dag` option for each scheduling request, and says
+  that a new sync DAG syncs the latest whole day as soon as it is unpaused rather than at the
+  next midnight.
+
 ### Fixed
 
 - A sync DAG no longer publishes its asset when an object failed, so `dbt_build` no longer
