@@ -125,19 +125,20 @@ def build_sync_dag(
             get_current_context()["object_name"] = object_name
             return sync_one(connector, object_name)
 
-        @task(task_id="publish", outlets=[asset_for(connector, group)], trigger_rule="all_done")
-        def publish() -> None:
-            return None
-
-        # The run's state follows its leaf; publish emits the asset whatever happened, so this
-        # leaf is what marks the run failed when an object failed.
+        # all_done: a failed object must still reach this task, which names it and fails the run.
         @task(task_id="check", trigger_rule="all_done", retries=0)
         def check(discovered: list[str]) -> None:
             ti = get_current_context()["ti"]
             states = ti.get_task_states(dag_id=ti.dag_id, task_ids=["sync"], run_ids=[ti.run_id])
             raise_for_failed(connector, discovered, states.get(ti.run_id, {}))
 
+        # The dbt DAG schedules on this asset, so it is emitted only once check has found every
+        # object synced; after a failed object dbt would build on partial data.
+        @task(task_id="publish", outlets=[asset_for(connector, group)])
+        def publish() -> None:
+            return None
+
         discovered = discover()
-        sync.expand(object_name=discovered) >> publish() >> check(discovered)
+        sync.expand(object_name=discovered) >> check(discovered) >> publish()
 
     return sync_dag()

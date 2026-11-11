@@ -5,6 +5,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Fixed
+
+- A sync DAG no longer publishes its asset when an object failed, so `dbt_build` no longer
+  builds on a partial sync. The asset now follows the `check` task, and existing DAG files
+  pick this up unchanged.
+
 ## [0.1.0] - 2026-11-09
 
 The first public release.

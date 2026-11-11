@@ -232,7 +232,9 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
             for ti in instances.json()["task_instances"]:
                 by_task.setdefault(ti["task_id"], []).append(ti["state"])
             assert Counter(by_task["sync"]) == {"failed": 1, "success": 2}, by_task
-            assert by_task["publish"] == ["success"] and by_task["check"] == ["failed"], by_task
+            assert by_task["check"] == ["failed"], by_task
+            # dbt_build schedules on the asset, which a failed object leaves unpublished.
+            assert by_task["publish"] == ["upstream_failed"], by_task
             # Unpausing a @daily DAG shortly after a cron fire time also queues that scheduled
             # run; max_active_runs=1 finishes it before the triggered one, and it loads good_b too.
             runs = api.get(f"/api/v2/dags/{DAG_ID}/dagRuns").json()["dag_runs"]

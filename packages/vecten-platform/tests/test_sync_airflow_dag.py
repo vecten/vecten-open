@@ -20,12 +20,11 @@ def test_dag_shape():
 
     assert isinstance(dag.timetable, CronDataIntervalTimetable)
     assert set(dag.task_ids) == {"discover", "sync", "publish", "check"}
-    publish = dag.get_task("publish")
-    assert publish.trigger_rule == "all_done"
     check = dag.get_task("check")
     assert check.trigger_rule == "all_done"
     assert check.retries == 0
-    assert "publish" in check.upstream_task_ids
+    assert "sync" in check.upstream_task_ids
+    publish = dag.get_task("publish")
     assert [a.name for a in publish.outlets] == [asset_for("hubspot", "default").name]
     sync = dag.get_task("sync")
     assert sync.retries == 2
@@ -33,6 +32,15 @@ def test_dag_shape():
     # The rendered map index names the object, which is how `vecten issues` groups attempts.
     assert sync.map_index_template == "{{ object_name }}"
     assert dag.get_task("discover").on_failure_callback is not None
+
+
+def test_the_asset_is_published_only_after_every_object_synced():
+    # dbt schedules on the asset, so publishing it after a failed object builds on partial data.
+    dag = build_sync_dag("hubspot", "default", [])
+    publish = dag.get_task("publish")
+    assert publish.upstream_task_ids == {"check"}
+    assert publish.trigger_rule == "all_success"
+    assert dag.get_task("check").downstream_task_ids == {"publish"}
 
 
 def test_first_run_is_due_when_the_dag_appears():
@@ -127,12 +135,26 @@ def run_demo_dag(tmp_path, monkeypatch, objects):
     return run, states, verdicts
 
 
+def asset_events(run) -> int:
+    from airflow.models.asset import AssetEvent
+    from airflow.utils.session import create_session
+    from sqlalchemy import func, select
+
+    with create_session() as session:
+        return session.scalar(
+            select(func.count())
+            .select_from(AssetEvent)
+            .where(AssetEvent.source_dag_id == run.dag_id, AssetEvent.source_run_id == run.run_id)
+        )
+
+
 @pytest.mark.docker
 def test_dag_test_all_objects_succeed(tmp_path, monkeypatch):
     run, states, verdicts = run_demo_dag(tmp_path, monkeypatch, ["good_a", "good_b"])
     assert run.state == "success"
     assert states["check"] == "success" and states["publish"] == "success"
     assert verdicts == [[]]
+    assert asset_events(run) == 1
 
 
 @pytest.mark.docker
@@ -154,8 +176,9 @@ def test_dag_test_one_object_fails_others_keep_checkpoints(tmp_path, monkeypatch
     finally:
         con.close()
     assert names == {"demo__good_a", "demo__good_b"}
-    assert states["publish"] == "success"
     assert states["check"] == "failed"
+    assert states["publish"] == "upstream_failed"
+    assert asset_events(run) == 0
     assert verdicts == [["bad"]]
     assert {k: v for k, v in states.items() if k.startswith("sync[")} == {
         "sync[bad]": "failed",
