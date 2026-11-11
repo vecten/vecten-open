@@ -11,6 +11,7 @@ import secrets
 import time
 from pathlib import Path
 
+from vecten.mcp_url import mcp_url
 from vecten.password_links import admin_link_issued
 from vecten_shared.config import load_config, save_config
 from vecten_shared.names import check_env_name
@@ -58,8 +59,10 @@ def issue_admin_link(project_root: Path, env: str, email: str | None) -> dict:
     from vecten.password_links import read_links
     from vecten.secrets import set_secret
 
-    # A corrupt record fails here, before the one-time token exists, so none is lost unprinted.
+    # A corrupt record or an unreadable tfvars fails here, before the one-time token exists,
+    # so none is lost unprinted.
     read_links(project_root, env)
+    url = mcp_url(project_root, config, env) + "/set-password"
     token = secrets.token_urlsafe(32)
     value = json.dumps({"token": token, "email": chosen, "issued_at": time.time()})
     set_secret(project_root, ADMIN_LINK_SECRET, value, env, from_local=False)
@@ -71,7 +74,7 @@ def issue_admin_link(project_root: Path, env: str, email: str | None) -> dict:
         "email": chosen,
         "env": env,
         # The token travels beside the URL, never in it, so no access log on the way holds it.
-        "url": f"https://mcp.{config.deploy.domain}/set-password",
+        "url": url,
         "setup_token": token,
         "expires_in": EXPIRES_IN,
     }
