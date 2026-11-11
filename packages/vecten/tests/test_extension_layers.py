@@ -59,7 +59,10 @@ def test_all_nine_groups_land(extension):
     root, config = extension
     dist = importlib.metadata.distribution("vecten-test-extension")
     assert {p.group for p in dist.entry_points} == set(GROUPS)
-    assert extension_connectors(config)["fixture"].package == dist.name
+    connector = extension_connectors(config)["fixture"]
+    assert connector.package == dist.name
+    assert connector.groups["daily"].schedule == "0 6 * * *"
+    assert connector.groups["daily"].timezone == "Europe/Warsaw"
     assert extension_packages(config)[0][1].name == "dbt"
     assert [p.name for p in dag_files(config)] == ["fixture.py"]
     assert (

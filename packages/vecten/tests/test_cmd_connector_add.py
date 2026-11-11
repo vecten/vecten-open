@@ -81,7 +81,9 @@ def test_add_verified_source(invoke, project):
     assert "never runs connector.py" in flat
     assert "`vecten connector run hubspot --json` is the live proof" in flat
     dag = (project / "orchestration" / "dags" / "sync_hubspot_default.py").read_text()
-    assert 'build_sync_dag(connector="hubspot", group="default", objects=[]' in dag
+    assert dag.endswith(
+        'build_sync_dag(connector="hubspot", group="default", objects=[], schedule="@daily")\n'
+    )
     sources = yaml.safe_load((project / "dbt" / "models" / "staging" / "sources.yml").read_text())
     entry = sources["sources"][0]
     assert (entry["name"], entry["schema"], entry["tables"]) == ("hubspot", "raw_hubspot", [])
@@ -125,6 +127,108 @@ def test_add_extension_connector(invoke, project, monkeypatch):
         and decl["version"] == "2.3.0"
     )
     assert decl["secrets"] == ["ATTIO_API_KEY"] and decl["dependencies"] == ["attio-sdk>=1,<2"]
+
+
+def grouped_connector():
+    spec = attio_connector()
+    spec["groups"] = {
+        "daily": {"objects": ["companies", "people"], "schedule": "0 6 * * *"},
+        "hourly": {"objects": ["deals"], "schedule": "@hourly", "timezone": "Europe/Warsaw"},
+        "weekly": ["notes"],
+    }
+    return spec
+
+
+def use_extension(project, monkeypatch, factory):
+    monkeypatch.setattr(
+        ext_mod, "entry_points_for", lambda group: [FakeEntryPoint("attio", "acme-ext", factory)]
+    )
+    list_extension(project)
+
+
+def dag_text(project, name):
+    return (project / "orchestration" / "dags" / f"sync_{name}.py").read_text()
+
+
+def test_extension_groups_get_a_dag_each_on_their_own_schedule(invoke, project, monkeypatch):
+    use_extension(project, monkeypatch, grouped_connector)
+    r = invoke("connector", "add", "attio", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert sorted(json.loads(r.stdout)["dags"]) == [
+        "orchestration/dags/sync_attio_daily.py",
+        "orchestration/dags/sync_attio_hourly.py",
+        "orchestration/dags/sync_attio_weekly.py",
+    ]
+    assert config(project)["connectors"][0]["groups"] == {
+        "daily": ["companies", "people"],
+        "hourly": ["deals"],
+        "weekly": ["notes"],
+    }
+    daily, hourly, weekly = (dag_text(project, f"attio_{g}") for g in ("daily", "hourly", "weekly"))
+    assert 'objects=["companies", "people"], schedule="0 6 * * *")' in daily
+    assert 'objects=["deals"], schedule="@hourly", timezone="Europe/Warsaw")' in hourly
+    assert 'objects=["notes"], schedule="@daily")' in weekly
+    for text in (daily, hourly, weekly):
+        compile(text, "dag.py", "exec")
+
+
+def test_a_declared_extension_connector_keeps_its_group_schedules(invoke, project, monkeypatch):
+    use_extension(project, monkeypatch, grouped_connector)
+    _declare(
+        project,
+        "attio",
+        "vecten-managed",
+        secrets=["ATTIO_API_KEY"],
+        extension="acme-ext",
+        groups={"hourly": ["deals"], "extra": []},
+    )
+    r = invoke("connector", "add", "attio", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert 'schedule="@hourly", timezone="Europe/Warsaw")' in dag_text(project, "attio_hourly")
+    assert dag_text(project, "attio_extra").endswith('objects=[], schedule="@daily")\n')
+    assert not (project / "orchestration" / "dags" / "sync_attio_daily.py").exists()
+
+
+def test_an_extension_without_groups_gets_the_default_group(invoke, project, monkeypatch):
+    use_extension(project, monkeypatch, attio_connector)
+    assert invoke("connector", "add", "attio", "--json").exit_code == 0
+    assert config(project)["connectors"][0]["groups"] == {"default": []}
+    assert dag_text(project, "attio_default").endswith('objects=[], schedule="@daily")\n')
+
+
+def _with_groups(groups):
+    def factory():
+        spec = attio_connector()
+        spec["groups"] = groups
+        return spec
+
+    return factory
+
+
+@pytest.mark.parametrize(
+    ("groups", "detail"),
+    [
+        (["daily"], "not a dict of groups"),
+        ({}, "not a dict of groups"),
+        ({"Daily!": []}, "group names must be"),
+        ({"daily": "companies"}, "neither a dict nor a list"),
+        ({"daily": {"objects": [], "cron": "@daily"}}, "unknown keys ['cron']"),
+        ({"daily": {"objects": "companies"}}, "objects that is not a list of strings"),
+        ({"daily": {"schedule": 6}}, "schedule is not a cron string"),
+        ({"daily": {"schedule": '@daily")\nimport os'}}, "schedule is not a cron string"),
+        ({"daily": {"timezone": "Mars/Olympus"}}, "unknown timezone 'Mars/Olympus'"),
+    ],
+)
+def test_extension_groups_that_cannot_render_a_dag_are_config(
+    invoke, project, monkeypatch, groups, detail
+):
+    use_extension(project, monkeypatch, _with_groups(groups))
+    before = snapshot(project)
+    r = invoke("connector", "add", "attio", "--json")
+    assert r.exit_code == 6, r.stdout
+    err = json.loads(r.stdout)["error"]
+    assert "acme-ext" in err and "attio" in err and detail in err
+    assert snapshot(project) == before
 
 
 def test_extension_not_listed_in_config_is_ignored(invoke, project, monkeypatch):

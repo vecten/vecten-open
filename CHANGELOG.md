@@ -12,6 +12,9 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `pool`, `guard` (a function whose falsy return skips the run without failing it),
   `timezone` (the zone a cron schedule is read in) and `paused_at_creation`. A DAG file that
   passes none of them behaves as before.
+- An extension connector's declaration takes `groups`: each group's objects, cron `schedule`
+  and `timezone`. `connector add` renders one sync DAG per group on its own schedule; an
+  extension that declares no groups still gets the one `default` group on `@daily`.
 
 ### Fixed
 
