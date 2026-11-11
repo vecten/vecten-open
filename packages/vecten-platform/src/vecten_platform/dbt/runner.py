@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +20,38 @@ log = logging.getLogger(__name__)
 
 # The convention's singular tests inspect the whole built graph, so they run after the build.
 _CONVENTION_TESTS = f"package:{CONVENTION_PACKAGE},test_type:singular"
-BUILD_STEP = ("build", "--exclude", _CONVENTION_TESTS)
+
+
+def selectors(value: str | Sequence[str]) -> list[str]:
+    """dbt node selectors from a space-separated string or a list, as `--select` takes them.
+
+    A run parameter reaches dbt's argument list, so a token that dbt would read as a flag of
+    its own is refused rather than passed on.
+    """
+    tokens = value.split() if isinstance(value, str) else [t for v in value for t in v.split()]
+    flags = [token for token in tokens if token.startswith("-")]
+    if flags:
+        raise ValueError(f"a dbt selector does not start with '-': {', '.join(flags)}")
+    return tokens
+
+
+def build_args(
+    select: str | Sequence[str] = (),
+    exclude: str | Sequence[str] = (),
+    *,
+    full_refresh: bool = False,
+) -> tuple[str, ...]:
+    """`dbt build` over `select` (every node when empty) less `exclude` and the convention tests."""
+    args = ["build"]
+    if chosen := selectors(select):
+        args += ["--select", *chosen]
+    args += ["--exclude", _CONVENTION_TESTS, *selectors(exclude)]
+    if full_refresh:
+        args.append("--full-refresh")
+    return tuple(args)
+
+
+BUILD_STEP = build_args()
 CONVENTION_STEP = ("test", "--select", _CONVENTION_TESTS)
 _BUILD_STEPS = (BUILD_STEP, CONVENTION_STEP)
 _FAILED_STATUSES = {"error", "fail", "runtime error"}

@@ -15,6 +15,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - An extension connector's declaration takes `groups`: each group's objects, cron `schedule`
   and `timezone`. `connector add` renders one sync DAG per group on its own schedule; an
   extension that declares no groups still gets the one `default` group on `@daily`.
+- `dbt_build` has run parameters `select`, `exclude` and `full_refresh` for a manual run, and
+  `build_dbt_dag` takes their defaults, `trigger="any"` (build when any awaited group updated
+  rather than all of them) and `paused_at_creation`; `dbt_assets(config, groups)` narrows the
+  awaited groups. A green build emits the `dbt_build` asset (`vecten://dbt/build`). A
+  narrowed build skips `mark_built`, so the built commit still means the whole bundle built.
 
 ### Fixed
 
