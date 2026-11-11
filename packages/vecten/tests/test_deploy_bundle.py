@@ -9,7 +9,7 @@ import yaml
 from vecten.deploy.aws.ship import component_url
 from vecten.deploy.bundle import build_host_bundle
 from vecten.deploy.vm import apply as agent
-from vecten_shared.config import load_config
+from vecten_shared.config import load_config, save_config
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.sql import setup_sql_path
@@ -141,6 +141,34 @@ def test_nginx_conf_uses_letsencrypt_for_the_host_names(project, tmp_path):
     assert "server_name airflow.data.acme.com;" in conf
     assert "/etc/letsencrypt/live/airflow.data.acme.com/fullchain.pem" in conf
     assert "mcp.data.acme.com" not in conf
+
+
+PAUSED = "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"
+
+
+def test_shipped_dags_start_paused_only_when_the_tfvars_opt_in(project, tmp_path):
+    def paused(out):
+        doc = yaml.safe_load(read(build(project, out), ".vecten/stack/docker-compose.yml"))
+        return doc["services"]["airflow-scheduler"]["environment"][PAUSED]
+
+    assert paused(tmp_path / "default") == "False"
+    tfvars = project / "deploy" / "envs" / "prod.tfvars"
+    rendered = tfvars.read_text()
+    tfvars.write_text(rendered + "dags_paused_at_creation = true\n")
+    assert paused(tmp_path / "opted-in") == "True"
+    tfvars.write_text(rendered + "dags_paused_at_creation = false\n")
+    assert paused(tmp_path / "opted-out") == "False"
+
+
+def test_shipped_nginx_carries_the_airflow_allow_list(project, tmp_path):
+    path = ".vecten/stack/nginx/conf.d/default.conf"
+    assert "deny all;" not in read(build(project, tmp_path / "open"), path)
+    config = load_config(project)
+    config.airflow.allow = ["203.0.113.0/24"]
+    save_config(project, config)
+    conf = read(build(project, tmp_path / "narrowed"), path)
+    assert "allow 203.0.113.0/24;" in conf and "deny all;" in conf
+    assert "location = /api/v2/monitor/health {" in conf
 
 
 def test_host_json_satisfies_the_agent_contract(project, tmp_path):

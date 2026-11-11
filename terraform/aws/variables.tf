@@ -109,6 +109,20 @@ variable "platform_size" {
   }
 }
 
+variable "root_volume_size_gb" {
+  description = "Size in GiB of every VM's root volume, which holds the images and the named volumes."
+  type        = number
+  default     = 30
+  nullable    = false
+
+  # EBS grows a volume in place but never shrinks one, so a size below the one every VM was
+  # created with would fail the apply.
+  validation {
+    condition     = var.root_volume_size_gb >= 30 && var.root_volume_size_gb <= 16384 && floor(var.root_volume_size_gb) == var.root_volume_size_gb
+    error_message = "root_volume_size_gb is a whole number of GiB from 30 to 16384, the gp3 maximum."
+  }
+}
+
 variable "instance_type_overrides" {
   description = "Instance types that win over sizing.json, keyed by platform, mcp, main, state or warehouse."
   type        = map(string)

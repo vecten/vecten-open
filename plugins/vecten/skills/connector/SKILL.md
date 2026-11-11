@@ -259,7 +259,9 @@ Tell the human how the source runs from here. `vecten connector add` wrote a dai
 with catch-up off. In the local Airflow that `vecten up` starts, the DAG appears paused, because
 new DAGs start paused; once unpaused, its first scheduled run is at the next midnight UTC, not
 straight away. To load now, `vecten connector run <name>` syncs from this machine. In a deployed
-environment the DAG starts unpaused and first runs at the midnight UTC after it ships.
+environment the DAG starts unpaused and first runs at the midnight UTC after it ships, unless
+that environment's `deploy/envs/<env>.tfvars` sets `dags_paused_at_creation = true`; then it
+starts paused and runs only once someone unpauses it in that environment's Airflow.
 
 ## 9. Finish
 
