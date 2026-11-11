@@ -102,14 +102,18 @@ def test_root_help_lists_dbt_with_its_help(invoke):
     assert "Run dbt against the project's profile" in result.stdout
 
 
-def test_dbt_on_a_snowflake_project_points_at_the_local_build(invoke, tmp_path, monkeypatch):
+def test_dbt_on_a_snowflake_project_points_at_env_and_the_local_build(
+    invoke, tmp_path, monkeypatch
+):
     calls = _recording_project(tmp_path, monkeypatch, warehouse="snowflake")
     result = invoke("dbt", "debug")
     assert result.exit_code == 3
     assert calls == []
     assert result.stderr == (
-        "error: vecten dbt needs a Snowflake connection, which arrives with deploy; "
-        "the credential-free path is `vecten dbt-build-local`\n"
+        "error: vecten dbt without --env runs against the laptop stack, which has no "
+        "Snowflake: run `vecten dbt --env <env> <args>` with a deployed environment's "
+        "credentials, or `vecten dbt-build-local` for the credential-free build on the "
+        "Snowflake emulation\n"
     )
 
 
