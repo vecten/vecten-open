@@ -11,25 +11,6 @@ permissions:
 env:
   UV_PYTHON: "3.14"
 jobs:
-  base-branch:
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    steps:
-      # A fork can name its branch release/x, so the head must also live in this repository.
-      # The names reach the script through the environment because a branch name is the
-      # author's text.
-      - name: main takes release and hotfix branches only
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          if [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" && "$HEAD_REF" =~ ^(release|hotfix)/.+ ]]; then
-            exit 0
-          fi
-          open=$(git ls-remote --heads "https://github.com/${GITHUB_REPOSITORY}" 'release/*' | sed 's|.*refs/heads/||' | paste -sd' ' -)
-          echo "::error::main takes release/ and hotfix/ branches only. Retarget this pull request to the open release branch: ${open:-see CONTRIBUTING.md}."
-          exit 1
   lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -169,11 +150,11 @@ jobs:
           sudo ss -ltnp 'sport = :55432'
           docker ps -a --format '{{.ID}} {{.Names}} {{.Status}} {{.Ports}}'
 
-  # The one check the rulesets require: a matrix job reports under one name per matrix entry,
-  # and a job skipped by its `if` counts as passed here.
+  # The check the rulesets require of this workflow: a matrix job reports under one name per
+  # matrix entry. `always()` makes it run after a failed job, where a skipped check would pass.
   required:
     if: always()
-    needs: [base-branch, lint, test, browser-auth, render-matrix, laptop-e2e]
+    needs: [lint, test, browser-auth, render-matrix, laptop-e2e]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

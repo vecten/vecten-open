@@ -98,7 +98,8 @@ fails a pull request to `main` from any other branch. The maintainers are
 | `main` | `release/<version>` | the other maintainer's approval | a merge commit |
 | `main` | `hotfix/<name>` | the other maintainer's approval | a squash |
 
-Every merge also needs CI green. One release branch is open at a time. It opens as the next
+Every merge also needs CI green, and no one bypasses that, the maintainers included. One
+release branch is open at a time. It opens as the next
 patch version; when a breaking change is accepted, a maintainer renames it to the next minor
 (`release/0.2.0`), which GitHub carries over to the open pull requests.
 
@@ -128,12 +129,14 @@ distributions share one, and the tag is `v<version>`.
 3. Tag the merge commit `v<version>` with an annotated tag and push the tag. The Terraform
    modules are fetched by this tag, so nothing deploys from the version before it exists.
 4. Publish the packages and the images, then run `uv run vecten dev check-images`.
-5. Create `release/<next patch>` from `main` and delete the merged branch.
+5. Rename the merged branch to `release/<next patch>`. Its open pull requests follow the
+   rename; deleting the branch would move them onto `main`.
 
 A hotfix carries its own version: the `hotfix/<name>` branch takes the next patch version, with
 the same bump and changelog entry as step 1, and is tagged and published as steps 3 and 4.
-The open release branch is then renamed to the patch version after it, and `main` is merged
-into it.
+The open release branch is then renamed to the patch version after it, and a pull request
+brings `main` into it as a merge commit. A squash would leave the hotfix out of the branch's
+history, and the next release would conflict in every file the bump edits.
 
 ## What to expect
 
