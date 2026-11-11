@@ -202,6 +202,7 @@ def test_rendered_project_is_not_tracking_generated_dbt_files(tmp_path):
     ignored = (tmp_path / "proj" / ".gitignore").read_text().splitlines()
     for line in ("dbt/packages.yml", "dbt/package-lock.yml", "dbt/dbt_packages/", "dbt/target/"):
         assert line in ignored
+    assert "dbt/project-packages.yml" not in ignored
     assert not (tmp_path / "proj" / "dbt" / "packages.yml").exists()
 
 

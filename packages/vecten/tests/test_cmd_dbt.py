@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import pytest
+import yaml
 
 from vecten.cli.commands import dbt as dbt_cmd
 from vecten.scaffold.params import ScaffoldParams
@@ -39,6 +42,27 @@ def test_dbt_refuses_a_drifted_convention_package(invoke, tmp_path, monkeypatch)
     assert result.exit_code == 6
     assert calls == []
     assert "reinstall vecten" in result.stderr
+
+
+def test_dbt_merges_the_project_packages_before_running(invoke, tmp_path, monkeypatch):
+    calls = _recording_project(tmp_path, monkeypatch)
+    listed = "packages:\n  - package: dbt-labs/dbt_utils\n    version: 1.3.0\n"
+    Path("dbt/project-packages.yml").write_text(listed)
+    result = invoke("dbt", "deps")
+    assert result.exit_code == 0, result.stderr
+    assert calls == [["deps"]]
+    packages = yaml.safe_load(Path("dbt/packages.yml").read_text())["packages"]
+    assert packages[-1] == {"package": "dbt-labs/dbt_utils", "version": "1.3.0"}
+
+
+def test_dbt_refuses_an_unpinned_project_package(invoke, tmp_path, monkeypatch):
+    calls = _recording_project(tmp_path, monkeypatch)
+    listed = "packages:\n  - package: dbt-labs/dbt_utils\n    version: '>=1.0.0'\n"
+    Path("dbt/project-packages.yml").write_text(listed)
+    result = invoke("dbt", "deps")
+    assert result.exit_code == 6
+    assert calls == []
+    assert "dbt/project-packages.yml" in result.stderr and "exact" in result.stderr
 
 
 def _recording_project(tmp_path, monkeypatch, warehouse="postgres"):

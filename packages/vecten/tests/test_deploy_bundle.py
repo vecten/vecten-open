@@ -116,6 +116,17 @@ def test_bundle_leaves_out_secrets_history_records_and_build_output(project, tmp
     assert not [t for t in texts if "hunter2" in t]
 
 
+def test_bundle_ships_the_project_packages_and_not_the_generated_ones(project, tmp_path):
+    listed = "packages:\n  - package: dbt-labs/dbt_utils\n    version: 1.3.0\n"
+    (project / "dbt" / "project-packages.yml").write_text(listed)
+    (project / "dbt" / "packages.yml").write_text("packages:\n  - local: /laptop/path\n")
+    (project / "dbt" / "package-lock.yml").write_text("packages: []\n")
+    bundle = build(project, tmp_path / "out")
+    names = members(bundle)
+    assert read(bundle, "dbt/project-packages.yml") == listed
+    assert "dbt/packages.yml" not in names and "dbt/package-lock.yml" not in names
+
+
 def test_compose_file_is_for_this_host_only(project, tmp_path):
     platform = yaml.safe_load(
         read(build(project, tmp_path / "a"), ".vecten/stack/docker-compose.yml")
