@@ -88,6 +88,8 @@ PUBLIC_AGENTS = (
     "  change starts there. The glossary is docs/GLOSSARY.md.\n"
     "- A code comment states the constraint that makes the code correct, never the change\n"
     "  history.\n"
+    "- Branch from the open release/<version> branch and open pull requests against it; main\n"
+    "  takes only release/ and hotfix/ merges. CONTRIBUTING.md has the branch and release rules.\n"
     "- Never commit secrets. The maintainer merges; deployments and publication need explicit\n"
     "  approval.\n"
 )
