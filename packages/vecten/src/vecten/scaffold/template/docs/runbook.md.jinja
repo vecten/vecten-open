@@ -79,10 +79,36 @@ target there, so on the laptop stack the container never shares `dbt/target` or
 `dbt/dbt_packages` with the host. The laptop stack and the host each resolve dbt dependencies
 before every run and keep separate build directories.
 
+The project's own dbt packages, from dbt hub or a public git repository, are listed in
+`dbt/project-packages.yml`. Each hub package is pinned to one release (`version: 1.3.0`), and
+each git package to a full commit id (`revision:`). The file is committed and shipped, and
+every resolution appends its entries to the generated `dbt/packages.yml`. An unpinned, private,
+local or duplicate entry stops the run with exit 6. On a deployed host the `deps` task installs
+them on every run, which needs outbound HTTPS to `hub.getdbt.com`, `github.com` and
+`codeload.github.com`. The hosts' security groups allow all outbound traffic. When those sites
+are unreachable, `deps` fails and the build does not run.
+
 On a laptop, `vecten dbt-build-local` runs the same build and convention steps on a disposable
 warehouse from the connectors' recorded fixtures; `vecten dbt <args>` runs dbt against the stack's
-Postgres.
-[% endif %][% if render_deploy and cloud == 'aws' %]
+Postgres[% if warehouse == 'snowflake' %], which a Snowflake project does not use, so here it
+refuses without `--env`[% endif %].
+[% if warehouse == 'snowflake' and render_deploy %]
+`vecten dbt --env <env> <args>` runs dbt against a deployed environment's Snowflake warehouse as
+its `LOADER` user, with `SNOWFLAKE_LOADER_PRIVATE_KEY` read from that environment's secrets
+store. The key reaches dbt only through its process environment. On `prod` only `clean`,
+`compile`, `debug`, `deps`, `docs generate`, `docs serve`, `ls`, `parse`, `show`,
+`source freshness` and `test` run, and every other command exits 4. On `prod`, `test` also
+leaves out unit tests and refuses `--store-failures`. `test` and `source freshness` are refused
+while the project or a package declares an `on-run-start` or `on-run-end` hook, and `test` while
+a test stores its failures. `LOADER` can write, so these checks guard against accidents. They
+cannot catch SQL that Jinja runs at compile time. Every command runs on any other environment,
+which is how to build a scratch Snowflake database: deploy an environment for it in its own
+Snowflake account.
+[% elif render_deploy %]
+`vecten dbt --env <env>` exits 4 on this project: a deployed Postgres warehouse sits on the
+environment's private network, which the laptop does not reach. The `dbt_build` DAG builds it,
+and `vecten issues --env <env>` reports its failures.
+[% endif %][% endif %][% if render_deploy and cloud == 'aws' %]
 ## AWS deployment
 
 An environment such as `prod` runs in one AWS account: an EC2 virtual machine (VM) per host,

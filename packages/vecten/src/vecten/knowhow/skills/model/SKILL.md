@@ -41,6 +41,12 @@ and the build checks them together. The command item `Build the dbt project loca
   it at build time.
 - The files that are yours: `dbt/models/staging/staging_*.sql`, `dbt/snapshots/snapshot_*.sql`,
   `dbt/models/core/*.sql`, `dbt/models/marts/*.sql` and the `schema.yml` beside core and marts.
+- A dbt package from dbt hub or a public git repository, such as `dbt_utils`, goes in
+  `dbt/project-packages.yml` with dbt's `packages:` shape: `package: dbt-labs/dbt_utils` with
+  `version: 1.3.0`, one exact release, or `git: https://...` with `revision:` set to a full
+  40-character commit id. Ask the human before adding one. Never edit `dbt/packages.yml`: it
+  is regenerated before every run from that file. The build exits 6 and names the entry when a
+  pin is a range, a tag or a branch, or when the package is private.
 - The CLI owns `dbt/models/staging/sources.yml` (written by each sync), `osi/datasets.json`
   (written by the local build), `vecten.toml`, `.vecten/` and `dbt/target/`; never edit them.
   `osi/metrics.json` belongs to the `semantic` skill.
@@ -97,8 +103,8 @@ relying on lineage, and again after changing models.
 
 That is quicker and more reliable than parsing `manifest.json` by hand. `generate_source`,
 `generate_model_yaml` and `generate_staging_model` appear only when the dbt project has the
-`dbt-codegen` package, which this project does not install; when the server offers them, their
-output is a draft to rewrite to the convention. Leave `build`, `run` and `test` to
+`dbt-codegen` package, which this project installs only if `dbt/project-packages.yml` lists it;
+when the server offers them, their output is a draft to rewrite to the convention. Leave `build`, `run` and `test` to
 `vecten dbt-build-local`, which replays the fixtures, runs the convention's second step and
 regenerates the semantic model.
 
@@ -249,6 +255,13 @@ A failing data test is information about the data: a `unique` failure on a key m
 staging model or the snapshot key is wrong, or the source really repeats ids, which the human
 needs to hear. Fix the model; never silence a failure by deleting a test, a description or a
 column from `schema.yml`, and never touch `osi/datasets.json` or the fixtures.
+
+When a test fails only on a deployed environment's data in a Snowflake project, as `operate`
+reports it, read that data with `vecten dbt --env <env> test --select <test>` or
+`vecten dbt --env <env> show --select <model>`. `--env` comes first. On `prod` it runs only
+commands that build nothing and exits 4 on anything else; never try to build `prod` this way.
+The `dbt_build` DAG builds it once the fix merges and ships. The fix is still proved with
+`vecten dbt-build-local --json`. A Postgres project exits 4 on `--env`.
 
 ## 8. Validate the semantic model
 

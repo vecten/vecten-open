@@ -70,6 +70,47 @@ The tests that enforce the convention, the identity macros and dbt's time spine 
 and the dbt DAG write `dbt/packages.yml` with local paths before each run, so the file is
 git-ignored.
 
+### The project's own dbt packages
+
+To use a package from [dbt hub](https://hub.getdbt.com) or a public git repository, such as
+`dbt_utils`, list it in `dbt/project-packages.yml` and commit that file. It has dbt's
+`packages:` shape:
+
+```yaml
+packages:
+  - package: dbt-labs/dbt_utils
+    version: 1.3.0
+  - git: https://github.com/dbt-labs/dbt-utils.git
+    revision: e164c645238ca98f21b2ecc558912b94b3d75a9f   # a full commit id
+    subdirectory: some_package                            # optional
+```
+
+Before each run, vecten appends these entries to the generated `dbt/packages.yml`, after its
+own `local:` entries. This happens on the laptop (`vecten dbt`, `vecten dbt-build-local`), in
+CI, and on the deployed host, where the dbt DAG's `deps` task installs them. The file ships in
+the bundle with the rest of `dbt/`. Each machine runs `dbt deps` on its own, so every entry
+must name exactly one release or one commit. These entries are refused, with exit 6 before dbt
+runs:
+
+- a hub `version` that is not one `X.Y.Z` release, such as a range or `1.3`;
+- a git `revision` that is not a full 40-character commit id, such as a tag or a branch;
+- a git URL that is not `https://`, or that carries a user, a token or Jinja;
+- a `local:`, `tarball:` or `private:` entry (a local dbt package belongs in an
+  [extension](extensions.md));
+- a package listed twice, or one that installs under the name of a generated entry
+  (`vecten_convention` or an extension's dbt project).
+
+Private git packages are not supported, because the hosts hold no git credentials. A hub
+package's own dependencies are resolved from the version ranges that package declares.
+
+A deployed host installs the packages on every dbt DAG run. It needs outbound HTTPS to
+`hub.getdbt.com`, and for git packages to `github.com` and `codeload.github.com`, and the
+Airflow image needs `git`, which it has. The AWS and Scaleway modules allow all outbound traffic
+from the hosts, so nothing needs configuring. If the hub or GitHub cannot be reached, the
+`deps` task fails, the build does not run, and `vecten issues --env <env>` lists the failure.
+
+### Commands
+
 - `vecten dbt-build-local` builds and tests the project with no warehouse credentials. It needs
   recorded fixtures for every connector (`vecten connector run <source> --record`) and, for a
   Postgres project, Docker, which runs a disposable Postgres container; a Snowflake project needs
@@ -85,8 +126,53 @@ git-ignored.
 - `vecten dbt <args>` passes its arguments to dbt unchanged, against the laptop stack's Postgres
   (`vecten up` first), and exits with dbt's code. It writes `dbt/packages.yml` before every
   invocation; run `vecten dbt deps` first on a fresh checkout, and remember that
-  `vecten dbt build` does not run the convention tests as a second step. On a Snowflake project
-  it refuses until a deploy provides a connection; use `vecten dbt-build-local` there.
+  `vecten dbt build` does not run the convention tests as a second step. The laptop stack has no
+  Snowflake, so on a Snowflake project it refuses and points at `--env` and at
+  `vecten dbt-build-local`.
+- `vecten dbt --env <env> <args>` runs dbt against a deployed environment's Snowflake warehouse;
+  see the next section.
+
+### dbt against a deployed environment
+
+`vecten dbt --env <env> <args>` runs dbt against the environment's own Snowflake warehouse.
+`--env <env>` must come first, before dbt's arguments. dbt signs in as the environment's
+`LOADER` service user, the identity the dbt DAG builds with. Its private key,
+`SNOWFLAKE_LOADER_PRIVATE_KEY`, is read from the environment's secrets store with your cloud
+login, and the database and `<PROJECT>_<ENV>_WH` warehouse come from `vecten.toml`. The key
+reaches dbt only through the process environment. It is never written to `profiles.yml` or any
+other file, and dbt masks it in its logs. Run `vecten dbt --env <env> deps` first on a fresh
+checkout.
+
+On `prod`, only commands that build nothing run: `clean`, `compile`, `debug`, `deps`,
+`docs generate`, `docs serve`, `ls`/`list`, `parse`, `show`, `source freshness` and `test`.
+Every other command exits 4 before any secret is read, including `run`, `build`, `seed`,
+`snapshot`, `clone`, `retry`, `run-operation` and any command not on that list. The dbt DAG
+builds `prod`. Some things would make an allowed command write, so on `prod`:
+
+- `test --store-failures` is refused, and a `DBT_STORE_FAILURES` set in your shell is ignored;
+- `test` leaves out unit tests, because each one creates a temporary table (they need no prod
+  data, and `vecten dbt-build-local` runs them), and `--exclude-resource-type` is refused because
+  it would bring them back;
+- before `test` or `source freshness`, which execute the project's `on-run-start` and
+  `on-run-end` hooks, vecten runs `dbt parse` without the key. It refuses when the project or any
+  of its packages declares such a hook, or, for `test`, when any test stores its failures
+  (`store_failures`, or `store_failures_as: table` or `view`). `compile`, `show` and
+  `docs generate` never execute hooks, so they still run.
+
+`LOADER` has write grants: no Snowflake role reads raw through marts without them. On `prod`,
+vecten's checks are what keep a run read-only, and they cannot see SQL that Jinja runs while
+dbt compiles, such as `run_query` in a model or macro, or Jinja passed to `show --inline`. Treat
+`--env prod` as a guard against accidents, not as a permission boundary. Anyone who can run it
+can also read the `LOADER` key.
+
+Any other environment runs every dbt command. That is the way to a scratch or CI database on
+Snowflake: deploy another environment, in its own Snowflake account because one account serves
+one environment, and run `vecten dbt --env <name> build` there. CI that needs no real Snowflake
+keeps running `vecten dbt-build-local --check` on the emulation.
+
+A Postgres warehouse is deployed on the environment's private network, which the laptop cannot
+reach, so `--env` on a Postgres project exits 4. The dbt DAG builds it, and
+`vecten issues --env <env>` reports its failures.
 - `vecten mcp validate` checks every document under `osi/` the way the MCP server will load it:
   the pinned Ossie schema, duplicate names across documents, a usable dialect for every
   expression, relationships and each metric's home dataset. It warns when a metric declares no
