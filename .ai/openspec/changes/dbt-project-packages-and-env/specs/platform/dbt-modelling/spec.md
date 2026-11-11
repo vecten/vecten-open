@@ -57,7 +57,7 @@ The rendered dbt project SHALL use dbt-core with the Postgres adapter when the w
 
 ### Requirement: Project dbt packages are pinned
 
-`dbt/project-packages.yml` SHALL hold one key, `packages`, a list whose every entry is either a dbt hub package, `package: <owner>/<name>` with `version` set to one exact release `X.Y.Z`, or a public git repository, `git: https://...` with `revision` set to a full 40-character commit id and an optional `subdirectory`. Resolution SHALL fail with exit 6, naming the file and the entry, before dbt runs and without writing `packages.yml`, when an entry is unpinned (a range, a list of ranges, a partial version, a tag or a branch), names a `local`, `private` or `tarball` package, carries a key outside these, uses a URL that is not `https://` or that carries credentials or Jinja, lists a package twice, or installs under the name of a generated `local:` entry. Private git packages are out of scope: the hosts hold no git credential.
+`dbt/project-packages.yml` SHALL hold one key, `packages`, a list whose every entry is either a dbt hub package, `package: <owner>/<name>` with `version` set to one exact release `X.Y.Z`, or a public git repository, `git: https://...` with `revision` set to a full 40-character commit id and an optional `subdirectory`. Resolution SHALL fail with exit 6, naming the file and the entry, before dbt runs and without writing `packages.yml`, when an entry is unpinned (a range, a list of ranges, a partial version, a tag or a branch), names a `local`, `private` or `tarball` package, carries a key outside these, uses a URL that is not `https://` or that carries credentials, Jinja, a query or a fragment, lists a package twice, or installs under the name of a generated `local:` entry. The refusal SHALL NOT repeat a refused URL, which may hold a token. Private git packages are out of scope: the hosts hold no git credential.
 
 #### Scenario: Unpinned version
 
@@ -95,7 +95,7 @@ The rendered dbt project SHALL use dbt-core with the Postgres adapter when the w
 
 ### Requirement: Prod runs build nothing
 
-On the environment named `prod`, `vecten dbt --env prod` SHALL run only the dbt commands `clean`, `compile`, `debug`, `deps`, `docs generate`, `docs serve`, `list` (`ls`), `parse`, `show`, `source freshness` and `test`, read with dbt's own argument parser, and SHALL refuse every other command, and arguments that name no command, with exit 4 before it reads any secret. It SHALL refuse `test` given `--store-failures` or `--exclude-resource-type`, SHALL run `test` with unit tests excluded through `DBT_EXCLUDE_RESOURCE_TYPES`, since each unit test creates a temporary table, and SHALL drop an inherited `DBT_STORE_FAILURES`. Before `test` or `source freshness`, which execute the project's on-run hooks, it SHALL parse the project with `dbt parse`, without the credential and with the run's `--vars`, and refuse with exit 4, naming them, when any package declares an `on-run-start` or `on-run-end` hook or, for `test`, when any test stores its failures through `store_failures` or `store_failures_as` set to `table` or `view`.
+On the environment named `prod`, `vecten dbt --env prod` SHALL run only the dbt commands `clean`, `compile`, `debug`, `deps`, `docs generate`, `docs serve`, `list` (`ls`), `parse`, `show`, `source freshness` and `test`, read with dbt's own argument parser, and SHALL refuse every other command, and arguments that name no command, with exit 4 before it reads any secret. Options SHALL be read by dbt's parameter, so every spelling of an option counts. It SHALL refuse every command given `--target` (`-t`), `--profile`, `--profiles-dir` or `--project-dir`, since the check below parses the project, profile and target vecten sets; SHALL refuse `test` given `--store-failures` or `--exclude-resource-types` (`--exclude-resource-type`); SHALL run `test` with unit tests excluded through `DBT_EXCLUDE_RESOURCE_TYPES`, since each unit test creates a temporary table; and SHALL drop from both the check's and the run's environment every inherited variable that sets a dbt option, in both its `DBT_` and `DBT_ENGINE_` spellings. Before `test` or `source freshness`, which execute the project's on-run hooks, it SHALL parse the project with `dbt parse`, without the credential and with the run's `--vars`, and refuse with exit 4, naming them, when any package declares an `on-run-start` or `on-run-end` hook or, for `test`, when any test stores its failures through `store_failures` or `store_failures_as` set to `table` or `view`.
 
 #### Scenario: Read-only command
 
@@ -116,6 +116,16 @@ On the environment named `prod`, `vecten dbt --env prod` SHALL run only the dbt 
 
 - **WHEN** a test is configured with `store_failures: true` and `vecten dbt --env prod test` runs
 - **THEN** it exits 4 naming the test
+
+#### Scenario: Another target, profile or project
+
+- **WHEN** `vecten dbt --env prod test --target audit`, or the same with `-t`, `--profile`, `--profiles-dir` or `--project-dir`, is run
+- **THEN** it exits 4 naming the options, before the check parses and before any secret is read
+
+#### Scenario: dbt settings in the shell
+
+- **WHEN** the shell sets `DBT_ENGINE_STORE_FAILURES`, `DBT_ENGINE_EXCLUDE_RESOURCE_TYPES` or `DBT_ENGINE_TARGET` and `vecten dbt --env prod test` runs
+- **THEN** neither the check nor the run sees them, the run's target is the one the check parsed, and unit tests stay excluded
 
 #### Scenario: Commands that never execute hooks
 

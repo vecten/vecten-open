@@ -138,8 +138,17 @@ and then run on the Snowflake emulation with a hook that creates a table: `run`,
 
 ### What makes an allowed command write is refused, not neutralised
 
-- `test --store-failures` is refused; an inherited `DBT_STORE_FAILURES` is dropped from dbt's
-  environment.
+- Options are read by dbt's own parser and compared by parameter, so `--exclude-resource-types`
+  and `--exclude-resource-type`, or `-taudit` and `--target audit`, are the same option.
+- `test --store-failures` is refused.
+- `--target`, `--profile`, `--profiles-dir` and `--project-dir` are refused on every prod
+  command: the check below parses the project, profile and target vecten sets, and a run that
+  chose others would execute a configuration nobody checked, such as a test that stores its
+  failures only on one target.
+- dbt reads each option from `DBT_ENGINE_<NAME>` before `DBT_<NAME>` and copies the first over
+  the second, so a variable in the shell would override what vecten sets. Every inherited
+  variable that sets a dbt option, in either spelling, is dropped from the check's and the
+  run's environment; `DBT_ENV_*` variables, which projects read with `env_var`, stay.
 - Before `test` and `source freshness`, vecten runs `dbt parse` into a temporary target
   directory, with the run's `--vars` and without the credential, and reads the manifest. Any
   `operation` node (a hook of the project or of any installed package) refuses both commands;
@@ -148,8 +157,8 @@ and then run on the Snowflake emulation with a hook that creates a table: `run`,
   are checked.
 - Unit tests are left out of prod `test` with `DBT_EXCLUDE_RESOURCE_TYPES=unit_test`: dbt's unit
   materialisation creates a temporary table in the model's schema and drops it. They need no prod
-  data; `dbt-build-local` runs them. `--exclude-resource-type` on the command line would override
-  the variable, so prod `test` refuses it.
+  data; `dbt-build-local` runs them. `--exclude-resource-types` on the command line would override
+  the variable, so prod `test` refuses it in either spelling.
 
 Alternatives considered:
 

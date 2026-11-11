@@ -172,11 +172,28 @@ def test_a_git_package_needs_a_full_commit(tmp_path, revision):
         "http://github.com/acme/dbt-helpers.git",
         "https://user:token@github.com/acme/dbt-helpers.git",
         "https://{{ env_var('DBT_ENV_SECRET_GIT_TOKEN') }}@github.com/acme/dbt-helpers.git",
+        "https://github.com/acme/dbt-helpers.git?private_token=token",
+        "https://[github.com/acme/dbt-helpers.git",
     ],
 )
 def test_a_git_package_must_be_public_https(tmp_path, url):
     _project_packages(tmp_path, {"git": url, "revision": SHA})
     assert "public" in _refusal(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:ghp_synthetic0token@github.com/acme/dbt-helpers.git",
+        "https://ghp_synthetic0token@github.com/acme/dbt-helpers.git",
+        "https://github.com/acme/dbt-helpers.git?private_token=ghp_synthetic0token",
+        "http://ghp_synthetic0token@github.com/acme/dbt-helpers.git",
+    ],
+)
+def test_a_refused_git_url_never_reaches_the_message(tmp_path, url):
+    _project_packages(tmp_path, {"git": url, "revision": SHA})
+    message = _refusal(tmp_path)
+    assert "ghp_synthetic0token" not in message and "github.com" not in message
 
 
 @pytest.mark.parametrize(

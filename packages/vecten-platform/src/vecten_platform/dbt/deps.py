@@ -106,17 +106,23 @@ def _hub_entry(label: str, entry: dict) -> str:
 
 def _git_entry(label: str, entry: dict) -> str:
     url = entry["git"]
-    parts = urlsplit(url) if isinstance(url, str) else None
+    try:
+        parts = urlsplit(url) if isinstance(url, str) else None
+    except ValueError:
+        parts = None
     if (
         parts is None
         or parts.scheme != "https"
         or not parts.hostname
         or "@" in parts.netloc
         or "{" in url
+        or parts.query
+        or parts.fragment
         or not parts.path.strip("/")
     ):
+        # The refused URL may hold a token, and this message reaches terminals and CI logs.
         raise _project_failure(
-            f"{label}: {url!r} is not a public https:// repository URL; private git packages "
+            f"{label}: git is not a public https:// repository URL; private git packages "
             "and credentials in the URL are not supported"
         )
     revision = entry.get("revision")

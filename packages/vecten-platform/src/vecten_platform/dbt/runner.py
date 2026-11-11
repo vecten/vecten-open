@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,9 +45,15 @@ def dbt_argv(args: list[str]) -> list[str]:
     return [sys.executable, "-c", _DBT_MAIN, *args]
 
 
-def base_env(project_dir: Path, profile: dict[str, str]) -> dict[str, str]:
-    """dbt reads the root `osi/` unless a caller points `OSI_PATH_VAR` elsewhere explicitly."""
-    inherited = {k: v for k, v in os.environ.items() if k != OSI_PATH_VAR}
+def base_env(
+    project_dir: Path, profile: dict[str, str], inherited: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """dbt reads the root `osi/` unless a caller points `OSI_PATH_VAR` elsewhere explicitly.
+
+    `inherited` is the environment passed on beneath the settings here, `os.environ` by default.
+    """
+    source = os.environ if inherited is None else inherited
+    inherited = {k: v for k, v in source.items() if k != OSI_PATH_VAR}
     return {
         **inherited,
         "DBT_PROJECT_DIR": str(project_dir),

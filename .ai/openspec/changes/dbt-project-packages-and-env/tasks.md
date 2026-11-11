@@ -11,7 +11,7 @@
 
 - [x] 2.1 Tests: every allowed prod command runs with the LOADER key, account, database and warehouse; every other command, a bare group and no command are refused without reading a secret
 - [x] 2.2 Tests: other environments run every command, hooks and stored failures included
-- [x] 2.3 Tests: prod `test --store-failures` and `--exclude-resource-type` refused; unit tests excluded and an inherited `DBT_STORE_FAILURES` dropped
+- [x] 2.3 Tests: prod `test --store-failures` and both spellings of `--exclude-resource-types` refused; `--target`, `--profile`, `--profiles-dir` and `--project-dir` refused; unit tests excluded and inherited dbt settings of both spellings dropped, checked with dbt's own parser; a target-dependent `store_failures` checked against a real parse
 - [x] 2.4 Tests: prod `test` and `source freshness` refused on hooks, `test` on `store_failures` and `store_failures_as`; compile, show and docs generate run beside them; the check parses with `--vars` and without the key; a failed parse stops the run
 - [x] 2.5 Test with a real `dbt parse`: an `on-run-end` grant and a project-wide `+store_failures` are found
 - [x] 2.6 Tests: the key never lands in a project file or in vecten's output, and is set under `DBT_ENV_SECRET_`

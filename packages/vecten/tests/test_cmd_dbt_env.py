@@ -193,7 +193,8 @@ def test_prod_refuses_test_with_the_store_failures_flag(invoke, snowflake, flag)
     result = invoke("dbt", "--env", "prod", "test", flag)
     assert result.exit_code == 4
     assert snowflake["runs"] == [] and READ == []
-    assert "--store-failures" in result.stderr
+    # dbt's parser takes no value for the flag, so the second spelling names no command it reads.
+    assert "--store-failures" in result.stderr or "no dbt command" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -253,25 +254,100 @@ def test_a_failed_check_parse_stops_the_run(invoke, snowflake, monkeypatch):
     assert "dbt parse" in result.stderr and "only 0 installed" in result.stderr
 
 
-def test_prod_test_leaves_out_unit_tests_and_an_inherited_store_failures(
-    invoke, snowflake, monkeypatch
-):
-    monkeypatch.setenv("DBT_STORE_FAILURES", "true")
+SHELL_DBT_SETTINGS = {
+    "DBT_STORE_FAILURES": "true",
+    "DBT_ENGINE_STORE_FAILURES": "true",
+    "DBT_ENGINE_EXCLUDE_RESOURCE_TYPES": "model",
+    "DBT_ENGINE_TARGET": "audit",
+    "DBT_ENGINE_PROFILES_DIR": "/elsewhere",
+    "DBT_ENGINE_PROJECT_DIR": "/elsewhere",
+    "DBT_PROFILE": "other",
+}
+
+
+def _effective(args, env):
+    """The options dbt's own parser resolves for `args` under the process environment `env`."""
+    import click
+    from dbt.cli.main import cli
+
+    command = cli.commands[args[0]]
+    saved = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(env)
+    try:
+        ctx = command.make_context(args[0], list(args[1:]), parent=click.Context(cli))
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+    return ctx.params
+
+
+def test_prod_runs_without_the_shells_dbt_settings(invoke, snowflake, monkeypatch):
+    for name, value in SHELL_DBT_SETTINGS.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("DBT_ENV_CUSTOM_ENV_TEAM", "data")
     result = invoke("dbt", "--env", "prod", "test")
     assert result.exit_code == 3, result.stderr
-    env = snowflake["runs"][0]["env"]
-    assert env["DBT_EXCLUDE_RESOURCE_TYPES"] == "unit_test"
-    assert "DBT_STORE_FAILURES" not in env
+    (parse,) = snowflake["parses"]
+    run = snowflake["runs"][0]["env"]
+    for env in (parse["env"], run):
+        assert not set(SHELL_DBT_SETTINGS) & set(env)
+        assert env["DBT_ENV_CUSTOM_ENV_TEAM"] == "data"
+    assert run["DBT_EXCLUDE_RESOURCE_TYPES"] == "unit_test"
+    effective = _effective(["test"], run)
+    assert effective["exclude_resource_types"] == ("unit_test",)
+    assert effective["store_failures"] is False
+    assert effective["target"] == "local"
+    assert effective["project_dir"] == effective["profiles_dir"] == str(snowflake["root"] / "dbt")
+
+
+def test_other_environments_keep_the_shells_dbt_settings(invoke, snowflake, monkeypatch):
+    monkeypatch.setenv("DBT_ENGINE_STORE_FAILURES", "true")
+    result = invoke("dbt", "--env", "staging", "test")
+    assert result.exit_code == 3, result.stderr
+    assert snowflake["runs"][0]["env"]["DBT_ENGINE_STORE_FAILURES"] == "true"
 
 
 @pytest.mark.parametrize(
-    "flag", [["--exclude-resource-type", "test"], ["--exclude-resource-type=test"]]
+    "flag",
+    [
+        ["--exclude-resource-type", "test"],
+        ["--exclude-resource-type=test"],
+        ["--exclude-resource-types", "model"],
+        ["--exclude-resource-types=model"],
+    ],
 )
 def test_prod_refuses_test_that_would_bring_unit_tests_back(invoke, snowflake, flag):
     result = invoke("dbt", "--env", "prod", "test", *flag)
     assert result.exit_code == 4
-    assert snowflake["runs"] == []
+    assert snowflake["runs"] == [] and READ == []
     assert "unit test" in result.stderr
+
+
+@pytest.mark.parametrize("command", [["test"], ["compile"], ["source", "freshness"]])
+@pytest.mark.parametrize(
+    "option",
+    [
+        ["--target", "audit"],
+        ["--target=audit"],
+        ["-t", "audit"],
+        ["-taudit"],
+        ["--profile", "other"],
+        ["--profiles-dir", "."],
+        ["--project-dir", "."],
+    ],
+    ids=" ".join,
+)
+def test_prod_refuses_another_project_profile_or_target(invoke, snowflake, command, option):
+    result = invoke("dbt", "--env", "prod", *command, *option)
+    assert result.exit_code == 4, result.stderr
+    assert snowflake["runs"] == [] and snowflake["parses"] == [] and READ == []
+    assert "chooses the dbt project, profile and target" in result.stderr
+
+
+def test_another_target_is_allowed_on_other_environments(invoke, snowflake):
+    result = invoke("dbt", "--env", "staging", "test", "--target", "audit")
+    assert result.exit_code == 3, result.stderr
 
 
 def test_the_credential_reaches_dbt_only_through_its_environment(invoke, snowflake):
@@ -370,6 +446,7 @@ def test_the_missing_loader_key_names_the_deploy(invoke, snowflake):
         (["source", "freshness", "--select", "x"], ("source", "freshness")),
         (["ls"], ("list",)),
         (["test", "--", "run"], ("test",)),
+        (["test", "--no-such-option"], ()),
         (["nonsense"], ()),
         ([], ()),
         (["--help"], ()),
@@ -379,10 +456,8 @@ def test_dbt_command_is_read_with_dbts_own_parser(args, command):
     assert dbt_env.dbt_command(args) == command
 
 
-def test_the_prod_check_reads_hooks_and_stored_failures_from_a_real_parse(
-    invoke, snowflake, monkeypatch
-):
-    """dbt itself parses the project, so a hook or store_failures set anywhere dbt reads is seen."""
+def _real_parse(snowflake, monkeypatch) -> Path:
+    """The project's dbt folder, with its packages installed and the prod check parsing for real."""
     from vecten_platform.dbt import runner
     from vecten_shared.config import load_config
 
@@ -395,6 +470,14 @@ def test_the_prod_check_reads_hooks_and_stored_failures_from_a_real_parse(
         env=runner.base_env(dbt_dir, {}),
         in_process=False,
     )
+    return dbt_dir
+
+
+def test_the_prod_check_reads_hooks_and_stored_failures_from_a_real_parse(
+    invoke, snowflake, monkeypatch
+):
+    """dbt itself parses the project, so a hook or store_failures set anywhere dbt reads is seen."""
+    dbt_dir = _real_parse(snowflake, monkeypatch)
     assert invoke("dbt", "--env", "prod", "test").exit_code == 3
 
     project = yaml.safe_load((dbt_dir / "dbt_project.yml").read_text())
@@ -408,3 +491,30 @@ def test_the_prod_check_reads_hooks_and_stored_failures_from_a_real_parse(
     result = invoke("dbt", "--env", "prod", "test")
     assert result.exit_code == 4 and "store" in result.stderr, result.stderr
     assert len(snowflake["runs"]) == 1 and READ == ["prod/SNOWFLAKE_LOADER_PRIVATE_KEY"]
+
+
+def test_the_prod_run_uses_the_target_its_check_parsed(invoke, snowflake, monkeypatch):
+    """A test config that depends on the target is checked against the target the run uses."""
+    from vecten_platform.dbt import runner
+    from vecten_shared.output import Failure
+
+    dbt_dir = _real_parse(snowflake, monkeypatch)
+    profiles = yaml.safe_load((dbt_dir / "profiles.yml").read_text())
+    outputs = profiles["vecten"]["outputs"]
+    outputs["audit"] = dict(outputs["local"])
+    (dbt_dir / "profiles.yml").write_text(yaml.safe_dump(profiles, sort_keys=False))
+    project = yaml.safe_load((dbt_dir / "dbt_project.yml").read_text())
+    by_target = {**project, "data_tests": {"+store_failures": "{{ target.name == 'audit' }}"}}
+    (dbt_dir / "dbt_project.yml").write_text(yaml.safe_dump(by_target, sort_keys=False))
+    with pytest.raises(Failure, match="store"):
+        audit = {"DBT_TARGET": "audit", "SNOWFLAKE_DATABASE": "ACME"}
+        dbt_env.check_prod_project(dbt_dir, ("test",), [], runner.base_env(dbt_dir, audit))
+
+    result = invoke("dbt", "--env", "prod", "test", "--target", "audit")
+    assert result.exit_code == 4 and "target" in result.stderr, result.stderr
+
+    monkeypatch.setenv("DBT_ENGINE_TARGET", "audit")
+    result = invoke("dbt", "--env", "prod", "test")
+    assert result.exit_code == 3, result.stderr
+    (run,) = snowflake["runs"]
+    assert run["env"]["DBT_TARGET"] == "local" and "DBT_ENGINE_TARGET" not in run["env"]

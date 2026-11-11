@@ -9,7 +9,9 @@ refusal of anything in the project that makes an allowed command write.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from vecten.deploy.snowflake import LOADER_PRIVATE_KEY
@@ -51,6 +53,13 @@ TEST = ("test",)
 # A unit test creates a temporary table in the tested model's schema; it needs no prod data.
 UNIT_TESTS_OFF = {"DBT_EXCLUDE_RESOURCE_TYPES": "unit_test"}
 _STORED_AS = frozenset({"table", "view"})
+# The prod check parses the project, profile and target that vecten sets; the run must use them.
+CHOSEN_BY_VECTEN = {
+    "profile": "--profile",
+    "profiles_dir": "--profiles-dir",
+    "project_dir": "--project-dir",
+    "target": "--target (-t)",
+}
 
 
 def split_env(args: list[str]) -> tuple[str | None, list[str]]:
@@ -80,34 +89,42 @@ def _before_separator(args: list[str]) -> list[str]:
     return args[: args.index("--")] if "--" in args else args
 
 
-def dbt_command(args: list[str]) -> tuple[str, ...]:
-    """The dbt command `args` invoke, resolved by dbt's own parser; empty when there is none."""
+def read_args(args: list[str]) -> tuple[tuple[str, ...], frozenset[str]]:
+    """The dbt command `args` invoke and the options they give, read with dbt's own parser.
+
+    Options are named as dbt's parameters are, so every spelling of one counts. The command is
+    empty when the arguments name none or dbt cannot read them.
+    """
     import click
     from dbt.cli.main import cli
 
     names: list[str] = []
-    command: click.Command | None = cli
+    given: set[str] = set()
+    command: click.Command = cli
     rest = list(args)
-    while isinstance(command, click.Group):
-        ctx = click.Context(command, info_name="dbt", resilient_parsing=True)
+    while True:
+        ctx = click.Context(command, info_name="dbt")
         try:
-            # The base class parses the group's own options and leaves the subcommand in place.
-            remaining = click.Command.parse_args(command, ctx, list(rest))
-            if not remaining:
+            # The parser records what the arguments say; the environment is not consulted.
+            opts, rest, _ = command.make_parser(ctx).parse_args(args=list(rest))
+            given.update(opts)
+            if not isinstance(command, click.Group) or not rest:
                 break
-            _, command, rest = command.resolve_command(ctx, remaining)
+            _, found, rest = command.resolve_command(ctx, rest)
         except click.ClickException:
-            return ()
-        if command is None:
-            return ()
+            return (), frozenset()
+        if found is None:
+            return (), frozenset()
+        command = found
         names.append(command.name or "")
     if isinstance(command, click.Group):
         names.append("")
-    return tuple(names) if all(names) else ()
+    return (tuple(names) if all(names) else ()), frozenset(given)
 
 
-def _flag_given(args: list[str], flag: str) -> bool:
-    return any(a == flag or a.startswith(f"{flag}=") for a in _before_separator(args))
+def dbt_command(args: list[str]) -> tuple[str, ...]:
+    """The dbt command `args` invoke, resolved by dbt's own parser; empty when there is none."""
+    return read_args(args)[0]
 
 
 def _allowed_list() -> str:
@@ -115,7 +132,7 @@ def _allowed_list() -> str:
 
 
 def check_prod_command(args: list[str]) -> tuple[str, ...]:
-    command = dbt_command(args)
+    command, given = read_args(args)
     if command not in PROD_COMMANDS:
         named = f"`dbt {' '.join(command)}`" if command else "these arguments name no dbt command"
         raise Failure(
@@ -124,17 +141,25 @@ def check_prod_command(args: list[str]) -> tuple[str, ...]:
             f"{_allowed_list()}; {named} is not one of them. The dbt_build DAG builds "
             f"{PROD_ENV}; run other commands against another environment.",
         )
-    if command == TEST and _flag_given(args, "--store-failures"):
+    chosen = sorted(given & CHOSEN_BY_VECTEN.keys())
+    if chosen:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"on {PROD_ENV}, vecten chooses the dbt project, profile and target, and checks "
+            "that one before the run; leave out "
+            + ", ".join(CHOSEN_BY_VECTEN[name] for name in chosen),
+        )
+    if command == TEST and "store_failures" in given:
         raise Failure(
             ExitCode.REFUSED,
             f"on {PROD_ENV}, `dbt test` must build nothing, and --store-failures writes a table "
             "for each failing test; leave it out",
         )
-    if command == TEST and _flag_given(args, "--exclude-resource-type"):
+    if command == TEST and "exclude_resource_types" in given:
         raise Failure(
             ExitCode.REFUSED,
             f"on {PROD_ENV}, `dbt test` leaves out unit tests, because each unit test creates "
-            "a temporary table, and --exclude-resource-type would bring them back; choose "
+            "a temporary table, and --exclude-resource-types would bring them back; choose "
             "tests with --select or --exclude, and run unit tests with `vecten dbt-build-local`",
         )
     return command
@@ -232,6 +257,20 @@ def _refuse_postgres(env: str) -> Failure:
     )
 
 
+def without_dbt_settings(environ: Mapping[str, str]) -> dict[str, str]:
+    """`environ` without any variable that sets a dbt option.
+
+    dbt reads each option from `DBT_ENGINE_<NAME>` before `DBT_<NAME>` and copies the first over
+    the second, so a shell's variable of either spelling would override what vecten sets.
+    """
+    from dbt.env_vars import KNOWN_ENGINE_ENV_VARS
+
+    known = {v.name for v in KNOWN_ENGINE_ENV_VARS} | {
+        v.old_name for v in KNOWN_ENGINE_ENV_VARS if v.old_name
+    }
+    return {k: v for k, v in environ.items() if k not in known and not k.startswith("DBT_ENGINE_")}
+
+
 def environment_dbt_env(
     root: Path, config: VectenConfig, env: str, args: list[str]
 ) -> dict[str, str]:
@@ -243,9 +282,11 @@ def environment_dbt_env(
     spec = _loader_spec(config, env)
     dbt_dir = root / "dbt"
     write_packages_yml(dbt_dir, config)
+    inherited = without_dbt_settings(os.environ) if env == PROD_ENV else None
     if env == PROD_ENV:
         # The check parses without the credential, so a refused run never reads it.
-        check_prod_project(dbt_dir, command, args, base_env(dbt_dir, profile_env(spec, "")))
+        check_env = base_env(dbt_dir, profile_env(spec, ""), inherited)
+        check_prod_project(dbt_dir, command, args, check_env)
     try:
         secret = store.call(lambda: store.provider.get_secret(LOADER_PRIVATE_KEY))
     except Failure as failure:
@@ -253,9 +294,7 @@ def environment_dbt_env(
             failure.code,
             f"{failure.message}; `vecten deploy --env {env}` generates the loader's key pair",
         ) from None
-    process_env = base_env(dbt_dir, {**profile_env(spec, secret), SCRUBBED_VAR: secret})
-    if env == PROD_ENV:
-        process_env.pop("DBT_STORE_FAILURES", None)
-        if command == TEST:
-            process_env.update(UNIT_TESTS_OFF)
+    process_env = base_env(dbt_dir, {**profile_env(spec, secret), SCRUBBED_VAR: secret}, inherited)
+    if command == TEST:
+        process_env.update(UNIT_TESTS_OFF)
     return process_env

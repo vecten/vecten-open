@@ -149,9 +149,13 @@ Every other command exits 4 before any secret is read, including `run`, `build`,
 `snapshot`, `clone`, `retry`, `run-operation` and any command not on that list. The dbt DAG
 builds `prod`. Some things would make an allowed command write, so on `prod`:
 
-- `test --store-failures` is refused, and a `DBT_STORE_FAILURES` set in your shell is ignored;
+- `--target`, `--profile`, `--profiles-dir` and `--project-dir` are refused: vecten checks the
+  project, profile and target it sets, and the run must use those;
+- dbt settings in your shell (`DBT_STORE_FAILURES`, `DBT_ENGINE_TARGET` and every other variable
+  that sets a dbt option) are ignored; `DBT_ENV_*` variables your project reads still pass;
+- `test --store-failures` is refused;
 - `test` leaves out unit tests, because each one creates a temporary table (they need no prod
-  data, and `vecten dbt-build-local` runs them), and `--exclude-resource-type` is refused because
+  data, and `vecten dbt-build-local` runs them), and `--exclude-resource-types` is refused because
   it would bring them back;
 - before `test` or `source freshness`, which execute the project's `on-run-start` and
   `on-run-end` hooks, vecten runs `dbt parse` without the key. It refuses when the project or any
