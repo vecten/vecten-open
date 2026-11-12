@@ -202,6 +202,48 @@ checklist for an upgrade. It names no private repository.
 record, lock, bundle and Dockerfile parts land after both. This change's delta of "Extensions are pip
 dependencies everywhere" is written over `project-extensions`' text.
 
+## Spike results
+
+Run on 2026-11-12 with uv 0.8.15 and git 2.52.0 on macOS, against `github.com` (public
+repositories only, no credential) and a local `git http-backend` behind TLS and basic
+authentication. Decision 2 stands as written; the laptop fallback is not needed.
+
+- **0.1, compile output.** `uv pip compile` of `acme-res @ git+…@acme-res/v1.2.0#subdirectory=…`,
+  where the prefixed tag is annotated, writes the peeled full commit in place of the tag and keeps
+  the subdirectory fragment, with `--universal` and with `--python-platform linux` alike. A full
+  commit in the input is written back unchanged. The `# tag` comment in the input is not carried
+  into the output, so `vecten lock` writes it into every lock itself.
+- **0.2, the `insteadOf` rewrite.** uv fetches by running `git`, and that `git` honours
+  `url.file://<copy>.insteadOf=https://<host>/<path>` passed as `GIT_CONFIG_COUNT`/`KEY`/`VALUE`
+  with `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`: a host that does not exist
+  resolves from the copy, by tag and by commit, and the compile output keeps the HTTPS URL. With
+  the rewrite pointing at a missing copy, the compile fails, so nothing else is consulted.
+- **0.2, uv's GitHub fast path.** For a `github.com` URL uv first asks
+  `api.github.com/repos/<owner>/<repo>/commits/<ref>` without a credential, and on success reads
+  `pyproject.toml` from `raw.githubusercontent.com` at that commit and never runs `git`, so the
+  copy is bypassed. A private repository answers 404 there, and uv then fetches through `git` and
+  the rewrite. The fast path reads metadata only, at the same full commit, so it cannot change
+  what is installed; it does tell GitHub's API the repository path and ref without a credential.
+  `UV_NO_GITHUB_FAST_PATH=1` turns it off: uv then reads only the copy, verified with the rewrite
+  pointing at a missing copy. `vecten lock` sets it whenever the records hold a git source, so the
+  locks resolve from the verified copy alone.
+- **0.3, fetch by commit.** `git fetch --depth 1 <url> <commit>` fetches a commit that is not at a
+  ref tip, alone, from GitHub and from `git http-backend` over protocol version 2, git's default;
+  the server needs no `uploadpack.allow*SHA1InWant` setting. A server that speaks only version 0
+  makes git refuse a commit no ref advertises (`Server does not allow request for unadvertised
+  object`): that is the host Decision 15's tag fallback serves. An unknown commit fails with
+  `upload-pack: not our ref <commit>`. `git ls-remote <url> refs/tags/<tag>` does not list the
+  peeled commit of an annotated tag; asking for `refs/tags/<tag>^{}` as well does.
+- **Error texts used to classify failures** (with `LC_ALL=C`): no credential, or a helper with no
+  answer, against a server that asks for one gives `unable to get password from user` or
+  `could not read Username … terminal prompts disabled` (GitHub answers this way for a missing
+  repository too); a refused token gives `Authentication failed for '<url>'`; a missing repository
+  behind an accepted token gives `repository '<url>' not found`.
+- git's own `credential-store` matches an entry's path exactly, not as a prefix. Vecten therefore
+  picks the `GIT_CREDENTIALS` entry itself (the longest path prefix on the host) and writes that
+  one entry into the fetch's credential file at the repository's exact path, with
+  `credential.useHttpPath` on; an entry without a path is written for the host alone.
+
 ## Risks and trade-offs
 
 - uv behaviour (spike): the `insteadOf` rewrite, the GitHub fast path, the full commit in compile output.

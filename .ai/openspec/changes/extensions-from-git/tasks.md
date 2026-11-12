@@ -6,10 +6,10 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 
 ## 0. Spike (no merge)
 
-- [ ] 0.1 `uv pip compile` writes the full commit for `@<tag>`, with `--universal` and with `--python-platform linux`.
-- [ ] 0.2 uv fetches through `git` and honours `url.file://<copy>.insteadOf=…` passed through `GIT_CONFIG_*` with `GIT_CONFIG_GLOBAL=/dev/null`; the lock keeps the HTTPS URL. Whether uv's GitHub fast path bypasses the copy.
-- [ ] 0.3 `git fetch --depth 1 <url> <commit>` on GitHub and on a local `git http-backend`.
-- [ ] 0.4 Record results in design.md; switch Decision 2 to its laptop fallback if 0.2 fails.
+- [x] 0.1 `uv pip compile` writes the full commit for `@<tag>`, with `--universal` and with `--python-platform linux`.
+- [x] 0.2 uv fetches through `git` and honours `url.file://<copy>.insteadOf=…` passed through `GIT_CONFIG_*` with `GIT_CONFIG_GLOBAL=/dev/null`; the lock keeps the HTTPS URL. Whether uv's GitHub fast path bypasses the copy.
+- [x] 0.3 `git fetch --depth 1 <url> <commit>` on GitHub and on a local `git http-backend`.
+- [x] 0.4 Record results in design.md; switch Decision 2 to its laptop fallback if 0.2 fails.
 
 ## 1. `vecten_shared.git_sources`
 
