@@ -21,8 +21,8 @@ ship before areas.
 - [x] 1.6 `AccessService.reconcile`: read actual grants per managed role (Snowflake through `READ_GRANTS`, Postgres from `relacl`, `nspacl` and `pg_default_acl`), revoke undesired ones in scope, honour `reconcile_drift`, log each, and record added, revoked and drift lists in access health
 - [x] 1.7 `check_scope` accepts USAGE on `READ_GRANTS`; the startup check compares the procedure's version and limits features when it is older
 - [ ] 1.8 `next` reports the provisioner-script rerun while the installed version is older
-- [ ] 1.9 unit: setup SQL and script text for both warehouses with and without the MCP; reconciliation against a fake adapter (revoke of an undesired schema grant, untouched grant outside scope, report mode, revokes before grants); `READ_GRANTS` bounds
-- [ ] 1.10 docker: Postgres stack: revoke `marts` from default, ship again, `analyst` holds nothing on `marts`; a hand grant in `marts` is revoked; a grant in another schema stays
+- [x] 1.9 unit: setup SQL and script text for both warehouses with and without the MCP; reconciliation against a fake adapter (revoke of an undesired schema grant, untouched grant outside scope, report mode, revokes before grants); `READ_GRANTS` bounds
+- [x] 1.10 docker: Postgres stack: revoke `marts` from default, ship again, `analyst` holds nothing on `marts`; a hand grant in `marts` is revoked; a grant in another schema stays
 - [ ] 1.11 live: revoke `marts` from default, `deploy`, rerun the script, rebuild a mart: `ANALYST` cannot read it
 - [ ] 1.12 deploy: upgrade a sandbox deployed with the previous release: the plan revokes nothing; the first reconciliation's access health is as expected
 - [ ] 1.13 Changelog: the upgrade steps and the warning about hand-made grants
