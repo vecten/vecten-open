@@ -469,12 +469,45 @@ def stack_project_name(project_root: Path, project_name: str) -> str:
     return f"vecten-{project_name}-{digest}"
 
 
+def _merge(table: Any, data: dict[str, Any], changed: dict[str, Any]) -> None:
+    """Make `table` hold `data`, touching only keys whose values differ.
+
+    A key the file does not hold is added only when `changed` (the values that differ from
+    their defaults) has it. Comments, blank lines and the order of everything unchanged stay as
+    the person wrote them.
+    """
+    for key in [k for k in table if k not in data]:
+        del table[key]
+    for key, value in data.items():
+        current = table.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            _merge(current, value, changed.get(key) or {})
+        elif current is None:
+            if key in changed:
+                table[key] = changed[key]
+        elif _plain(current) != value:
+            table[key] = value
+
+
+def _plain(item: Any) -> Any:
+    return item.unwrap() if hasattr(item, "unwrap") else item
+
+
 def save_config(project_root: Path, config: VectenConfig) -> None:
+    import tomlkit
+
     data = config.model_dump(mode="json", exclude_none=True)
     for optional in ("dependencies", "secrets", "settings"):
         if not data.get(optional):
             data.pop(optional, None)
-    write_text_atomic(project_root / CONFIG_FILE, tomli_w.dumps(data))
+    path = project_root / CONFIG_FILE
+    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if doc is None:
+        write_text_atomic(path, tomli_w.dumps(data))
+        return
+    changed = config.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+    _merge(doc, data, changed)
+    write_text_atomic(path, tomlkit.dumps(doc))
 
 
 def parse_warehouse_locator(url: str) -> WarehouseSection:
