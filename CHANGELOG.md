@@ -73,6 +73,34 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   next midnight.
 - `vecten dbt` on a Snowflake project without `--env` now names `--env` alongside
   `vecten dbt-build-local` in its refusal.
+- With the `mcp` component, the MCP's state is the only owner of the default group's reads
+  on `core` and `marts`: the Snowflake module, the provisioner script and the Postgres setup
+  SQL no longer grant `analyst` anything on a schema, and the MCP's first reconciliation
+  applies the grants it seeded. A revoke of `marts` from the default group now survives
+  `deploy`, `ship` and a rerun of the provisioner script
+  ([#51](https://github.com/vecten/vecten-open/issues/51)). Without the `mcp` component the
+  deploy grants them as before.
+- Reconciliation converges in both directions: it reads the read grants (`USAGE` on a schema,
+  current and future `SELECT`) that `analyst` and every group role hold in the convention and
+  `raw_<source>` schemas, and revokes those the state does not hold. Access health lists every
+  grant added, revoked or found drifting, and `vecten issues` reports drift kept under
+  `reconcile_drift = report` and an outdated install of the access procedures. The setting
+  `reconcile_drift` (`revoke`, the default, or `report`) is in the admin panel's settings.
+
+  **Upgrading.** Snowflake deployments with the MCP: `vecten deploy` forgets the old
+  `analyst_schema` and `analyst_future` resources without revoking them (the plan destroys
+  nothing); then an ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and the
+  run is confirmed with `--confirm-run`, which installs `VECTEN_ACCESS.READ_GRANTS` and the new
+  `READ_GRANT`. Until then the MCP keeps applying grants but neither lists nor revokes drift,
+  and `vecten issues` names the step. Postgres deployments need nothing beyond the next ship;
+  an existing Postgres warehouse needs no rerun.
+
+  **Warning.** A read grant made by hand to `analyst` or a group role inside `core`, `marts`,
+  `staging`, `snapshots` or a `raw_<source>` schema is revoked by the first reconciliation
+  after the upgrade unless the state holds a matching grant. Set `reconcile_drift` to `report`
+  before upgrading to see the list first, record the grants you want with `vecten grant`, then
+  set it back to `revoke`. Grants in other schemas or databases, and grants to roles the MCP
+  does not manage, are never touched.
 
 ### Fixed
 

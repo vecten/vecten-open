@@ -25,7 +25,7 @@ ship before areas.
 - [x] 1.10 docker: Postgres stack: revoke `marts` from default, ship again, `analyst` holds nothing on `marts`; a hand grant in `marts` is revoked; a grant in another schema stays
 - [ ] 1.11 live: revoke `marts` from default, `deploy`, rerun the script, rebuild a mart: `ANALYST` cannot read it
 - [ ] 1.12 deploy: upgrade a sandbox deployed with the previous release: the plan revokes nothing; the first reconciliation's access health is as expected
-- [ ] 1.13 Changelog: the upgrade steps and the warning about hand-made grants
+- [x] 1.13 Changelog: the upgrade steps and the warning about hand-made grants
 
 ## 2. Grants survive rebuilds
 

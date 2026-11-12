@@ -145,7 +145,15 @@ below. The MCP records the default group's grants on those two schemas once, at 
 start, and its reconciliation applies them; no deploy, ship or setup script grants `analyst`
 anything on a schema while `mcp` is a component, so revoking `marts` from the default group
 holds. Without the MCP, setup grants `analyst` the two schemas. Raw ingestion schemas,
-`staging`, and `snapshots` have no default grant. Memberships combine the permissions of all
+`staging`, and `snapshots` have no default grant.
+
+Reconciliation also reads the read grants `analyst` and every group role hold in the
+convention and `raw_<source>` schemas (on Snowflake through the owner-rights
+`VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and revokes those the
+state does not hold. The `reconcile_drift` setting, `revoke` by default, can be set to
+`report` to list them in access health without revoking. A grant in any other schema, or to a
+role the MCP does not manage, is left alone. While the installed procedures are older than the
+MCP, this step is skipped and access health names `vecten mcp provisioner-script`. Memberships combine the permissions of all
 assigned groups. Removing a grant from one group does not remove access provided by another.
 
 Use `vecten group`, `vecten grant`, `vecten revoke`, and `vecten reconcile` for group membership
