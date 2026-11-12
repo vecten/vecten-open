@@ -33,13 +33,13 @@ template can run on; B must land in the same release, before any public route re
 
 ## 4. Hostnames and public routes (PR C)
 
-- [ ] 4.1 Terraform, both clouds: `service_hostnames` variable with validation, records beside the built-in ones, `hosts[h].service_hostnames` output; `terraform test` for records per profile, apex refusal where domain equals zone, reserved labels, output parity
-- [ ] 4.2 Thin root template declares and passes the variable; `vecten deploy` passes it from `vecten.toml` (including `--plan-only`) and refuses an old root naming `vecten update`; tests of the rendered root and of the passed variable
-- [ ] 4.3 `EnvironmentOutputs`: `service_hostnames` per host, empty when absent; `bundle.py` appends them to `host.json`'s `hostnames`
-- [ ] 4.4 `stack/nginx.py`: a port-80 server and a TLS server per served service hostname; route locations with upgrade, timeouts, body size and PR #58's allow helper; the five identity headers cleared on every location; the gate cookie stripped; `/_vecten/health` exact location (reads only, fixed upstream path); 404 fallback; no route on built-in hostnames
-- [ ] 4.5 Laptop: `<label>.localhost` certificates from `stack/certs.py`, `allow` ignored
+- [x] 4.1 Terraform, both clouds: `service_hostnames` variable with validation, records beside the built-in ones, `hosts[h].service_hostnames` output; `terraform test` for records per profile, apex refusal where domain equals zone, reserved labels, output parity
+- [x] 4.2 Thin root template declares and passes the variable; `vecten deploy` passes it from `vecten.toml` (including `--plan-only`) and refuses an old root naming `vecten update`; tests of the rendered root and of the passed variable
+- [x] 4.3 `EnvironmentOutputs`: `service_hostnames` per host, empty when absent; `bundle.py` appends them to `host.json`'s `hostnames`
+- [x] 4.4 `stack/nginx.py`: a port-80 server and a TLS server per served service hostname; route locations with upgrade, timeouts, body size and PR #58's allow helper; the five identity headers cleared on every location; the gate cookie stripped; `/_vecten/health` exact location (reads only, fixed upstream path); 404 fallback; no route on built-in hostnames
+- [x] 4.5 Laptop: `<label>.localhost` certificates from `stack/certs.py`, `allow` ignored
 - [ ] 4.6 `ship`: poll each service health URL after the component polls, report states (`--json` too), never roll back for a service; report waiting routes and orphaned volumes; `next` offers `vecten deploy --env <env>` for waiting hostnames
-- [ ] 4.7 Tests: NGINX rendering (public, allow, websocket, body size, header clearing, health location, fallback); a Docker-tier test with a stub upstream that logs requests: forged `X-Vecten-*` headers never arrive, `POST` and an encoded path on the health location behave as specified, an unbound path is 404, a WebSocket upgrade passes; bundle tests for `host.json` hostnames with and without outputs
+- [x] 4.7 Tests: NGINX rendering (public, allow, websocket, body size, header clearing, health location, fallback); a Docker-tier test with a stub upstream that logs requests: forged `X-Vecten-*` headers never arrive, `POST` and an encoded path on the health location behave as specified, an unbound path is 404, a WebSocket upgrade passes; bundle tests for `host.json` hostnames with and without outputs
 - [ ] 4.8 **[deploy]** On AWS (standard) and on Scaleway (minimal): `vecten deploy` creates `portal.<domain>`, the next ship issues its certificate, the renewal timer's dry run (`certbot renew --dry-run`) covers it, and a public route answers over HTTPS
 - [ ] 4.9 **[deploy]** A ship from a GitHub-hosted runner reports a routed service's health while its route's `allow` excludes the runner
 - [ ] 4.10 **[deploy]** Apex binding (`@`) on a domain below its zone, on both clouds
