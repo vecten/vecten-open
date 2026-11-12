@@ -114,18 +114,43 @@ class SnowflakeAdapter:
         return f"REVOKE ROLE {quote(bound)} FROM ROLE {quote(role)};"
 
     def review_statement(self, bound):
-        return f"SHOW GRANTS TO ROLE {quote(bound)};"
+        """Every grant `bound` holds, through every role nested under it, for an administrator
+        to read: PROVISIONER cannot see a hierarchy it does not own."""
+        name = "'" + bound.upper().replace("'", "''") + "'"
+        return (
+            "-- Run as ACCOUNTADMIN. ACCOUNT_USAGE lags up to two hours. A row granted on\n"
+            "-- ACCOUNT, or a role such as ACCOUNTADMIN, SECURITYADMIN, SYSADMIN or USERADMIN,\n"
+            "-- makes the role unsafe to bind.\n"
+            "WITH RECURSIVE reach (role) AS (\n"
+            f"  SELECT {name}\n"
+            "  UNION ALL\n"
+            "  SELECT g.name FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES g\n"
+            "  JOIN reach r ON g.grantee_name = r.role\n"
+            "  WHERE g.granted_on = 'ROLE' AND g.privilege = 'USAGE' AND g.deleted_on IS NULL\n"
+            ")\n"
+            "SELECT g.grantee_name, g.privilege, g.granted_on, g.name\n"
+            "FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES g\n"
+            "JOIN reach r ON g.grantee_name = r.role WHERE g.deleted_on IS NULL\n"
+            "ORDER BY 1, 3, 4;"
+        )
 
-    def holds_role(self, role, bound):
+    def bound_role_problem(self, bound, managed):
+        # PROVISIONER cannot read a role it does not own; the review statement is the check.
+        return None
+
+    def granted_roles(self, role):
+        """The roles granted to the group's role, as SHOW GRANTS prints their names."""
         check_account(role)
         with self.control() as cursor:
             rows = cursor.execute(f"SHOW GRANTS TO ROLE {quote(role)}").fetchall()
             columns = [c[0].lower() for c in cursor.description]
-        for row in rows:
-            grant = dict(zip(columns, row, strict=True))
-            if grant["granted_on"] == "ROLE" and grant["name"].upper() == bound.upper():
-                return True
-        return False
+        grants = [dict(zip(columns, row, strict=True)) for row in rows]
+        return {
+            g["name"] for g in grants if g["granted_on"] == "ROLE" and g["privilege"] == "USAGE"
+        }
+
+    def holds_role(self, role, bound):
+        return bound.upper() in {name.upper() for name in self.granted_roles(role)}
 
     def drop_account(self, name):
         check_account(name)
@@ -259,7 +284,10 @@ class SnowflakeAdapter:
                         held.add((role, "future", schema, None, kind))
         return held
 
-    def check_scope(self, registry):
+    def check_scope(self, registry, bound=False):
+        """Refuse any grant PROVISIONER holds outside its stated set. While a group binds a
+        role, USAGE on a group role would let PROVISIONER read through that role, so only
+        OWNERSHIP of group roles is accepted."""
         with self.control() as cursor:
             rows = cursor.execute("SHOW GRANTS TO ROLE PROVISIONER").fetchall()
             columns = [c[0].lower() for c in cursor.description]
@@ -277,7 +305,10 @@ class SnowflakeAdapter:
                                 and registry.get(name.lower(), {}).get("kind") == "group"
                             )
                         )
-                        and privilege in {"OWNERSHIP", "USAGE"}
+                        and (
+                            privilege == "OWNERSHIP"
+                            or (privilege == "USAGE" and (not bound or name.lower() == "analyst"))
+                        )
                     )
                     or (
                         kind == "USER"

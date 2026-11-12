@@ -21,6 +21,10 @@ DONE = {
     "groups/confirm": "Binding confirmed.",
     "grant": "Grant saved.",
     "revoke": "Grant revoked.",
+    "revoke-refused": (
+        "Revoke recorded, but the warehouse refused the revoke; every reconciliation retries "
+        "it, and access health shows why."
+    ),
     "denied/set": "Deny list saved.",
     "reconcile": "Grants reconciled.",
     "gaps/status": "Gap status saved.",
@@ -452,7 +456,11 @@ def access(ctx):
 def access_grant(ctx):
     operation = "revoke" if ctx.form.get("action") == "revoke" else "grant"
     data = {k: ctx.form.get(k, "") for k in ("group", "kind", "target")}
-    ctx.call(operation, data, write=True)
+    result = ctx.call(operation, data, write=True) or {}
+    failures = (result.get("reconciliation") or {}).get("failures", [])
+    mine = (data["group"], data["kind"], data["target"], "revoke")
+    if any((f["group"], f["kind"], f["target"], f["operation"]) == mine for f in failures):
+        return done("/admin/access", "revoke-refused")
     return done("/admin/access", operation)
 
 

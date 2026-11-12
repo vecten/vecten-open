@@ -130,7 +130,24 @@ class AccessService:
             raise ValueError(f"role {role} already belongs to group {owner}")
         if self.state.get("provisioner_registry", role):
             raise ValueError(f"role {role} already belongs to a principal")
+        for group, binding in self.state.scan("bindings"):
+            if binding["bound_role"].lower() == role.lower():
+                raise ValueError(f"role {role} is bound to group {group}")
         return role
+
+    def _managed_roles(self):
+        """Every role the server or setup manages, which a bound role may neither be nor
+        reach."""
+        return (
+            {g["warehouse_role"].lower() for g in self.list_groups()}
+            | {name.lower() for name, _ in self.state.scan("provisioner_registry")}
+            | RESERVED
+        )
+
+    def _check_bound(self, bound):
+        problem = self.adapter.bound_role_problem(bound, self._managed_roles())
+        if problem:
+            raise ValueError(f"{bound} cannot be bound: {problem}")
 
     def bind(self, group, bound):
         """Record a role the client already has as bound to the group, pending until the
@@ -156,6 +173,11 @@ class AccessService:
                 raise ValueError(
                     f"group {group} already binds {held['bound_role']}: unbind it first"
                 )
+            if held:
+                # Binding the same role again prints its statement; the record, confirmed
+                # or not, stays as it is.
+                return self._binding(group, role, bound, confirmed=held["confirmed"])
+            self._check_bound(bound)
             self.state.put("bindings", group, {"bound_role": bound, "confirmed": False})
         return self._binding(group, role, bound, confirmed=False)
 
@@ -179,6 +201,7 @@ class AccessService:
         role = self.require_group(group)["warehouse_role"]
         with self.lock:
             bound = self._bound(group)["bound_role"]
+            self._check_bound(bound)
             if not self.adapter.holds_role(role, bound):
                 statement = self.adapter.bind_statement(bound, role)
                 raise ValueError(
@@ -188,7 +211,9 @@ class AccessService:
         return self._binding(group, role, bound, confirmed=True)
 
     def unbind(self, group):
-        """Forget the binding; the returned statement, run by an administrator, revokes it."""
+        """Forget the binding; the returned statement, run by an administrator, revokes it,
+        and until it runs reconciliation lists the role as one the group's role should not
+        hold."""
         role = self.require_group(group)["warehouse_role"]
         with self.lock:
             bound = self._bound(group)["bound_role"]
@@ -214,6 +239,10 @@ class AccessService:
                 self.membership(name, pid, False)
             self.adapter.drop_group(group["warehouse_role"])
             with self.state.transaction() as conn:
+                # Dropping the role took every grant it held, revokes refused above included.
+                for key, row in list(self.state.scan("applied_grants")):
+                    if row["group"] == name:
+                        self.state.remove("applied_grants", key, conn=conn)
                 conn.execute(delete(groups).where(groups.c.name == name))
                 self.state.remove("bindings", name, conn=conn)
                 self.state.remove("provisioner_registry", group["warehouse_role"], conn=conn)
@@ -303,8 +332,8 @@ class AccessService:
     def _apply(self, grant, source, allowed, done=None):
         """The relation kinds the warehouse refused a grant, each with its message; the grant
         holds for every other kind. A revoke that leaves anything refused raises, so its
-        applied record stays for the next pass. `done` collects the schemas applied before a
-        failure."""
+        applied record stays for the next pass. `done` collects the schemas attempted, the
+        failing one included."""
         done = [] if done is None else done
         role = self.require_group(grant["group"])["warehouse_role"]
         if grant["kind"] == "dataset":
@@ -312,9 +341,10 @@ class AccessService:
         else:
             refused = []
             for schema in source if grant["kind"] == "area" else [source]:
+                # Listed before the call: a refusal can follow a part of the grant.
+                done.append(schema)
                 kinds = self.adapter.schema_grant(role, schema, allowed) or []
                 refused += [f"{schema}: {kind}" for kind in kinds]
-                done.append(schema)
         if refused and not allowed:
             raise RuntimeError("the warehouse refused part of the revoke: " + "; ".join(refused))
         if refused:
@@ -334,15 +364,16 @@ class AccessService:
         if self._current(kind, source) and self._outdated():
             raise ValueError(f"areas need the current access procedures. {OUTDATED_FIX}")
         row = {"group": group, "kind": kind, "target": target}
+        key = self._key(group, kind, target)
         with self.lock:
             done = []
             try:
                 refused = self._apply(row, source, True, done)
             except Exception:
-                if kind == "area" and done:
+                # A grant held before this call stays; reconciliation retries it.
+                if kind == "area" and done and not self.state.get("applied_grants", key):
                     self._roll_back(row, done)
                 raise
-            key = self._key(group, kind, target)
             self.state.put("grants", key, row)
             self.state.put("applied_grants", key, dict(row, source=source))
         return dict(row, refused=refused) if refused else row
@@ -395,6 +426,7 @@ class AccessService:
             "drift": [],
             "database_future": [],
             "missing_bindings": [],
+            "unbound_roles": [],
         }
 
         def failed(key, row, operation, exc):
@@ -451,43 +483,51 @@ class AccessService:
                         logger.info("Granted %s %s to %s", row["kind"], row["target"], row["group"])
                 except Exception as exc:
                     failed(key, row, "grant", exc)
-                    if done and key not in applied:
-                        # The schemas granted before the failure stay revocable.
+                    if row["kind"] == "area" and done and key not in applied:
+                        # The schemas attempted before the failure stay revocable.
                         self.state.put("applied_grants", key, dict(row, source=done))
-            report["missing_bindings"] = self._missing_bindings(failures)
+            report["missing_bindings"], report["unbound_roles"] = self._bindings(failures)
         health = {"checked_at": time.time(), "failures": failures, **report}
         if outdated:
             health["outdated"] = outdated
         self.state.put("access_health", "reconciliation", health)
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
-    def _missing_bindings(self, failures):
-        """Confirmed bindings whose grant the group's role no longer holds."""
-        missing = []
-        for group, binding in sorted(self.state.scan("bindings")):
-            row = self.state.group(group)
-            if row is None or not binding["confirmed"]:
+    def _bindings(self, failures):
+        """Confirmed bindings whose grant a group's role no longer holds, and every role
+        nested under a group's role other than its confirmed binding."""
+        missing, unbound = [], []
+        bindings = dict(self.state.scan("bindings"))
+        for row in sorted(self.list_groups(), key=lambda g: g["name"]):
+            group, role = row["name"], row["warehouse_role"]
+            if group == "default":
                 continue
-            role, bound = row["warehouse_role"], binding["bound_role"]
+            binding = bindings.get(group) or {}
+            bound = binding.get("bound_role") if binding.get("confirmed") else None
             try:
-                held = self.adapter.holds_role(role, bound)
+                nested = self.adapter.granted_roles(role)
+                held = self.adapter.holds_role(role, bound) if bound else True
             except Exception as exc:
                 error = describe_error(exc)
                 failures.append(
                     {
                         "group": group,
                         "kind": "binding",
-                        "target": bound,
+                        "target": bound or "*",
                         "operation": "read",
                         "error": error,
                     }
                 )
-                logger.warning("Reading the binding of %s to %s failed: %s", bound, role, error)
+                logger.warning("Reading the roles granted to %s failed: %s", role, error)
                 continue
             if not held:
                 missing.append({"group": group, "role": role, "bound_role": bound})
                 logger.warning("%s no longer holds its bound role %s", role, bound)
-        return missing
+            for name in sorted(nested):
+                if bound is None or name.lower() != bound.lower():
+                    unbound.append({"group": group, "role": role, "granted_role": name})
+                    logger.warning("%s holds %s, which no confirmed binding names", role, name)
+        return missing, unbound
 
     def _undeclared(self, row):
         try:
@@ -660,6 +700,7 @@ class AccessService:
             "drift": [],
             "database_future": [],
             "missing_bindings": [],
+            "unbound_roles": [],
         }
 
     def model_changed(self, datasets):

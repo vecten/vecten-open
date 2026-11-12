@@ -283,6 +283,7 @@ class AdminService:
                     "drift": [],
                     "database_future": [],
                     "missing_bindings": [],
+                    "unbound_roles": [],
                 }
             return access.health()
         if operation == "settings":

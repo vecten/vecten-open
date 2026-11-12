@@ -205,3 +205,52 @@ def test_group_add_names_the_role_and_bind_prints_then_confirms(invoke, workdir,
     result = invoke("group", "unbind", "finance")
     assert result.exit_code == 0 and "REVOKE ROLE x FROM ROLE y;" in result.output
     assert calls[-1] == ("groups/unbind", {"group": "finance"})
+
+
+def test_a_revoke_the_warehouse_refused_says_so_rather_than_revoked(invoke, monkeypatch):
+    invoke("init", ".", "--name", "demo", "--users", "5", "--source", "hubspot")
+    failure = {
+        "group": "sales",
+        "kind": "schema",
+        "target": "marts",
+        "operation": "revoke",
+        "error": "the target still holds SELECT in D.MARTS",
+    }
+    partial = {"complete": False, "reconciled": 2, "failures": [failure]}
+
+    class Client:
+        def __init__(self, root, env):
+            pass
+
+        def call(self, operation, data=None):
+            return {**(data or {}), "reconciliation": partial}
+
+    monkeypatch.setattr("vecten.mcp_client.AdminClient", Client)
+    result = invoke("revoke", "--schema", "marts", "--group", "sales", "--env", "local")
+    assert result.exit_code == 5
+    assert "refused" in result.output and "still holds SELECT" in result.output
+    assert "Grant revoked" not in result.output
+
+
+def test_binding_a_confirmed_role_again_prints_the_statement_without_asking_to_confirm(
+    invoke, monkeypatch
+):
+    invoke("init", ".", "--name", "demo", "--users", "5", "--source", "hubspot")
+
+    class Client:
+        def __init__(self, root, env):
+            pass
+
+        def call(self, operation, data=None):
+            return {
+                "group": "finance",
+                "bound_role": "finance_analyst",
+                "confirmed": True,
+                "statement": "GRANT x TO y;",
+                "review": "SHOW x;",
+            }
+
+    monkeypatch.setattr("vecten.mcp_client.AdminClient", Client)
+    result = invoke("group", "bind", "finance", "finance_analyst")
+    assert result.exit_code == 0 and "GRANT x TO y;" in result.output
+    assert "--confirm" not in result.output and "confirmed" in result.output

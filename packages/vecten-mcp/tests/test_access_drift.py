@@ -36,6 +36,9 @@ class Adapter:
         self.reads.append(set(roles))
         return {full(grant) for grant in self.held if grant[0] in roles}
 
+    def granted_roles(self, role):
+        return set()
+
     def schema_grant(self, role, schema, grant=True):
         self.ops.append(("schema", role, schema, grant))
         if grant:
@@ -521,9 +524,11 @@ def test_a_half_applied_area_grant_is_rolled_back():
     adapter.ops.clear()
     with pytest.raises(RuntimeError, match="no helper"):
         access.grant("finance", "area", "finance")
+    # The failing schema is revoked too: a refusal may come after its USAGE was granted.
     assert adapter.ops == [
         ("schema", "finance", "core_finance", True),
         ("schema", "finance", "core_finance", False),
+        ("schema", "finance", "marts_finance", False),
     ]
     assert not [g for g in access.list_grants() if g["kind"] == "area"]
 
@@ -541,7 +546,7 @@ def test_a_half_applied_area_grant_that_cannot_be_rolled_back_is_recorded_for_re
     with pytest.raises(RuntimeError, match="marts_finance"):
         access.grant("finance", "area", "finance")
     leftovers = [row for _, row in access.state.scan("applied_grants") if row["kind"] == "area"]
-    assert [row["source"] for row in leftovers] == [["core_finance"]]
+    assert [row["source"] for row in leftovers] == [["core_finance", "marts_finance"]]
     result = access.reconcile()
     assert any(f["kind"] == "area" and f["operation"] == "revoke" for f in result["failures"])
 
@@ -570,3 +575,23 @@ def test_a_kind_the_warehouse_refuses_is_a_failure_with_its_message_and_the_gran
     assert failure["operation"] == "grant" and "unsupported feature 'ICEBERG'" in failure["error"]
     assert result["reconciled"] == 1 and not result["complete"]
     assert access.health()["failures"] == [failure]
+
+
+def test_a_failed_grant_again_of_a_held_area_rolls_nothing_back():
+    class RefusingMartsLater(Adapter):
+        refuse = False
+
+        def schema_grant(self, role, schema, grant=True):
+            if grant and self.refuse and schema.startswith("marts_"):
+                raise RuntimeError("no helper for marts_finance")
+            return super().schema_grant(role, schema, grant)
+
+    adapter = RefusingMartsLater()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    access.grant("finance", "area", "finance")
+    adapter.refuse = True
+    adapter.ops.clear()
+    with pytest.raises(RuntimeError):
+        access.grant("finance", "area", "finance")
+    assert not [op for op in adapter.ops if not op[3]]

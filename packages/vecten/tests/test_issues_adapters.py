@@ -591,3 +591,12 @@ def test_a_missing_binding_is_an_issue_printing_the_statement_to_rerun():
     assert issue.title == "finance's role no longer holds its bound role finance_analyst"
     assert "vecten group bind finance finance_analyst --env prod" in issue.resolution
     assert "vecten group unbind finance --env prod" in issue.resolution
+
+
+def test_a_role_nested_under_a_group_role_without_a_binding_is_an_issue():
+    nested = {"group": "finance", "role": "finance", "granted_role": "SYSADMIN"}
+    health = {"checked_at": 1792627200, "failures": [], "unbound_roles": [nested]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_nested_finance_SYSADMIN"
+    assert issue.title == "finance's role holds SYSADMIN, which no confirmed binding names"
+    assert "REVOKE" in issue.resolution and "vecten group bind finance" in issue.resolution

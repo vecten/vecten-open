@@ -398,6 +398,11 @@ STATE_FACTS = {
 
 
 def test_destroy_clears_the_facts_the_state_database_held(invoke, project, monkeypatch):
+    from vecten_shared.config import AreaDecl, save_config
+
+    config = load_config(project)
+    config.areas = {"finance": AreaDecl()}
+    save_config(project, config)
     set_facts(project, provisioner_script_run=True, **STATE_FACTS)
     with cloud(project, monkeypatch):
         r = invoke("destroy", "--env", "prod", "--confirm", "prod", "--json")

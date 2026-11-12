@@ -20,12 +20,23 @@ def _grant(ctx, env, dataset, schema, area, group, revoke=False):
     data = client.call(
         "revoke" if revoke else "grant", {"target": target, "kind": kind, "group": group}
     )
-    if data.get("reconciliation", {}).get("complete") is False:
+    reconciliation = data.get("reconciliation", {})
+    if reconciliation.get("complete") is False:
+        refused = [
+            f["error"]
+            for f in reconciliation.get("failures", [])
+            if (f.get("group"), f.get("kind"), f.get("target"), f.get("operation"))
+            == (group, kind, target, "revoke")
+        ]
+        message = (
+            "The revoke is recorded, but the warehouse refused it: "
+            + "; ".join(refused)
+            + ". Every reconciliation retries it."
+            if refused
+            else "Grant revoked; reconciliation of remaining grants is incomplete."
+        )
         raise Failure(
-            ExitCode.TOOL_FAILED,
-            "Grant revoked; reconciliation of remaining grants is incomplete. "
-            "Run vecten reconcile --json for details.",
-            data,
+            ExitCode.TOOL_FAILED, message + " Run vecten reconcile --json for details.", data
         )
     if kind != "dataset" and not revoke:
         _record_declared_access(root, env, client, kind, target)

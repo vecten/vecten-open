@@ -24,6 +24,9 @@ pytestmark = [pytest.mark.docker, pytest.mark.xdist_group("mcp-postgres-bound-ro
 MODEL = {"version": "0.1.1", "semantic_model": [{"name": "shop", "datasets": []}]}
 CLIENT_ROLE = """
 CREATE ROLE finance_analyst NOLOGIN;
+CREATE ROLE reads_everything NOLOGIN IN ROLE pg_read_all_data;
+CREATE ROLE wraps_everything NOLOGIN IN ROLE reads_everything;
+CREATE ROLE all_powerful NOLOGIN SUPERUSER;
 CREATE SCHEMA ledger;
 CREATE TABLE ledger.entries (id int);
 GRANT USAGE ON SCHEMA ledger TO finance_analyst;
@@ -74,7 +77,9 @@ def test_a_member_reads_through_the_bound_role_once_it_is_confirmed(stack):
     bound = stack.admin(stack.ada, "groups/bind", {"group": "finance", "role": "finance_analyst"})[
         "data"
     ]
-    assert bound["statement"] == 'GRANT "finance_analyst" TO "fin_readers" WITH INHERIT TRUE;'
+    assert bound["statement"] == (
+        'GRANT "finance_analyst" TO "fin_readers" WITH INHERIT TRUE, SET FALSE;'
+    )
     stack.admin(stack.ada, "groups/confirm", {"group": "finance"}, status=400)
     stack.pg.sql(bound["statement"])
     assert stack.admin(stack.ada, "groups/confirm", {"group": "finance"})["data"]["confirmed"]
@@ -87,13 +92,40 @@ def test_a_member_reads_through_the_bound_role_once_it_is_confirmed(stack):
     assert not reads_ledger(stack, "analyst")
 
 
-def test_the_provisioner_holds_no_membership_in_the_bound_role(stack):
-    direct = stack.pg.sql(
-        "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid=m.roleid "
-        "JOIN pg_roles u ON u.oid=m.member "
-        "WHERE r.rolname='finance_analyst' AND u.rolname='provisioner'"
-    )[0][0]
-    assert direct == 0
+def test_a_role_reaching_every_table_or_a_superuser_is_refused(stack):
+    stack.admin(stack.ada, "groups/create", {"name": "board"})
+    for role, reason in (
+        ("reads_everything", "pg_read_all_data"),
+        ("wraps_everything", "pg_read_all_data"),
+        ("all_powerful", "SUPERUSER"),
+        ("nobody_here", "no role named"),
+    ):
+        refused = stack.admin(
+            stack.ada, "groups/bind", {"group": "board", "role": role}, status=400
+        )
+        assert reason in refused["error"], (role, refused)
+    stack.admin(stack.ada, "groups/delete", {"name": "board"})
+
+
+def test_the_bound_role_is_granted_without_set_and_the_provisioner_never_inherits_it(stack):
+    [(inherit, setting)] = stack.pg.sql(
+        "SELECT m.inherit_option, m.set_option FROM pg_auth_members m "
+        "JOIN pg_roles r ON r.oid=m.roleid JOIN pg_roles g ON g.oid=m.member "
+        "WHERE r.rolname='finance_analyst' AND g.rolname='fin_readers'"
+    )
+    assert inherit and not setting
+    # Every role the provisioner inherits, however deep: finance_analyst is not among them.
+    inherited = {
+        row[0]
+        for row in stack.pg.sql(
+            "WITH RECURSIVE reach(oid) AS ("
+            " SELECT oid FROM pg_roles WHERE rolname='provisioner'"
+            " UNION SELECT m.roleid FROM pg_auth_members m JOIN reach ON m.member=reach.oid"
+            " WHERE m.inherit_option)"
+            " SELECT r.rolname FROM reach JOIN pg_roles r ON r.oid=reach.oid"
+        )
+    }
+    assert inherited == {"provisioner"}
     for privilege in ("USAGE", "SET"):
         assert not stack.pg.sql(
             "SELECT pg_has_role('provisioner', 'finance_analyst', %s)", params=(privilege,)
@@ -112,8 +144,21 @@ def test_a_binding_revoked_outside_the_server_is_listed_in_access_health(stack):
     ]
 
 
+def test_an_unbound_role_still_granted_is_listed_until_the_revoke_runs(stack):
+    stack.pg.sql('GRANT "finance_analyst" TO "fin_readers" WITH INHERIT TRUE, SET FALSE')
+    unbound = stack.admin(stack.ada, "groups/unbind", {"group": "finance"})["data"]
+    stack.admin(stack.ada, "reconcile", {})
+    health = stack.admin(stack.ada, "access-health")["data"]
+    assert health["unbound_roles"] == [
+        {"group": "finance", "role": "fin_readers", "granted_role": "finance_analyst"}
+    ]
+    stack.pg.sql(unbound["statement"])
+    stack.admin(stack.ada, "reconcile", {})
+    assert stack.admin(stack.ada, "access-health")["data"]["unbound_roles"] == []
+
+
 def test_deleting_the_group_drops_its_role_and_leaves_the_bound_one(stack):
-    stack.pg.sql('GRANT "finance_analyst" TO "fin_readers" WITH INHERIT TRUE')
+    stack.pg.sql('GRANT "finance_analyst" TO "fin_readers" WITH INHERIT TRUE, SET FALSE')
     stack.admin(stack.ada, "groups/delete", {"name": "finance"})
     roles = {row[0] for row in stack.pg.sql("SELECT rolname FROM pg_roles")}
     assert "fin_readers" not in roles and "finance_analyst" in roles

@@ -183,6 +183,7 @@ def test_a_group_is_created_with_a_role_and_binds_an_existing_one(panel):
         f"{'GRANT' if grant else 'REVOKE'} {bound} {role}"
     )
     adapter.review_statement = lambda bound: f"SHOW {bound}"
+    adapter.bound_role_problem = lambda bound, managed: None
     held = set()
     adapter.holds_role = lambda role, bound: (role, bound) in held
     response = post(
@@ -213,6 +214,28 @@ def test_a_group_is_created_with_a_role_and_binds_an_existing_one(panel):
     assert response.status_code == 200
     assert "REVOKE finance_analyst fin_readers" in text(response)
     assert panel.runtime.state.get("bindings", "finance") is None
+
+
+def test_a_revoke_the_warehouse_refuses_is_named_on_the_access_screen(panel):
+    panel.runtime.access.grant("default", "schema", "staging")
+    adapter = panel.adapter
+    original = adapter.schema_grant
+
+    def refuse(role, schema, grant=True):
+        if not grant:
+            raise RuntimeError("the target still holds SELECT in D.STAGING")
+        return original(role, schema, grant)
+
+    adapter.schema_grant = refuse
+    response = post(
+        panel,
+        "/admin/access/grant",
+        {"group": "default", "kind": "schema", "target": "staging", "action": "revoke"},
+        origin="/admin/access",
+    )
+    assert response.status_code == 303
+    page = text(panel.http.get(response.headers["location"]))
+    assert "refused the revoke" in page and "Grant revoked." not in page
 
 
 def test_denying_a_column_hides_it_from_the_next_describe(panel):

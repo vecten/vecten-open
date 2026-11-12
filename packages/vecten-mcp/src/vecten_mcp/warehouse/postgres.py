@@ -31,6 +31,22 @@ WHERE a.privilege_type = 'SELECT' AND d.defaclobjtype = 'r'
 """
 
 
+# The role and every role it is a member of, with any options: SET reaches as far as
+# INHERIT does.
+REACH = """
+WITH RECURSIVE reach(oid) AS (
+    SELECT oid FROM pg_catalog.pg_roles WHERE rolname = %s
+    UNION
+    SELECT m.roleid FROM pg_catalog.pg_auth_members m JOIN reach ON m.member = reach.oid
+)
+SELECT r.rolname, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication
+FROM reach JOIN pg_catalog.pg_roles r ON r.oid = reach.oid
+"""
+ATTRIBUTES = ("SUPERUSER", "BYPASSRLS", "CREATEROLE", "CREATEDB", "REPLICATION")
+# The managed services' administrator roles, which act as superusers.
+ADMIN_ROLES = frozenset({"rds_superuser", "cloudsqlsuperuser", "azure_pg_admin"})
+
+
 def identifier(name):
     return sql.Identifier(name)
 
@@ -121,7 +137,9 @@ class PostgresAdapter:
     def bind_statement(self, bound, role, grant=True):
         """What an administrator runs to make the group's role inherit `bound`; the
         provisioner holds no ADMIN on `bound`, so it cannot grant it."""
-        statement = "GRANT {} TO {} WITH INHERIT TRUE;" if grant else "REVOKE {} FROM {};"
+        statement = (
+            "GRANT {} TO {} WITH INHERIT TRUE, SET FALSE;" if grant else "REVOKE {} FROM {};"
+        )
         return sql.SQL(statement).format(identifier(bound), identifier(role)).as_string()
 
     def review_statement(self, bound):
@@ -133,6 +151,36 @@ class PostgresAdapter:
             .format(sql.Literal(bound))
             .as_string()
         )
+
+    def granted_roles(self, role):
+        """Every role the group's role is a member of, whatever the membership's options."""
+        check_account(role)
+        with self.control() as conn:
+            rows = conn.execute(
+                "SELECT r.rolname FROM pg_auth_members m "
+                "JOIN pg_roles g ON g.oid=m.member JOIN pg_roles r ON r.oid=m.roleid "
+                "WHERE g.rolname=%s",
+                (role,),
+            ).fetchall()
+        return {row[0] for row in rows}
+
+    def bound_role_problem(self, bound, managed):
+        """Why `bound` may not be bound, from the role and every role it is a member of."""
+        if bound != bound.lower():
+            return "a Postgres role is bound by its lower case name"
+        with self.control() as conn:
+            reach = conn.execute(REACH, (bound,)).fetchall()
+        if not reach:
+            return f"no role named {bound}"
+        for name, *flags in reach:
+            held = [flag for flag, on in zip(ATTRIBUTES, flags, strict=True) if on]
+            if held:
+                return f"{name} has {', '.join(held)}"
+            if name != bound and (name.startswith("pg_") or name in ADMIN_ROLES):
+                return f"{bound} is a member of {name}"
+            if name.lower() in managed:
+                return f"{bound} reaches {name}, a role the server manages"
+        return None
 
     def holds_role(self, role, bound):
         check_account(role)
@@ -280,7 +328,9 @@ class PostgresAdapter:
             rows = conn.execute(READ_GRANTS, (sorted(roles),)).fetchall()
         return {tuple(row) for row in rows}
 
-    def check_scope(self, registry):
+    def check_scope(self, registry, bound=False):
+        """Refuse any privilege the provisioner holds outside its stated set; its memberships
+        never inherit, bound roles or not."""
         registry = set(registry)
         with self.control() as conn:
             self._check_helpers(conn, registry)

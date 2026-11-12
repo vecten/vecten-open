@@ -46,6 +46,9 @@ class Adapter:
     def read_grants(self, roles):
         return set()
 
+    def granted_roles(self, role):
+        return set()
+
 
 class Auth:
     def __init__(self, state):
@@ -274,6 +277,7 @@ def test_access_health_reads_the_last_reconciliation(admin):
             "drift": [],
             "database_future": [],
             "missing_bindings": [],
+            "unbound_roles": [],
         }
         service.access.reconcile()
         data = client.get("/api/admin/access-health", headers=headers).json()["data"]
@@ -325,6 +329,7 @@ def test_a_group_role_is_named_and_an_existing_role_bound_over_the_admin_api(adm
         grant, f"{'GRANT' if grant else 'REVOKE'} {bound} {role}"
     )
     adapter.review_statement = lambda bound: f"SHOW {bound}"
+    adapter.bound_role_problem = lambda bound, managed: None
     held = set()
     adapter.holds_role = lambda role, bound: (role, bound) in held
     client, headers = http_admin(service)

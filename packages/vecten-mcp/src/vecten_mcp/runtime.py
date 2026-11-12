@@ -48,7 +48,8 @@ class Runtime:
     def start(self):
         if self.adapter:
             registry = dict(self.state.scan("provisioner_registry"))
-            self.adapter.check_scope(registry)
+            bound = any(True for _ in self.state.scan("bindings"))
+            self.adapter.check_scope(registry, bound=bound)
             self.adapter.cleanup_sessions()
         if self.model:
             self.model.reload()

@@ -152,6 +152,28 @@ def binding_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> 
     )
 
 
+def nested_role_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
+    group, granted = (str(entry.get(k, "?")) for k in ("group", "granted_role"))
+    return Issue(
+        id=mcp_issue_id("nested", group, granted),
+        source="mcp",
+        kind="ask",
+        title=cap(f"{group}'s role holds {granted}, which no confirmed binding names", TITLE_LIMIT),
+        resolution=(
+            f"Every member of {group} reads through {granted}. If it should, bind and confirm "
+            f"it (`vecten group bind {group} {granted} --env {ctx.env}`, then `--confirm`); "
+            "otherwise a warehouse administrator REVOKEs it from the group's role. The MCP "
+            "never revokes a role it does not manage."
+        ),
+        occurrences=1,
+        first_seen=None,
+        last_seen=iso(checked_at),
+        evidence=untrusted(
+            {k: sanitized(ctx, entry.get(k)) for k in ("group", "role", "granted_role")}
+        ),
+    )
+
+
 def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     if ctx.admin is None:
         raise SourceUnavailable("the admin API is not reachable from here")
@@ -170,6 +192,9 @@ def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     for entry in access.get("missing_bindings") or []:
         if isinstance(entry, dict):
             issues.append(binding_issue(ctx, entry, checked_at))
+    for entry in access.get("unbound_roles") or []:
+        if isinstance(entry, dict):
+            issues.append(nested_role_issue(ctx, entry, checked_at))
     if isinstance(access.get("outdated"), dict):
         issues.append(outdated_issue(ctx, access["outdated"], checked_at))
     return issues

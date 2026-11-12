@@ -81,3 +81,17 @@ def test_a_configuration_that_breaks_a_rule_is_never_saved(tmp_path):
     assert exc.value.code == ExitCode.CONFIG and "area hubspot" in exc.value.message
     assert (tmp_path / "vecten.toml").read_text() == before
     assert load_config(tmp_path).areas == {"hubspot": AreaDecl()}
+
+
+def test_an_area_no_longer_declared_leaves_the_seeded_facts_so_next_asks_again(tmp_path):
+    # The MCP forgets the grants of an area that left vecten.toml, so the fact that its
+    # declared access was applied goes with it.
+    loaded = _load(
+        tmp_path,
+        areas={"payroll": {}},
+        environments={"prod": {"area_access_applied": ["finance", "payroll"]}},
+    )
+    assert loaded.environments["prod"].area_access_applied == ["payroll"]
+    save_config(tmp_path, loaded)
+    raw = tomllib.loads((tmp_path / "vecten.toml").read_text())
+    assert raw["environments"]["prod"]["area_access_applied"] == ["payroll"]

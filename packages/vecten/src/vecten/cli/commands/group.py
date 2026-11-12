@@ -49,6 +49,14 @@ def bind(
         if confirm:
             data = client.call("groups/confirm", {"group": name})
             return Result(data=data, message=f"Group {name} reads through {role}.")
+        if data.get("confirmed"):
+            return Result(
+                data=data,
+                message=(
+                    f"The binding of {role} to {name} is confirmed. If the grant is gone, a "
+                    f"warehouse administrator runs: {data['statement']}"
+                ),
+            )
         return Result(
             data=data,
             message=(

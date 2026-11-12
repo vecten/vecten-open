@@ -484,6 +484,14 @@ class VectenConfig(Strict):
         return self
 
     @model_validator(mode="after")
+    def _applied_areas_are_declared(self) -> VectenConfig:
+        # The MCP forgets the grants of an area that left this file, so `next` seeds a later
+        # declaration of the same name again.
+        for facts in self.environments.values():
+            facts.area_access_applied = [a for a in facts.area_access_applied if a in self.areas]
+        return self
+
+    @model_validator(mode="after")
     def _airflow_needs_platform(self) -> VectenConfig:
         # Without the platform no host serves Airflow, so the list would restrict nothing.
         if self.airflow.allow and not self.has("platform"):

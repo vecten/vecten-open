@@ -14,6 +14,7 @@ class Adapter:
 
     def __init__(self, existing=()):
         self.roles, self.granted, self.ops = set(existing), {}, []
+        self.problems = {}
 
     def create_group(self, role):
         if role in self.roles:
@@ -35,6 +36,13 @@ class Adapter:
     def holds_role(self, role, bound):
         self.ops.append(("holds", role, bound))
         return bound in self.granted.get(role, set())
+
+    def granted_roles(self, role):
+        return set(self.granted.get(role, set()))
+
+    def bound_role_problem(self, bound, managed):
+        self.ops.append(("check", bound, frozenset(managed)))
+        return self.problems.get(bound)
 
     def schema_grant(self, role, schema, grant=True):
         self.ops.append(("schema", role, schema, grant))
@@ -207,6 +215,90 @@ def test_deleting_a_group_drops_its_own_role_and_leaves_the_bound_one():
     access.confirm_binding("finance")
     access.delete_group("finance")
     assert ("drop", "finance") in adapter.ops
-    assert not [op for op in adapter.ops if "finance_analyst" in op and op[0] != "holds"]
+    assert not [
+        op for op in adapter.ops if "finance_analyst" in op and op[0] not in {"holds", "check"}
+    ]
     assert "finance_analyst" in adapter.roles
     assert access.state.get("bindings", "finance") is None
+
+
+def test_binding_the_same_role_again_prints_the_statement_and_keeps_the_record():
+    adapter = Adapter()
+    access = service(adapter)
+    access.create_group("finance")
+    access.bind("finance", "finance_analyst")
+    adapter.granted["finance"] = {"finance_analyst"}
+    access.confirm_binding("finance")
+    adapter.granted["finance"] = set()
+    access.reconcile()
+    assert access.health()["missing_bindings"]
+    again = access.bind("finance", "finance_analyst")
+    assert again["confirmed"] is True and again["statement"] == "GRANT finance_analyst TO finance"
+    access.reconcile()
+    assert access.health()["missing_bindings"] == [
+        {"group": "finance", "role": "finance", "bound_role": "finance_analyst"}
+    ]
+
+
+def test_a_role_another_group_binds_cannot_become_a_group_role():
+    access = service()
+    access.create_group("finance")
+    access.bind("finance", "fin_readers")
+    with pytest.raises(ValueError, match="bound to group finance"):
+        access.create_group("board", role="fin_readers")
+
+
+def test_bind_and_confirm_refuse_a_role_the_warehouse_reports_too_powerful():
+    adapter = Adapter()
+    access = service(adapter)
+    access.create_group("finance")
+    adapter.problems["wrapper"] = "wrapper is a member of pg_read_all_data"
+    with pytest.raises(ValueError, match="pg_read_all_data"):
+        access.bind("finance", "wrapper")
+    assert access.state.get("bindings", "finance") is None
+    access.bind("finance", "finance_analyst")
+    adapter.granted["finance"] = {"finance_analyst"}
+    adapter.problems["finance_analyst"] = "finance_analyst is SUPERUSER"
+    with pytest.raises(ValueError, match="SUPERUSER"):
+        access.confirm_binding("finance")
+    assert access.state.get("bindings", "finance")["confirmed"] is False
+    managed = [op[2] for op in adapter.ops if op[0] == "check"]
+    assert managed and all({"analyst", "finance", "provisioner"} <= m for m in managed)
+
+
+def test_a_role_nested_under_a_group_role_other_than_its_binding_is_listed():
+    adapter = Adapter()
+    access = service(adapter)
+    access.create_group("finance")
+    access.bind("finance", "finance_analyst")
+    adapter.granted["finance"] = {"finance_analyst", "SYSADMIN"}
+    access.confirm_binding("finance")
+    result = access.reconcile()
+    assert access.health()["unbound_roles"] == [
+        {"group": "finance", "role": "finance", "granted_role": "SYSADMIN"}
+    ]
+    assert result["complete"]
+    access.unbind("finance")
+    access.reconcile()
+    assert {r["granted_role"] for r in access.health()["unbound_roles"]} == {
+        "SYSADMIN",
+        "finance_analyst",
+    }
+    adapter.granted["finance"] = set()
+    access.reconcile()
+    assert access.health()["unbound_roles"] == []
+
+
+def test_deleting_a_group_whose_revoke_fails_leaves_no_applied_record():
+    class Refusing(Adapter):
+        def schema_grant(self, role, schema, grant=True):
+            if not grant:
+                raise RuntimeError("refused")
+            super().schema_grant(role, schema, grant)
+
+    access = service(Refusing())
+    access.create_group("finance")
+    access.grant("finance", "schema", "marts")
+    access.delete_group("finance")
+    assert not [r for _, r in access.state.scan("applied_grants") if r["group"] == "finance"]
+    assert access.reconcile()["complete"]
