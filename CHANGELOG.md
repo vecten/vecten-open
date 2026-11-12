@@ -25,12 +25,29 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   rather than all of them) and `paused_at_creation`; `dbt_assets(config, groups)` narrows the
   awaited groups. A green build emits the `dbt_build` asset (`vecten://dbt/build`). A
   narrowed build skips `mark_built`, so the built commit still means the whole bundle built.
+- A project lists its own dbt packages in `dbt/project-packages.yml`: dbt hub packages pinned
+  to one release and public git repositories pinned to a full commit id. `vecten dbt`,
+  `vecten dbt-build-local` and the dbt DAG's `deps` task append them to the generated
+  `dbt/packages.yml`, and the file ships in the bundle. An unpinned, private, local or tarball
+  entry, a duplicate, or one named like a generated entry exits 6 before dbt runs. A deployed
+  host needs outbound HTTPS to `hub.getdbt.com` and GitHub, which both clouds' hosts already
+  have.
+- `vecten dbt --env <env> <args>` runs dbt against a deployed environment's Snowflake warehouse
+  as its `LOADER` user, with the key from that environment's secrets store passed to dbt
+  through its process environment only. On `prod` only commands that build nothing run
+  (`compile`, `test`, `ls`, `show`, `debug`, `parse`, `source freshness`, `docs generate`,
+  `deps`, `clean`, `docs serve`). `test` leaves out unit tests and refuses `--store-failures`,
+  and `test` and `source freshness` are refused while the project declares on-run hooks or a
+  test stores its failures. Every command runs on other environments. A Postgres project is
+  refused, because its deployed warehouse is on a private network.
 
 ### Changed
 
 - The `connector` skill names the `build_sync_dag` option for each scheduling request, and says
   that a new sync DAG syncs the latest whole day as soon as it is unpaused rather than at the
   next midnight.
+- `vecten dbt` on a Snowflake project without `--env` now names `--env` alongside
+  `vecten dbt-build-local` in its refusal.
 
 ### Fixed
 

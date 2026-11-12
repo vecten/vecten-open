@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import pytest
+import yaml
 
 from vecten.cli.commands import dbt as dbt_cmd
 from vecten.scaffold.params import ScaffoldParams
@@ -41,6 +44,27 @@ def test_dbt_refuses_a_drifted_convention_package(invoke, tmp_path, monkeypatch)
     assert "reinstall vecten" in result.stderr
 
 
+def test_dbt_merges_the_project_packages_before_running(invoke, tmp_path, monkeypatch):
+    calls = _recording_project(tmp_path, monkeypatch)
+    listed = "packages:\n  - package: dbt-labs/dbt_utils\n    version: 1.3.0\n"
+    Path("dbt/project-packages.yml").write_text(listed)
+    result = invoke("dbt", "deps")
+    assert result.exit_code == 0, result.stderr
+    assert calls == [["deps"]]
+    packages = yaml.safe_load(Path("dbt/packages.yml").read_text())["packages"]
+    assert packages[-1] == {"package": "dbt-labs/dbt_utils", "version": "1.3.0"}
+
+
+def test_dbt_refuses_an_unpinned_project_package(invoke, tmp_path, monkeypatch):
+    calls = _recording_project(tmp_path, monkeypatch)
+    listed = "packages:\n  - package: dbt-labs/dbt_utils\n    version: '>=1.0.0'\n"
+    Path("dbt/project-packages.yml").write_text(listed)
+    result = invoke("dbt", "deps")
+    assert result.exit_code == 6
+    assert calls == []
+    assert "dbt/project-packages.yml" in result.stderr and "exact" in result.stderr
+
+
 def _recording_project(tmp_path, monkeypatch, warehouse="postgres"):
     root = render_fixture(tmp_path, warehouse)
     monkeypatch.chdir(root)
@@ -78,14 +102,18 @@ def test_root_help_lists_dbt_with_its_help(invoke):
     assert "Run dbt against the project's profile" in result.stdout
 
 
-def test_dbt_on_a_snowflake_project_points_at_the_local_build(invoke, tmp_path, monkeypatch):
+def test_dbt_on_a_snowflake_project_points_at_env_and_the_local_build(
+    invoke, tmp_path, monkeypatch
+):
     calls = _recording_project(tmp_path, monkeypatch, warehouse="snowflake")
     result = invoke("dbt", "debug")
     assert result.exit_code == 3
     assert calls == []
     assert result.stderr == (
-        "error: vecten dbt needs a Snowflake connection, which arrives with deploy; "
-        "the credential-free path is `vecten dbt-build-local`\n"
+        "error: vecten dbt without --env runs against the laptop stack, which has no "
+        "Snowflake: run `vecten dbt --env <env> <args>` with a deployed environment's "
+        "credentials, or `vecten dbt-build-local` for the credential-free build on the "
+        "Snowflake emulation\n"
     )
 
 

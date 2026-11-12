@@ -25,7 +25,7 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 | `estimate` | Approximate monthly hosting cost per cloud and tier. | v0.1 |
 | `connector` | `add` wires a dlt source into the project; `run` syncs it locally. | v0.1 |
 | `raw` | `schema <source>` dumps the raw tables and columns for the model skill. | v0.1 |
-| `dbt` | Passes its arguments to dbt against the project's profile; output and exit code are dbt's own, the one command outside the `--json` contract. | v0.1 |
+| `dbt` | Passes its arguments to dbt against the project's profile; output and exit code are dbt's own, the one command outside the `--json` contract. Without `--env` it runs against the laptop stack's Postgres. A leading `--env <env>` runs against that deployed environment's Snowflake warehouse as its `LOADER` user, with the key from the environment's secrets store; on `prod` only commands that build nothing run, and a Postgres project is refused. Both write `dbt/packages.yml`, merging the project's pinned packages from `dbt/project-packages.yml`; see [warehouse](warehouse.md#dbt-against-a-deployed-environment). | v0.1 |
 | `dbt-build-local` | Builds and tests the dbt project with no credentials on a disposable Postgres container or the Snowflake emulation, then regenerates `osi/datasets.json`; `--check` fails when the committed file is stale. | v0.1 |
 | `secret` | `set <name>` stores a secret from the prompt or stdin; `list` shows names only. | v0.1 |
 | `github` | `init` creates the repository and pushes; `push` commits and pushes. | v0.1 |
