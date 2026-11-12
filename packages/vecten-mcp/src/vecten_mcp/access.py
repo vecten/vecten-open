@@ -172,9 +172,12 @@ class AccessService:
         return self.datasets[target]
 
     def _current(self, kind, source):
-        """Whether the grant needs procedures as recent as this server: an area schema is
-        outside what an older READ_GRANT accepts."""
-        schemas = source if kind == "area" else [source] if kind == "schema" else []
+        """Whether the grant reaches an area schema, which an older READ_GRANT refuses."""
+        if kind == "dataset":
+            parts = source.lower().split(".")
+            schemas = parts[-2:-1] if len(parts) > 1 else []
+        else:
+            schemas = source if kind == "area" else [source]
         return any(AREA_SCHEMA.fullmatch(schema) for schema in schemas)
 
     def _outdated(self):

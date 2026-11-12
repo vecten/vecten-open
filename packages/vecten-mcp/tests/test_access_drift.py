@@ -383,6 +383,17 @@ def test_an_older_procedure_refuses_area_grants_and_names_the_script():
     assert adapter.ops == []
 
 
+def test_an_older_procedure_refuses_a_dataset_grant_on_an_area_mart():
+    adapter = Adapter(version=ACCESS_VERSION - 1)
+    access = service(adapter, areas={"finance"})
+    access.datasets = {"finance_revenue": "warehouse.marts_finance.finance_revenue"}
+    access.create_group("finance")
+    adapter.ops.clear()
+    with pytest.raises(ValueError, match="vecten mcp provisioner-script"):
+        access.grant("finance", "dataset", "finance_revenue")
+    assert adapter.ops == []
+
+
 def test_an_area_grant_recorded_before_the_script_rerun_waits_and_the_rest_reconcile():
     adapter = Adapter()
     access = service(adapter, areas={"finance"})
