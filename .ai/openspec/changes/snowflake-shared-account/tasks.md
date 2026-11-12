@@ -1,12 +1,12 @@
 ## 1. One source for every Snowflake name (no behaviour change)
 
-- [ ] 1.1 `snowflake_names(config, env)` returns the account, suffix, database, warehouse, `analyst`, `loader` and `provisioner` roles, loader and provisioner users, integration, access schema and authentication policy; with fixed names each equals today's literal
-- [ ] 1.2 `vecten_platform.sync.destination.loader_connection` takes the loader's user and role from it; `SNOWFLAKE_LOADER_ROLE` goes
-- [ ] 1.3 `OutputsRuntimeProvider._snowflake_warehouse` takes the analyst role, database, warehouse and account from it; `SNOWFLAKE_ANALYST_ROLE` goes
-- [ ] 1.4 `vecten_mcp.runtime_setup.configured_runtime` signs in as the names' provisioner user and role, with the names' account and audience
-- [ ] 1.5 `identity_setup.provisioner_script`, `snowflake_access_helper` and `_leftover_grants` take the names; `snowflake_access.js` receives the analyst role, provisioner role and suffix as baked values
-- [ ] 1.6 `SnowflakeAdapter.check_scope` and `_grant` compare with the names; the CLI messages in `deploy/snowflake.py`, `deploy/run.py` and `cli/commands/deploy.py` name them
-- [ ] 1.7 Tests: the fixed names equal the literals on `release/0.1.1` for several projects and environments, and every caller reads them from the function (a test that greps the runtime packages for the old literals)
+- [x] 1.1 `snowflake_names(config, env)` returns the account, suffix, database, warehouse, `analyst`, `loader` and `provisioner` roles, loader and provisioner users, integration, access schema and authentication policy; with fixed names each equals today's literal
+- [x] 1.2 `vecten_platform.sync.destination.loader_connection` takes the loader's user and role from it; `SNOWFLAKE_LOADER_ROLE` goes
+- [x] 1.3 `OutputsRuntimeProvider._snowflake_warehouse` takes the analyst role, database, warehouse and account from it; `SNOWFLAKE_ANALYST_ROLE` goes
+- [x] 1.4 `vecten_mcp.runtime_setup.configured_runtime` signs in as the names' provisioner user and role, with the names' account and audience
+- [x] 1.5 `identity_setup.provisioner_script`, `snowflake_access_helper` and `_leftover_grants` take the names; `snowflake_access.js` receives the analyst role, provisioner role and suffix as baked values
+- [x] 1.6 `SnowflakeAdapter.check_scope` and `_grant` compare with the names; the CLI messages in `deploy/snowflake.py`, `deploy/run.py` and `cli/commands/deploy.py` name them
+- [x] 1.7 Tests: the fixed names equal the literals on `release/0.1.1` for several projects and environments, and every caller reads them from the function (a test that greps the runtime packages for the old literals)
 
 ## 2. Terraform
 
@@ -44,7 +44,7 @@
 
 ## 7. dbt and #53
 
-- [ ] 7.1 `vecten dbt --env` (#53, merged in #60) takes every connection name from `snowflake_names`
+- [x] 7.1 `vecten dbt --env` (#53, merged in #60) takes every connection name from `snowflake_names`
 - [ ] 7.2 Test: `profile_env` for a shared-account environment carries the suffixed user and role, the database and the warehouse
 
 ## 8. Docs
