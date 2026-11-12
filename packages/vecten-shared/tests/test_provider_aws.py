@@ -463,3 +463,24 @@ def test_constructing_the_provider_reads_nothing(tmp_path, monkeypatch):
     no_cloud_api(monkeypatch)
     provider = AwsRuntimeProvider(tmp_path / "absent", "prod")
     assert provider.env == "prod"
+
+
+def test_the_snowflake_connection_takes_every_name_from_the_snowflake_names(tmp_path, monkeypatch):
+    from functools import partial
+
+    from vecten_shared.provider import runtime, snowflake_names
+
+    aws_credentials(monkeypatch, tmp_path)
+    write_aws_project(
+        tmp_path,
+        outputs=mcp_only_outputs(),
+        warehouse={"kind": "snowflake", "existing": True, "account": "ACMEORG-PROD1"},
+    )
+    monkeypatch.setattr(runtime, "snowflake_names", partial(snowflake_names, shared_account=True))
+    spec = AwsRuntimeProvider(tmp_path, "prod").connection("prod", "warehouse")
+    assert (spec.role, spec.database, spec.warehouse, spec.account) == (
+        "ANALYST_ACME_PROD",
+        "ACME_PROD",
+        "ACME_PROD_WH",
+        "ACMEORG-PROD1",
+    )
