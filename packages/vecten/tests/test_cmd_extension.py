@@ -135,7 +135,7 @@ def test_resolution_and_installation_keep_release_constraints(tmp_path, monkeypa
 
     calls = []
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, copies=()):
         calls.append(args)
         assert "--constraint" in args
         constraints = Path(args[args.index("--constraint") + 1]).read_text()
@@ -154,7 +154,7 @@ def test_unknown_package_is_inspected_without_installing_into_cli(tmp_path, monk
 
     from vecten.extensions import inspect_package
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, copies=()):
         assert "--target" in args and "--no-deps" in args
         assert (
             "--python" not in args
@@ -192,7 +192,7 @@ def test_compile_targets_runtime_python_and_does_not_install(tmp_path, monkeypat
 
     calls = []
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, copies=()):
         calls.append(args)
         assert args[:2] == ["pip", "compile"]
         assert args[args.index("--python-version") + 1] == VERSIONS.python
@@ -234,7 +234,7 @@ def test_inspection_reads_the_extras_a_wheel_provides(tmp_path, monkeypatch, lin
 
     from vecten.extensions import inspect_package
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, copies=()):
         info = Path(args[args.index("--target") + 1]) / "acme_demo-1.0.dist-info"
         info.mkdir(parents=True)
         (info / "METADATA").write_text(

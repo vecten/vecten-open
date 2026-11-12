@@ -12,7 +12,7 @@ def test_an_editable_extension_imports_in_the_process_that_installed_it(tmp_path
     (source / "acme_fresh_pkg").mkdir(parents=True)
     (source / "acme_fresh_pkg" / "__init__.py").write_text("VALUE = 7\n")
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, copies=()):
         # An editable install of a src layout writes a path file, read at interpreter start.
         if "--editable" in args:
             (site / "_editable_impl_acme_fresh_pkg.pth").write_text(f"{source}\n")

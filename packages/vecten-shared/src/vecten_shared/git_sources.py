@@ -624,7 +624,8 @@ def fetch(
     credentials: Credentials | None,
     tag: str | None = None,
 ) -> Path:
-    """A bare repository at `into` holding `commit` alone under `SOURCE_REF`.
+    """A bare repository at `into` holding `commit` alone under `SOURCE_REF` and as its
+    detached HEAD.
 
     Where the host refuses to fetch by hash, `tag` is fetched instead and must still point at
     `commit`."""
@@ -662,6 +663,9 @@ def fetch(
             raise _failure(source, shown, result, run, credentials)
     if _peel(into, SOURCE_REF) != commit:
         raise GitSourceFailure(source, shown, Cause.COMMIT, _hint(Cause.COMMIT, source, None))
+    # A client of the copy, such as uv through its file:// rewrite, also fetches HEAD.
+    if _git(["update-ref", "--no-deref", "HEAD", commit], _local(into)).returncode != 0:
+        raise Failure(ExitCode.TOOL_FAILED, f"git could not record the fetched commit in {into}")
     return into
 
 

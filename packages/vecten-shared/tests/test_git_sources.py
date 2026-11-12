@@ -642,6 +642,16 @@ def test_fetch_a_commit_that_no_ref_points_at(served, tmp_path):
     assert _git("rev-parse", "--is-bare-repository", cwd=bare) == "true"
 
 
+def test_the_fetched_repository_serves_the_commit_as_its_head(served, tmp_path):
+    # uv reads the repository through a file:// rewrite and fetches its HEAD as well.
+    commits, _, _, good, source, _ = served
+    bare = fetch(
+        source("acme/extensions.git", commits.middle), commits.middle, tmp_path / "r", good
+    )
+    _git("clone", "-q", f"file://{bare}", str(tmp_path / "clone"), cwd=tmp_path)
+    assert _git("rev-parse", "HEAD", cwd=tmp_path / "clone") == commits.middle
+
+
 def test_fetch_a_public_commit_without_a_credential(served, tmp_path):
     commits, server, _, _, source, _ = served
     s = source("public/tools.git", commits.tagged)
