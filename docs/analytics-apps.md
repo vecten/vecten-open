@@ -6,9 +6,24 @@ runs the app, decides who may open it, and limits what data it reads. The MCP's 
 both of those, just as they do for questions people ask through the MCP.
 
 An app reads data through the MCP as its own service principal, the **app principal**,
-`svc_app_<app>`. The MCP lets that principal read only the datasets the app declares. It lets a
-person open the app only through a bound group that may itself read every one of those
-datasets.
+`svc_app_<app>`. The MCP lets that principal read only the datasets the app declares, with the
+warehouse roles of the groups the app admits. A person opens the app only through one of those
+groups. Every person the app admits sees the same data.
+
+Terms used on this page:
+
+- **Record**: `extensions.lock.json`, which `vecten lock` writes; it holds each extension's
+  declarations ([dependencies and locks](extensions.md#dependencies-and-locks)).
+- **Login route**: a route of an extension service that only signed-in members of its groups
+  reach; NGINX asks the gate before forwarding a request to it.
+- **Gate**: the MCP's check, at an app's or service's hostname, that a person is signed in and
+  in an admitted group. It is part of the extension services change and not merged on this
+  branch yet.
+- **Access health**: the MCP's report of access problems, read with the admin API's
+  `access-health` operation and shown by `vecten issues`.
+- **Reconciliation**: the MCP reapplying the desired grants to the warehouse, every fifteen
+  minutes and on `vecten reconcile` ([access and enforcement](mcp-identity.md#access-and-enforcement)).
+- **Model swap**: the MCP loading a newly shipped semantic model.
 
 ## What works today and what does not yet
 
@@ -21,13 +36,15 @@ datasets.
 | Admission, access health and `vecten issues` entries | Built |
 | The viewer recorded in the audit | Built |
 | The Analytics screen, the admin API read, the `list_apps` tool and the `/apps` page | Built |
-| The sign-in gate in front of an app's hostname | Not in this release yet. Until it is, NGINX answers every request to an app's route with `503` |
+| The gate in front of an app's hostname | Not merged yet. Until it is, NGINX answers every request to the app's login route with `503`; only the service's health path, `/_vecten/health`, is forwarded |
 | Publishing a `snowflake` app (Streamlit in Snowflake) | Specified, not built: it needs warehouse resources that a later change adds ([#40](https://github.com/vecten/vecten-open/issues/40)) |
 | `vecten ship` listing a `snowflake` app as not published | Specified, not built; the Analytics screen lists it as not published |
 | `USAGE` grants on a Streamlit object for the admitted groups | Specified, not built (with #40) |
 | Restricted-area grants ([#51](https://github.com/vecten/vecten-open/issues/51)) counted by admission | Specified, not built; only dataset and schema grants count |
 | A service's health shown on the Analytics screen | Not built: `vecten ship` prints it, and nothing passes it to the MCP |
 | A laptop app reading data | Not built: see [On the laptop](#on-the-laptop) |
+| Snowflake's own grammar refusing `LATERAL TABLE('<relation>')` | The app SQL check refuses it either way; the test that checks Snowflake itself (`test_app_sql_snowflake_live.py`) needs a live account and has not run |
+| A viewer mode, where an app reads as the viewing person | Not built; a later option (see [Every viewer sees the same data](#every-viewer-sees-the-same-data)) |
 
 ## Declaring an app
 
@@ -60,11 +77,11 @@ up to 30 lowercase letters, digits or hyphens.
 | `title`, `description` | What the listings show. The title must not be empty. |
 | `kind` | `container` (a web app run by Vecten) or `snowflake` (Streamlit in Snowflake). |
 | `datasets` | A non-empty list of distinct Ossie dataset names. These are the only data the app reads. |
-| `groups` | The MCP groups `extension add` suggests when it binds the app. |
+| `groups` | A non-empty list of the MCP groups `extension add` suggests when it binds the app. |
 | `runtime`, `entry` | `container` only. `runtime = "streamlit"` with `entry`, a `.py` file inside the installed package written as `<package>/<path>`. |
 | `command`, `port`, `health` | `container` only, for any other web framework: the command, the port it listens on and its health check. `health` defaults to `{"path": "/"}`. |
 | `components`, `memory_mb`, `cpus` | `container` only, the same as for a service. `memory_mb` defaults to 512. |
-| `entry` (snowflake) | A `snowflake` app's main file, as `<package>/<path>.py`. |
+| `entry` (snowflake) | Required for a `snowflake` app: its main file, as `<package>/<path>.py`. |
 
 `vecten lock` records each declaration in `extensions.lock.json`. It refuses a known key with a
 bad value and names the extension, the app and the key. Some keys conflict and are also refused:
@@ -82,6 +99,33 @@ replaces itself with `python -m streamlit run <file>` and these flags:
 `/_stcore/health`. Streamlit and the app's other packages go in the extension's `platform` extra
 (or `mcp`, if the app runs on the MCP host); see
 [dependencies per component](extensions.md#dependencies-per-component).
+
+A minimal `acme_sales/app.py`, using the client in
+[the app principal and its data](#the-app-principal-and-its-data) saved as
+`acme_sales/mcp_client.py`:
+
+```python
+import asyncio
+
+import pandas as pd
+import streamlit as st
+
+from acme_sales.mcp_client import revenue_by_region
+
+st.title("Sales overview")
+# The gate passes the viewer's email as X-Vecten-User once it is merged.
+viewer = st.context.headers.get("X-Vecten-User", "")
+
+
+@st.cache_data(ttl=300)
+def load():
+    # Every admitted viewer sees the same data, so one cached result serves them all.
+    result = asyncio.run(revenue_by_region(viewer))
+    return pd.DataFrame(result["rows"], columns=result["columns"])
+
+
+st.bar_chart(load(), x="region", y="revenue")
+```
 
 ## Binding an app in vecten.toml
 
@@ -139,9 +183,18 @@ The service receives:
 
 The app authenticates to the MCP with client credentials. It sends a `POST` to
 `https://mcp.<domain>/token` with `grant_type=client_credentials`, its client id and secret,
-and `resource=https://mcp.<domain>/mcp`. The access token lasts an hour. The principal belongs
-to the app's bound groups, so its warehouse user holds their roles. On top of that, the MCP
-holds it to the app's declared datasets:
+and `resource=https://mcp.<domain>/mcp`. The access token lasts an hour.
+
+**Which roles it reads with.** The principal is a member of the app's bound groups. It queries
+with the warehouse roles of only those groups that the app admits at that moment (see
+[who may open an app](#who-may-open-an-app)). A bound group the app does not admit, and any
+other group, never feeds a query. The MCP grants the principal those roles in the warehouse
+and revokes the others whenever admission or its membership changes. On Postgres, a query
+from an app principal is refused if its warehouse user holds any other role, for example one
+granted by hand. The principal cannot be added to a group outside its app's binding. The
+column deny lists of its groups apply combined, as they do for anyone in several groups.
+
+On top of its roles, the MCP holds it to the app's declared datasets:
 
 - **Tools.** An app principal sees only `describe`, `search`, `sql-exec` and `query_metrics`.
 - **`describe` and `search`** show only the declared datasets, their metrics and the
@@ -171,15 +224,22 @@ holds it to the app's declared datasets:
   query, as it does to anyone's. An app that needs more rows should aggregate in SQL or read
   metrics.
 
-**Every viewer sees the same data.** The app reads as its principal, not as the person viewing
-it, so every person the app admits sees the same rows. Per-person row policies and column masks
-do not apply inside an app. Admission is what keeps this safe: a person is admitted only
-through a group that may read every declared dataset.
+### Every viewer sees the same data
+
+The app reads as its principal, not as the person viewing it. All viewers of one app share one
+view: what the union of the admitted groups' roles may read. At the table level this is safe,
+because every admitted group may read every declared dataset. Row access policies, row-level
+security and column masks are evaluated against that union, though. If two admitted groups see
+different rows or masks of the same table, the app shows each viewer the union, whichever
+group admitted them. Bind such groups to separate apps. A viewer mode, where the app reads as
+the viewing person, is a later change.
 
 **The viewer is audited.** An app may pass the viewing person's email in an
-`X-Vecten-On-Behalf-Of` header. The MCP records it as `on_behalf_of` in the audit row, and only
-for an app principal. The header must appear once and be at most 254 characters, as a
-percent-encoded `local@domain`. The MCP never uses it to decide anything.
+`X-Vecten-On-Behalf-Of` header; once the gate is merged, the app reads it from the
+`X-Vecten-User` header the gate sends. The MCP records it, lower-cased, as `on_behalf_of` in the
+audit row, and only for an app principal. The header must appear once, hold at most 762 ASCII
+characters, and percent-decode to one visible `local@domain` of at most 254 characters.
+Otherwise nothing is recorded. The MCP never uses it to decide anything.
 
 No per-address rate limit applies to an app's tool calls. Only its token request is limited,
 like everyone's, to 60 per minute from one address.
@@ -188,7 +248,10 @@ A minimal client, for the MCP Python SDK 2.x (`mcp`, which brings `httpx2`) in t
 extra; with another client library, the protocol is the same:
 
 ```python
+import json
 import os
+import time
+from urllib.parse import quote
 
 import httpx2
 from mcp import ClientSession
@@ -196,35 +259,44 @@ from mcp.client.streamable_http import streamable_http_client
 
 MCP = os.environ["VECTEN_MCP_URL"]  # https://mcp.<domain>/mcp
 ISSUER = MCP.removesuffix("/mcp")
+_token = {"value": "", "expires_at": 0.0}
 
 
-def token():
-    response = httpx2.post(
-        ISSUER + "/token",
-        data={
-            "grant_type": "client_credentials",
-            "client_id": os.environ["APP_OVERVIEW_CLIENT_ID"],
-            "client_secret": os.environ["APP_OVERVIEW_CLIENT_SECRET"],
-            "resource": MCP,
-        },
-    )
+async def token():
+    """The access token, requested again a minute before it expires."""
+    if _token["expires_at"] - 60 > time.time():
+        return _token["value"]
+    async with httpx2.AsyncClient(timeout=30) as http:
+        response = await http.post(
+            ISSUER + "/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": os.environ["APP_OVERVIEW_CLIENT_ID"],
+                "client_secret": os.environ["APP_OVERVIEW_CLIENT_SECRET"],
+                "resource": MCP,
+            },
+        )
     response.raise_for_status()
-    return response.json()["access_token"]
+    body = response.json()
+    _token.update(value=body["access_token"], expires_at=time.time() + body["expires_in"])
+    return _token["value"]
 
 
 async def revenue_by_region(viewer):
-    headers = {"Authorization": "Bearer " + token(), "X-Vecten-On-Behalf-Of": viewer}
+    headers = {"Authorization": "Bearer " + await token()}
+    if viewer:
+        headers["X-Vecten-On-Behalf-Of"] = quote(viewer, safe="@")
     async with httpx2.AsyncClient(headers=headers, timeout=httpx2.Timeout(30, read=300)) as http:
         async with streamable_http_client(MCP, http_client=http) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                return await session.call_tool(
+                result = await session.call_tool(
                     "query_metrics", {"metrics": ["revenue"], "dimensions": ["region"]}
                 )
+    if result.isError:
+        raise RuntimeError(result.content[0].text)
+    return json.loads(result.content[0].text)
 ```
-
-Cache the token until shortly before it expires, and cache results with Streamlit's cache:
-every admitted viewer sees the same data, so cached results can be shared between viewers.
 
 ## Who may open an app
 
@@ -250,8 +322,12 @@ principal named `svc_app_<app>` for a bound app that is not marked as that app's
 reads everything its groups can. Review who uses it, then run `vecten app connect` with
 `--adopt`, or delete it.
 
-Admission is computed today, but the gate that uses it to admit people at an app's hostname is
-not in this release yet (see the table at the top).
+Admission is computed now. Once the gate is merged, it admits a person at an app's hostname
+only through these groups.
+
+An app principal whose groups differ from its app's binding, as after the binding changed, is
+an access-health entry too. `vecten app connect <extension>.<app> --env <env> --groups-only`
+sets its groups to the binding without changing its credentials.
 
 ## vecten app connect
 
@@ -267,8 +343,10 @@ It works in this order:
 2. It calls the admin API's `apps/connect`. The MCP reads the binding from the bundle it runs,
    so an app bound in your checkout but not shipped yet is refused there.
 3. The MCP creates `svc_app_<app>` under exactly that warehouse name, or reuses the existing
-   one. It marks the principal as the app's and makes it a member of exactly the bound groups:
-   a new principal leaves `default` unless the app is bound to it. Last, it issues new client
+   one. It marks the principal as the app's and makes it a member of the bound groups and no
+   others: a new principal leaves `default` unless the app is bound to it. In the warehouse it
+   holds only the roles of the groups the app admits (see
+   [which roles it reads with](#the-app-principal-and-its-data)). Last, it issues new client
    credentials, which replace every earlier client of the principal and end its sessions.
 4. The command stores the client id and secret under the app's credential names. With `--env
    <env>` they go to that environment's secrets store, and the name puts them in the scope of
@@ -280,8 +358,14 @@ principal (delete it first), a principal marked for another app, and an existing
 `svc_app_<app>` without `--adopt`. With `--adopt`, that principal is taken over: its groups
 become the app's, and its credentials are replaced. When a warehouse account named
 `svc_app_<app>` exists but no MCP principal does, the command asks for `--adopt` too.
-Adoption is refused while the account holds a role other than those of the bound groups,
-`default` and Snowflake's `PUBLIC`.
+Adoption is refused while the account holds a role other than those of the bound groups, of
+the groups the principal is in now (the connection revokes them), of `default`, and
+Snowflake's `PUBLIC`.
+
+**After changing an app's groups** in `vecten.toml`, ship, then run
+`vecten app connect <extension>.<app> --env <env> --groups-only`. It sets the principal's
+groups to the new binding and keeps its credentials, so the running app keeps working. It
+needs an existing, marked principal, and it cannot be combined with `--adopt`.
 
 **Running it again rotates the secret.** The previous secret stops working at once, so the
 running app cannot authenticate until `vecten ship --env <env>` delivers the new one (on the
@@ -296,7 +380,7 @@ that is already connected.
 ## On the laptop
 
 `vecten up` runs a bound container app whose binding has `local = true`, at
-`https://<hostname>.localhost:8443`. `vecten app connect <app> --env local` stores its
+`https://<hostname>.localhost:8443`. `vecten app connect <extension>.<app> --env local` stores its
 credentials in `.env`, and the service receives them at the next `vecten up`. **A laptop app
 reads no data.** No container on the laptop can reach `https://mcp.localhost:8443`: that name
 resolves to the container itself, NGINX listens on another port inside the network, and the

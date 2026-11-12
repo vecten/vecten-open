@@ -45,7 +45,7 @@ Afterwards you land on the overview. The first admins are the addresses listed u
 | Connected clients | Active client sessions across people | `connected_clients` tool |
 | Settings | Current value, default and range of each setting; change one | `read_settings` tool, `POST /api/admin/settings/set` |
 | Analytics | Every bound [analytics app](analytics-apps.md): title, extension and version, kind, URL, bound and admitted groups, datasets, its principal, its access-health entries and where its binding lives in `vecten.toml`; read-only | `list_apps` tool, `GET /api/admin/apps` |
-| (no screen) | Create or rotate an app's principal and its credentials | `vecten app connect`, `POST /api/admin/apps/connect`; no tool |
+| (no screen) | Create or rotate an app's principal and its credentials, or set its groups to the binding (`--groups-only`) | `vecten app connect`, `POST /api/admin/apps/connect`; no tool |
 
 ### Users and groups
 

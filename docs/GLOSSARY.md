@@ -40,7 +40,7 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Analytics app**: a dashboard an extension declares in the `vecten.apps` group and a project binds to MCP groups in `[apps.<extension>.<app>]` of `vecten.toml`; a `container` app runs as a service on its own hostname, and the MCP decides who may open it and what data it reads; see [analytics apps](analytics-apps.md).
 
-**App principal**: the service principal `svc_app_<app>` through which an analytics app reads data from the MCP; `vecten app connect` creates or rotates it, marks it as the app's and puts it in exactly the app's bound groups, and the MCP holds it to the app's declared datasets.
+**App principal**: the service principal `svc_app_<app>` through which an analytics app reads data from the MCP; `vecten app connect` creates or rotates it, marks it as the app's and puts it in the app's bound groups; it queries with the roles of the groups the app admits, and the MCP holds it to the app's declared datasets.
 
 **Ship**: deliver a project's code and semantic files to existing hosts, without changing infrastructure through Terraform.
 
