@@ -18,7 +18,7 @@ from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.provider.local import local_pg_published_port
-from vecten_shared.services import Bound, bound_services
+from vecten_shared.services import SERVICE_COMPONENT, Bound, bound_services
 from vecten_shared.sql import local_init_script_path, setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -301,7 +301,6 @@ SERVICES_NETWORK = "vecten-services"
 SERVICES_BRIDGE = "vecten-services"
 SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
 SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
-SERVICE_COMPONENT = "service"
 
 
 def _literal(value: str) -> str:

@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from vecten_shared.extension_record import Extension
 
 GROUP = "vecten.services"
+# The `VECTEN_COMPONENT` of a service's container.
+SERVICE_COMPONENT = "service"
 NAME = re.compile(r"[a-z][a-z0-9-]{0,30}")
 NAME_RULE = "a lowercase letter, then up to 30 lowercase letters, digits or hyphens"
 SERVICE_KEYS = ("command", "port", "health", "volume", "components", "memory_mb", "cpus", "routes")

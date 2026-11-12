@@ -6,7 +6,9 @@ secrets its extension's manifest, or the project, declared, and only those deliv
 component reading them, so a read fails the same way on the laptop and on any VM.
 
 Compose sets `VECTEN_COMPONENT` and passes declared secrets as environment variables; outside
-Compose the reader is the CLI's process, which acts as `platform` and reads `.env`.
+Compose the reader is the CLI's process, which acts as `platform` and reads `.env`. An extension's
+service (`VECTEN_COMPONENT=service`) holds no cloud identity, so it reads only its environment,
+and receives what its host component receives.
 """
 
 from __future__ import annotations
@@ -29,9 +31,11 @@ from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import Provider, get_provider
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.requirements import parse_requirement
+from vecten_shared.services import SERVICE_COMPONENT, bound_services
 from vecten_shared.versions import normalize_name
 
 COMPONENT_VAR = "VECTEN_COMPONENT"
+SERVICE_VAR = "VECTEN_SERVICE"
 _RECEIVERS = {"mcp": "the MCP server", "platform": "Airflow and the CLI"}
 
 
@@ -46,8 +50,10 @@ class Handle:
         env: str,
         component: str,
         root: Path,
+        service: str | None = None,
     ) -> None:
         self._owner = owner
+        self._service = service
         self._declared = frozenset(declared)
         self.settings = MappingProxyType(settings)
         self.env = env
@@ -64,13 +70,22 @@ class Handle:
             )
         receiver = component_for(name)
         if receiver != self._component:
+            reader = (
+                f"service {self._service}, which runs on the {self._component} host"
+                if self._service
+                else f"the {self._component} component"
+            )
             raise Failure(
                 ExitCode.REFUSED,
-                f"{name} is delivered to {_RECEIVERS[receiver]}, not to the {self._component} "
-                "component; declare a name for this component too",
+                f"{name} is delivered to {_RECEIVERS[receiver]}, not to {reader}; "
+                "declare a name for this component too",
             )
         if self._provider is None:
-            self._provider = _provider(self._root, self.env)
+            self._provider = (
+                LocalProvider(self._root, inside_compose=True)
+                if self._service
+                else _provider(self._root, self.env)
+            )
         return self._provider.get_secret(name)
 
 
@@ -92,7 +107,15 @@ def _root() -> Path:
     raise Failure(ExitCode.PREREQUISITE, "no vecten.toml here or above; set VECTEN_PROJECT_ROOT")
 
 
-def _loaded() -> tuple[Path, VectenConfig, dict[str, Extension], str, str]:
+def _service_host(config: VectenConfig, record: dict[str, Extension]) -> tuple[str, str]:
+    key = os.environ.get(SERVICE_VAR, "")
+    for bound in bound_services(config, record):
+        if bound.key == key:
+            return key, bound.host
+    raise Failure(ExitCode.CONFIG, f"service {key!r} is not bound in vecten.toml")
+
+
+def _loaded() -> tuple[Path, VectenConfig, dict[str, Extension], str, str, str | None]:
     root = _root()
     config = load_config(root)
     record = read_record(root)
@@ -105,11 +128,14 @@ def _loaded() -> tuple[Path, VectenConfig, dict[str, Extension], str, str]:
     env = os.environ.get("VECTEN_ENV") or LOCAL
     component = os.environ.get(COMPONENT_VAR) or "platform"
     check_settings(config, record, env)
-    return root, config, record, env, component
+    service = None
+    if component == SERVICE_COMPONENT:
+        service, component = _service_host(config, record)
+    return root, config, record, env, component, service
 
 
 def extension(name: str) -> Handle:
-    root, config, record, env, component = _loaded()
+    root, config, record, env, component, service = _loaded()
     wanted = normalize_name(name)
     listed = {normalize_name(r.name) for r in map(parse_requirement, config.extensions) if r}
     if wanted not in listed:
@@ -117,10 +143,10 @@ def extension(name: str) -> Handle:
     entry = record.get(wanted)
     secrets = entry.secrets if entry is not None else ()
     settings = effective_settings(config, record, wanted, env)
-    return Handle(wanted, secrets, settings, env, component, root)
+    return Handle(wanted, secrets, settings, env, component, root, service)
 
 
 def project() -> Handle:
-    root, config, record, env, component = _loaded()
+    root, config, record, env, component, service = _loaded()
     settings = effective_settings(config, record, PROJECT, env)
-    return Handle(PROJECT, tuple(config.secrets), settings, env, component, root)
+    return Handle(PROJECT, tuple(config.secrets), settings, env, component, root, service)
