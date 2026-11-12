@@ -45,6 +45,8 @@ def git_project(
     found: GitOrigin | None = None,
     digest: str = DIGEST,
     others: dict[str, Extension] | None = None,
+    build: tuple[str, ...] = ("hatchling==1.26.3", "pluggy==1.5.0"),
+    body: str = "httpx==0.28.1\n",
 ):
     """A project as `vecten lock` leaves it with one git-sourced extension, beside the in-repo
     extensions `others` names."""
@@ -56,7 +58,7 @@ def git_project(
             ("platform",),
             git=found,
             source_sha256=digest,
-            build_requires=("hatchling==1.26.3", "pluggy==1.5.0"),
+            build_requires=build,
         ),
         **(others or {}),
     }
@@ -69,7 +71,7 @@ def git_project(
         roots = locking.roots(c, pins, record, component)
         digest = locking.inputs_hash(component, [*roots, *locking.metadata_markers(record)])
         stamp = locking.stamp_line(component, digest)
-        (root / locking.LOCK_FILES[component]).write_text(f"{stamp}\n{line}\nhttpx==0.28.1\n")
+        (root / locking.LOCK_FILES[component]).write_text(f"{stamp}\n{line}\n{body}")
     return line
 
 
