@@ -211,7 +211,19 @@ def test_root_carries_state_key_names_size_and_public_key(tmp_path):
     # The tier is the environment's own, from its tfvars, not vecten.toml's.
     assert extra["warehouse_size"] == "MEDIUM"
     assert extra["loader_public_key"].startswith("-----BEGIN PUBLIC KEY-----")
-    assert set(extra) == {"database_name", "warehouse_name", "warehouse_size", "loader_public_key"}
+    assert extra["analyst_role_name"] == "ANALYST"
+    assert extra["loader_role_name"] == extra["loader_user_name"] == "LOADER"
+    assert extra["provisioner_role_name"] == "PROVISIONER"
+    assert set(extra) == {
+        "database_name",
+        "warehouse_name",
+        "analyst_role_name",
+        "loader_role_name",
+        "loader_user_name",
+        "provisioner_role_name",
+        "warehouse_size",
+        "loader_public_key",
+    }
     assert all("PRIVATE" not in value for value in extra.values())
     assert found.env["SNOWFLAKE_PRIVATE_KEY"] == DEPLOY_KEY
     assert DEPLOY_KEY not in repr(found)
@@ -302,3 +314,54 @@ def test_the_destroy_message_names_the_environments_provisioner_role():
     }
     message = _destroy_message(data, provisioner_role="PROVISIONER_ACME_DEV")
     assert "the users and roles PROVISIONER_ACME_DEV created stay in Snowflake" in message
+
+
+def test_the_root_takes_every_name_from_the_snowflake_names(tmp_path, monkeypatch):
+    from vecten.deploy import snowflake
+
+    root = render_snowflake(tmp_path / "snow")
+    _shared_names(monkeypatch, snowflake)
+    found = snowflake_root(root, load_config(root), "prod", deploy_store())
+    extra = dict(found.extra_vars)
+    assert (extra["database_name"], extra["warehouse_name"]) == ("ACME_PROD", "ACME_PROD_WH")
+    assert extra["analyst_role_name"] == "ANALYST_ACME_PROD"
+    assert extra["loader_role_name"] == extra["loader_user_name"] == "LOADER_ACME_PROD"
+    assert extra["provisioner_role_name"] == "PROVISIONER_ACME_PROD"
+
+
+def _drop_name_variables(root):
+    """The thin root a release before shared accounts rendered: no role or user variables."""
+    path = root / "deploy" / "terraform" / "snowflake" / "variables.tf"
+    kept = [
+        line
+        for line in path.read_text().splitlines()
+        if not any(name in line for name in ("_role_name", "loader_user_name"))
+    ]
+    path.write_text("\n".join(kept) + "\n")
+
+
+def test_a_thin_root_without_the_name_variables_keeps_the_fixed_names(tmp_path):
+    root = render_snowflake(tmp_path / "snow")
+    _drop_name_variables(root)
+    found = snowflake_root(root, load_config(root), "prod", deploy_store())
+    assert set(dict(found.extra_vars)) == {
+        "database_name",
+        "warehouse_name",
+        "warehouse_size",
+        "loader_public_key",
+    }
+
+
+def test_a_thin_root_without_the_name_variables_refuses_other_names(tmp_path, monkeypatch):
+    from vecten.deploy import snowflake
+
+    root = render_snowflake(tmp_path / "snow")
+    _drop_name_variables(root)
+    _shared_names(monkeypatch, snowflake)
+    store = deploy_store()
+    with pytest.raises(Failure) as caught:
+        snowflake_root(root, load_config(root), "prod", store)
+    assert caught.value.code == ExitCode.CONFIG
+    assert "vecten update" in caught.value.message
+    assert "analyst_role_name" in caught.value.message
+    assert store.written == []

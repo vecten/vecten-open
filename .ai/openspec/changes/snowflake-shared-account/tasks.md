@@ -10,10 +10,10 @@
 
 ## 2. Terraform
 
-- [ ] 2.1 `terraform/snowflake`: role names and the loader user's name become variables, with `local.roles` a map keyed by purpose; every object keeps the `vecten <project> <env>` comment
-- [ ] 2.2 The scaffolded Snowflake thin root declares the new variables; `deploy` passes them with `-var` beside `database_name` and `warehouse_name`
-- [ ] 2.3 `terraform test`: fixed names give today's resource names; a shared-account run gives the suffixed names; two runs with different environments share no name
-- [ ] 2.4 The rendered-root static test counts the new variables
+- [x] 2.1 `terraform/snowflake`: role names and the loader user's name become variables, with `local.roles` a map keyed by purpose; every object keeps the `vecten <project> <env>` comment
+- [x] 2.2 The scaffolded Snowflake thin root declares the new variables; `deploy` passes them with `-var` beside `database_name` and `warehouse_name`
+- [x] 2.3 `terraform test`: fixed names give today's resource names; a shared-account run gives the suffixed names; two runs with different environments share no name
+- [x] 2.4 The rendered-root static test counts the new variables
 
 ## 3. The layout setting and the account per environment
 

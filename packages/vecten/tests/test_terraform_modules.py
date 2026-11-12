@@ -263,7 +263,15 @@ def _render_snowflake(tmp_path: Path, components: list[str]) -> Path:
     return target / "deploy" / "terraform" / "snowflake"
 
 
-SNOWFLAKE_ROOT_VARS = {"database_name", "warehouse_name", "warehouse_size", "loader_public_key"}
+SNOWFLAKE_NAME_VARS = {
+    "database_name",
+    "warehouse_name",
+    "analyst_role_name",
+    "loader_role_name",
+    "loader_user_name",
+    "provisioner_role_name",
+}
+SNOWFLAKE_ROOT_VARS = SNOWFLAKE_NAME_VARS | {"warehouse_size", "loader_public_key"}
 
 
 def test_rendered_snowflake_root_passes_every_module_variable(tmp_path):
@@ -274,6 +282,7 @@ def test_rendered_snowflake_root_passes_every_module_variable(tmp_path):
     assert passed == module_variables
     root_variables = _declared_variables(root / "variables.tf")
     assert SNOWFLAKE_ROOT_VARS <= root_variables
+    assert len(SNOWFLAKE_ROOT_VARS) == 8
     assert re.search(r"^\s*account\s*=\s*var\.snowflake_account\s*$", main, re.M)
     for name in passed - {"account"}:
         assert re.search(rf"^\s*{name}\s*=\s*var\.{name}\s*$", main, re.M), name
@@ -301,10 +310,14 @@ SNOWFLAKE_ROOT_TEST = """
 mock_provider "snowflake" {}
 
 variables {
-  database_name     = "ACME"
-  warehouse_name    = "ACME_PROD_WH"
-  warehouse_size    = "XSMALL"
-  loader_public_key = "-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0B\\n-----END PUBLIC KEY-----"
+  database_name         = "ACME"
+  warehouse_name        = "ACME_PROD_WH"
+  analyst_role_name     = "ANALYST"
+  loader_role_name      = "LOADER"
+  loader_user_name      = "LOADER"
+  provisioner_role_name = "PROVISIONER"
+  warehouse_size        = "XSMALL"
+  loader_public_key     = "-----BEGIN PUBLIC KEY-----\\nMIIB\\n-----END PUBLIC KEY-----"
 }
 
 run "thin_root_plans_against_the_module" {

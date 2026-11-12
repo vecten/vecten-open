@@ -9,5 +9,9 @@ variable "snowflake_account" { type = string }
 # generates a new pair, so none of them belongs in tfvars.
 variable "database_name" { type = string }
 variable "warehouse_name" { type = string }
+variable "analyst_role_name" { type = string }
+variable "loader_role_name" { type = string }
+variable "loader_user_name" { type = string }
+variable "provisioner_role_name" { type = string }
 variable "warehouse_size" { type = string }
 variable "loader_public_key" { type = string }
