@@ -88,6 +88,11 @@ def path_problem(value: object, *, prefix: bool) -> str | None:
     return None
 
 
+def route_prefix(path: str) -> str:
+    """The segments a route path covers: `/api` and `/api/` both cover `/api` and below it."""
+    return path.rstrip("/") or "/"
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -202,9 +207,10 @@ def parse_service(extension: str, name: str, value: object) -> Declaration:
     seen: set[str] = set()
     for route_name, route_value in raw_routes.items():
         route, extra = _route(fail, route_name, route_value)
-        if route.path in seen:
-            raise fail(f"routes.{route_name}.path", f"{route.path} is served by another route")
-        seen.add(route.path)
+        prefix = route_prefix(route.path)
+        if prefix in seen:
+            raise fail(f"routes.{route_name}.path", f"{prefix} is served by another route")
+        seen.add(prefix)
         routes[route_name] = route
         unknown += extra
     if (routes or health_path is not None) and port is None:
