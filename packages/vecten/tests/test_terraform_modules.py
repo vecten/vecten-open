@@ -122,9 +122,24 @@ def test_terraform_test_passes(root):
 
 
 @pytest.mark.terraform
-def test_snowflake_upgrade_forgets_the_analyst_grants_without_revoking(tmp_path):
+@pytest.mark.parametrize(
+    ("test_file", "run", "prefix"),
+    [
+        ("upgrade.tftest.hcl", "the_upgrade_forgets_them_without_revoking", ""),
+        (
+            "upgrade_child.tftest.hcl",
+            "the_upgrade_forgets_them_inside_the_child_module",
+            "module.snowflake.",
+        ),
+    ],
+    ids=["root", "child"],
+)
+def test_snowflake_upgrade_forgets_the_analyst_grants_without_revoking(
+    tmp_path, test_file, run, prefix
+):
     """`terraform test` cannot assert on planned actions, so the upgrade file's verbose plan is
-    read here: every earlier ANALYST grant leaves state, and nothing is destroyed."""
+    read here: every earlier ANALYST grant leaves state, and nothing is destroyed, with the
+    module as the root and as a thin root's child."""
     if shutil.which("terraform") is None:
         pytest.skip("terraform is not installed")
     module = tmp_path / "snowflake"
@@ -132,7 +147,7 @@ def test_snowflake_upgrade_forgets_the_analyst_grants_without_revoking(tmp_path)
     env = _terraform_env()
     steps = [
         ["init", "-backend=false", "-input=false"],
-        ["test", "-filter=tests/upgrade.tftest.hcl", "-verbose"],
+        ["test", f"-filter=tests/{test_file}", "-verbose"],
     ]
     for args in steps:
         done = subprocess.run(
@@ -143,14 +158,14 @@ def test_snowflake_upgrade_forgets_the_analyst_grants_without_revoking(tmp_path)
             timeout=600,
         )
         assert done.returncode == 0, done.stdout + done.stderr
-    plan = done.stdout.split('run "the_upgrade_forgets_them_without_revoking"', 1)[1]
+    plan = done.stdout.split(f'run "{run}"', 1)[1]
     kept = r"# (\S+) will no longer be managed by Terraform, but will not be destroyed"
     forgotten = set(re.findall(kept, plan))
     assert forgotten == {
-        'snowflake_grant_privileges_to_account_role.analyst_schema["CORE"]',
-        'snowflake_grant_privileges_to_account_role.analyst_schema["MARTS"]',
+        f'{prefix}snowflake_grant_privileges_to_account_role.analyst_schema["CORE"]',
+        f'{prefix}snowflake_grant_privileges_to_account_role.analyst_schema["MARTS"]',
         *(
-            f'snowflake_grant_privileges_to_account_role.analyst_future["{schema}/{kind}"]'
+            f'{prefix}snowflake_grant_privileges_to_account_role.analyst_future["{schema}/{kind}"]'
             for schema in ("CORE", "MARTS")
             for kind in ("TABLES", "VIEWS")
         ),
