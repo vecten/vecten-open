@@ -1,5 +1,6 @@
 import json
 import subprocess
+import threading
 
 from vecten_shared.output import ExitCode
 from vecten_shared.versions import VERSIONS
@@ -56,6 +57,36 @@ def test_missing_tool_is_tool_failed(invoke, tmp_path, monkeypatch):
     result = invoke("dev", "build-images", "--json")
     assert result.exit_code == ExitCode.TOOL_FAILED
     assert json.loads(result.stdout)["error"] == "uv not found on PATH"
+
+
+def test_local_builds_of_the_two_images_overlap(invoke, tmp_path, monkeypatch):
+    checkout(tmp_path)
+    both_building = threading.Barrier(2, timeout=10)
+    built = []
+
+    def fake_run(cmd, **kw):
+        if cmd[:2] == ["docker", "build"]:
+            both_building.wait()
+            built.append(cmd[cmd.index("-t") + 1])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = invoke("dev", "build-images", "--json")
+    assert result.exit_code == 0, result.stdout
+    assert sorted(built) == sorted(json.loads(result.stdout)["images"])
+
+
+def test_a_failed_local_build_is_tool_failed(invoke, tmp_path, monkeypatch):
+    checkout(tmp_path)
+
+    def fake_run(cmd, **kw):
+        failed = cmd[:2] == ["docker", "build"] and "images/mcp" in " ".join(cmd)
+        return subprocess.CompletedProcess(cmd, 1 if failed else 0, "", "no space left")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = invoke("dev", "build-images", "--json")
+    assert result.exit_code == ExitCode.TOOL_FAILED
+    assert json.loads(result.stdout)["error"] == "docker failed: no space left"
 
 
 def test_build_context_admits_the_wheels_and_the_lock_inputs():

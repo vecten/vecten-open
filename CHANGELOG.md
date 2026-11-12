@@ -5,11 +5,20 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
 - Deployed hosts: `dags_paused_at_creation = true` in `deploy/envs/<env>.tfvars` makes that
   environment's new DAGs start paused, `[airflow] allow` in `vecten.toml` limits which networks
   reach `airflow.<domain>` (Airflow's health path stays open for `vecten ship`), and
   `root_volume_size_gb` in the tfvars sizes every VM's root volume on AWS and Scaleway. Every
   default is the current behaviour.
+
+### Fixed
+
+- `--env <env>` commands that reach or name the MCP (`vecten login`, `user`, `group`, `grant`,
+  `issues`, `mcp admin-link`, `mcp connection`, `mcp provisioner-script` and the sign-in items
+  of `next`) use the environment's own domain from `deploy/envs/<env>.tfvars`, not prod's
+  `[deploy] domain` ([#36](https://github.com/vecten/vecten-open/issues/36)).
 
 ## [0.1.0] - 2026-11-09
 

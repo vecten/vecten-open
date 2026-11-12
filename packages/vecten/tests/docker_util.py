@@ -1,3 +1,4 @@
+import random
 import shutil
 import socket
 import subprocess
@@ -107,6 +108,24 @@ def free_port() -> int:
             port = s.getsockname()[1]
         if port != LOCAL_PG_PUBLISHED_PORT:
             return port
+
+
+def stack_pg_port() -> int:
+    """A free port for a test stack's published Postgres, below the kernel's ephemeral range.
+
+    The kernel hands any port in that range, 55432 included, to an outbound connection as its
+    local end, and such a socket can make `vecten up` fail to publish the port. Linux's default
+    range starts at 32768 and macOS's at 49152, so only a listener takes a port below both, and
+    the bind here sees a listener.
+    """
+    while True:
+        port = random.randrange(20000, 32768)
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
 
 
 @contextmanager
