@@ -134,9 +134,9 @@ The sign-in flow:
    `https://<hostname>/_vecten/gate/start` on the service's own hostname, carrying the path the
    person asked for.
 2. `start`, answered by the MCP server through NGINX, sets the state cookie
-   `vecten-gate-state` on the service's hostname, holding a random value for ten minutes. The
-   cookie is limited to the path `/_vecten/gate`, which NGINX forwards only to the MCP, so the
-   service never sees it. `start` then redirects to the MCP's
+   `__Host-vecten-gate-state` on the service's hostname, holding a random value for 600
+   seconds (HTTPS only, hidden from scripts, sent to that hostname only, `SameSite=Lax`). It
+   then redirects to the MCP's
    `https://mcp.<domain>/gate/authorize` with only a hash of that value. The MCP signs the
    person in through its configured identity backend (OpenID Connect, password, or one an
    extension provides). A person already signed
@@ -145,9 +145,9 @@ The sign-in flow:
    valid for at most 60 seconds and only for that hostname and that hash. The callback, again
    answered by the MCP, accepts the code only together with the state cookie's value, so a
    callback address leaked through a log is useless without the browser that started the
-   sign-in. It creates a gate session and sets the cookie `__Host-vecten-gate` (HTTPS only,
-   hidden from scripts, sent to that hostname only), then returns the browser to the path it
-   asked for.
+   sign-in. It creates a gate session, sets the cookie `__Host-vecten-gate` (with the same
+   attributes) holding the session's id, clears the state cookie, and returns the browser to
+   the path it asked for.
 4. Every later request is checked again, against the person's current state and groups: adding
    someone to a group, or disabling them, takes effect on their next request.
 
@@ -155,14 +155,17 @@ A signed-in person outside the route's groups gets a 403 "No access" page from N
 link to sign out and use another account; a person with no gate session is redirected to sign
 in, as above. The MCP starts a sign-in only for a
 hostname that a `login` route binds in the `vecten.toml` it was shipped with, and returns only to
-a path on that hostname, so the gate cannot send a browser to another site. Disabled people and
-people not provisioned in the MCP are refused, and services that sign in to the MCP with client
-credentials never get a gate session.
+a path on that hostname, so the gate cannot send a browser to another site. Disabled people are
+refused, and so is a person the MCP has not provisioned with a warehouse account: they get no
+gate session until an admin adds them (on the laptop, run `vecten user add` for yourself).
+Services that sign in to the MCP with client credentials never get a gate session.
 
 A gate session ends at the MCP's maximum session lifetime, when the person is disabled or
-deleted, when the person sets a new password through a link, and at
-`https://<hostname>/_vecten/gate/logout`. A WebSocket opened before that stays open until it
-reconnects.
+deleted, when the person sets a new password through a link, and when the person signs out.
+`https://<hostname>/_vecten/gate/logout` shows a confirmation form; submitting it ends the gate
+session for that hostname and the person's sign-ins on the MCP's own browser pages, so the next
+sign-in asks for credentials again. Gate sessions on other service hostnames stay until they
+end on their own. A WebSocket opened before a session ends stays open until it reconnects.
 
 The gate depends on the MCP server: while it is down, `login` routes are down too, and `public`
 routes keep working. Under `standard` the platform host's NGINX asks the MCP over HTTPS at
@@ -200,10 +203,10 @@ them trustworthy there:
   the stack can send it a request. Every bound service on a host shares that network, though,
   so another service on the same host can reach its port directly: trust the headers only as
   far as you trust every service bound on that host.
-- **The service never sees the gate cookie.** NGINX removes `__Host-vecten-gate` from the
-  `Cookie` header it forwards, so a service holds no credential it could replay to the gate.
-  A service must not set a cookie of that name itself: NGINX answers 400 to a request that
-  still carries one after the removal.
+- **The service never sees the gate's cookies.** NGINX removes `__Host-vecten-gate` and
+  `__Host-vecten-gate-state` from the `Cookie` header it forwards, so a service holds no
+  credential it could replay to the gate. A service must not set a cookie of either name
+  itself: NGINX answers 400 to a request that carries a second copy of either.
 
 In practice: key what you store about a person by `X-Vecten-Principal`, since an email can
 change; read the groups from each request rather than remembering them; and on a service with
