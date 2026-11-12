@@ -61,6 +61,7 @@ def connect_app(root: Path, key: str, env: str, *, adopt: bool = False) -> dict:
     data = AdminClient(root, env).call("apps/connect", {"name": key, "adopt": adopt})
     credentials = data["credentials"]
     values = (credentials["client_id"], credentials["client_secret"])
+    stored: list[str] = []
     try:
         for name, value in zip(names, values, strict=True):
             if store is None:
@@ -68,17 +69,30 @@ def connect_app(root: Path, key: str, env: str, *, adopt: bool = False) -> dict:
             else:
                 store.call(lambda name=name, value=value: store.provider.put_secret(name, value))
                 record_cloud_write(root, env, name, from_local=False)
+            stored.append(name)
     except (Failure, OSError) as exc:
+        missing = [name for name in names if name not in stored]
+        held = f"{stored[0]} is stored and " if stored else ""
         raise Failure(
             ExitCode.TOOL_FAILED,
-            f"storing {names[1]} failed and the app's previous secret no longer works; run "
-            f"`vecten app connect {key} --env {env}` again",
+            f"{held}{' and '.join(missing)} is not, and the app's previous secret no longer "
+            f"works; run `vecten app connect {key} --env {env}` again, which rotates the "
+            "secret once more and stores both",
         ) from exc
     where = ".env" if store is None else f"the {env} secrets store"
+    restart = "`vecten up`" if store is None else f"`vecten ship --env {env}`"
+    if data["created"]:
+        after = LAPTOP_NOTE if store is None else "the next ship delivers them to the app."
+    else:
+        after = (
+            "The running app still holds the previous secret, which no longer works, so it "
+            f"cannot authenticate until {restart} delivers the new one."
+        )
+        if store is None:
+            after += " " + LAPTOP_NOTE
     message = (
         f"Connected {key} as {data['principal']['warehouse_name']} in "
-        f"{', '.join(data['groups'])}. Stored {names[0]} and {names[1]} in {where}; "
-        + (LAPTOP_NOTE if store is None else "the next ship delivers them to the app.")
+        f"{', '.join(data['groups'])}. Stored {names[0]} and {names[1]} in {where}; {after}"
     )
     return {
         "app": key,

@@ -57,9 +57,17 @@ class FakeAdmin:
     failure: Failure | None = None
     created = True
     secret = SECRET
+    # The shipped apps the admin API lists, or a Failure it raises.
+    listing: object = []
 
     def __init__(self, root, env):
         self.env = env
+
+    def read(self, operation, params):
+        assert operation == "apps"
+        if isinstance(self.listing, Failure):
+            raise self.listing
+        return self.listing
 
     def call(self, operation, data=None):
         if self.failure:
@@ -116,6 +124,7 @@ def fake_admin(project, monkeypatch):
     monkeypatch.setattr(FakeAdmin, "failure", None)
     monkeypatch.setattr(FakeAdmin, "created", True)
     monkeypatch.setattr(FakeAdmin, "secret", SECRET)
+    monkeypatch.setattr(FakeAdmin, "listing", [])
     monkeypatch.setattr("vecten.mcp_client.AdminClient", FakeAdmin)
 
 
@@ -231,6 +240,39 @@ def test_a_store_failure_after_rotation_says_to_run_it_again(
     assert SECRET not in result.stdout + result.stderr
 
 
+def test_a_store_failure_says_what_is_stored_and_that_a_rerun_fixes_it(
+    invoke, project, fake_admin, monkeypatch
+):
+    def secret_fails(self, name, value):
+        if name.endswith("_SECRET"):
+            raise RuntimeError(f"cannot write {value}")
+        STORE[name] = value
+
+    monkeypatch.setattr(FakeCloud, "put_secret", secret_fails)
+    result = connect(invoke, "--env", "prod")
+    error = json.loads(result.stdout)["error"]
+    assert "APP_OVERVIEW_CLIENT_ID is stored" in error
+    assert "APP_OVERVIEW_CLIENT_SECRET is not" in error
+    assert "the app's previous secret no longer works" in error
+    assert "stores both" in error
+    assert SECRET not in result.stdout + result.stderr
+
+
+def test_a_rotation_says_the_running_app_stops_authenticating_until_a_ship(
+    invoke, project, fake_admin, monkeypatch
+):
+    monkeypatch.setattr(FakeAdmin, "created", False)
+    message = json.loads(connect(invoke, "--env", "prod").stdout)["message"]
+    assert "cannot authenticate until" in message
+    assert "vecten ship --env prod" in message
+
+
+def test_a_local_rotation_names_up(invoke, project, fake_admin, monkeypatch):
+    monkeypatch.setattr(FakeAdmin, "created", False)
+    message = json.loads(connect(invoke, "--env", "local").stdout)["message"]
+    assert "cannot authenticate until" in message and "vecten up" in message
+
+
 def deployed(project):
     config = load_config(project)
     facts = config.environments["prod"]
@@ -244,21 +286,64 @@ def deployed(project):
     return config
 
 
+def listed(principal):
+    return [{"app": "acme-sales.overview", "kind": "container", "principal": principal}]
+
+
+MARKED = {"id": "p-app", "warehouse_name": "svc_app_overview", "marked": True, "enabled": True}
+CREATE = Item(
+    "command",
+    "Create the MCP principal of acme-sales.overview in prod",
+    "vecten app connect acme-sales.overview --env prod",
+)
 CONNECT = Item(
     "command",
-    "Connect acme-sales.overview to the MCP in prod",
+    "Connect acme-sales.overview to the MCP in prod; if it is connected already, this "
+    "rotates its secret and the app needs a ship",
     "vecten app connect acme-sales.overview --env prod",
 )
 
 
-def test_next_offers_connect_for_a_bound_container_app_without_a_principal(
-    invoke, project, fake_admin, tmp_path
+def test_signed_in_next_offers_connect_where_the_mcp_lists_no_principal(
+    invoke, project, fake_admin, tmp_path, monkeypatch
 ):
     config = deployed(project)
     signed_in(tmp_path / "xdg" / "vecten" / "tokens.json", config, project)
+    monkeypatch.setattr(FakeAdmin, "listing", listed(None))
     items = post_deploy_items(project, config, "prod", CLEAN)
-    assert CONNECT in items
+    assert CREATE in items and CONNECT not in items
     assert not [i for i in items if "acme-sales.warehouse" in i.resolution]
+    monkeypatch.setattr(FakeAdmin, "listing", listed(MARKED))
+    assert CREATE not in post_deploy_items(project, config, "prod", CLEAN)
+
+
+def test_signed_in_next_offers_nothing_for_a_connected_app_this_checkout_never_stored(
+    project, fake_admin, tmp_path, monkeypatch
+):
+    config = deployed(project)
+    signed_in(tmp_path / "xdg" / "vecten" / "tokens.json", config, project)
+    monkeypatch.setattr(FakeAdmin, "listing", listed(MARKED))
+    items = post_deploy_items(project, config, "prod", CLEAN)
+    assert not [i for i in items if "app connect" in i.resolution]
+
+
+def test_signed_in_next_leaves_an_unmarked_principal_to_access_health(
+    project, fake_admin, tmp_path, monkeypatch
+):
+    config = deployed(project)
+    signed_in(tmp_path / "xdg" / "vecten" / "tokens.json", config, project)
+    monkeypatch.setattr(FakeAdmin, "listing", listed({**MARKED, "marked": False}))
+    items = post_deploy_items(project, config, "prod", CLEAN)
+    assert not [i for i in items if "app connect" in i.resolution]
+
+
+def test_next_falls_back_to_the_local_record_when_the_mcp_cannot_answer(
+    invoke, project, fake_admin, tmp_path, monkeypatch
+):
+    config = deployed(project)
+    signed_in(tmp_path / "xdg" / "vecten" / "tokens.json", config, project)
+    monkeypatch.setattr(FakeAdmin, "listing", Failure(ExitCode.TOOL_FAILED, "MCP request failed"))
+    assert CONNECT in post_deploy_items(project, config, "prod", CLEAN)
     assert connect(invoke, "--env", "prod").exit_code == 0
     assert CONNECT not in post_deploy_items(project, load_config(project), "prod", CLEAN)
 

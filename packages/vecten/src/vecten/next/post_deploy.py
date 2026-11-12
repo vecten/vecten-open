@@ -117,31 +117,60 @@ def _waiting_hostname_items(root: Path, config: VectenConfig, env: str) -> list[
     ]
 
 
+def _shipped_apps(root: Path, config: VectenConfig, env: str) -> dict[str, dict] | None:
+    """The apps the MCP of `env` lists, by `<extension>.<app>`, or None when this machine
+    holds no session for it or the MCP does not answer."""
+    if not _signed_in(root, config, env):
+        return None
+    from vecten.mcp_client import AdminClient
+
+    try:
+        listing = AdminClient(root, env).read("apps", {})
+    except Failure:
+        return None
+    if not isinstance(listing, list):
+        return None
+    return {e["app"]: e for e in listing if isinstance(e, dict) and isinstance(e.get("app"), str)}
+
+
 def app_connect_items(root: Path, config: VectenConfig, env: str) -> list[Item]:
-    """`vecten app connect` for each bound container app whose credentials `env` has not
-    received from this checkout; a binding that does not render yet is reported elsewhere."""
+    """`vecten app connect` for each bound container app without a principal in `env`: as
+    the MCP lists it when this machine can ask, else as this checkout's record of the
+    secrets it stored, in which case running it may rotate a working secret."""
     if not config.apps:
         return []
     # Deferred so that `next` loads the app helpers only for a project that binds an app.
     from vecten.app_connect import app_secret_names
 
-    recorded = recorded_secret_names(root, env)
-    items = []
+    candidates = []
     for extension, bindings in sorted(config.apps.items()):
         for app in sorted(bindings):
             try:
                 names = app_secret_names(root, config, extension, app)
             except Failure:
                 continue
-            if not set(names) <= recorded:
-                key = f"{extension}.{app}"
+            candidates.append((f"{extension}.{app}", names))
+    if not candidates:
+        return []
+    shipped = _shipped_apps(root, config, env)
+    recorded = recorded_secret_names(root, env)
+    items = []
+    for key, names in candidates:
+        command = f"vecten app connect {key} --env {env}"
+        if shipped is not None:
+            # An app the shipped bundle does not bind waits for the ship; a principal that
+            # exists unmarked or disabled is an access-health issue.
+            entry = shipped.get(key)
+            if entry is not None and entry.get("principal") is None:
                 items.append(
-                    Item(
-                        "command",
-                        f"Connect {key} to the MCP in {env}",
-                        f"vecten app connect {key} --env {env}",
-                    )
+                    Item("command", f"Create the MCP principal of {key} in {env}", command)
                 )
+        elif not set(names) <= recorded:
+            title = (
+                f"Connect {key} to the MCP in {env}; if it is connected already, this rotates "
+                "its secret and the app needs a ship"
+            )
+            items.append(Item("command", title, command))
     return items
 
 
