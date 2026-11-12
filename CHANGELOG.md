@@ -103,8 +103,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `vecten group bind <group> <role>` prints the review statement and the grant nesting it
   under the group's role for an administrator to run, `--confirm` records it once the grant is
   in place, and `vecten group unbind` forgets it and prints the revoke. The server never
-  grants, alters or drops a bound role; access health and `vecten issues` report a confirmed
-  binding whose grant is gone. Policies on a bound role use `IS_ROLE_IN_SESSION`, not
+  grants, alters or drops a bound role; Postgres refuses a role reaching a superuser-like
+  attribute, a predefined `pg_` role or a managed role, and Snowflake prints a recursive
+  review of the role's grants. Access health and `vecten issues` report a confirmed binding
+  whose grant is gone and any other role nested under a group's role. While a role is bound,
+  the startup check refuses `USAGE` on a group role held by `PROVISIONER`. Policies on a bound
+  role use `IS_ROLE_IN_SESSION` (Snowflake) or `pg_has_role` (Postgres), not
   `CURRENT_ROLE()` ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
 ### Changed

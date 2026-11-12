@@ -161,32 +161,48 @@ A group can read through a role the client already has, such as `FINANCE_ANALYST
 own grants and row access policies, by binding it:
 
 1. `vecten group bind finance finance_analyst` records the binding as pending and prints two
-   statements: one an administrator runs to review what the role reads (on Snowflake
-   `SHOW GRANTS TO ROLE "FINANCE_ANALYST";`, which the provisioner cannot run for a role it
-   does not own), and the grant that nests it under the group's role: on Snowflake
-   `GRANT ROLE "FINANCE_ANALYST" TO ROLE "FINANCE";`, on Postgres
-   `GRANT "finance_analyst" TO "finance" WITH INHERIT TRUE;`.
-2. An administrator runs the grant.
+   statements for an administrator. The review lists every grant the role holds, through
+   every role nested under it: on Snowflake a recursive query over
+   `SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES`, which lags by up to two hours. The grant nests
+   the role under the group's role: on Snowflake `GRANT ROLE "FINANCE_ANALYST" TO ROLE
+   "FINANCE";`, on Postgres `GRANT "finance_analyst" TO "finance" WITH INHERIT TRUE, SET
+   FALSE;`.
+2. An administrator reviews the role and runs the grant.
 3. `vecten group bind finance finance_analyst --confirm` checks that the group's role holds
    the bound role (`SHOW GRANTS TO ROLE` on Snowflake, `pg_auth_members` with inherit on
-   Postgres) and records it.
+   Postgres) and records it. Binding a confirmed role again prints its grant and keeps the
+   record.
 
 `vecten group unbind finance` forgets the binding and prints the revoke for an administrator
-to run. Each reconciliation checks every confirmed binding, and access health and
-`vecten issues` list one whose grant is gone.
+to run. Each reconciliation reads the roles granted to every group's role. Access health and
+`vecten issues` list a confirmed binding whose grant is gone, and every other role nested
+under a group's role, including an unbound one until its revoke has run.
 
 The server never owns, grants, alters or drops a bound role, and never targets it with a
-dataset, schema or area grant or with drift revocation: `READ_GRANT` refuses it as a target,
-and deleting the group drops only the group's own role. The provisioner holds no membership in
-it, so its startup check is unchanged. The default group, system roles (`ACCOUNTADMIN`,
-`SYSADMIN`, `PUBLIC` and the like), Postgres's predefined `pg_` roles, the roles setup
-creates, and any role the server manages cannot be bound. What a bound role reads, including
-outside the environment's database, is the client's to set, and the warehouse enforces it.
+dataset, schema or area grant or with drift revocation: `READ_GRANT` and the Postgres helpers
+refuse it as a target, and deleting the group drops only the group's own role. The default
+group, system roles (`ACCOUNTADMIN`, `SYSADMIN`, `PUBLIC` and the like), Postgres's predefined
+`pg_` roles, the roles setup creates, any role the server manages, and a role bound to another
+group cannot be bound, nor can a group's role be named after a bound role. On Postgres, binding
+and confirming also refuse a role that has, or is a member at any depth of a role that has,
+`SUPERUSER`, `BYPASSRLS`, `CREATEROLE`, `CREATEDB` or `REPLICATION`, a predefined `pg_` role,
+`rds_superuser`, `cloudsqlsuperuser`, `azure_pg_admin` or a managed role. Postgres binds a role
+by its lower-case name. The provisioner cannot read a Snowflake role it does not own, so there
+the review is the check.
+
+The provisioner owns each group's role, and an owner can grant itself the roles it owns, so it
+can reach whatever a bound role reaches. A bound role must therefore never hold account-level
+privileges or roles such as `ACCOUNTADMIN`, `SECURITYADMIN`, `SYSADMIN` or `USERADMIN`. While a
+binding exists, the MCP's startup check refuses `USAGE` on a group role held by `PROVISIONER`.
+What a bound role reads, including outside the environment's database, is the client's to set,
+and the warehouse enforces it.
 
 A person's session runs under the group's role (or, with one reader role per person, their
 own), never the bound role, so a policy keyed on `CURRENT_ROLE()` does not match a bound role.
-Key row access and masking policies on `IS_ROLE_IN_SESSION('FINANCE_ANALYST')`, which matches
-a role inherited through the role hierarchy.
+On Snowflake, key row access and masking policies on `IS_ROLE_IN_SESSION('FINANCE_ANALYST')`,
+which matches a role inherited through the role hierarchy. On Postgres, a row-level security
+policy uses `pg_has_role(current_user, 'finance_analyst', 'USAGE')`, which follows inherited
+memberships the same way.
 
 ## Access and enforcement
 
