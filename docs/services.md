@@ -25,11 +25,13 @@ Terms used below:
 
 ## What runs where
 
-Each bound service runs as one container, named `svc-<extension>-<service>`, from the project
-image of its `host` component: the Airflow image on the platform host, by default, or the MCP
-image on the MCP host when the binding sets `host = "mcp"`. Under `minimal` both are on the one
-VM. The container starts in the same `docker compose up` as the rest of the stack and restarts
-whenever it stops, and nothing waits for it: a service that crashes in a loop leaves Airflow,
+Each bound service runs as one container from the project image of its `host` component: the
+Airflow image on the platform host, by default, or the MCP image on the MCP host when the
+binding sets `host = "mcp"`. Under `minimal` both are on the one VM. Its Compose service, which
+is also the name NGINX reaches it by, is `svc-<extension>-<service>`; `docker ps` shows the
+container as `<Compose project>-svc-<extension>-<service>-1`. On a VM the container starts in
+the same `docker compose up` as the rest of the stack, and under `vecten up` in a second one
+once the stack is up. It restarts whenever it stops, and nothing waits for it: a service that crashes in a loop leaves Airflow,
 the MCP server and NGINX serving, and only its own hostname answers 502. Removing a binding, or
 the extension, stops and removes the container at the next ship.
 
@@ -42,7 +44,7 @@ the MCP server, which every person's question goes through.
 Each service with a bound route gets a hostname of its own: `<label>.<domain>`, or `<domain>`
 itself when the binding sets `hostname = "@"`, where `<domain>` is the `domain` in that
 environment's `deploy/envs/<env>.tfvars`. No extension route is ever served on
-`airflow.<domain>` or `mcp.<domain>`. A browser treats each hostname as a separate site, so
+`airflow.<domain>` or `mcp.<domain>`. A browser treats each hostname as a separate origin, so
 script on a service's page cannot read the [admin panel](GLOSSARY.md)'s pages or Airflow's UI
 with the person's cookies.
 
@@ -51,8 +53,8 @@ A new hostname needs a DNS record, which only Terraform creates, so it takes one
 1. **Bind and merge.** `extension add` writes the binding and names the new hostname. The pull
    request that adds it gets a comment from the generated `terraform-plan` workflow, which plans
    Terraform for every pull request that changes `vecten.toml`, showing the new DNS record.
-   After the merge, the ship starts the service but serves none of its routes yet, and reports
-   them by `<extension>.<service>.<route>`:
+   After the merge, the ship starts the service but serves none of its routes yet, and the
+   `ship` workflow's log reports them by `<extension>.<service>.<route>`:
 
    ```text
    service acme-bot.bot: waiting for deploy
@@ -80,7 +82,8 @@ not, naming `vecten update`, which re-renders the root from the installed Vecten
 set: a `service_hostnames` line in a tfvars file is refused. `@` is refused, on both clouds,
 in an environment whose tfvars set `domain` equal to `dns_zone` (the DNS zone, which usually
 also holds your organization's website). The reason is Scaleway: left alone, it would add a
-second record at the zone's apex beside the website's instead of refusing it; the rule holds on
+second record at the zone's apex, the bare zone name itself, beside the website's instead of
+refusing it; the rule holds on
 AWS too, so that a binding means the same on both clouds.
 
 ## Access: `public`, `login` and `allow`
@@ -96,8 +99,9 @@ On a service's hostname NGINX answers each request this way:
 | Anything else | 404; nothing reaches the service. |
 
 A request whose raw path holds an encoded slash or backslash (`%2F`, `%5C`), a backslash, a `;`
-(or `%3B`), `//`, or a `.` or `..` segment, encoded or not, is answered 400 before any route
-sees it. NGINX picks the route from the cleaned-up path but forwards the path as sent, so such a
+(or `%3B`), `//`, or a `.` or `..` segment, encoded or not, is answered 400 on every path a
+route covers, before the service sees it; the health path and the 404 answers above are not
+affected. NGINX picks the route from the cleaned-up path but forwards the path as sent, so such a
 path could make the service read a different route than the one NGINX checked. An application
 that needs these forms in its own paths cannot be routed.
 
@@ -129,10 +133,13 @@ The sign-in flow:
    Without a valid gate session, NGINX redirects the browser to
    `https://<hostname>/_vecten/gate/start` on the service's own hostname, carrying the path the
    person asked for.
-2. `start`, answered by the MCP server through NGINX, sets a short-lived state cookie on the
-   service's hostname holding a random value, and redirects to the MCP's
+2. `start`, answered by the MCP server through NGINX, sets the state cookie
+   `vecten-gate-state` on the service's hostname, holding a random value for ten minutes. The
+   cookie is limited to the path `/_vecten/gate`, which NGINX forwards only to the MCP, so the
+   service never sees it. `start` then redirects to the MCP's
    `https://mcp.<domain>/gate/authorize` with only a hash of that value. The MCP signs the
-   person in through its identity backend (OpenID Connect or password). A person already signed
+   person in through its configured identity backend (OpenID Connect, password, or one an
+   extension provides). A person already signed
    in to the MCP's browser pages passes straight through, so one sign-in covers every service.
 3. The MCP redirects back to `https://<hostname>/_vecten/gate/callback` with a one-time code,
    valid for at most 60 seconds and only for that hostname and that hash. The callback, again
@@ -144,7 +151,9 @@ The sign-in flow:
 4. Every later request is checked again, against the person's current state and groups: adding
    someone to a group, or disabling them, takes effect on their next request.
 
-A signed-in person outside the route's groups gets 403. The MCP starts a sign-in only for a
+A signed-in person outside the route's groups gets a 403 "No access" page from NGINX, with a
+link to sign out and use another account; a person with no gate session is redirected to sign
+in, as above. The MCP starts a sign-in only for a
 hostname that a `login` route binds in the `vecten.toml` it was shipped with, and returns only to
 a path on that hostname, so the gate cannot send a browser to another site. Disabled people and
 people not provisioned in the MCP are refused, and services that sign in to the MCP with client
@@ -169,9 +178,15 @@ On a `login` route NGINX passes the service who is asking:
 |---|---|
 | `X-Vecten-User` | The person's sign-in email. |
 | `X-Vecten-Principal` | The person's stable id in the MCP. |
-| `X-Vecten-Name` | The display name. |
+| `X-Vecten-Name` | The display name, percent-encoded (below). |
 | `X-Vecten-Groups` | The person's current groups, comma-separated and sorted. |
 | `X-Vecten-Admin` | `true` or `false`: the person's [admin flag](GLOSSARY.md). |
+
+A header carries plain ASCII text only, so `X-Vecten-User`, `X-Vecten-Principal` and
+`X-Vecten-Name` are percent-encoded as UTF-8: every character outside printable ASCII (space
+to `~`), and `%` itself, becomes `%XX`, while a name in ASCII without `%` arrives unchanged. A
+display name holding `ë` arrives with `%C3%AB` in its place. Decode the values before showing
+or storing them, for example with Python's `urllib.parse.unquote`.
 
 Trust these five headers only on a request that arrived on a `login` route. Three things make
 them trustworthy there:
@@ -269,7 +284,7 @@ little as possible:
 When the firewall rule cannot be added, the host fails closed. A ship fails, naming its
 `service isolation` step, and the version of the project already running on the host stays. At boot a failed guard unit
 keeps Docker, and with it the host's whole stack, Airflow and the MCP included, down until an
-operator fixes the cause. Outbound internet stays open, and a service shares the host's kernel
+operator fixes the cause. On Scaleway, whose VMs accept no SSH and no run command, that means a new VM. Outbound internet stays open, and a service shares the host's kernel
 with the rest of the stack: install only extensions you trust.
 
 ## Limits and sizing
@@ -295,7 +310,9 @@ Scaleway a change of server type replaces the VM, which loses the services' volu
 ## Volumes, and what replaces a VM
 
 A service that declares `volume` gets a Docker volume named `svc-<extension>-<service>-data`
-on its host, mounted at that path and writable by the image's user. Docker lists it with the
+on its host, mounted at that path. When the image has no such path, the image build creates it
+owned by the image's user, so the service can write there; a path the image already holds, such
+as `/etc`, keeps its owner, so declare a path of the service's own. Docker lists it with the
 Compose project's name in front, such as `vecten-acme-prod_svc-acme-bot-bot-data`.
 
 The volume survives ships, restarts and reboots. It lives on the VM's disk and is not backed
@@ -313,8 +330,10 @@ every ship after it, names the volume:
 volumes of services no longer bound on platform: vecten-acme-prod_svc-acme-old-data; they keep their data until removed on the VM
 ```
 
-`--json` lists them under `orphaned_volumes`, by host. Vecten never removes one. On AWS you can
-remove it with SSM Run Command (`docker volume rm <name>`); a Scaleway VM accepts no SSH and no
+The line is in the `ship` workflow's log, and `--json` there lists them under
+`orphaned_volumes`, by host. Vecten never removes one. On AWS you can remove it with
+`docker volume rm <name>` through Systems Manager Run Command, the AWS service `vecten ship`
+itself uses to run commands on a VM; a Scaleway VM accepts no SSH and no
 run command, so there it stays until the VM is replaced. On Scaleway the first ship after
 upgrading Vecten does not list volumes yet, because the VM still runs the previous release's
 copy of the agent.
@@ -324,7 +343,8 @@ copy of the agent.
 `vecten up` starts each bound service whose binding does not set `local = false`, after the rest
 of the stack is up, and does not wait for it to become healthy. It prints each service's state
 as Docker sees it (its health check's `starting`, `healthy` or `unhealthy`, its container state
-while it has no verdict yet, or `not started:` with Docker's reason), the address of each bound
+while it has no verdict yet, `not running`, `not started:` with Docker's reason, or
+`unknown: docker compose ps failed`), the address of each bound
 route, and what the services reserve:
 
 ```text
@@ -342,8 +362,9 @@ from `.env`; a name `.env` lacks is empty.
 
 Vecten provides no tunnel, and the laptop's NGINX listens on `127.0.0.1` only, so a provider
 cannot send webhooks to the laptop. Set `local = false` for such a bot and try it in a deployed
-environment, or run a tunnel of your own to `https://127.0.0.1:8443` that sets the `Host`
-header to `<label>.localhost`.
+environment, or run a tunnel of your own to `https://127.0.0.1:8443` that connects with
+`<label>.localhost` as its TLS server name (SNI), since the laptop's NGINX refuses a TLS
+handshake for any other name, and sends `<label>.localhost` as the `Host` header.
 
 ## Health and the ship report
 
@@ -354,9 +375,11 @@ and the gate, so that `ship` can reach it from a GitHub Actions runner. It admit
 `HEAD` only, answering 403 to anything else, and forwards exactly the declared path. Anyone can
 read the answer, so put nothing private in it.
 
-After it has checked Airflow and the MCP, `ship` polls each served service's health address for
-up to 60 seconds and reports one state per bound service, in its output and under `services`
-with `--json`:
+After it has checked Airflow and the MCP, `ship` polls each served service's health address,
+one after another, for up to 60 seconds each, and reports one state per bound service, under
+`services` with `--json`. These lines are printed by the ship that runs inside GitHub Actions: in the log of the `ship` workflow, and of the `terraform-apply` workflow that `vecten deploy` dispatches. `vecten ship --env <env>` or `vecten deploy --env <env>` run from a laptop dispatch the workflow and print only its run and address.
+
+
 
 | State | Meaning |
 |---|---|
@@ -367,7 +390,7 @@ with `--json`:
 | `served` | The hostname is served and the service declares a health command, which only Docker runs. |
 
 A service's state never fails a ship and never puts back the version the previous ship delivered: a broken bot does
-not undo a dbt fix. An unhealthy service only makes the ship up to a minute longer.
+not undo a dbt fix. Each unhealthy service only makes the ship up to a minute longer.
 `vecten issues` does not read services; [operations](operations.md#services-in-the-ship-output)
 says where their state shows.
 

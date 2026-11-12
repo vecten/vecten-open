@@ -1024,15 +1024,21 @@ long-running process, such as a bot or a portal, served on a hostname of its own
   `vecten-services-guard.service`, which Docker requires: before Docker starts, it adds the
   firewall rule that keeps services away from the cloud's metadata address, where a container
   could otherwise obtain the VM's cloud credentials. If the unit fails, Docker, and the whole
-  stack on that VM, stays down until the cause is fixed; `journalctl -u
-  vecten-services-guard.service` on the VM says why. A ship whose rule cannot be added fails
+  stack on that VM, stays down until the cause is fixed.[% if cloud == 'aws' %] Read why with
+  `journalctl -u vecten-services-guard.service`, run on the VM through Systems Manager Run
+  Command.[% else %] A Scaleway VM accepts no SSH and Scaleway offers no run-command API, so
+  the unit's log cannot be read from outside, and Vecten has no command that repairs the VM in
+  place; the way back is a new VM, which loses what the old one kept on its disk (see "Changes
+  that replace a server or a database").[% endif %] A ship whose rule cannot be added fails
   naming its `service isolation` step and leaves the running release as it was.
 - **Volumes.** A service's volume lives on its VM's disk: it survives ships and reboots, is not
   backed up, and is lost when the VM is replaced. When a service is no longer bound, each ship
-  names its volume as no longer used; Vecten never removes one.
-- **Health.** Each ship reports every bound service as `healthy`, `unhealthy`,
-  `waiting for deploy`, `not routed` or `served`. A service's state never fails a ship or rolls
-  it back.
+  names its volume as no longer used; Vecten never removes one.[% if cloud == 'aws' %] Remove it
+  with `docker volume rm <name>` through Systems Manager Run Command.[% endif %]
+- **Health.** The log of each `ship` and `terraform-apply` workflow run reports every bound
+  service as `healthy`, `unhealthy`, `waiting for deploy`, `not routed` or `served`, and names
+  the volumes of services no longer bound; a laptop's `vecten ship` or `vecten deploy` only
+  dispatches the run. A service's state never fails a ship or rolls it back.
 [% if warehouse == 'snowflake' and 'platform' in components %]
 ### Snowflake
 

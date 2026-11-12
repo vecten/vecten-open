@@ -149,9 +149,11 @@ asks once whether to set the webhook; on yes, run `vecten secret set ALERT_WEBHO
 ## Services in the ship output
 
 `vecten issues` does not read [extension services](services.md), the long-running processes
-an extension contributes, such as a bot or a portal. Their state shows in each ship's output,
+an extension contributes, such as a bot or a portal. Their state shows in the output of each ship,
 after the hosts are shipped, one line per service the project binds, and under `services` with
-`--json`:
+`--json`. These lines are printed by the ship that runs inside GitHub Actions: in the log of the `ship` workflow, and of the `terraform-apply` workflow that `vecten deploy` dispatches. `vecten ship --env <env>` or `vecten deploy --env <env>` run from a laptop dispatch the workflow and print only its run and address.
+
+
 
 ```text
 shipped 3f9a1c2e to platform, mcp

@@ -65,7 +65,7 @@ template can run on; B must land in the same release, before any public route re
 
 - [x] 7.1 Rebase the `shared/extension-points` and `cli/cli-lifecycle` deltas onto #50's archived text
 - [x] 7.2 With the in-repo change: how a service declaration edited in code is caught in CI (see design.md, Decision 1)
-- [x] 7.3 With #5: confirm the gate covers Airflow's browser sign-in and record the API-client question in #5's change
+- [x] 7.3 With #5: confirm the gate covers Airflow's browser sign-in and record the API-client question; #5 has no change folder yet, so both are recorded in design.md under "Interactions"
 
 ## 8. Proven only by a real deploy
 

@@ -435,7 +435,7 @@ bot = "acme_bot.services:bot"
 | `command` | yes | A non-empty list of strings, run as it is, without a shell. A `$` stays a literal `$`. |
 | `port` | with routes or a health path | The HTTP port the process listens on, 1 to 65535. Listen on every interface (`0.0.0.0`), not only on `localhost`: NGINX reaches the process over a Docker network. |
 | `health` | yes | `{"path": "/healthz"}`, fetched with `curl` on `http://localhost:<port><path>` inside the container, or `{"command": [...]}`, run there. Docker runs it every 10 seconds, after 30 seconds of start-up grace; three failures mark the service unhealthy. |
-| `volume` | no | An absolute path where a persistent volume is mounted, writable by the image's user. |
+| `volume` | no | An absolute path where a persistent volume is mounted. A path the image lacks is created owned by the image's user, so the service can write there; a path the image already holds keeps its owner. |
 | `components` | no, default `["platform"]` | The components whose project image holds the service's dependencies: `platform`, `mcp` or both. |
 | `memory_mb` | no, default 256 | The memory limit the project starts from, 64 to 65536. |
 | `cpus` | no, default 0.5 | The CPU limit the project starts from, 0.05 to 64. |
@@ -458,8 +458,8 @@ image (user `airflow`) on `platform`, the MCP image (user `app`) on `mcp`. Put t
 Python dependencies in the extra of each component it lists (see
 [dependencies per component](#dependencies-per-component)), and its templates, pages and other
 static files in the package as package data: the images install the package, and NGINX serves
-nothing from disk for a service. Compose names the container `svc-<extension>-<service>`,
-shortened with a hash past 63 characters.
+nothing from disk for a service. Its Compose service, the name NGINX reaches it by, is
+`svc-<extension>-<service>`, shortened with a hash past 63 characters.
 
 The container's environment holds:
 
@@ -539,10 +539,11 @@ public, reachable by anyone: acme-bot.bot route webhook
 new hostnames, served after `vecten deploy`: bot.example.com
 ```
 
-A service already bound keeps its binding. An upgrade that adds a route or changes a suggestion
-is only named (`acme-bot.bot route export: declared, not bound`,
+A service already bound keeps its binding. An upgrade that adds a route, or suggests another
+`access` for a bound route, is only named (`acme-bot.bot route export: declared, not bound`,
 `acme-bot.bot route webhook: bound login, suggested public`), so no route becomes reachable
-without a line in the project's diff. `vecten next` lists each declared service and route that
+without a line in the project's diff. A changed `groups` suggestion is not named; it shows
+only in the diff of `extensions.lock.json`. `vecten next` lists each declared service and route that
 `vecten.toml` does not bind as a `note:` (under `notes` with `--json`); a note asks for nothing,
 since leaving a route unbound can be deliberate.
 
