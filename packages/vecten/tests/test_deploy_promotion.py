@@ -17,6 +17,7 @@ from vecten_shared.output import ExitCode, Failure
 from .deploy_fixtures import COMMIT, FakeGh, gh_fields, render_aws
 
 OTHER = "fedcba9876543210fedcba9876543210fedcba98"
+DEV_OK_STATUS = ("vecten/ship/dev", "success")
 
 
 def ordered(root, order=("dev", "prod"), version="0.1.1", tfvars=("dev",)):
@@ -192,3 +193,22 @@ def test_a_later_failure_on_a_commit_does_not_hide_an_earlier_success_elsewhere(
         },
     )
     assert github_env.last_shipped(gh, tmp_path, "acme/data", "main", "dev") == sha(1)
+
+
+def test_one_commits_status_is_read_from_a_full_page(tmp_path):
+    gh = FakeGh(statuses={COMMIT: [DEV_OK_STATUS]})
+    github_env.ship_status(gh, tmp_path, "acme/data", COMMIT, "dev")
+    assert gh.calls[-1][1] == f"repos/acme/data/commits/{COMMIT}/status?per_page=100"
+
+
+def test_a_project_rendered_by_the_next_release_may_record_an_order():
+    # PROMOTION_SINCE names the release that introduces the order; `vecten dev bump-version`
+    # to that release must render projects allowed to record one.
+    from packaging.version import Version
+
+    from vecten_shared.config import PROMOTION_SINCE
+    from vecten_shared.versions import VERSIONS
+
+    current = Version(VERSIONS.vecten)
+    next_release = Version(f"{current.major}.{current.minor}.{current.micro + 1}")
+    assert Version(PROMOTION_SINCE) <= next_release

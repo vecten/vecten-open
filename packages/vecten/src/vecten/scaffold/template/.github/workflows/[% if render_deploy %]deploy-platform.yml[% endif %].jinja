@@ -74,8 +74,11 @@ jobs:
           )
           if shown.returncode != 0:
               sys.exit(f"git show {commit}:vecten.toml failed: {shown.stderr.strip()}")
-          version = tomllib.loads(shown.stdout)["project"]["scaffold_version"]
-          if not re.fullmatch(r"[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?", version):
+          version = tomllib.loads(shown.stdout).get("project", {}).get("scaffold_version")
+          if not isinstance(version, str):
+              sys.exit(f"vecten.toml at {commit} names no [project] scaffold_version")
+          release = r"[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?"
+          if not re.fullmatch(release, version):
               sys.exit(f"scaffold_version at {commit} is no vecten release; got {version!r}")
           print(f"vecten={version}")
           EOF
@@ -91,8 +94,9 @@ jobs:
           role-to-assume: ${{ vars.VECTEN_AWS_ROLE_ARN }}
           aws-region: [[ region | tojson ]]
 [%- endif %]
-      - run: vecten ship --env ${{ inputs.environment }} ${COMMIT:+--commit "$COMMIT"} --json
+      - run: vecten ship --env "$ENVIRONMENT" ${COMMIT:+--commit "$COMMIT"} --json
         env:
+          ENVIRONMENT: ${{ inputs.environment }}
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ inputs.commit }}
 [%- if cloud != 'aws' %]

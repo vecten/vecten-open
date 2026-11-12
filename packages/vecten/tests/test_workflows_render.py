@@ -302,8 +302,8 @@ def key_env(access: str, secret: str) -> dict:
     return {"SCW_ACCESS_KEY": secret_ref(access), "SCW_SECRET_KEY": secret_ref(secret)}
 
 
-APPLY_COMMAND = 'vecten deploy --env ${{ inputs.environment }} ${COMMIT:+--commit "$COMMIT"} --json'
-SHIP_COMMAND = 'vecten ship --env ${{ inputs.environment }} ${COMMIT:+--commit "$COMMIT"} --json'
+APPLY_COMMAND = 'vecten deploy --env "$ENVIRONMENT" ${COMMIT:+--commit "$COMMIT"} --json'
+SHIP_COMMAND = 'vecten ship --env "$ENVIRONMENT" ${COMMIT:+--commit "$COMMIT"} --json'
 SCALEWAY_JOBS = (
     ("terraform-plan.yml", "plan", "vecten deploy --env prod --plan-only --cloud-only --json"),
     ("terraform-apply.yml", "apply", APPLY_COMMAND),
@@ -341,6 +341,7 @@ def test_scaleway_apply_and_ship_sign_with_the_environment_deploy_key(render, pa
             **key_env(ENV_ACCESS_SECRET, ENV_SECRET_SECRET),
             "GH_TOKEN": "${{ github.token }}",
             "COMMIT": "${{ inputs.commit }}",
+            "ENVIRONMENT": "${{ inputs.environment }}",
         }, name
         assert permissions(doc, job) == {
             "contents": "read",
@@ -553,6 +554,91 @@ def test_the_version_step_reads_scaffold_version_at_the_commit(render, params, t
         result = _run_version_step(version["run"], repo, env)
         assert result.returncode != 0 and "commit id" in result.stderr
         assert not (tmp_path / "bad").exists() or (tmp_path / "bad").read_text() == ""
+
+
+def _version_repo(tmp_path: Path, versions: list[str | None]) -> tuple[Path, list[str]]:
+    """A repository with one commit per entry: its vecten.toml names that scaffold_version,
+    or holds no [project] table for None."""
+    repo = tmp_path / "versions"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "T")
+    git("config", "user.email", "t@acme.test")
+    commits = []
+    for version in versions:
+        text = "users = 1\n" if version is None else f'[project]\nscaffold_version = "{version}"\n'
+        (repo / "vecten.toml").write_text(text)
+        git("add", "-A")
+        git("commit", "-q", "--allow-empty", "-m", str(version))
+        commits.append(git("rev-parse", "HEAD"))
+    return repo, commits
+
+
+@pytest.mark.parametrize("params", AWS[:1], ids=label)
+def test_the_version_step_takes_post_and_dev_releases_and_names_a_missing_version(
+    render, params, tmp_path
+):
+    [version] = [
+        s
+        for s in steps(_vecten_job(render(params)["terraform-apply.yml"]))
+        if s.get("id") == "version"
+    ]
+    repo, commits = _version_repo(tmp_path, ["0.1.1.post2", "0.2.0.dev3", "0.2.0rc1", None])
+    for commit, expected in zip(
+        commits[:3], ["0.1.1.post2", "0.2.0.dev3", "0.2.0rc1"], strict=True
+    ):
+        out = tmp_path / f"out-{expected}"
+        env = {
+            "PATH": os.environ["PATH"],
+            "GITHUB_SHA": commit,
+            "COMMIT": "",
+            "GITHUB_OUTPUT": str(out),
+        }
+        result = _run_version_step(version["run"], repo, env)
+        assert result.returncode == 0, result.stderr
+        assert out.read_text() == f"vecten={expected}\n"
+    env = {
+        "PATH": os.environ["PATH"],
+        "GITHUB_SHA": commits[3],
+        "COMMIT": "",
+        "GITHUB_OUTPUT": str(tmp_path / "missing"),
+    }
+    result = _run_version_step(version["run"], repo, env)
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "[project] scaffold_version" in result.stderr
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_no_run_line_interpolates_an_expression(render, params):
+    # `${{ }}` lands in the shell script before bash reads it; values reach a step by env.
+    for name, doc in render(params).items():
+        if name == "terraform-plan.yml":
+            continue
+        for job_name, job in doc["jobs"].items():
+            for step in steps(job):
+                assert "${{" not in step.get("run", ""), (name, job_name, step["run"])
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_the_pull_request_plan_names_prod_on_purpose(raw, params):
+    # A merge reaches prod last, so the plan a reviewer reads is prod's, made with prod's
+    # read-only plan identity, whatever the promotion order.
+    text = raw(params, "terraform-plan.yml")
+    lines = [
+        ln.strip().removeprefix("- ")
+        for ln in text.splitlines()
+        if re.search(r"\bprod\b", ln) and not ln.strip().startswith("#")
+    ]
+    assert lines, "terraform-plan.yml plans prod"
+    for line in lines:
+        assert re.search(r"--env prod\b|_PROD\b|plans/prod\.txt|plan for prod\b", line), line
 
 
 @pytest.mark.parametrize("params", DEPLOYED, ids=label)

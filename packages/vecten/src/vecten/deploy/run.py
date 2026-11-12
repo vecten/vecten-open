@@ -88,7 +88,8 @@ def check_facts(config: VectenConfig, env: str) -> dict[str, bool]:
 
 
 def export_facts(found: dict[str, bool | str]) -> None:
-    """Append `name=true|false` lines to the step's output file when Actions provides one."""
+    """Append a `name=value` line per fact to the step's output file when Actions provides
+    one: `true` or `false` for a flag, the text itself for a name such as `env`."""
     path = os.environ.get(GITHUB_OUTPUT_VAR)
     if not path:
         return
