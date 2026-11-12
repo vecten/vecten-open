@@ -52,7 +52,7 @@ services:
     profiles: &id002
     - platform
     restart: unless-stopped
-    user: '501:0'
+    user: '50000:0'
     volumes: &id003
     - ../../orchestration/dags:/opt/airflow/dags/project
     - ../../dbt:/opt/airflow/dbt
@@ -73,7 +73,7 @@ services:
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
-    user: '501:0'
+    user: '50000:0'
     volumes: *id003
   airflow-scheduler:
     command: scheduler
@@ -85,7 +85,7 @@ services:
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
-    user: '501:0'
+    user: '50000:0'
     volumes: *id003
   airflow-triggerer:
     command: triggerer
@@ -97,7 +97,7 @@ services:
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
-    user: '501:0'
+    user: '50000:0'
     volumes: *id003
   log-cleaner:
     command:

@@ -6,9 +6,12 @@ analytics apps; regenerate them only for a change meant to alter a project witho
 
 import tarfile
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
+# The laptop's Airflow runs as the invoking user's uid, which differs between machines.
+LAPTOP_UID = 50000
 BUNDLE_FILES = (
     ".vecten/ship/host.json",
     ".vecten/stack/docker-compose.yml",
@@ -41,7 +44,8 @@ def render(tmp_path: Path) -> dict[str, str]:
                 found[f"{host}/{name}"] = tar.extractfile(name).read().decode("utf-8")
     stack = root / ".vecten" / "stack"
     stack.mkdir(parents=True, exist_ok=True)
-    doc = generate_compose(config, "local", ["platform", "mcp"], stack, project="golden")
+    with mock.patch("os.getuid", return_value=LAPTOP_UID):
+        doc = generate_compose(config, "local", ["platform", "mcp"], stack, project="golden")
     found["local/docker-compose.yml"] = yaml.safe_dump(doc, sort_keys=True)
     found["local/default.conf"] = generate_nginx_conf(
         ["platform", "mcp"], local_hostnames(), "local"
