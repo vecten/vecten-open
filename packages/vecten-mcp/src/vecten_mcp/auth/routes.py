@@ -187,7 +187,7 @@ def auth_routes(service, gate=None):
                 error="Sign-in failed. Check your credentials or try again later.",
             )
         pending = state.get("flows", digest(form["flow"]), now=service.clock())
-        if pending.get("gate"):
+        if pending and pending.get("gate"):
             return browser_session(request, finish_gate(form["flow"], principal), principal)
         return browser_session(
             request,
@@ -251,7 +251,7 @@ def auth_routes(service, gate=None):
         csrf_check(request, {"flow": flow, "csrf": csrf})
         principal = service.authenticate(flow, identity)
         pending = state.get("flows", digest(flow), now=service.clock())
-        if pending.get("gate"):
+        if pending and pending.get("gate"):
             # The provider's redirect is a GET, so no form-action rule covers this one.
             url = gate.finish(flow, principal)
             state.remove("browser_flows", digest(flow))
