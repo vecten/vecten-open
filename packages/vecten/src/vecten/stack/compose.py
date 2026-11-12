@@ -9,7 +9,7 @@ from typing import Literal
 
 import yaml
 
-from vecten.stack.images import BUILD_DIR
+from vecten.stack.images import BUILD_DIR, SOURCES_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
 from vecten_shared.config import APEX, VectenConfig, service_hostname, stack_project_name
 from vecten_shared.declarations import component_for, secret_problem
@@ -152,13 +152,20 @@ def _build(mode: str, stack_dir: Path, dockerfile: str) -> dict:
     # relative to the stack directory Compose runs from.
     context = f"./{BUILD_DIR}" if mode == "vm" else str(stack_dir / BUILD_DIR)
     build = {"context": context, "dockerfile": dockerfile}
-    if any(entry.source_path for entry in project_record(stack_dir).values()):
+    record = project_record(stack_dir).values()
+    contexts = {}
+    if any(entry.source_path for entry in record):
         # In-repo extensions build from the project's own extensions/, never copied into the
         # layer's context.
-        extensions = (
+        contexts["extensions"] = (
             "../../extensions" if mode == "vm" else str(stack_dir.parent.parent / "extensions")
         )
-        build["additional_contexts"] = {"extensions": extensions}
+    if any(entry.git for entry in record):
+        # A bundle carries each git source in its extensions/; `up` fetches them under the
+        # stack directory, never into the project's own files.
+        contexts["sources"] = "../../extensions" if mode == "vm" else str(stack_dir / SOURCES_DIR)
+    if contexts:
+        build["additional_contexts"] = contexts
     return build
 
 
