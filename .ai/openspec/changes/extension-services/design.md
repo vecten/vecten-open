@@ -116,12 +116,13 @@ returning one, as for `vecten.connectors`) holds, per service name:
 
 ```python
 {
-    "command": ["python", "-m", "acme_bot.server"],   # exec form, run in the project image
-    "port": 8000,                                    # required when the service has routes
-    "health": {"path": "/healthz"},                   # or {"command": [...]}
-    "volume": "/var/lib/acme-bot",                    # optional, see Decision 10
-    "components": ["platform"],                       # images it can run from, see Decision 5
-    "memory_mb": 256, "cpus": 0.5,                    # defaults, see Decision 9
+    "command": ["python", "-m", "acme_bot.server"],  # exec form, run in the project image
+    "port": 8000,  # required when the service has routes
+    "health": {"path": "/healthz"},  # or {"command": [...]}
+    "volume": "/var/lib/acme-bot",  # optional, see Decision 10
+    "components": ["platform"],  # images it can run from, see Decision 5
+    "memory_mb": 256,
+    "cpus": 0.5,  # defaults, see Decision 9
     "routes": {
         "webhook": {"path": "/api/messages", "access": "public", "max_body_mb": 1},
         "admin": {"path": "/", "access": "login", "groups": ["default"], "websocket": True},

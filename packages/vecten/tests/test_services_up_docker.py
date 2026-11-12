@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -87,9 +88,11 @@ def _wait_healthy(container: str, timeout: int = 120) -> None:
 
 
 def _compose(proj, *args):
-    files = (proj / STACK_DIR / "compose.project").read_text().split()
-    cmd = ["docker", "compose", *(a for f in files for a in ("-f", f)), "--profile", "platform"]
-    return subprocess.run([*cmd, *args], cwd=proj, capture_output=True, text=True)
+    from vecten.stack.docker import SubprocessDocker
+
+    files = [Path(f) for f in (proj / STACK_DIR / "compose.project").read_text().split()]
+    profiles = ["platform", "mcp", "local"]
+    return SubprocessDocker().compose(proj, files, profiles, list(args))
 
 
 @pytest.mark.skipif(not docker_ok(), reason="no docker daemon")

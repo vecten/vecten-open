@@ -21,7 +21,7 @@ template can run on; B must land in the same release, before any public route re
 - [x] 2.5 `stack/compose.py`: one Compose service per binding (name, image, profile, command, environment, mounts, limits, volume, health check), the `vecten-services` network with its fixed bridge name, `nginx` on both networks, no `depends_on` toward services
 - [x] 2.6 Declared secrets reach services on the laptop as `${NAME:-}`, filtered by host scope; the read API reads a service's secrets from its environment when `VECTEN_COMPONENT=service`
 - [x] 2.7 `up` starts services, honours `local = false`, prints health without waiting for it; `ship --check` and `up` print the per-host sum of limits
-- [ ] 2.8 Tests: declaration parsing; binding validation (each refusal); byte-identical Compose, NGINX and bundle for a project without services; Compose output per profile (standard, minimal, MCP-only, `host = "mcp"`); the stub extension's service (eleven groups); a Docker-tier test that `up` starts a service from the platform image, its volume survives a recreate, a crash-looping service leaves Airflow, the MCP and `nginx` up, and Airflow cannot resolve the service's name
+- [x] 2.8 Tests: declaration parsing; binding validation (each refusal); byte-identical Compose, NGINX and bundle for a project without services; Compose output per profile (standard, minimal, MCP-only, `host = "mcp"`); the stub extension's service (eleven groups); a Docker-tier test that `up` starts a service from the platform image, its volume survives a recreate, a crash-looping service leaves Airflow, the MCP and `nginx` up, and Airflow cannot resolve the service's name
 
 ## 3. Isolation in the VM agent (PR B)
 
