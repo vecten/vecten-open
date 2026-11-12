@@ -30,7 +30,9 @@ snapshot or seed sets dbt's `grants` config. Use `vecten_convention.normalize_do
 The build runs in two steps, because the convention tests read the built graph:
 `dbt build --exclude package:vecten_convention,test_type:singular`, then
 `dbt test --select package:vecten_convention,test_type:singular`. `vecten dbt-build-local` and the
-`dbt_build` DAG run both; `vecten dbt build` forwards only what you pass it.
+`dbt_build` DAG run both; `vecten dbt build` forwards only what you pass it, plus the areas
+`vecten.toml` declares as the dbt var `vecten_areas`, which plain `dbt` needs as
+`--vars '{"vecten_areas": ["finance"]}'`.
 [% else %]The full text is `docs/schema-convention.md`. This project runs only the MCP over an
 existing warehouse: the convention's dbt rules apply to whoever builds that warehouse, and its
 rules for `osi/` apply here.

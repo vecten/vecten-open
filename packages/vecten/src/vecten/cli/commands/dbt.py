@@ -68,12 +68,14 @@ def register(app: typer.Typer) -> None:
     )
     def dbt(ctx: typer.Context) -> None:
         # Imported here: the environment path reaches the deploy and secrets modules.
-        from vecten.dbt_env import environment_dbt_env, split_env
+        from vecten.dbt_env import environment_dbt_env, split_env, with_area_vars
 
         cli = CliContext(cwd=Path.cwd(), json=False)
         try:
             root, config = _platform_project(cli)
             target_env, args = split_env(ctx.meta[RAW_ARGS])
+            # The convention tests read the declared areas from this var.
+            args = with_area_vars(args, config.areas)
             if target_env is None:
                 env = _dbt_env(root, config)
                 write_packages_yml(root / "dbt", config)

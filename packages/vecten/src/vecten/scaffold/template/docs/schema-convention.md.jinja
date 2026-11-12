@@ -67,8 +67,10 @@ run as a second step after the build:
     dbt build --exclude package:vecten_convention,test_type:singular
     dbt test  --select  package:vecten_convention,test_type:singular
 
-`vecten dbt-build-local` and the `dbt_build` DAG run both, passing the declared areas as the dbt
-var `vecten_areas`; `vecten dbt build` runs what you pass. A violation of
+`vecten dbt-build-local` and the `dbt_build` DAG run both; `vecten dbt build` runs what you pass.
+Each of them passes the areas `vecten.toml` declares as the dbt var `vecten_areas`, which plain
+`dbt` needs as `--vars '{"vecten_areas": ["finance"]}'`, or the naming test reports every area
+model undeclared. A violation of
 `convention_model_naming`, `convention_descriptions`, `convention_core_primary_key`,
 `convention_staging_load_metadata` or `convention_no_grants` reads `model <name>: <reason>`
 (`snapshot` or `seed` in place of `model` for those).

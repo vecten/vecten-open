@@ -16,9 +16,9 @@ from pathlib import Path
 
 from vecten.deploy.snowflake import LOADER_PRIVATE_KEY
 from vecten.secrets import cloud_store
-from vecten_platform.dbt.deps import write_packages_yml
+from vecten_platform.dbt.deps import CONVENTION_PACKAGE, write_packages_yml
 from vecten_platform.dbt.profile import profile_env
-from vecten_platform.dbt.runner import base_env, output_tail, run_dbt
+from vecten_platform.dbt.runner import AREAS_VAR, base_env, output_tail, run_dbt
 from vecten_shared.config import VectenConfig
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
@@ -122,6 +122,51 @@ def read_args(args: list[str]) -> tuple[tuple[str, ...], frozenset[str]]:
     return (tuple(names) if all(names) else ()), frozenset(given)
 
 
+def _takes_vars(command: tuple[str, ...]) -> bool:
+    from dbt.cli.main import cli
+
+    if not command:
+        return False
+    found = cli
+    for name in command:
+        found = found.commands.get(name) if hasattr(found, "commands") else None
+        if found is None:
+            return False
+    return any(param.name == "vars" for param in found.params)
+
+
+def with_area_vars(args: list[str], areas) -> list[str]:
+    """`args` passing the declared areas as the convention's dbt var, when the command takes vars.
+
+    A `--vars` the person gave keeps its own variables and gains the areas, unless it names
+    them itself or is not a mapping, in which case it is passed on as given.
+    """
+    names = sorted(areas)
+    if not names or not _takes_vars(dbt_command(args)):
+        return list(args)
+    import yaml
+
+    head = _before_separator(args)
+    tail = args[len(head) :]
+    for i, arg in enumerate(head):
+        given = head[i + 1] if arg == "--vars" and i + 1 < len(head) else None
+        if arg.startswith("--vars="):
+            given = arg.split("=", 1)[1]
+        if given is None:
+            continue
+        try:
+            values = yaml.safe_load(given)
+        except yaml.YAMLError:
+            return list(args)
+        if not isinstance(values, dict) or AREAS_VAR in values:
+            return list(args)
+        merged = json.dumps({**values, AREAS_VAR: names})
+        if arg == "--vars":
+            return [*head[: i + 1], merged, *head[i + 2 :], *tail]
+        return [*head[:i], f"--vars={merged}", *head[i + 1 :], *tail]
+    return [*head, "--vars", json.dumps({AREAS_VAR: names}), *tail]
+
+
 def dbt_command(args: list[str]) -> tuple[str, ...]:
     """The dbt command `args` invoke, resolved by dbt's own parser; empty when there is none."""
     return read_args(args)[0]
@@ -170,7 +215,12 @@ def writing_nodes(manifest: dict, command: tuple[str, ...]) -> list[str]:
     nodes = list((manifest.get("nodes") or {}).values())
     found: list[str] = []
     if command in HOOKED_COMMANDS:
-        hooks = sorted(n["name"] for n in nodes if n.get("resource_type") == "operation")
+        # The convention package's hook reads the parsed graph and sends the warehouse nothing.
+        hooks = sorted(
+            n["name"]
+            for n in nodes
+            if n.get("resource_type") == "operation" and n.get("package_name") != CONVENTION_PACKAGE
+        )
         if hooks:
             found.append(
                 f"on-run-start and on-run-end hooks, which `dbt {' '.join(command)}` executes: "

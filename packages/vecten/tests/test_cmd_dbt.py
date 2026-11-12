@@ -139,3 +139,55 @@ def test_dbt_without_the_loader_secret_names_the_command(invoke, tmp_path, monke
     result = invoke("dbt", "debug")
     assert result.exit_code == 3
     assert "vecten secret set LOADER_PASSWORD" in result.stderr
+
+
+def _declare_finance(root):
+    from vecten_shared.config import AreaDecl, load_config, save_config
+
+    config = load_config(root)
+    save_config(root, config.model_copy(update={"areas": {"finance": AreaDecl()}}))
+
+
+AREAS = '{"vecten_areas": ["finance"]}'
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        (["test"], ["test", "--vars", AREAS]),
+        (
+            ["--debug", "build", "--select", "marts"],
+            ["--debug", "build", "--select", "marts", "--vars", AREAS],
+        ),
+        (["docs", "generate"], ["docs", "generate", "--vars", AREAS]),
+        (
+            ["test", "--vars", "{audit: true}"],
+            ["test", "--vars", '{"audit": true, "vecten_areas": ["finance"]}'],
+        ),
+        (
+            ["test", "--vars={audit: true}"],
+            ["test", '--vars={"audit": true, "vecten_areas": ["finance"]}'],
+        ),
+        (
+            ["test", "--vars", "{vecten_areas: [other]}"],
+            ["test", "--vars", "{vecten_areas: [other]}"],
+        ),
+        (["deps"], ["deps", "--vars", AREAS]),
+        (["--version"], ["--version"]),
+    ],
+    ids=["test", "global-flag", "docs", "merged", "merged-equals", "own-areas", "deps", "version"],
+)
+def test_dbt_passes_the_declared_areas_to_commands_that_take_vars(
+    invoke, tmp_path, monkeypatch, args, expected
+):
+    calls = _recording_project(tmp_path, monkeypatch)
+    _declare_finance(Path.cwd())
+    result = invoke("dbt", *args)
+    assert result.exit_code == 0, result.stderr
+    assert calls == [expected]
+
+
+def test_dbt_without_areas_passes_no_vars(invoke, tmp_path, monkeypatch):
+    calls = _recording_project(tmp_path, monkeypatch)
+    assert invoke("dbt", "test").exit_code == 0
+    assert calls == [["test"]]

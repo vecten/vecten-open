@@ -69,8 +69,9 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   the area to a group. Their models follow the core and marts rules, each mart in
   `marts_<area>` becomes a dataset whose source names that schema, and
   `convention_model_naming` fails a model in a `core_<name>` or `marts_<name>` schema whose
-  area is not declared. `vecten dbt-build-local` and the dbt DAG pass the declared areas to
-  dbt as the var `vecten_areas`. `vecten update` moves an existing project's
+  area is not declared. `vecten dbt-build-local`, the dbt DAG and `vecten dbt` (with or
+  without `--env`) pass the declared areas to dbt as the var `vecten_areas`, merged into a
+  `--vars` given by hand. `vecten update` moves an existing project's
   `docs/schema-convention.md` and `convention_version` to version 2
   ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
