@@ -8,31 +8,51 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 from packaging.requirements import InvalidRequirement, Requirement
 
 from vecten_shared.config import VectenConfig
+from vecten_shared.extension_record import (
+    RECORD_FILE,
+    Extension,
+    parse_record,
+    read_record,
+    record_text,
+)
 from vecten_shared.requirements import parse_requirement
 from vecten_shared.versions import VERSIONS, normalize_name
+
+# The record lives in vecten-shared because the runtimes read it; it is re-exported here for the
+# CLI's locking code.
+__all__ = [
+    "LOCK_FILES",
+    "PINS_FILE",
+    "RECORD_FILE",
+    "Extension",
+    "components",
+    "divergence",
+    "inputs_hash",
+    "lock_problems",
+    "lock_state",
+    "parse_record",
+    "read_pins",
+    "read_record",
+    "read_stamp",
+    "record_text",
+    "roots",
+    "stamp_line",
+]
 
 LOCK_FILES = {
     "cli": "requirements.lock",
     "platform": "requirements-airflow.lock",
     "mcp": "requirements-mcp.lock",
 }
-RECORD_FILE = "extensions.lock.json"
 PINS_FILE = "requirements.txt"
 STAMP = "# vecten-lock:"
 # The base image a runtime lock is resolved against; the CLI's lock has none.
 BASE_IMAGES = {"platform": "vecten-airflow", "mcp": "vecten-mcp"}
-
-
-@dataclass(frozen=True)
-class Extension:
-    version: str
-    extras: tuple[str, ...]
 
 
 def release() -> str:
@@ -122,39 +142,6 @@ def read_stamp(text: str) -> tuple[str, str] | None:
     if "component" not in fields or "inputs" not in fields:
         return None
     return fields["component"], fields["inputs"]
-
-
-def record_text(record: dict[str, Extension]) -> str:
-    body = {
-        "version": 1,
-        "extensions": {
-            name: {"version": entry.version, "extras": sorted(entry.extras)}
-            for name, entry in sorted(record.items())
-        },
-    }
-    return json.dumps(body, indent=2) + "\n"
-
-
-def parse_record(text: str) -> dict[str, Extension] | None:
-    """The record, or None when any part is malformed: a partial record is never trusted."""
-    try:
-        entries = json.loads(text)["extensions"].items()
-        record = {}
-        for name, entry in entries:
-            version, extras = entry["version"], entry["extras"]
-            if not isinstance(version, str) or not all(isinstance(e, str) for e in extras):
-                return None
-            record[name] = Extension(version=version, extras=tuple(sorted(extras)))
-        return record
-    except ValueError, KeyError, TypeError, AttributeError:
-        return None
-
-
-def read_record(root: Path) -> dict[str, Extension] | None:
-    path = root / RECORD_FILE
-    if not path.is_file():
-        return None
-    return parse_record(path.read_text(encoding="utf-8"))
 
 
 def lock_state(root: Path, config: VectenConfig, component: str) -> str:

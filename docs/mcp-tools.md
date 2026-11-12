@@ -203,6 +203,10 @@ require membership in at least one listed group. `admin: true` also requires a h
 admin. Group changes are checked again at invocation. Duplicate tool names, including attempts
 to replace a built-in, fail startup.
 
+A tool reads its extension's settings and secrets with `vecten_shared.context.extension(<name>)`.
+It receives only `MCP_` names its manifest declares; a name without the prefix is delivered to
+Airflow and refused here. See [secrets and settings](extensions.md#secrets-and-settings).
+
 ## Feedback lifecycle
 
 Stored reports and query failures fold automatically into gaps. Gap reads include

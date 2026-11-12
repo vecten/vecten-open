@@ -20,7 +20,10 @@ GROUPS = (
     "vecten.mcp.provisioning",
     "vecten.mcp.audit_sinks",
     "vecten.skills",
+    "vecten.manifest",
 )
+# The manifest says what an extension needs; it contributes no layer of its own.
+DECLARATION_GROUPS = frozenset({"vecten.manifest"})
 RESOURCE_GROUPS = frozenset({"vecten.dbt_packages", "vecten.dags", "vecten.osi", "vecten.skills"})
 
 

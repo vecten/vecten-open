@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from vecten.deploy.aws.ship import component_url
-from vecten.deploy.bundle import build_host_bundle
+from vecten.deploy.bundle import build_host_bundle, host_document
 from vecten.deploy.vm import apply as agent
 from vecten_shared.config import load_config, save_config
 from vecten_shared.output import ExitCode, Failure
@@ -465,4 +465,32 @@ def test_a_stale_lock_stops_the_bundle_build(project, tmp_path):
     for name in locking.LOCK_FILES.values():
         (project / name).write_text("# vecten-lock: component=x inputs=0\n")
     with pytest.raises(Failure, match="vecten lock"):
+        build(project, tmp_path / "out")
+
+
+def test_host_json_carries_every_declared_platform_secret(project, tmp_path):
+    from vecten_shared.extension_record import Extension, record_text
+
+    (project / "extensions.lock.json").write_text(
+        record_text({"acme": Extension("1.0", (), secrets=("ACME_API_KEY", "MCP_ACME_TOKEN"))})
+    )
+    doc = host_document(
+        load_config(project),
+        "prod",
+        EnvironmentOutputs.model_validate(STANDARD_OUTPUTS),
+        "platform",
+        COMMIT,
+        {},
+        {"acme": Extension("1.0", (), secrets=("ACME_API_KEY", "MCP_ACME_TOKEN"))},
+    )
+    assert "ACME_API_KEY" in doc["connector_secrets"]
+    assert "HUBSPOT_API_KEY" in doc["connector_secrets"]
+    assert "MCP_ACME_TOKEN" not in doc["connector_secrets"]
+
+
+def test_the_bundle_build_checks_the_environments_settings(project, tmp_path):
+    from .settings_fixtures import with_settings
+
+    with_settings(project, {"env": {"prod": {"daily_cap": "500"}}})
+    with pytest.raises(Failure, match="settings.acme.daily_cap in prod"):
         build(project, tmp_path / "out")

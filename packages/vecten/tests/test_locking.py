@@ -92,7 +92,12 @@ def test_the_record_round_trips_sorted():
     record = {"zeta": Extension("2.0", ("platform",)), "acme": Extension("1.0", ("mcp", "cli"))}
     text = locking.record_text(record)
     assert list(json.loads(text)["extensions"]) == ["acme", "zeta"]
-    assert json.loads(text)["extensions"]["acme"] == {"version": "1.0", "extras": ["cli", "mcp"]}
+    assert json.loads(text)["extensions"]["acme"] == {
+        "version": "1.0",
+        "extras": ["cli", "mcp"],
+        "secrets": [],
+        "settings": None,
+    }
     assert locking.parse_record(text) == {
         "acme": Extension("1.0", ("cli", "mcp")),
         "zeta": Extension("2.0", ("platform",)),

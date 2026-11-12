@@ -300,3 +300,14 @@ def test_a_pending_snowflake_identity_ships_nothing_in_actions(
     assert r.exit_code == 0, r.stdout
     assert doc(r)["hosts"] == [] and ssm.sent == []
     assert "vecten mcp provisioner-script --env prod" in doc(r)["ship_skipped"]
+
+
+def test_check_refuses_a_setting_of_the_wrong_type_for_the_environment(invoke, no_cloud):
+    from vecten_shared.output import ExitCode
+
+    from .settings_fixtures import with_settings
+
+    with_settings(no_cloud, {"env": {"prod": {"daily_cap": "500"}}})
+    r = invoke("ship", "--env", "prod", "--check", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.stdout
+    assert "settings.acme.daily_cap" in r.stdout and "prod" in r.stdout

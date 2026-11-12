@@ -14,14 +14,15 @@ from vecten.deploy.snowflake import (
     secret_set_command,
 )
 from vecten.intake.answers import ANSWER_KEYS, DECLINED, read_answers
+from vecten.next.declared import declared_secret_items
 from vecten.next.existing_warehouse import provisioner_secrets_item
 from vecten.next.gitstate import GitState
 from vecten.next.items import Item
 from vecten.secrets import LAPTOP_ONLY, provisioner_secret_names, recorded_secret_names
-from vecten.stack.env import STACK_MANAGED
 from vecten_shared.config import EnvironmentFacts, VectenConfig
 from vecten_shared.envfile import read_env_values
 from vecten_shared.provider.local import LocalProvider
+from vecten_shared.stack_secrets import STACK_MANAGED
 
 # `none` records that the human has no account yet; the question stays open and, asked again,
 # carries the guides to show first. An agent acting on the item records it like any answer.
@@ -147,9 +148,11 @@ def deploy_prerequisite_items(
     if provisioner is not None:
         items.append(provisioner)
     items += snowflake_deploy_secret_items(root, config, env)
-    for name in _uncopied_secrets(root, config, env):
+    uncopied = _uncopied_secrets(root, config, env)
+    for name in uncopied:
         command = f"vecten secret set {name} --env {env} --from-local"
         items.append(Item("command", f"Copy {name} to {env}", command))
+    items += declared_secret_items(root, config, env, skip=uncopied)
     if git.has_origin and (git.dirty or git.ahead):
         items.append(PUSH)
     return items

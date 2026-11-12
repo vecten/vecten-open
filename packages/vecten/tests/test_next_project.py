@@ -377,3 +377,66 @@ def test_the_lock_item_comes_before_starting_the_stack(tmp_path):
     root = render_fixture(tmp_path, "postgres")
     (root / "requirements.lock").write_text("# vecten-lock: component=cli inputs=0\n")
     assert _project_items(root, load_config(root))[0].resolution == "vecten lock"
+
+
+def _declare(root, secrets=("ACME_API_KEY", "MCP_ACME_TOKEN"), project=()):
+    import tomllib
+
+    import tomli_w
+
+    from vecten_shared.extension_record import Extension, record_text
+
+    doc = tomllib.loads((root / "vecten.toml").read_text())
+    doc["extensions"] = ["acme"]
+    doc["secrets"] = list(project)
+    doc["components"] = ["platform", "mcp"]
+    (root / "vecten.toml").write_text(tomli_w.dumps(doc))
+    (root / "extensions.lock.json").write_text(
+        record_text({"acme": Extension("1.0", (), secrets=tuple(secrets))})
+    )
+
+
+def test_a_declared_secret_missing_locally_is_reported_with_its_owner(tmp_path):
+    from vecten.next.declared import declared_secret_items
+
+    root = render_fixture(tmp_path, "postgres")
+    _declare(root, project=["SLACK_TOKEN"])
+    (root / ".env").write_text("MCP_ACME_TOKEN=x\n")
+    items = declared_secret_items(root, load_config(root))
+    assert [(i.title, i.resolution) for i in items] == [
+        ("Set ACME_API_KEY, which acme declares", "vecten secret set ACME_API_KEY"),
+        ("Set SLACK_TOKEN, which the project declares", "vecten secret set SLACK_TOKEN"),
+    ]
+
+
+def test_a_declared_secret_not_yet_in_an_environment_is_reported_for_it(tmp_path):
+    from vecten.next.declared import declared_secret_items
+    from vecten_shared.records import write_record
+
+    root = render_fixture(tmp_path, "postgres")
+    _declare(root)
+    write_record(root, "secrets-prod", {"stored": ["ACME_API_KEY"]})
+    items = declared_secret_items(root, load_config(root), "prod")
+    assert [i.resolution for i in items] == ["vecten secret set MCP_ACME_TOKEN --env prod"]
+
+
+def test_a_secret_set_locally_is_left_to_the_copy_item(tmp_path):
+    from vecten.next.declared import declared_secret_items
+
+    root = render_fixture(tmp_path, "postgres")
+    _declare(root, secrets=("ACME_API_KEY",))
+    (root / ".env").write_text("ACME_API_KEY=x\n")
+    items = declared_secret_items(root, load_config(root), "prod", skip=["ACME_API_KEY"])
+    assert items == []
+
+
+def test_a_deployed_environment_is_asked_for_a_secret_set_only_locally(tmp_path):
+    from vecten.next.declared import declared_secret_items
+
+    root = render_fixture(tmp_path, "postgres")
+    _declare(root, secrets=("ACME_API_KEY",))
+    (root / ".env").write_text("ACME_API_KEY=x\n")
+    items = declared_secret_items(root, load_config(root), "prod", skip=())
+    assert [i.resolution for i in items] == [
+        "vecten secret set ACME_API_KEY --env prod --from-local"
+    ]

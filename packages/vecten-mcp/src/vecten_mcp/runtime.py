@@ -119,6 +119,13 @@ class Runtime:
 
 
 def build_runtime(root, config, extensions):
-    from vecten_mcp.runtime_setup import configured_runtime
+    import os
 
+    from vecten_mcp.runtime_setup import configured_runtime
+    from vecten_shared.declarations import check_settings
+    from vecten_shared.extension_record import read_record
+
+    # The server loads every extension now, so it checks their settings now, before /health
+    # can answer: a tool must never run on settings its manifest refuses.
+    check_settings(config, read_record(root) or {}, os.environ.get("VECTEN_ENV", "local"))
     return configured_runtime(root, config, extensions)

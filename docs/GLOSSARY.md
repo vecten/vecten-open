@@ -30,6 +30,10 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Extension**: a Python package listed in `vecten.toml` that adds connectors, models, DAGs, semantic documents, skills or MCP hooks through entry points; see [extensions](extensions.md).
 
+**Manifest**: an extension's `vecten.manifest` entry point, naming the secrets it reads and the schema of its settings; `vecten lock` records it in `extensions.lock.json`; see [secrets and settings](extensions.md#secrets-and-settings).
+
+**Setting**: a value an extension or the project reads at run time, kept in `[settings.<extension>]` or `[settings.project]` of `vecten.toml`, with per-environment overrides under `env.<env>`; read with `vecten_shared.context`.
+
 **Bundle**: the archive of a project's DAGs, connectors, dbt project, `osi/` and `evals/` at one commit that a ship delivers to the hosts.
 
 **Ship**: deliver a project's code and semantic files to existing hosts, without changing infrastructure through Terraform.

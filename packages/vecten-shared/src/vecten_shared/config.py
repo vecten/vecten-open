@@ -22,6 +22,8 @@ from pydantic import (
     model_validator,
 )
 
+from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
+from vecten_shared.declarations import is_toml_time, secret_problem
 from vecten_shared.names import (
     connector_name_problem,
     env_name_problem,
@@ -31,6 +33,7 @@ from vecten_shared.names import (
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
 from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
+from vecten_shared.versions import normalize_name
 
 CONFIG_FILE = "vecten.toml"
 Component = Literal["platform", "mcp"]
@@ -359,6 +362,10 @@ class VectenConfig(Strict):
     airflow: AirflowSection = Field(default_factory=AirflowSection)
     connectors: list[ConnectorDecl] = Field(default_factory=list)
     dependencies: DependenciesSection = Field(default_factory=DependenciesSection)
+    # Secret names the project's own DAGs and MCP code read, delivered like an extension's.
+    secrets: list[str] = Field(default_factory=list)
+    # `[settings.<extension>]` and `[settings.project]`, with `env.<env>` overrides.
+    settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -373,6 +380,51 @@ class VectenConfig(Strict):
         # Without the platform no host serves Airflow, so the list would restrict nothing.
         if self.airflow.allow and not self.has("platform"):
             raise ValueError("[airflow] allow needs the platform component")
+        return self
+
+    @field_validator("secrets")
+    @classmethod
+    def _secrets(cls, value: list[str]) -> list[str]:
+        for name in value:
+            problem = secret_problem(name)
+            if problem:
+                raise ValueError(problem)
+        return value
+
+    @field_validator("extensions")
+    @classmethod
+    def _no_extension_named_project(cls, value: list[str]) -> list[str]:
+        for registration in value:
+            req = parse_requirement(registration)
+            if req is not None and normalize_name(req.name) == PROJECT_SETTINGS:
+                raise ValueError(
+                    "an extension may not be named project, which names the project's settings"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _settings_namespaces(self) -> VectenConfig:
+        listed = {
+            normalize_name(req.name)
+            for req in map(parse_requirement, self.extensions)
+            if req is not None
+        }
+        for namespace, table in self.settings.items():
+            where = f"settings.{namespace}"
+            if namespace != PROJECT_SETTINGS and namespace not in listed:
+                raise ValueError(f"{where}: no extension of that name is listed in extensions")
+            if is_toml_time(table):
+                raise ValueError(
+                    f"{where}: a TOML date or time, inf or nan has no JSON type; use a string"
+                )
+            overrides = table.get("env", {})
+            if not isinstance(overrides, dict):
+                raise ValueError(f"{where}.env: a table of environments, such as env.prod")
+            for env, values in overrides.items():
+                if env != "local" and env_name_problem(env):
+                    raise ValueError(f"{where}.env.{env}: {env_name_problem(env)}")
+                if not isinstance(values, dict):
+                    raise ValueError(f"{where}.env.{env}: a table of settings")
         return self
 
     @model_validator(mode="after")
@@ -419,11 +471,53 @@ def stack_project_name(project_root: Path, project_name: str) -> str:
     return f"vecten-{project_name}-{digest}"
 
 
+def _merge(table: Any, data: dict[str, Any], changed: dict[str, Any]) -> None:
+    """Make `table` hold `data`, touching only keys whose values differ.
+
+    A key the file does not hold is added only when `changed` (the values that differ from
+    their defaults) has it. Comments, blank lines and the order of everything unchanged stay as
+    the person wrote them.
+    """
+    for key in [k for k in table if k not in data]:
+        del table[key]
+    for key, value in data.items():
+        current = table.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            _merge(current, value, changed.get(key) or {})
+        elif current is None:
+            if key in changed:
+                table[key] = changed[key]
+        elif _plain(current) != value:
+            table[key] = value
+
+
+def _plain(item: Any) -> Any:
+    return item.unwrap() if hasattr(item, "unwrap") else item
+
+
 def save_config(project_root: Path, config: VectenConfig) -> None:
+    import tomlkit
+
     data = config.model_dump(mode="json", exclude_none=True)
-    if not data.get("dependencies"):
-        data.pop("dependencies", None)
-    write_text_atomic(project_root / CONFIG_FILE, tomli_w.dumps(data))
+    for optional in ("dependencies", "secrets", "settings"):
+        if not data.get(optional):
+            data.pop(optional, None)
+    path = project_root / CONFIG_FILE
+    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if doc is None:
+        write_text_atomic(path, tomli_w.dumps(data))
+        return
+    changed = config.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+    _merge(doc, data, changed)
+    text = tomlkit.dumps(doc)
+    # tomlkit can emit a table twice when a file declares one table's parts apart; such a file
+    # no longer loads, so the whole configuration is written afresh instead, without comments.
+    try:
+        if VectenConfig.model_validate(tomllib.loads(text)) != config:
+            raise ValueError("the edited file reads back differently")
+    except tomllib.TOMLDecodeError, ValueError, ValidationError:
+        text = tomli_w.dumps(data)
+    write_text_atomic(path, text)
 
 
 def parse_warehouse_locator(url: str) -> WarehouseSection:

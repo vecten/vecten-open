@@ -33,3 +33,10 @@ def answer():
 
 
 tool = {"groups": ["analyst"], "handler": answer}
+
+
+def manifest():
+    return {
+        "secrets": ["FIXTURE_TOKEN", "MCP_FIXTURE_TOKEN"],
+        "settings": {"properties": {"greeting": {"type": "string", "default": "hello"}}},
+    }

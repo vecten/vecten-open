@@ -12,6 +12,8 @@ import yaml
 from vecten.stack.images import BUILD_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
 from vecten_shared.config import VectenConfig, stack_project_name
+from vecten_shared.declarations import component_for
+from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
@@ -98,8 +100,50 @@ def _project_mounts(stack_dir: Path) -> list[str]:
     return mounts
 
 
-def connector_secrets(config: VectenConfig) -> list[str]:
-    return sorted({s for c in config.connectors for s in c.secrets})
+def _declared(config: VectenConfig, record: dict[str, Extension]) -> set[str]:
+    names = set(config.secrets)
+    for entry in record.values():
+        names.update(entry.secrets)
+    return names
+
+
+def platform_secrets(config: VectenConfig, record: dict[str, Extension]) -> list[str]:
+    """The names delivered to Airflow: connectors', and declared names outside `MCP_`."""
+    names = {s for c in config.connectors for s in c.secrets}
+    names.update(n for n in _declared(config, record) if component_for(n) == "platform")
+    return sorted(names)
+
+
+def mcp_secrets(config: VectenConfig, record: dict[str, Extension]) -> list[str]:
+    return sorted(n for n in _declared(config, record) if component_for(n) == "mcp")
+
+
+def project_record(stack_dir: Path) -> dict[str, Extension]:
+    return read_record(stack_dir.parent.parent) or {}
+
+
+def _record_mount(stack_dir: Path, target_dir: str) -> list[str]:
+    # Compose creates a directory for a bind source that does not exist, so only a project that
+    # has a record mounts it.
+    if not (stack_dir.parent.parent / RECORD_FILE).is_file():
+        return []
+    return [f"../../{RECORD_FILE}:{target_dir}/{RECORD_FILE}:ro"]
+
+
+def _add_secrets(environment: dict, names: list[str], kind: str) -> None:
+    for secret in names:
+        if secret in environment:
+            continue
+        # The name lands inside `${...}`, which Compose would misread with any other character.
+        if not SECRET_NAME.fullmatch(secret):
+            raise Failure(ExitCode.CONFIG, f"{kind} secret {secret!r} must be {SECRET_RULE}")
+        if secret.startswith("AIRFLOW__"):
+            raise Failure(
+                ExitCode.CONFIG,
+                f"{kind} secret {secret} collides with a stack variable; rename the secret",
+            )
+        # `${NAME:-}` lets the stack start before a secret is set; the run then names it.
+        environment[secret] = f"${{{secret}:-}}"
 
 
 def _build(mode: str, stack_dir: Path, dockerfile: str) -> dict:
@@ -179,11 +223,13 @@ def _airflow_common(
             "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE": PASSWORDS_FILE_TARGET,
             "VECTEN_PROVIDER": mode if mode == "local" else "${VECTEN_PROVIDER}",
             "VECTEN_ENV": "local" if mode == "local" else "${VECTEN_ENV}",
+            "VECTEN_COMPONENT": "platform",
             "FORWARDED_ALLOW_IPS": "*",
         },
         "volumes": [
             *_project_mounts(stack_dir),
             "../../vecten.toml:/opt/airflow/vecten.toml:ro",
+            *_record_mount(stack_dir, "/opt/airflow"),
             "./extension_dags.py:/opt/airflow/dags/vecten_extensions.py:ro",
             # dbt reads the semantic model from the osi directory beside the dbt project.
             "../../osi:/opt/airflow/osi:ro",
@@ -203,21 +249,6 @@ def _airflow_common(
         "RUNTIME__DLTHUB_TELEMETRY": "false",
         ARTIFACT_DIR_VAR: DEFAULT_ARTIFACT_DIR,
     }
-    for secret in connector_secrets(config):
-        # The name lands inside `${...}`, which Compose would misread with any other character.
-        if not SECRET_NAME.fullmatch(secret):
-            raise Failure(ExitCode.CONFIG, f"connector secret {secret!r} must be {SECRET_RULE}")
-        if (
-            secret in common["environment"]
-            or secret in runtime_env
-            or secret.startswith("AIRFLOW__")
-        ):
-            raise Failure(
-                ExitCode.CONFIG,
-                f"connector secret {secret} collides with a stack variable; rename the secret",
-            )
-        # `${NAME:-}` lets the stack start before a secret is set; the run then names it.
-        runtime_env[secret] = f"${{{secret}:-}}"
     common["environment"] |= runtime_env
     if mode == "vm":
         cloud = _cloud(config)
@@ -243,6 +274,16 @@ def _airflow_common(
         # The passwords file is 0600 and owned by the host user, so Airflow must run as that
         # uid; the official image supports an arbitrary uid only with gid 0.
         common["user"] = f"{os.getuid()}:0"
+    # Checked against every variable the stack sets, the VM's included: the agent hands secrets
+    # to Compose after the stack's own values, so a colliding name would replace them.
+    secrets = platform_secrets(config, project_record(stack_dir))
+    for secret in secrets:
+        if secret in common["environment"] or secret in SCALEWAY_RUNTIME_VARS:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"declared secret {secret} collides with a stack variable; rename the secret",
+            )
+    _add_secrets(common["environment"], secrets, "declared")
     return common
 
 
@@ -371,9 +412,15 @@ def generate_compose(
                 "VECTEN_MCP_PUBLIC_URL": f"https://{hosts['mcp']}",
                 "VECTEN_PROVIDER": mode if mode == "local" else "${VECTEN_PROVIDER}",
                 "VECTEN_ENV": "local" if mode == "local" else "${VECTEN_ENV}",
+                "VECTEN_COMPONENT": "mcp",
+                "VECTEN_PROJECT_ROOT": "/app",
                 "MCP_STATE_DB_PASSWORD": "${MCP_STATE_DB_PASSWORD}",
             },
-            "volumes": ["../../osi:/app/osi:ro", "../../vecten.toml:/app/vecten.toml:ro"],
+            "volumes": [
+                "../../osi:/app/osi:ro",
+                "../../vecten.toml:/app/vecten.toml:ro",
+                *_record_mount(stack_dir, "/app"),
+            ],
             "depends_on": (
                 {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
             ),
@@ -401,6 +448,16 @@ def generate_compose(
             }
             services["mcp-server"]["volumes"].append("mcp-secrets:/var/lib/vecten-mcp/secrets")
             volumes["mcp-secrets"] = {}
+            # On a VM the MCP server reads its own scope through its provider instead.
+            mcp_env = services["mcp-server"]["environment"]
+            declared = mcp_secrets(config, project_record(stack_dir))
+            for secret in declared:
+                if secret in mcp_env:
+                    raise Failure(
+                        ExitCode.CONFIG,
+                        f"declared secret {secret} collides with a stack variable; rename it",
+                    )
+            _add_secrets(mcp_env, declared, "declared")
         if mode == "vm":
             services["mcp-server"]["environment"] |= _vm_runtime_env(_cloud(config)) | {
                 "VECTEN_MCP_POOL_CAP": "${VECTEN_MCP_POOL_CAP}",

@@ -47,7 +47,7 @@ def extension(tmp_path, monkeypatch):
     sys.modules.pop("vecten_test_extension", None)
 
 
-def test_all_nine_groups_land(extension):
+def test_all_ten_groups_land(extension):
     from vecten.connectors.extensions import extension_connectors
     from vecten.extension_skills import link_extension_skills
     from vecten_mcp.extensions import McpExtensions
@@ -211,3 +211,37 @@ def test_semantic_digest_is_stable_when_extension_environment_moves(
     assert osi_digest(root / "osi") == before
     (moved / "fixture.json").write_text("{}")
     assert osi_digest(root / "osi") != before
+
+
+def test_the_manifest_reaches_the_record_the_laptop_stack_and_the_read_api(extension, monkeypatch):
+    from vecten.extensions import load_manifests
+    from vecten.stack.compose import generate_compose
+    from vecten_shared import context
+    from vecten_shared.extension_record import Extension, record_text
+
+    root, config = extension
+    manifest = load_manifests(config)["vecten-test-extension"]
+    assert manifest.secrets == ("FIXTURE_TOKEN", "MCP_FIXTURE_TOKEN")
+    record = {
+        "vecten-test-extension": Extension(
+            "1.0", (), secrets=manifest.secrets, settings=manifest.settings
+        )
+    }
+    (root / "extensions.lock.json").write_text(record_text(record))
+    stack = root / ".vecten" / "stack"
+    stack.mkdir(parents=True)
+    doc = generate_compose(config, "local", ["platform", "mcp"], stack)
+    assert doc["services"]["airflow-scheduler"]["environment"]["FIXTURE_TOKEN"]
+    assert doc["services"]["mcp-server"]["environment"]["MCP_FIXTURE_TOKEN"]
+
+    monkeypatch.setenv("VECTEN_PROJECT_ROOT", str(root))
+    monkeypatch.setenv("VECTEN_ENV", "local")
+    monkeypatch.delenv("VECTEN_PROVIDER", raising=False)
+    monkeypatch.setenv("FIXTURE_TOKEN", "dag-token")
+    monkeypatch.setenv("MCP_FIXTURE_TOKEN", "tool-token")
+    monkeypatch.setenv("VECTEN_COMPONENT", "platform")
+    in_a_dag = context.extension("vecten-test-extension")
+    assert in_a_dag.secret("FIXTURE_TOKEN") == "dag-token"
+    assert in_a_dag.settings["greeting"] == "hello"
+    monkeypatch.setenv("VECTEN_COMPONENT", "mcp")
+    assert context.extension("vecten-test-extension").secret("MCP_FIXTURE_TOKEN") == "tool-token"

@@ -30,22 +30,22 @@ The three groups below are three pull requests, in this order (design, "Migratio
 
 ## 3. Manifest, secrets and settings (#49, pull request 3)
 
-- [ ] 3.1 `vecten.manifest` in `vecten_shared.extensions.GROUPS` (not a layer group for the empty-declaration rule); one per distribution
-- [ ] 3.2 Test then implement manifest loading in the lock routine: `secrets` (names, scope rule, reserved scopes, stack-managed names, `AIRFLOW_*`), `settings` (the accepted JSON Schema subset, no `env` property), unknown top-level keys reported
-- [ ] 3.3 `extensions.lock.json` records each manifest's secrets and settings schema
-- [ ] 3.4 `vecten_shared.config`: top-level `secrets`, `[settings.<namespace>]` with `env.<env>` overrides; namespace is a listed extension or `project`; `local` or a valid environment name; TOML dates and times refused; an extension named `project` refused
-- [ ] 3.5 One validator in `vecten-shared` for the effective settings of one environment against the record; called by `vecten lock` (local and every named environment), `up` (local), bundle build and `ship --check` (the shipped environment)
-- [ ] 3.6 `stack/compose.py`: declared platform names to the Airflow services and `MCP_*` names to `mcp-server` as `${NAME:-}`, collision checks for both services; mount `extensions.lock.json` beside `vecten.toml`; set `VECTEN_COMPONENT`, and `VECTEN_PROJECT_ROOT=/app` for `mcp-server`
-- [ ] 3.7 `deploy/bundle.py`: `host.json`'s `connector_secrets` carries every declared platform name; comment the key's wider meaning; test that `apply.py` and its Scaleway copy are unchanged
-- [ ] 3.8 `vecten_shared.context`: `extension(name)` and `project()` with `settings`, `env` and `secret()`; declared-only and component-scoped `secret()`; tests on the local provider inside and outside Compose and on mocked AWS and Scaleway runtime providers, including a `minimal` host refusing an `MCP_` read from platform code
-- [ ] 3.9 The MCP server validates every extension's settings at startup and does not report healthy on failure
-- [ ] 3.10 `vecten_platform.sync.secret` keeps its behaviour; it may delegate to the shared provider construction
-- [ ] 3.11 `extension add` output and `next` name declared secrets missing locally and per environment (`next/deploy.py`)
-- [ ] 3.12 The stub extension declares a manifest with a platform secret, an `MCP_` secret and a setting with a default; the layer test asserts the record, the laptop Compose environment and a read through the API in a DAG and in a tool
-- [ ] 3.13 `scripts/check_extension_wheels.py` and the docs' group table count ten groups
-- [ ] 3.14 Docs: `docs/extensions.md` (manifest, secret delivery and the two-names pattern, settings and overrides, the read API, validation), `docs/GLOSSARY.md` (manifest, setting), `docs/mcp-tools.md` for tool authors; the `connector` skill where it says only connectors declare secrets; render the plugin and `docs/agent-guide.md`
-- [ ] 3.15 Changelog
+- [x] 3.1 `vecten.manifest` in `vecten_shared.extensions.GROUPS` (not a layer group for the empty-declaration rule); one per distribution
+- [x] 3.2 Test then implement manifest loading in the lock routine: `secrets` (names, scope rule, reserved scopes, stack-managed names, `AIRFLOW_*`), `settings` (the accepted JSON Schema subset, no `env` property), unknown top-level keys reported
+- [x] 3.3 `extensions.lock.json` records each manifest's secrets and settings schema
+- [x] 3.4 `vecten_shared.config`: top-level `secrets`, `[settings.<namespace>]` with `env.<env>` overrides; namespace is a listed extension or `project`; `local` or a valid environment name; TOML dates and times refused; an extension named `project` refused
+- [x] 3.5 One validator in `vecten-shared` for the effective settings of one environment against the record; called by `vecten lock` (local and every named environment), `up` (local), bundle build and `ship --check` (the shipped environment)
+- [x] 3.6 `stack/compose.py`: declared platform names to the Airflow services and `MCP_*` names to `mcp-server` as `${NAME:-}`, collision checks for both services; mount `extensions.lock.json` beside `vecten.toml`; set `VECTEN_COMPONENT`, and `VECTEN_PROJECT_ROOT=/app` for `mcp-server`
+- [x] 3.7 `deploy/bundle.py`: `host.json`'s `connector_secrets` carries every declared platform name; comment the key's wider meaning; test that `apply.py` and its Scaleway copy are unchanged
+- [x] 3.8 `vecten_shared.context`: `extension(name)` and `project()` with `settings`, `env` and `secret()`; declared-only and component-scoped `secret()`; tests on the local provider inside and outside Compose and on mocked AWS and Scaleway runtime providers, including a `minimal` host refusing an `MCP_` read from platform code
+- [x] 3.9 The MCP server validates every extension's settings at startup and does not report healthy on failure
+- [x] 3.10 `vecten_platform.sync.secret` keeps its behaviour; it may delegate to the shared provider construction
+- [x] 3.11 `extension add` output and `next` name declared secrets missing locally and per environment (`next/deploy.py`)
+- [x] 3.12 The stub extension declares a manifest with a platform secret, an `MCP_` secret and a setting with a default; the layer test asserts the record, the laptop Compose environment and a read through the API in a DAG and in a tool
+- [x] 3.13 `scripts/check_extension_wheels.py` and the docs' group table count ten groups
+- [x] 3.14 Docs: `docs/extensions.md` (manifest, secret delivery and the two-names pattern, settings and overrides, the read API, validation), `docs/GLOSSARY.md` (manifest, setting), `docs/mcp-tools.md` for tool authors; the `connector` skill where it says only connectors declare secrets; render the plugin and `docs/agent-guide.md`
+- [x] 3.15 Changelog
 
 ## 4. Comments in `vecten.toml` survive, in pull request 3
 
-- [ ] 4.1 `save_config` updates the parsed `tomlkit` document in place, so the comments in `vecten.toml` survive `bootstrap`, `user add` and the other commands that record facts (design, Risks)
+- [x] 4.1 `save_config` updates the parsed `tomlkit` document in place, so the comments in `vecten.toml` survive `bootstrap`, `user add` and the other commands that record facts (design, Risks)

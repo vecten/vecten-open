@@ -404,3 +404,17 @@ def test_up_on_an_existing_snowflake_warehouse_has_nothing_to_start(
     assert r.exit_code == 4, r.stdout
     assert "runs only deployed" in json.loads(r.stdout)["error"]
     assert fake.calls == []
+
+
+def test_up_refuses_an_unknown_setting_before_anything_starts(invoke, workdir, fake, monkeypatch):
+    from vecten_shared.output import ExitCode
+
+    from .settings_fixtures import with_settings
+
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    with_settings(workdir / "p", {"dialy_cap": 500})
+    r = invoke("up", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.stdout
+    assert "settings.acme.dialy_cap" in r.stdout and "local" in r.stdout
+    assert fake.calls == []

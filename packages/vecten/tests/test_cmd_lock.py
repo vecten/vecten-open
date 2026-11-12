@@ -81,6 +81,8 @@ def test_lock_writes_every_record_with_inputs_lines(invoke, project, fakes):
     assert record["extensions"]["acme-demo"] == {
         "version": "1.2.0",
         "extras": ["cli", "mcp", "platform"],
+        "secrets": [],
+        "settings": None,
     }
     assert locking.lock_problems(project, load_config(project)) == []
     assert "acme-demo[cli]==1.2.0" in fakes["installed"][0]
@@ -223,3 +225,144 @@ def test_a_connector_dependency_that_is_not_a_plain_requirement_is_refused(
     assert r.exit_code != 0
     assert "crm" in r.output
     assert fakes["compiles"] == []
+
+
+SCHEMA = {"properties": {"daily_cap": {"type": "integer", "default": 1000}}}
+
+
+def _manifests(monkeypatch, value):
+    from vecten_shared.declarations import parse_manifest
+
+    monkeypatch.setattr(
+        extensions,
+        "load_manifests",
+        lambda config, candidates=None: {"acme-demo": parse_manifest("acme-demo", value)},
+    )
+
+
+def test_the_record_holds_each_manifests_secrets_and_settings(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    _manifests(monkeypatch, {"secrets": ["MCP_ACME_TOKEN", "ACME_API_KEY"], "settings": SCHEMA})
+    assert invoke("lock").exit_code == 0
+    entry = json.loads((project / locking.RECORD_FILE).read_text())["extensions"]["acme-demo"]
+    assert entry["secrets"] == ["ACME_API_KEY", "MCP_ACME_TOKEN"]
+    assert entry["settings"] == SCHEMA
+
+
+def test_an_unknown_manifest_key_is_reported(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    _manifests(monkeypatch, {"permissions": ["x"]})
+    r = invoke("lock", "--json")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["unsupported"] == {"acme-demo": ["permissions"]}
+
+
+def test_a_malformed_manifest_changes_no_record(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    before = (project / locking.RECORD_FILE).read_bytes()
+
+    def bad(config, candidates=None):
+        from vecten_shared.declarations import parse_manifest
+
+        return {"acme-demo": parse_manifest("acme-demo", {"secrets": "ACME_API_KEY"})}
+
+    monkeypatch.setattr(extensions, "load_manifests", bad)
+    r = invoke("lock", "--json")
+    assert r.exit_code == ExitCode.CONFIG
+    assert "acme-demo" in r.output and "secrets" in r.output
+    assert (project / locking.RECORD_FILE).read_bytes() == before
+
+
+def test_lock_checks_settings_for_local_and_every_named_environment(
+    invoke, project, fakes, monkeypatch
+):
+    _add_extension(project)
+    _manifests(monkeypatch, {"settings": SCHEMA})
+    _edit_config(
+        project,
+        lambda doc: doc.__setitem__(
+            "settings", {"acme-demo": {"env": {"prod": {"daily_cap": "500"}}}}
+        ),
+    )
+    r = invoke("lock", "--json")
+    assert r.exit_code == ExitCode.CONFIG
+    assert "settings.acme-demo.daily_cap" in r.output and "prod" in r.output
+
+
+def test_a_secret_for_a_component_the_project_lacks_is_reported(
+    invoke, project, fakes, monkeypatch
+):
+    _add_extension(project)
+    _edit_config(project, lambda doc: doc.__setitem__("components", ["platform"]))
+    _manifests(monkeypatch, {"secrets": ["MCP_ACME_TOKEN", "ACME_API_KEY"]})
+    r = invoke("lock", "--json")
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.stdout)
+    assert data["undelivered"] == ["MCP_ACME_TOKEN"]
+    assert "ACME_API_KEY" in data["missing_locally"]
+
+
+def test_two_manifests_in_one_distribution_are_refused():
+    from vecten_shared.config import VectenConfig
+
+    dist = SimpleNamespace(name="acme-demo", version="1.0")
+    points = [
+        SimpleNamespace(name=n, dist=dist, group="vecten.manifest", load=lambda: {})
+        for n in ("one", "two")
+    ]
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "a", "scaffold_version": "0.1.0"},
+            "extensions": ["acme-demo"],
+        }
+    )
+    with pytest.raises(Failure, match="acme-demo"):
+        extensions.load_manifests(config, candidates=points)
+
+
+def test_lock_names_secrets_to_set_and_secrets_not_delivered(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    _edit_config(project, lambda doc: doc.__setitem__("components", ["platform"]))
+    _manifests(monkeypatch, {"secrets": ["MCP_ACME_TOKEN", "ACME_API_KEY"]})
+    r = invoke("lock")
+    assert r.exit_code == 0, r.output
+    assert "vecten secret set ACME_API_KEY" in r.output
+    assert "MCP_ACME_TOKEN" in r.output and "not delivered" in r.output
+
+
+def test_extension_add_names_the_secrets_to_set(invoke, project, fakes, monkeypatch):
+    _manifests(monkeypatch, {"secrets": ["ACME_API_KEY"]})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    data = json.loads(r.stdout)
+    assert data["missing_secrets"] == ["ACME_API_KEY"]
+    r = invoke("extension", "add", "acme-demo")
+    assert "vecten secret set ACME_API_KEY" in r.output
+
+
+def test_two_extensions_may_name_their_manifest_entry_point_alike():
+    from vecten_shared.config import VectenConfig
+
+    def point(dist_name, secrets):
+        dist = SimpleNamespace(name=dist_name, version="1.0")
+        return SimpleNamespace(
+            name="manifest",
+            dist=dist,
+            group="vecten.manifest",
+            load=lambda: {"secrets": secrets},
+        )
+
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "a", "scaffold_version": "0.1.0"},
+            "extensions": ["acme-one", "acme-two"],
+        }
+    )
+    found = extensions.load_manifests(
+        config, candidates=[point("acme-one", ["ONE_TOKEN"]), point("acme-two", ["TWO_TOKEN"])]
+    )
+    assert found["acme-one"].secrets == ("ONE_TOKEN",)
+    assert found["acme-two"].secrets == ("TWO_TOKEN",)
