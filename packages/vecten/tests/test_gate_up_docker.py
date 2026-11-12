@@ -1,6 +1,8 @@
 """The laptop stack's gate: a person signs in with the password backend and reaches a login
 route of an in-repo extension's service, which sees who they are and nothing forged."""
 
+import base64
+import hashlib
 import json
 import re
 import secrets
@@ -10,7 +12,7 @@ import sys
 import uuid
 from html import unescape
 from http.cookies import SimpleCookie
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 import pytest
@@ -82,7 +84,7 @@ class Browser:
         self.client = client
         self.jars: dict[str, dict[str, str]] = {}
 
-    def go(self, method, url, *, headers=None, data=None):
+    def go(self, method, url, *, headers=None, data=None, json=None):
         target = urlsplit(url)
         host = target.netloc
         jar = self.jars.setdefault(host, {})
@@ -95,6 +97,7 @@ class Browser:
             f"https://127.0.0.1:8443{path}",
             headers=sent,
             data=data,
+            json=json,
             extensions={"sni_hostname": host.split(":", 1)[0]},
         )
         for line in response.headers.get_list("set-cookie"):
@@ -141,6 +144,86 @@ def _images(registry):
     assert probe.returncode == 0, "the MCP base image lacks the gate: " + probe.stderr
 
 
+def _sign_in(browser):
+    """From a login route through the gate's start and the server's sign-in page; the
+    answer to the posted credentials."""
+    first = browser.go("GET", f"https://{WEB_HOST}/docs?page=2")
+    assert first.status_code == 302
+    start = browser.follow(f"https://{WEB_HOST}/", first)
+    assert start == f"https://{WEB_HOST}/_vecten/gate/start?rd=/docs?page=2"
+    started = browser.go("GET", start)
+    assert started.status_code == 303, started.text
+    authorize = started.headers["location"]
+    assert authorize.startswith(f"https://{MCP_HOST}/gate/authorize?")
+    page = browser.go("GET", authorize)
+    assert page.status_code == 200, page.text
+    return browser.go(
+        "POST",
+        f"https://{MCP_HOST}/login",
+        data={
+            "flow": _hidden(page, "flow"),
+            "csrf": _hidden(page, "csrf"),
+            "email": ADMIN,
+            "password": PASSWORD,
+        },
+    )
+
+
+def _provision(admin):
+    """`vecten user add` over the admin API, with a token from the authorization code flow:
+    the first admin is invited at start and has no warehouse account until then."""
+    redirect = "http://127.0.0.1:9000/cb"
+    client = admin.go(
+        "POST",
+        f"https://{MCP_HOST}/register",
+        json={"client_name": "gate test", "redirect_uris": [redirect]},
+    ).json()
+    verifier = "v" * 43
+    digest = hashlib.sha256(verifier.encode()).digest()
+    resource = f"https://{MCP_HOST}/mcp"
+    query = {
+        "client_id": client["client_id"],
+        "redirect_uri": redirect,
+        "response_type": "code",
+        "resource": resource,
+        "code_challenge": base64.urlsafe_b64encode(digest).rstrip(b"=").decode(),
+        "code_challenge_method": "S256",
+        "state": "s",
+    }
+    page = admin.go("GET", f"https://{MCP_HOST}/authorize?" + urlencode(query))
+    flow, csrf = _hidden(page, "flow"), _hidden(page, "csrf")
+    admin.go(
+        "POST",
+        f"https://{MCP_HOST}/login",
+        data={"flow": flow, "csrf": csrf, "email": ADMIN, "password": PASSWORD},
+    )
+    approved = admin.go(
+        "POST",
+        f"https://{MCP_HOST}/consent",
+        data={"flow": flow, "csrf": csrf, "decision": "approve"},
+    )
+    target = unescape(re.search(r'<a href="([^"]+)"', approved.text)[1])
+    tokens = admin.go(
+        "POST",
+        f"https://{MCP_HOST}/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": parse_qs(urlsplit(target).query)["code"][0],
+            "client_id": client["client_id"],
+            "redirect_uri": redirect,
+            "code_verifier": verifier,
+            "resource": resource,
+        },
+    ).json()
+    created = admin.go(
+        "POST",
+        f"https://{MCP_HOST}/api/admin/users/create",
+        json={"email": ADMIN, "name": "Ada"},
+        headers={"Authorization": "Bearer " + tokens["access_token"]},
+    )
+    assert created.status_code == 200, created.text
+
+
 @pytest.mark.skipif(not docker_ok(), reason="no docker daemon")
 def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monkeypatch):
     build = subprocess.run(
@@ -183,33 +266,21 @@ def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monk
             )
             assert done.status_code == 200, done.text
 
-            first = browser.go("GET", f"https://{WEB_HOST}/docs?page=2")
-            assert first.status_code == 302
-            start = browser.follow(f"https://{WEB_HOST}/", first)
-            assert start == f"https://{WEB_HOST}/_vecten/gate/start?rd=/docs?page=2"
-            started = browser.go("GET", start)
-            assert started.status_code == 303, started.text
-            authorize = started.headers["location"]
-            assert authorize.startswith(f"https://{MCP_HOST}/gate/authorize?")
-            page = browser.go("GET", authorize)
-            assert page.status_code == 200, page.text
-            signed = browser.go(
-                "POST",
-                f"https://{MCP_HOST}/login",
-                data={
-                    "flow": _hidden(page, "flow"),
-                    "csrf": _hidden(page, "csrf"),
-                    "email": ADMIN,
-                    "password": PASSWORD,
-                },
-            )
+            # Signed in, but without a warehouse account yet: no portal.
+            refused = _sign_in(browser)
+            assert refused.status_code == 400 and "Ask an admin" in refused.text
+            _provision(Browser(client))
+            signed = _sign_in(browser)
             callback = unescape(re.search(r'<a href="([^"]+)"', signed.text)[1])
             assert callback.startswith(f"https://{WEB_HOST}/_vecten/gate/callback?code=")
             landed = browser.go("GET", callback)
             assert landed.status_code == 303 and landed.headers["location"] == "/docs?page=2"
             assert "__Host-vecten-gate" in browser.jars[WEB_HOST]
             assert "__Host-vecten-gate" not in browser.jars[MCP_HOST]
+            assert "__Host-vecten-gate-state" not in browser.jars[WEB_HOST]
 
+            # A sign-in left unfinished elsewhere keeps its state cookie; no service sees it.
+            browser.jars[WEB_HOST]["__Host-vecten-gate-state"] = "v" * 43
             seen = browser.go("GET", f"https://{WEB_HOST}/docs?page=2", headers=FORGED)
             assert seen.status_code == 200, seen.text
             echoed = seen.json()
@@ -217,7 +288,8 @@ def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monk
             assert echoed["x-vecten-groups"] == "default"
             assert echoed["x-vecten-admin"] == "true"
             assert echoed["x-vecten-principal"] and echoed["x-vecten-name"]
-            assert "__Host-vecten-gate" not in echoed.get("cookie", "")
+            assert "vecten-gate" not in echoed.get("cookie", "")
+            browser.jars[WEB_HOST].pop("__Host-vecten-gate-state")
 
             refused = browser.go("GET", f"https://{WEB_HOST}/books")
             assert refused.status_code == 403 and "No access" in refused.text
@@ -227,12 +299,22 @@ def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monk
             assert not [h for h in hook.json() if h.startswith("x-vecten")]
 
             session = dict(browser.jars[WEB_HOST])
-            out = browser.go("GET", f"https://{WEB_HOST}/_vecten/gate/logout")
-            assert out.status_code == 200
+            asked = browser.go("GET", f"https://{WEB_HOST}/_vecten/gate/logout")
+            assert asked.status_code == 200 and 'method="post"' in asked.text
+            out = browser.go(
+                "POST",
+                f"https://{WEB_HOST}/_vecten/gate/logout",
+                data={"csrf": _hidden(asked, "csrf")},
+            )
+            assert out.status_code == 200, out.text
             assert "__Host-vecten-gate" not in browser.jars[WEB_HOST]
             browser.jars[WEB_HOST] = session
             again = browser.go("GET", f"https://{WEB_HOST}/docs")
             assert again.status_code == 302
+            # The server's own sign-in ended too: the next sign-in asks for credentials.
+            started = browser.go("GET", f"https://{WEB_HOST}/_vecten/gate/start?rd=/")
+            form = browser.go("GET", started.headers["location"])
+            assert form.status_code == 200 and 'name="password"' in form.text
     finally:
         vecten("down", "--volumes", "--json", cwd=proj)
         drop_volumes(project)
