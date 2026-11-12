@@ -23,6 +23,10 @@ from vecten_shared.versions import VERSIONS
 
 from .scaffold_matrix import MATRIX, label
 
+COPY_GRANTS = (
+    "  # A rebuilt relation keeps the grants of the one it replaces, in the same statement.\n"
+    "  +copy_grants: true\n"
+)
 SKILL_REFERENCE = re.compile(r"skills/([^/\s`]+)/SKILL\.md")
 BASE_PATHS = [
     "orchestration/docker-compose.override.yml",
@@ -219,6 +223,22 @@ def test_rendered_dbt_project_delegates_schema_names_to_the_convention(tmp_path)
     assert project["snapshots"]["acme"]["+schema"] == "snapshots"
     macro = (dbt_dir / "macros" / "generate_schema_name.sql").read_text()
     assert "vecten_convention.generate_schema_name(custom_schema_name, node)" in macro
+
+
+def test_snowflake_models_keep_their_grants_across_rebuilds(tmp_path):
+    texts = {}
+    for warehouse in ("postgres", "snowflake"):
+        params = ScaffoldParams.from_answers(
+            {"name": "acme", "users": 3, "sources": ["hubspot"], "warehouse": warehouse}, {}
+        )
+        render_project(tmp_path / warehouse, params)
+        texts[warehouse] = (tmp_path / warehouse / "dbt" / "dbt_project.yml").read_text()
+    assert yaml.safe_load(texts["snowflake"])["models"]["+copy_grants"] is True
+    # A Postgres project renders exactly as before; Snowflake adds the setting only.
+    assert "copy_grants" not in texts["postgres"]
+    assert texts["snowflake"] == texts["postgres"].replace(
+        "\nmodels:\n", "\nmodels:\n" + COPY_GRANTS
+    )
 
 
 @pytest.mark.parametrize("warehouse", ["postgres", "snowflake"])

@@ -14,7 +14,9 @@ target-path: "target"
 packages-install-path: "{{ env_var('DBT_PACKAGES_INSTALL_PATH', 'dbt_packages') }}"
 clean-targets: ["target", "dbt_packages"]
 models:
-  "[[ project_name | replace('-', '_') ]]":
+[% if warehouse == 'snowflake' %]  # A rebuilt relation keeps the grants of the one it replaces, in the same statement.
+  +copy_grants: true
+[% endif %]  "[[ project_name | replace('-', '_') ]]":
     staging:
       +schema: staging
       +materialized: view
