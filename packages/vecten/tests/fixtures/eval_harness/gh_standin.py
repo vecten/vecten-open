@@ -657,6 +657,24 @@ def route_api(ctx: Context, method: str, path: str, query: dict, body: dict) -> 
                 repo["environments"][env] = environment
                 return {"name": env, **environment}
         raise Unanswered(f"api {method} {path}")
+    status_match = re.fullmatch(r"statuses/([0-9a-f]{40})|commits/([0-9a-f]{7,40})/status", rest)
+    if status_match and method == "POST" and status_match[1]:
+        status = {
+            "state": body.get("state"),
+            "context": body.get("context", "default"),
+            "description": body.get("description"),
+            "target_url": body.get("target_url"),
+            "created_at": now_iso(),
+        }
+        with ctx.store.edit(name) as repo:
+            repo.setdefault("statuses", {}).setdefault(status_match[1], []).append(status)
+        return status
+    if status_match and method == "GET" and status_match[2]:
+        found = ctx.store.require(name).get("statuses", {})
+        sha = next((s for s in found if s.startswith(status_match[2])), status_match[2])
+        # The combined status holds the latest status of each context.
+        latest = {s["context"]: s for s in found.get(sha, [])}
+        return {"sha": sha, "state": "pending", "statuses": list(latest.values())}
     repo = ctx.store.require(name)
     if rest == "pulls" and method == "GET":
         state = query.get("state", ["open"])[0]
@@ -817,14 +835,23 @@ def emulate_apply(checkout: Path, env: str, commit: str) -> str:
     return f"applied the mocked cloud for {env}; shipped {commit} to {', '.join(hosts)}"
 
 
-def emulate_ship(checkout: Path, env: str) -> str:
-    """The ship job: `vecten ship --env <env>` inside Actions, from the checkout."""
+def emulate_ship(store: Store, checkout: Path, env: str) -> str:
+    """The ship job: `vecten ship --env <env>` inside Actions, from the checkout.
+
+    The job sets its commit status through `gh`, which must be this stand-in: the real one
+    would write to GitHub.
+    """
+    environ = _clean_env()
     result = subprocess.run(
         [sys.executable, "-m", "vecten.cli.app", "ship", "--env", env, "--json"],
         cwd=checkout,
         capture_output=True,
         text=True,
-        env={**_clean_env(), "GITHUB_ACTIONS": "true"},
+        env={
+            **environ,
+            **install(store.root, python=sys.executable, environ=environ),
+            "GITHUB_ACTIONS": "true",
+        },
     )
     if result.returncode != 0:
         raise RuntimeError(f"vecten ship exited {result.returncode}: {result.stdout}")
@@ -879,7 +906,7 @@ def dispatch(store: Store, name: str, workflow: str, ref: str, inputs: dict) -> 
     elif workflow == SHIP_WORKFLOW:
 
         def emulate(checkout, commit):
-            return emulate_ship(checkout, env)
+            return emulate_ship(store, checkout, env)
 
     else:
 
@@ -1425,7 +1452,7 @@ def post_receive(store: Store, bare: Path, lines: list[str]) -> None:
             facts = load_config(checkout).environments.get("prod")
             if facts is None or not facts.deployed_commit:
                 return "gate: prod is not deployed in this commit; nothing shipped"
-            return emulate_ship(checkout, "prod")
+            return emulate_ship(store, checkout, "prod")
 
         run = record_run(store, name, PUSH_WORKFLOW, "push", repo["default_branch"], new, emulate)
         sys.stderr.write(f"{PUSH_WORKFLOW} run {run['id']}: {run['conclusion']}\n")
