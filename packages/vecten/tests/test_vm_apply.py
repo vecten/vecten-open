@@ -15,9 +15,9 @@ import pytest
 
 import vecten.deploy.vm
 from vecten.deploy import admin
-from vecten.stack.env import FIXED
 from vecten_shared.provider import scope_for
 from vecten_shared.sql import setup_sql_path, setup_variables
+from vecten_shared.stack_secrets import FIXED
 from vecten_shared.versions import VERSIONS
 
 from . import docker_util

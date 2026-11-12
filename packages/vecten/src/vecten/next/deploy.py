@@ -18,10 +18,10 @@ from vecten.next.existing_warehouse import provisioner_secrets_item
 from vecten.next.gitstate import GitState
 from vecten.next.items import Item
 from vecten.secrets import LAPTOP_ONLY, provisioner_secret_names, recorded_secret_names
-from vecten.stack.env import STACK_MANAGED
 from vecten_shared.config import EnvironmentFacts, VectenConfig
 from vecten_shared.envfile import read_env_values
 from vecten_shared.provider.local import LocalProvider
+from vecten_shared.stack_secrets import STACK_MANAGED
 
 # `none` records that the human has no account yet; the question stays open and, asked again,
 # carries the guides to show first. An agent acting on the item records it like any answer.

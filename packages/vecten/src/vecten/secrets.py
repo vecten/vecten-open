@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
-from vecten.stack.env import STACK_MANAGED
 from vecten_shared.config import VectenConfig, load_config
 from vecten_shared.names import check_env_name, check_secret_name
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import Provider, get_provider
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import read_record, write_record
+from vecten_shared.stack_secrets import STACK_MANAGED
 
 T = TypeVar("T")
 

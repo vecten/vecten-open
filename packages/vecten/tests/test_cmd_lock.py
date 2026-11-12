@@ -81,6 +81,8 @@ def test_lock_writes_every_record_with_inputs_lines(invoke, project, fakes):
     assert record["extensions"]["acme-demo"] == {
         "version": "1.2.0",
         "extras": ["cli", "mcp", "platform"],
+        "secrets": [],
+        "settings": None,
     }
     assert locking.lock_problems(project, load_config(project)) == []
     assert "acme-demo[cli]==1.2.0" in fakes["installed"][0]
