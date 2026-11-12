@@ -20,6 +20,9 @@ T = TypeVar("T")
 # `vecten mcp introspect` signs in with the existing warehouse's administrator on this machine;
 # no deployed component reads it, so a cloud copy would only widen where it can leak.
 LAPTOP_ONLY = frozenset({"WAREHOUSE_ADMIN_PASSWORD", "WAREHOUSE_ADMIN_PRIVATE_KEY"})
+# The git credential fetches extension sources on a laptop and in CI only; a deployed host
+# builds from the source CI ships and never needs it.
+GIT_CREDENTIALS = frozenset({"GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"})
 
 
 def provisioner_secret_names(config: VectenConfig) -> list[str]:
@@ -47,6 +50,11 @@ def check_request(name: str, env: str | None, from_local: bool) -> None:
     if from_local and env is None:
         raise Failure(
             ExitCode.USAGE, "--from-local copies a local secret to an environment; add --env <env>"
+        )
+    if env is not None and name in GIT_CREDENTIALS:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"{name} lives only in .env and in CI: no deployed host fetches git sources",
         )
     if env is not None and name in LAPTOP_ONLY:
         raise Failure(

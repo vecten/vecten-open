@@ -270,6 +270,19 @@ def test_secret_set_refuses_the_admin_password_for_an_environment(invoke, deploy
     assert r.exit_code == 0, r.stdout + r.stderr
 
 
+@pytest.mark.parametrize("name", ["GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"])
+def test_secret_set_refuses_the_git_credential_for_an_environment(invoke, deployed, name):
+    token = "https://x-access-token:QWERTYPLKJ@github.com"
+    r = invoke("secret", "set", name, "--env", "prod", "--json", input=f"{token}\n")
+    assert r.exit_code == 4, r.stdout + r.stderr
+    error = json.loads(r.stdout)["error"]
+    assert ".env" in error and "CI" in error
+    assert "QWERTY" not in r.stdout + r.stderr
+    assert STORE == {}
+    r = invoke("secret", "set", name, "--json", input=f"{token}\n")
+    assert r.exit_code == 0, r.stdout + r.stderr
+
+
 def test_list_shows_names_only(invoke, project):
     invoke("secret", "set", "B_KEY", input="2\n")
     invoke("secret", "set", "A_KEY", input="1\n")
