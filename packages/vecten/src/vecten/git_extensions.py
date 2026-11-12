@@ -41,14 +41,20 @@ LINE = re.compile(r"(?P<requirement>\S.*?)(?:\s+#\s*tag\s+(?P<tag>\S+))?\s*")
 VERSION_TAG = re.compile(r"(?:.+/)?v(?P<version>[^/]+)")
 
 
+# `<name>[extras] @`, with which a requirement names its package by URL, even a malformed one.
+URL_REQUIREMENT = re.compile(r"\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s*@")
+
+
 def is_source(text: str) -> bool:
-    """Whether a requirement or record line names its package by URL."""
-    if "://" in text:
-        return True
-    try:
-        return Requirement(text.strip()).url is not None
-    except InvalidRequirement:
+    """Whether a requirement or record line names its package by URL; a comment, which starts
+    at a `#` after whitespace, is not read."""
+    requirement = re.split(r"\s#", text, maxsplit=1)[0].strip()
+    if not requirement or requirement.startswith("#"):
         return False
+    try:
+        return Requirement(requirement).url is not None
+    except InvalidRequirement:
+        return URL_REQUIREMENT.match(requirement) is not None
 
 
 def line_name(line: str) -> str | None:

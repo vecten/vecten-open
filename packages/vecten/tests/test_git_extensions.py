@@ -778,3 +778,30 @@ def test_every_uv_call_in_a_project_with_git_sources_runs_without_the_credential
     assert calls
     for call in calls:
         assert not {"GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"} & set(call["env"]), call["args"]
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("acme @ git+https://github.com/acme/x@" + "a" * 40 + "  # tag v1", True),
+        ("acme[cli] @ git+https://github.com/acme/x@v1#subdirectory=acme", True),
+        ("acme @ git+http://github.com/acme/x@v1", True),
+        ("acme @ https://example.com/acme-1.0.whl", True),
+        ("acme@git+https://github.com/acme/x@v1", True),
+        ("httpx==0.27.0  # mirrored from https://example.com/httpx", False),
+        ("# see https://example.com", False),
+        ("./extensions/acme  # https://example.com", False),
+        ("httpx==0.27.0", False),
+    ],
+)
+def test_a_source_line_is_told_apart_by_its_requirement_not_its_comment(line, expected):
+    from vecten import git_extensions
+
+    assert git_extensions.is_source(line) is expected
+
+
+def test_an_index_pin_with_a_url_in_its_comment_is_not_read_as_a_source(project):
+    (project / "requirements.txt").write_text("acme-demo==1.2.0  # from https://example.com\n")
+    # As before git sources, a pin with a comment is not one `vecten lock` writes or reads.
+    assert locking.read_pins(project) == {}
+    assert locking.git_problems(project, load_config(project)) == []
