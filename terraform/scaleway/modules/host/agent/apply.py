@@ -118,9 +118,12 @@ XTABLES_WAIT_SECONDS = "30"
 # Every Compose service a binding generates is named with this prefix.
 SERVICE_PREFIX = "svc-"
 # After a reboot dockerd restarts services before any unit ordered after it, and keeps a
-# DOCKER-USER chain it finds, so the rule goes in before Docker starts.
+# DOCKER-USER chain it finds, so the rule goes in before Docker starts. `RequiredBy` with
+# `Before` keeps Docker down when the guard fails; a skipped condition counts as success.
+# The guard runs a copy of the agent that ships it, since the current release may predate it.
 SYSTEMD_DIR = Path("/etc/systemd/system")
 GUARD_UNIT = "vecten-services-guard.service"
+GUARD_AGENT = Path("/opt/vecten/guard/apply.py")
 GUARD_UNIT_TEXT = f"""[Unit]
 Description=Vecten: keep extension services off the instance metadata address
 Before=docker.service
@@ -129,10 +132,10 @@ ConditionPathExists={RELEASES}/current
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/python3 {RELEASES}/current/{SHIP_DIR}/apply.py guard
+ExecStart=/usr/bin/python3 {GUARD_AGENT} guard
 
 [Install]
-WantedBy=docker.service
+RequiredBy=docker.service
 """
 
 # The metadata server answers user data only to a request from a source port below 1024.
@@ -924,8 +927,19 @@ def isolate_services(host: dict, run: Run, create_chain: bool = False) -> None:
         )
 
 
+def _replace_file(path: Path, data: bytes, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data)
+    os.chmod(str(tmp), mode)
+    os.replace(str(tmp), str(path))
+
+
 def install_guard(run: Run) -> None:
     """Install and enable the unit that runs `guard` before Docker starts at boot."""
+    agent = Path(__file__).read_bytes()
+    if not GUARD_AGENT.is_file() or GUARD_AGENT.read_bytes() != agent:
+        _replace_file(GUARD_AGENT, agent, 0o644)
     path = SYSTEMD_DIR / GUARD_UNIT
     try:
         current = path.read_text(encoding="utf-8")
@@ -933,11 +947,7 @@ def install_guard(run: Run) -> None:
         current = None
     commands = [["systemctl", "enable", GUARD_UNIT]]
     if current != GUARD_UNIT_TEXT:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.tmp")
-        tmp.write_text(GUARD_UNIT_TEXT, encoding="utf-8")
-        os.chmod(str(tmp), 0o644)
-        os.replace(str(tmp), str(path))
+        _replace_file(path, GUARD_UNIT_TEXT.encode("utf-8"), 0o644)
         commands.insert(0, ["systemctl", "daemon-reload"])
     for command in commands:
         result = run(command)

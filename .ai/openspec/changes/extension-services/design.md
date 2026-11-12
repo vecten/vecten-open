@@ -409,9 +409,11 @@ run by the agent of the release that failed, so it knows the keys too, unless th
 built by a Vecten older than this change: downgrading Vecten on an environment whose previous
 release runs services is unsupported. After a reboot dockerd restarts running services as it
 starts, so a ship that runs services also installs `vecten-services-guard.service`, ordered
-before `docker.service`, which runs the current release's agent (`apply.py guard`) to create
-`DOCKER-USER` and add the rule with no secret read; dockerd keeps a chain it finds (proven in
-the Docker tier on engines 25.0 and 28.5). The boot step still adds the rule first, before any
+before `docker.service` and required by it, which runs the shipping agent's own copy
+(`/opt/vecten/guard/apply.py guard`, since the current release may predate the command) to
+create `DOCKER-USER` and add the rule with no secret read; dockerd keeps a chain it finds
+(proven in the Docker tier on engines 25.0 and 28.5). A guard that fails keeps Docker, and
+with it the whole stack, down until an operator fixes it: fail-closed, proven under systemd. The boot step still adds the rule first, before any
 secret read; at boot and on rollback a failure stops the services rather than leave them
 running without the rule. On ship it runs before the swap and fails the ship, because a
 service without the rule would hold the host's identity.
@@ -562,8 +564,7 @@ starts on every host.
 - [The MCP being down takes `login` routes down] → It is the identity provider; `public` routes
   are unaffected. The docs say so.
 - [After a reboot Docker restarts services before the boot unit runs] → The guard unit adds
-  the rule before `docker.service`; if it fails, the boot step adds it first or stops the
-  services. Task 3.5 probes the metadata address from a service while a VM reboots.
+  the rule before `docker.service`, which requires it, so a failed guard keeps Docker down. Task 3.5 probes the metadata address from a service while a VM reboots.
 - [iptables rules on two operating systems] → Amazon Linux 2023 and Ubuntu both run Docker with
   the iptables backend it manages, and `DOCKER-USER` is Docker's documented place for user
   rules. A Docker-tier test proves the block on the agent's own commands; a real deploy proves it

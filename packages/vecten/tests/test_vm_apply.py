@@ -40,6 +40,7 @@ def agent(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "LETSENCRYPT", tmp_path / "letsencrypt")
     monkeypatch.setattr(module, "RUN_DIR", tmp_path / "run" / "vecten")
     monkeypatch.setattr(module, "SYSTEMD_DIR", tmp_path / "systemd")
+    monkeypatch.setattr(module, "GUARD_AGENT", tmp_path / "guard" / "apply.py")
     return module
 
 
@@ -1982,11 +1983,12 @@ def test_ship_installs_a_guard_that_runs_before_docker(agent, tmp_path):
     run = FakeRun(store=seeded(out))
     ship(agent, release, run, tmp_path)
     unit = (agent.SYSTEMD_DIR / GUARD_UNIT).read_text()
-    assert "Before=docker.service" in unit and "WantedBy=docker.service" in unit
-    assert (
-        "ExecStart=/usr/bin/python3 /opt/vecten/releases/current/.vecten/ship/apply.py guard"
-        in unit
-    )
+    # Docker starts only once the guard succeeded; a wanted unit would not hold it back.
+    assert "Before=docker.service" in unit and "RequiredBy=docker.service" in unit
+    assert "WantedBy=" not in unit
+    assert "ExecStart=/usr/bin/python3 /opt/vecten/guard/apply.py guard" in unit
+    # A copy of its own: the current release may come from before `guard` existed.
+    assert agent.GUARD_AGENT.read_bytes() == APPLY.read_bytes()
     assert systemctl(run) == [["systemctl", "daemon-reload"], ["systemctl", "enable", GUARD_UNIT]]
     order = [
         c["args"][0] for c in run.calls if c["args"][0] == "systemctl" or c in compose_calls(run)
@@ -2060,3 +2062,22 @@ def test_main_runs_the_guard(agent, tmp_path, monkeypatch):
     run = FakeRun()
     assert agent.main(["guard"], run=run) == 0
     assert run.rules == {AWS_DROP}
+
+
+def test_the_unit_runs_a_fixed_agent_path_outside_the_releases(agent):
+    module = load_agent()
+    assert str(module.GUARD_AGENT) == "/opt/vecten/guard/apply.py"
+    assert f"ExecStart=/usr/bin/python3 {module.GUARD_AGENT} guard" in module.GUARD_UNIT_TEXT
+
+
+def test_a_stale_guard_agent_copy_is_replaced(agent, tmp_path):
+    out = outputs("standard")
+    agent.GUARD_AGENT.parent.mkdir(parents=True)
+    agent.GUARD_AGENT.write_text("# an older agent\n")
+    ship(
+        agent,
+        stage(tmp_path / "releases", out, "platform", **with_services()),
+        FakeRun(store=seeded(out)),
+        tmp_path,
+    )
+    assert agent.GUARD_AGENT.read_bytes() == APPLY.read_bytes()
