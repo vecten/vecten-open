@@ -55,6 +55,7 @@ PUBLIC_DOCS = {
     "docs/operations.md",
     "docs/query-metrics.md",
     "docs/semantic-model.md",
+    "docs/services.md",
     "docs/skill-evaluations.md",
 }
 PUBLIC_AGENTS = (
