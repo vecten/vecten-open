@@ -51,10 +51,10 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 
 ## 5. `vecten extension sync`
 
-- [ ] 5.1 The command (Decision 14) and its tests, including in-repo extensions.
+- [x] 5.1 The command (Decision 14) and its tests, including in-repo extensions.
 
 ## 6. Documentation and archive
 
-- [ ] 6.1 `docs/extensions-private-git.md` (Decision 16); `docs/extensions.md` links it.
-- [ ] 6.2 `docs/cli.md`, `docs/GLOSSARY.md` ("Git source"), changelog.
+- [x] 6.1 `docs/extensions-private-git.md` (Decision 16); `docs/extensions.md` links it.
+- [x] 6.2 `docs/cli.md`, `docs/GLOSSARY.md` ("Git source"), changelog.
 - [ ] 6.3 Agree the final text of "Extensions are pip dependencies everywhere" with `project-extensions`, and archive.
