@@ -349,3 +349,13 @@ def test_a_snowflake_setup_script_names_each_environments_issuer(tmp_path):
     items = existing_warehouse_items(root, load_config(root), "dev")
     assert [i.resolution for i in items] == ["vecten mcp provisioner-script --env dev"]
     assert existing_warehouse_items(root, load_config(root), "prod") == []
+
+
+def test_without_a_deploy_layer_a_deployed_prod_waits_for_the_deploy_questions(project):
+    """As before the order existed: the deploy questions come before any environment."""
+    clear_after_deploy(project, "prod")
+    facts(project, "prod", connection_shown=False)
+    config = load_config(project)
+    config.deploy = None
+    save_config(project, config)
+    assert [i.answer_keys for i in next_items(project)] == [("cloud",)]

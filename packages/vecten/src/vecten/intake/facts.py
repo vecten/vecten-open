@@ -123,8 +123,9 @@ def set_promotion(project_root: Path, raw: str) -> list[str] | None:
     config = load_config(project_root)
     if config.deploy is None:
         raise Failure(
-            ExitCode.PREREQUISITE,
-            f"{PROMOTION_KEY} orders the deployed environments; run `vecten init --deploy` first",
+            ExitCode.REFUSED,
+            f"{PROMOTION_KEY} orders the deployed environments; this project has no deploy "
+            "layer; run `vecten init --deploy` first",
         )
     order: list[str] | None = None
     if raw.strip().lower() != NO_PROMOTION:

@@ -112,7 +112,7 @@ def test_a_project_without_a_deploy_layer_names_init_deploy(invoke, tmp_path, mo
     monkeypatch.chdir(root)
     before = (root / "vecten.toml").read_text()
     r = invoke("answer", "deploy.promotion", "dev,prod", "--json")
-    assert r.exit_code == 3, r.stdout
+    assert r.exit_code == 4, r.stdout
     assert "vecten init --deploy" in json.loads(r.stdout)["error"]
     assert (root / "vecten.toml").read_text() == before
 
