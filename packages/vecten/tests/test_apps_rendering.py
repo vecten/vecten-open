@@ -164,7 +164,7 @@ def test_nginx_serves_the_app_at_its_hostname_with_one_login_route_and_its_healt
 
 
 def test_nginx_limits_no_request_rate_by_address_for_the_app_or_the_mcp(tmp_path):
-    # An app's MCP calls arrive from its host's one public address (design.md, Risks), so no
+    # An app's MCP calls arrive from its host's one public address, so no
     # per-address rate limit may stand between the app and the MCP.
     stack(tmp_path)
     [bound] = bound_services(config(BOUND), read_record(tmp_path / "proj"))

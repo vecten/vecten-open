@@ -128,6 +128,10 @@ def test_a_bound_group_that_does_not_exist_is_listed():
     assert [(e["group"], e.get("reason")) for e in access.health()["apps"]] == [
         ("sales", "no such group")
     ]
+    access.create_group("sales")
+    assert [(e["group"], e.get("dataset")) for e in access.health()["apps"]] == [
+        ("sales", "orders")
+    ]
 
 
 def test_a_dataset_the_model_lacks_blocks_no_group_and_is_a_model_warning():

@@ -25,8 +25,10 @@ class AccessService:
         self.apps = None
 
     def admit(self):
-        if self.apps is not None:
-            self.apps.admit(self.datasets)
+        # Under the grant lock, so a computation from older grants never lands after a newer one.
+        with self.lock:
+            if self.apps is not None:
+                self.apps.admit(self.datasets)
 
     def seed_defaults(self):
         # Setup SQL creates these grants. Record them once so revoke is effective,
@@ -53,6 +55,7 @@ class AccessService:
             conn.execute(insert(groups).values(name=name, warehouse_role=role))
             self.adapter.create_group(role)
             self.state.put("provisioner_registry", role, {"kind": "group"}, conn=conn)
+        self.admit()
         return {"name": name, "warehouse_role": role}
 
     def delete_group(self, name):
@@ -76,6 +79,7 @@ class AccessService:
                 conn.execute(delete(groups).where(groups.c.name == name))
                 self.state.remove("provisioner_registry", group["warehouse_role"], conn=conn)
                 self.state.remove("denied", name, conn=conn)
+            self.admit()
         return {"deleted": name}
 
     def require_group(self, name):
@@ -207,8 +211,7 @@ class AccessService:
         self.state.put(
             "access_health", "reconciliation", {"checked_at": time.time(), "failures": failures}
         )
-        with self.lock:
-            self.admit()
+        self.admit()
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
     def health(self):
