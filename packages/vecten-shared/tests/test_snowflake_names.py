@@ -1,6 +1,9 @@
 """Every name Vecten gives an object in Snowflake, from one function."""
 
+import ast
+import re
 from dataclasses import astuple
+from pathlib import Path
 
 import pytest
 
@@ -92,3 +95,98 @@ def test_the_audience_needs_an_account():
     assert names.account is None
     with pytest.raises(ValueError):
         _ = names.audience
+
+
+REPO = Path(__file__).resolve().parents[3]
+NAMING_MODULE = "packages/vecten-shared/src/vecten_shared/provider/__init__.py"
+# A Snowflake role, user, integration, schema or policy name the function owns, or the
+# warehouse suffix it builds; secret names such as LOADER_PASSWORD hold one only inside a
+# longer word.
+SPELLED = re.compile(
+    r"(?<![A-Za-z0-9_])(ANALYST|LOADER|PROVISIONER|VECTEN_PROVISIONER|VECTEN_EXTERNAL_OAUTH"
+    r"|VECTEN_ACCESS|MCP_SIGN_IN)(?![A-Za-z0-9_])|_WH(?![A-Za-z0-9_])"
+)
+# Constants a caller would keep beside the function, whatever their value.
+CONSTANTS = re.compile(r"\bSNOWFLAKE_(LOADER|ANALYST|PROVISIONER)_(ROLE|USER)\b")
+ALLOWED = {
+    # The laptop's DuckDB emulation of a Snowflake connection, which reaches no account.
+    "packages/vecten-platform/src/vecten_platform/dbt/local_warehouse.py",
+    # The runbook's Snowflake section renders per layout from section 8 of the change.
+    "packages/vecten/src/vecten/scaffold/template/docs/runbook.md.jinja",
+}
+
+
+def _docstrings(tree):
+    kinds = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+    for node in ast.walk(tree):
+        if isinstance(node, kinds) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                yield id(first.value)
+
+
+def spelled(path):
+    """What `path` spells of the function's names: in Python, its strings other than
+    docstrings and its constant names; in any other file, its whole text."""
+    text = path.read_text(encoding="utf-8")
+    found = [match.group(0) for match in CONSTANTS.finditer(text)]
+    if path.suffix != ".py":
+        return found + [match.group(0) for match in SPELLED.finditer(text)]
+    tree = ast.parse(text)
+    skip = set(_docstrings(tree))
+    return found + [
+        match.group(0)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip
+        for match in SPELLED.finditer(node.value)
+    ]
+
+
+def sources(root):
+    return sorted(
+        path
+        for pattern in ("*.py", "*.js", "*.sql", "*.jinja")
+        for path in (root / "packages").glob(f"*/src/**/{pattern}")
+    )
+
+
+def spelled_outside(root):
+    return {
+        rel: found
+        for path in sources(root)
+        if (rel := path.relative_to(root).as_posix()) not in ALLOWED | {NAMING_MODULE}
+        if (found := spelled(path))
+    }
+
+
+def test_no_snowflake_name_is_spelled_outside_the_naming_function():
+    assert len(sources(REPO)) > 100
+    assert spelled_outside(REPO) == {}
+
+
+def test_every_allowed_file_exists():
+    assert all((REPO / rel).is_file() for rel in ALLOWED | {NAMING_MODULE})
+
+
+@pytest.mark.parametrize(
+    ("name", "text", "found"),
+    [
+        ("caller.py", 'ROLE = "LOADER"\n', ["LOADER"]),
+        ("caller.py", "SNOWFLAKE_ANALYST_ROLE = role\n", ["SNOWFLAKE_ANALYST_ROLE"]),
+        ("caller.py", 'warehouse = f"{project}_{env}_WH"\n', ["_WH"]),
+        ("caller.py", 'sql = f"SHOW GRANTS TO ROLE PROVISIONER {x}"\n', ["PROVISIONER"]),
+        ("grant.js", "if (TARGET !== 'ANALYST') {}\n", ["ANALYST"]),
+        (
+            "setup.sql",
+            "CREATE SECURITY INTEGRATION VECTEN_EXTERNAL_OAUTH;\n",
+            ["VECTEN_EXTERNAL_OAUTH"],
+        ),
+        ("caller.py", '"""Signs in as LOADER."""\nKEY = "LOADER_PASSWORD"\n', []),
+    ],
+)
+def test_the_guard_catches_a_planted_name(tmp_path, name, text, found):
+    package = tmp_path / "packages" / "vecten-mcp" / "src" / "vecten_mcp"
+    package.mkdir(parents=True)
+    (package / name).write_text(text)
+    rel = f"packages/vecten-mcp/src/vecten_mcp/{name}"
+    assert spelled_outside(tmp_path) == ({rel: found} if found else {})
