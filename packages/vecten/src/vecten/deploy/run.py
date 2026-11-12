@@ -642,7 +642,7 @@ def promote_env(
 
 def promotion_status(project_root: Path, *, gh: ToolRunner) -> dict:
     """Each environment of the order with the commit it shipped last, and whether the
-    environment before it shipped a newer one."""
+    environment before it shipped last a different one, which a promotion would bring."""
     config = load_config(project_root)
     repository = require_deploy_cloud(config).github_repository
     order = promotion_order(project_root, config)
@@ -653,8 +653,8 @@ def promotion_status(project_root: Path, *, gh: ToolRunner) -> dict:
     for env in order:
         previous = config.promoted_from(env)
         mine, theirs = found[env], found.get(previous) if previous else None
-        # A smaller distance from the branch's head is a newer commit.
-        behind = theirs is not None and (mine is None or theirs[1] < mine[1])
+        # Behind: the environment before it runs a commit this one has not been given.
+        behind = theirs is not None and (mine is None or theirs[0] != mine[0])
         listed.append(
             {
                 "env": env,

@@ -57,7 +57,7 @@ A promotion must answer two questions: what the environment before this one runs
 | B. GitHub's deployment records | Correct for a push-triggered first environment. Wrong for every promoted run, which records the default branch's head (Context), so a third environment could not trust the second's record. |
 | C. A marker in the environment's bucket | Exact, but the later environment's CI identity cannot read the earlier environment's bucket, and should not. |
 
-**Accepted: A.** "What the environment before this one runs" is the newest commit on the default branch, among its last 200, whose `vecten/ship/<env>` status is `success`. After a failed ship rolls back, that commit's status is `failure`, so the answer is the commit the hosts went back to.
+**Accepted: A.** "What the environment before this one runs" is the commit, among the default branch's last 200, whose `vecten/ship/<env>` `success` status was set last (its `createdAt`), not the newest such commit in history: a promotion with `--commit` ships an older commit after a newer one. After a failed ship rolls back, that commit's status is `failure`, so the answer is the commit the hosts went back to. (Refined on 2026-11-12 at review.)
 
 ### Decision 3: How the order is declared (Accepted)
 

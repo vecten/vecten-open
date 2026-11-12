@@ -211,3 +211,33 @@ def test_status_without_an_order_lists_prod(invoke, tmp_path, monkeypatch):
     assert doc(r)["environments"] == [
         {"env": "prod", "promotes_from": None, "commit": HEAD, "behind": False}
     ]
+
+
+def test_after_a_rollback_by_commit_promote_and_status_follow_the_later_ship(
+    invoke, project, monkeypatch
+):
+    # dev shipped SHIPPED, then was rolled back to OLDER: OLDER's success is the later one.
+    gh = use(
+        monkeypatch,
+        FakeGh(
+            history=[HEAD, SHIPPED, OLDER],
+            statuses={
+                SHIPPED: [("vecten/ship/dev", "success", "2026-03-01T10:00:00Z")],
+                OLDER: [
+                    ("vecten/ship/dev", "success", "2026-02-01T10:00:00Z"),
+                    ("vecten/ship/dev", "success", "2026-03-02T10:00:00Z"),
+                    ("vecten/ship/prod", "success", "2026-02-02T10:00:00Z"),
+                ],
+            },
+        ),
+    )
+    status = invoke("promote", "--status", "--json")
+    assert status.exit_code == 0, status.stdout
+    assert [(e["env"], e["commit"], e["behind"]) for e in doc(status)["environments"]] == [
+        ("dev", OLDER, False),
+        ("prod", OLDER, False),
+    ]
+    r = invoke("promote", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    [dispatch] = gh.named("workflow", "run")
+    assert f"commit={OLDER}" in dispatch

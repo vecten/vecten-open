@@ -14,7 +14,7 @@ A merge therefore reaches production before it has run anywhere else. Today's wo
 - `[deploy] promotion` in `vecten.toml` declares an order of environments, for example `["dev", "prod"]`. Without it the order is `["prod"]`, which is today's behaviour.
 - A push to the default branch ships the first environment of the order. The rendered `ship.yml` reads the order when it runs, so changing the order needs no re-render.
 - Every ship from CI records its outcome on the commit as a GitHub commit status, `vecten/ship/<env>`.
-- `vecten promote --env <env>` ships a later environment the newest commit that the environment before it shipped, or a given `--commit` that it shipped. CI refuses a commit that is not on the default branch or that the environment before it did not ship. `ship --env <env>` from the laptop refuses a later environment and names `promote`.
+- `vecten promote --env <env>` ships a later environment the commit that the environment before it shipped last, or a given `--commit` that it shipped. CI refuses a commit that is not on the default branch or that the environment before it did not ship. `ship --env <env>` from the laptop refuses a later environment and names `promote`.
 - `deploy --env <env>` of a later environment applies and ships the same promoted commit, so infrastructure changes also run first in the environment before it.
 - A promoted run builds everything from the promoted commit, including the content, `vecten.toml`, the tfvars, the Terraform roots and the CLI version that commit pins. It reads the facts the CLI records about environments from the default branch.
 - `next` walks the environments in order, each through its bootstrap, deploy and first-user items.

@@ -2,7 +2,7 @@
 
 ### Requirement: promote
 
-`vecten promote --env <env> [--commit <sha>]` SHALL ship to `<env>` a commit that the environment before it in the promotion order shipped: by default the newest one, as the `shared/deploy` spec's "Every ship records its outcome on the commit" defines it, or the given `--commit` when that environment shipped it. It SHALL refuse an environment outside the order or first in it, and SHALL refuse, before dispatching, a commit the environment before it did not ship, naming both. It SHALL dispatch the ship workflow on the default branch with the environment and the commit, follow the run, and exit with its outcome, reporting the commit and the run's URL. `vecten promote --status` SHALL list each environment of the order with the commit it shipped last, and whether the environment before it shipped a newer one.
+`vecten promote --env <env> [--commit <sha>]` SHALL ship to `<env>` a commit that the environment before it in the promotion order shipped: by default the one it shipped last, as the `shared/deploy` spec's "Every ship records its outcome on the commit" defines it, or the given `--commit` when that environment shipped it. It SHALL refuse an environment outside the order or first in it, and SHALL refuse, before dispatching, a commit the environment before it did not ship, naming both. It SHALL dispatch the ship workflow on the default branch with the environment and the commit, follow the run, and exit with its outcome, reporting the commit and the run's URL. `vecten promote --status` SHALL list each environment of the order with the commit it shipped last, and whether the environment before it shipped last a different commit, which a promotion would bring.
 
 #### Scenario: Promote what dev runs
 

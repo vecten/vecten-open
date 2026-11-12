@@ -6,7 +6,7 @@
 
 ## 2. Commit statuses and the shipped commit
 
-- [x] 2.1 `vecten.deploy.github_env`: set a commit status, read one commit's status for a context, and find the newest commit among the default branch's last 200 with `vecten/ship/<env>` `success`
+- [x] 2.1 `vecten.deploy.github_env`: set a commit status, read one commit's status for a context, and find the commit among the default branch's last 200 whose `vecten/ship/<env>` `success` was set last
 - [x] 2.2 `ship_env` inside Actions sets `pending`, then `success` once every host answered or `failure` otherwise, on the commit it ships
 - [x] 2.3 Tests against a mocked `gh`: each state, the rollback case, the 200-commit bound and its message
 

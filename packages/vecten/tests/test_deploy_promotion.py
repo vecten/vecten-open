@@ -167,3 +167,28 @@ def test_nothing_shipped_in_the_last_200_commits_names_commit(tmp_path):
 def test_the_newest_shipped_commit_is_returned(tmp_path):
     gh = FakeGh(history=[sha(2), sha(1)], statuses={sha(1): [("vecten/ship/dev", "success")]})
     assert newest_shipped(gh, tmp_path, "acme/data", "main", "dev") == sha(1)
+
+
+def test_the_commit_whose_success_was_set_last_is_what_shipped(tmp_path):
+    # staging shipped b, then rolled back to a with --commit: a's success is the later one.
+    gh = FakeGh(
+        history=[sha(2), sha(1)],
+        statuses={
+            sha(2): [("vecten/ship/dev", "success", "2026-03-01T10:00:00Z")],
+            sha(1): [("vecten/ship/dev", "success", "2026-03-02T09:00:00Z")],
+        },
+    )
+    assert github_env.last_shipped(gh, tmp_path, "acme/data", "main", "dev") == sha(1)
+    query = gh_fields(gh.calls[0])["query"]
+    assert "createdAt" in query
+
+
+def test_a_later_failure_on_a_commit_does_not_hide_an_earlier_success_elsewhere(tmp_path):
+    gh = FakeGh(
+        history=[sha(2), sha(1)],
+        statuses={
+            sha(2): [("vecten/ship/dev", "failure", "2026-03-02T10:00:00Z")],
+            sha(1): [("vecten/ship/dev", "success", "2026-03-01T10:00:00Z")],
+        },
+    )
+    assert github_env.last_shipped(gh, tmp_path, "acme/data", "main", "dev") == sha(1)

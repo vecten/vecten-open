@@ -50,7 +50,7 @@ The apply and ship workflows SHALL take a `commit` input beside `environment`, r
 
 ### Requirement: Every ship records its outcome on the commit
 
-Every ship that runs in GitHub Actions SHALL set the commit status `vecten/ship/<env>` on the commit it ships: `pending` when it starts, `success` once every host it ships answers its health poll, and `failure` otherwise. The newest commit on the default branch, among its last 200, whose status for an environment is `success` SHALL be what that environment shipped last.
+Every ship that runs in GitHub Actions SHALL set the commit status `vecten/ship/<env>` on the commit it ships: `pending` when it starts, `success` once every host it ships answers its health poll, and `failure` otherwise. Among the default branch's last 200 commits, the one whose `vecten/ship/<env>` `success` status was set last SHALL be what that environment shipped last, so a promotion of an older commit with `--commit` makes that older commit what the environment runs.
 
 #### Scenario: Ship succeeds
 
@@ -61,6 +61,11 @@ Every ship that runs in GitHub Actions SHALL set the commit status `vecten/ship/
 
 - **WHEN** a ship of `b71d004` to `dev` fails its health poll and the hosts restore `a3f9c2e`
 - **THEN** `b71d004` carries `vecten/ship/dev` with state `failure`, and `a3f9c2e` is what `dev` shipped last
+
+#### Scenario: Rollback by commit
+
+- **WHEN** `staging` shipped `b71d004` and then `vecten promote --env staging --commit a3f9c2e` shipped the older `a3f9c2e`
+- **THEN** `a3f9c2e` is what `staging` shipped last, and `vecten promote --env prod` ships `a3f9c2e`
 
 ## MODIFIED Requirements
 

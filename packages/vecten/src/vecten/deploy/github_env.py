@@ -340,7 +340,7 @@ query($owner: String!, $name: String!, $branch: String!, $context: String!, $fir
         ... on Commit {
           history(first: $first, after: $cursor) {
             pageInfo { hasNextPage endCursor }
-            nodes { oid status { context(name: $context) { state } } }
+            nodes { oid status { context(name: $context) { state createdAt } } }
           }
         }
       }
@@ -408,11 +408,13 @@ def ship_status(
 def last_shipped(
     gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
 ) -> str | None:
-    """The newest of `branch`'s last `SHIPPED_SEARCH_LIMIT` commits whose `vecten/ship/<env>`
-    is `success`, or None.
+    """The commit among `branch`'s last `SHIPPED_SEARCH_LIMIT` whose `vecten/ship/<env>`
+    `success` was set last, or None.
 
-    A ship that rolled back leaves `failure` on its commit, so the answer is then the commit
-    the hosts went back to.
+    Time, not the commit's place in history, decides: a promotion with `--commit` ships an
+    older commit after a newer one, and the hosts then run the older one. A ship that rolled
+    back leaves `failure` on its commit, so the answer is then the commit the hosts went back
+    to.
     """
     found = shipped_at(gh, project_root, repository, branch, env)
     return found[0] if found else None
@@ -420,10 +422,11 @@ def last_shipped(
 
 def shipped_at(
     gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
-) -> tuple[str, int] | None:
-    """`last_shipped`'s commit with its distance from `branch`'s head, 0 being the head."""
+) -> tuple[str, str] | None:
+    """`last_shipped`'s commit with the time its `success` status was set."""
     owner, name = repository.split("/", 1)
     cursor: str | None = None
+    newest: tuple[str, str] | None = None
     for start in range(0, SHIPPED_SEARCH_LIMIT, _HISTORY_PAGE):
         args = [
             "api",
@@ -453,14 +456,17 @@ def shipped_at(
                 ExitCode.TOOL_FAILED,
                 f"gh api graphql named no history for {branch} of {repository}",
             ) from None
-        for offset, node in enumerate(nodes):
-            state = ((node.get("status") or {}).get("context") or {}).get("state")
-            if str(state).lower() == "success":
-                return str(node["oid"]), start + offset
+        for node in nodes:
+            context = (node.get("status") or {}).get("context") or {}
+            created = str(context.get("createdAt") or "")
+            if str(context.get("state")).lower() == "success" and created:
+                # GitHub's ISO 8601 UTC times sort as text.
+                if newest is None or created > newest[1]:
+                    newest = (str(node["oid"]), created)
         if not page.get("hasNextPage"):
-            return None
+            break
         cursor = page.get("endCursor")
-    return None
+    return newest
 
 
 def _created(run: dict) -> datetime:
