@@ -12,6 +12,7 @@ CONVENTION_TESTS = (
     "convention_descriptions",
     "convention_core_primary_key",
     "convention_staging_load_metadata",
+    "convention_no_grants",
 )
 
 
@@ -43,7 +44,12 @@ def _strip_source(path: Path) -> None:
     path.write_text(path.read_text().replace("'demo' as _source", "'demo' as _origin"))
 
 
+def _configure(path: Path, config: str) -> None:
+    path.write_text("{{ config(" + config + ") }}\n" + path.read_text())
+
+
 CORE_YML = "dbt/models/core/schema.yml"
+MART = "dbt/models/marts/company_overview.sql"
 
 # (id, failing convention test, mutation, violation line the message must carry)
 MUTATIONS = [
@@ -76,6 +82,20 @@ MUTATIONS = [
         "convention_staging_load_metadata",
         lambda d: _strip_source(d / "dbt/models/staging/staging_demo_deal.sql"),
         "model staging_demo_deal: lacks column _source",
+    ),
+    (
+        "grants",
+        "convention_no_grants",
+        # An empty list grants nothing on a first build, which the emulation accepts, and
+        # revokes every SELECT on a rebuild.
+        lambda d: _configure(d / MART, "grants={'select': []}"),
+        "model company_overview: sets dbt grants",
+    ),
+    (
+        "copy_grants_off",
+        "convention_no_grants",
+        lambda d: _configure(d / MART, "copy_grants=false"),
+        "model company_overview: sets copy_grants to false",
     ),
 ]
 
