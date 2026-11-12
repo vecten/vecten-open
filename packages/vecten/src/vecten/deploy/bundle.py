@@ -9,6 +9,8 @@ layout here is the agent's contract: `.vecten/ship/host.json` (every key in
 from __future__ import annotations
 
 import gzip
+import hashlib
+import io
 import json
 import os
 import re
@@ -76,8 +78,12 @@ SKIPPED_SUFFIXES = (".pyc",)
 SKIPPED_PATHS = frozenset(
     {"dbt/target", "dbt/logs", "dbt/dbt_packages", "dbt/packages.yml", "dbt/package-lock.yml"}
 )
-# Every member carries this mtime and owner, so a bundle's bytes depend on its content only.
+# Every member carries this owner, and a directory this mtime, so a bundle's bytes depend on
+# its content only.
 MEMBER_MTIME = 0
+# A file's mtime, from 2001-09-09 on, follows its content (see `content_mtime`).
+CONTENT_MTIME_BASE = 1_000_000_000
+CONTENT_MTIME_SPAN = 2**29
 DEFAULT_PLATFORM_SIZE = "small"
 # The commit names the release directory on the VM and appears in its shell commands.
 _COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
@@ -327,10 +333,19 @@ def _write_ship_files(stage: Path, env: str, outputs: EnvironmentOutputs, host_d
     shutil.copyfile(setup_sql_path(), ship_dir / "warehouse_setup.sql")
 
 
-def _normalised(info: tarfile.TarInfo) -> tarfile.TarInfo:
+def content_mtime(data: bytes) -> int:
+    """The mtime a member with these bytes carries: equal content, equal time.
+
+    BuildKit reuses a build-context file it already holds whose size and mtime match, even one
+    from another release's directory, so two contents must never share a time."""
+    digest = int.from_bytes(hashlib.sha256(data).digest()[:8], "big")
+    return CONTENT_MTIME_BASE + digest % CONTENT_MTIME_SPAN
+
+
+def _normalised(info: tarfile.TarInfo, data: bytes | None = None) -> tarfile.TarInfo:
     info.uid = info.gid = 0
     info.uname = info.gname = ""
-    info.mtime = MEMBER_MTIME
+    info.mtime = MEMBER_MTIME if data is None else content_mtime(data)
     # Airflow runs in group 0 and dbt writes into its own project directory.
     writable = info.name == DBT_DIR or info.name.startswith(f"{DBT_DIR}/")
     # No file needs an execute bit: the agent is started as `python3 <path>`.
@@ -351,12 +366,12 @@ def _write_tarball(stage: Path, target: Path) -> None:
             tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar,
         ):
             for name, path in entries:
-                info = _normalised(tar.gettarinfo(str(path), arcname=name))
+                info = tar.gettarinfo(str(path), arcname=name)
                 if info.isfile():
-                    with path.open("rb") as handle:
-                        tar.addfile(info, handle)
+                    data = path.read_bytes()
+                    tar.addfile(_normalised(info, data), io.BytesIO(data))
                 else:
-                    tar.addfile(info)
+                    tar.addfile(_normalised(info))
         os.replace(tmp, target)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)

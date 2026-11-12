@@ -253,6 +253,28 @@ def test_two_builds_at_one_commit_are_byte_identical(project, tmp_path):
     assert names == sorted(names)
 
 
+def test_a_files_mtime_follows_its_content_so_buildkit_never_reuses_another_releases(
+    project, tmp_path
+):
+    from vecten.deploy.bundle import content_mtime
+
+    first = build(project, tmp_path / "a")
+    model, name = project / "dbt/models/marts/orders.sql", "dbt/models/marts/orders.sql"
+    model.write_text("select 1\n")
+    one = members(build(project, tmp_path / "b"))[name].mtime
+    model.write_text("select 2\n")
+    two = members(build(project, tmp_path / "c"))[name].mtime
+    assert one != two and one == content_mtime(b"select 1\n")
+    for member in members(first).values():
+        if member.isfile():
+            body = read(first, member.name).encode()
+            assert member.mtime == content_mtime(body), member.name
+            # 2001-09-09 to 2018: no tool reads such a time as unset or in the future.
+            assert 1_000_000_000 <= member.mtime < 1_000_000_000 + 2**29
+        else:
+            assert member.mtime == 0
+
+
 def test_missing_mount_dirs_get_their_stand_ins(tmp_path):
     root = render_aws(tmp_path / "proj")
     for path in sorted((root / "connectors").rglob("*"), reverse=True):
