@@ -25,6 +25,9 @@ REQUIRED = (
     "warehouse",
 )
 SECOND_WAREHOUSE = "a second warehouse is a second deployment"
+# Read by `ship` when it renders a host's stack; Terraform has no use for it, and the cloud
+# root declares it only so the shared tfvars file plans without an undeclared-variable warning.
+DAGS_PAUSED_AT_CREATION = "dags_paused_at_creation"
 _KEY = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)")
 
 
@@ -192,5 +195,11 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
         raise Failure(
             ExitCode.CONFIG,
             f"{rel} sets size = {values['size']!r}; size must be one of: {', '.join(TIERS)}",
+        )
+    paused = values.get(DAGS_PAUSED_AT_CREATION, False)
+    if not isinstance(paused, bool):
+        raise Failure(
+            ExitCode.CONFIG,
+            f"{rel} sets {DAGS_PAUSED_AT_CREATION} = {paused!r}; it must be true or false",
         )
     return values

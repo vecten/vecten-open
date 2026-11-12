@@ -128,6 +128,11 @@ class DeploySection(Strict):
 McpAuth = Literal["oidc", "password"]
 
 
+def allow_networks(value: list[str]) -> list[str]:
+    # Each entry becomes an NGINX `allow` line, so only a parsed network may pass.
+    return [str(ipaddress.ip_network(item, strict=True)) for item in value]
+
+
 class McpSection(Strict):
     admins: list[str] = Field(default_factory=list)
     auth: str = Field(default="oidc", pattern=r"^[a-z][a-z0-9_-]*$")
@@ -139,14 +144,23 @@ class McpSection(Strict):
     @field_validator("admin_allow")
     @classmethod
     def _networks(cls, value: list[str]) -> list[str]:
-        # Each entry becomes an NGINX `allow` line, so only a parsed network may pass.
-        return [str(ipaddress.ip_network(item, strict=True)) for item in value]
+        return allow_networks(value)
 
     @model_validator(mode="after")
     def _exposure(self) -> McpSection:
         if self.admin_panel == "off" and self.admin_allow:
             raise ValueError("admin_allow applies only while admin_panel is public")
         return self
+
+
+class AirflowSection(Strict):
+    # The networks that may reach a deployed `airflow.<domain>`; empty leaves it public.
+    allow: list[str] = Field(default_factory=list)
+
+    @field_validator("allow")
+    @classmethod
+    def _networks(cls, value: list[str]) -> list[str]:
+        return allow_networks(value)
 
 
 def _checked(problem: str | None, value: Any) -> Any:
@@ -279,6 +293,7 @@ class VectenConfig(Strict):
     warehouse: WarehouseSection = Field(default_factory=WarehouseSection)
     deploy: DeploySection | None = None
     mcp: McpSection = Field(default_factory=McpSection)
+    airflow: AirflowSection = Field(default_factory=AirflowSection)
     connectors: list[ConnectorDecl] = Field(default_factory=list)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
@@ -288,6 +303,13 @@ class VectenConfig(Strict):
         for env in value:
             _checked(env_name_problem(env), env)
         return value
+
+    @model_validator(mode="after")
+    def _airflow_needs_platform(self) -> VectenConfig:
+        # Without the platform no host serves Airflow, so the list would restrict nothing.
+        if self.airflow.allow and not self.has("platform"):
+            raise ValueError("[airflow] allow needs the platform component")
+        return self
 
     def model_post_init(self, context: Any, /) -> None:
         self.environments = _EnvDict(self.environments)

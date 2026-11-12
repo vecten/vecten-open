@@ -114,6 +114,20 @@ variable "platform_size" {
   }
 }
 
+variable "root_volume_size_gb" {
+  description = "Size in GB of every VM's boot volume, which holds the images and the named volumes. A DEV1 type boots from its local SSD, which caps the size at the type's local storage."
+  type        = number
+  default     = 30
+  nullable    = false
+
+  # An SBS volume can grow but never shrink, so a size below the one every VM was created
+  # with would replace each VM.
+  validation {
+    condition     = var.root_volume_size_gb >= 30 && floor(var.root_volume_size_gb) == var.root_volume_size_gb
+    error_message = "root_volume_size_gb is a whole number of GB, at least 30."
+  }
+}
+
 variable "instance_type_overrides" {
   description = "Instance and node types that win over sizing.json, keyed by platform, mcp, main, state or warehouse."
   type        = map(string)

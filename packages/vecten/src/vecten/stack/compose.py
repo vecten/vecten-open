@@ -144,7 +144,12 @@ def _artifacts_source(mode: str) -> str:
 
 
 def _airflow_common(
-    config: VectenConfig, mode: str, stack_dir: Path, project: str, hosts: dict[str, str]
+    config: VectenConfig,
+    mode: str,
+    stack_dir: Path,
+    project: str,
+    hosts: dict[str, str],
+    dags_paused_at_creation: bool,
 ) -> dict:
     db = (
         "postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres/airflow"
@@ -158,9 +163,12 @@ def _airflow_common(
         "environment": {
             "AIRFLOW__CORE__EXECUTOR": "LocalExecutor",
             "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
-            # A deployed environment has no step that unpauses a DAG, so only the laptop's start
-            # paused, where a schedule would sync from the human's machine.
-            "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION": str(mode == "local"),
+            # The laptop's DAGs always start paused, where a schedule would sync from the
+            # human's machine. A deployed environment has no step that unpauses a DAG, so its
+            # DAGs start paused only when its tfvars opt in, leaving each to a person to unpause.
+            "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION": str(
+                mode == "local" or dags_paused_at_creation
+            ),
             "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": db,
             "AIRFLOW__CORE__FERNET_KEY": "${AIRFLOW_FERNET_KEY}",
             "AIRFLOW__API__SECRET_KEY": "${AIRFLOW_API_SECRET_KEY}",
@@ -283,8 +291,13 @@ def generate_compose(
     stack_dir: Path,
     project: str | None = None,
     hosts: dict[str, str] | None = None,
+    dags_paused_at_creation: bool = False,
 ) -> dict:
-    """The Compose document; a vm stack passes `hosts` from `vm_hostnames(outputs)`."""
+    """The Compose document; a vm stack passes `hosts` from `vm_hostnames(outputs)`.
+
+    `dags_paused_at_creation` is the environment's tfvars setting; a local stack starts its
+    DAGs paused whatever it says.
+    """
     hosts = _hosts(mode, hosts)
     services: dict[str, dict] = {}
     volumes: dict[str, dict] = {}
@@ -299,7 +312,7 @@ def generate_compose(
         volumes["postgres-data"] = {}
 
     if with_platform:
-        common = _airflow_common(config, mode, stack_dir, project, hosts)
+        common = _airflow_common(config, mode, stack_dir, project, hosts, dags_paused_at_creation)
         depends = {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
         services["airflow-api-server"] = {
             **common,

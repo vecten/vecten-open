@@ -222,16 +222,30 @@ def test_airflow_api_is_published_on_loopback_in_the_local_stack_only(tmp_path):
     assert "ports" not in vm["services"]["airflow-api-server"]
 
 
-def test_dags_start_paused_on_the_laptop_and_scheduled_on_a_vm(tmp_path):
-    local = generate_compose(cfg(["platform", "mcp"]), "local", ["platform", "mcp"], tmp_path)
-    vm = generate_compose(
-        cfg(["platform", "mcp"], deploy=DEPLOY), "vm", ["platform", "mcp"], tmp_path, hosts=VM_HOSTS
-    )
+@pytest.mark.parametrize(
+    ("mode", "setting", "expected"),
+    [
+        # The laptop starts DAGs paused whatever the setting says.
+        ("local", None, "True"),
+        ("local", False, "True"),
+        ("local", True, "True"),
+        # A VM schedules new DAGs unless its environment opts in to pausing them.
+        ("vm", None, "False"),
+        ("vm", False, "False"),
+        ("vm", True, "True"),
+    ],
+)
+def test_dags_start_paused_on_the_laptop_and_scheduled_on_a_vm(tmp_path, mode, setting, expected):
+    kwargs = {} if setting is None else {"dags_paused_at_creation": setting}
+    if mode == "vm":
+        config = cfg(["platform", "mcp"], deploy=DEPLOY)
+        kwargs["hosts"] = VM_HOSTS
+    else:
+        config = cfg(["platform", "mcp"])
+    doc = generate_compose(config, mode, ["platform", "mcp"], tmp_path, **kwargs)
     for name in AIRFLOW_SERVICES:
-        local_env = local["services"][name]["environment"]
-        vm_env = vm["services"][name]["environment"]
-        assert local_env["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "True", name
-        assert vm_env["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "False", name
+        environment = doc["services"][name]["environment"]
+        assert environment["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == expected, name
 
 
 def test_mcp_only_local(tmp_path):

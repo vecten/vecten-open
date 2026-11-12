@@ -34,7 +34,9 @@ platform and not a gap's status.
 If a source applies to the project but cannot be read, for example because the `vecten login`
 session expired, the command exits 5. The same happens when Airflow holds more than 50,000
 finished task instances in the 14-day window, because a page left unread could hold a task's
-newest failure. The output still holds the issues from the other sources, and `sources` names
+newest failure, and when `[airflow] allow` in `vecten.toml` does not list the network you run
+from, because NGINX then refuses the Airflow login with HTTP 403 (see
+[orchestration](orchestration.md#airflow-in-a-deployed-environment)). The output still holds the issues from the other sources, and `sources` names
 each source with `ok` or the reason it could not be read. An empty list means nothing is broken
 only when the command exits 0.
 

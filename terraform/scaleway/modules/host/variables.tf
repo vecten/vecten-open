@@ -43,6 +43,11 @@ variable "certbot_image" {
   type        = string
 }
 
+variable "root_volume_size_gb" {
+  description = "Size in GB of the boot volume, which holds the images and the named volumes."
+  type        = number
+}
+
 variable "watch_config" {
   description = "What the watcher reads from /etc/vecten/watch.json before any release exists: host key, components, artifacts bucket, region, resources project and secret path prefix."
   type = object({
