@@ -154,10 +154,12 @@ def test_the_script_takes_every_name_from_the_snowflake_names():
         assert json.dumps(value) in handler, value
 
 
-def test_a_name_that_is_no_plain_identifier_is_refused():
+@pytest.mark.parametrize("role", ["P; DROP DATABASE D", "_PROVISIONER", "provisioner"])
+def test_a_name_that_is_no_plain_identifier_is_refused(role):
+    # The same rule as the Snowflake module's role variables: ^[A-Z][A-Z0-9_]{0,254}$.
     with pytest.raises(ValueError):
         provisioner_script(
             "snowflake",
             issuer="https://mcp.example",
-            names=replace(names(), provisioner_role="P; DROP DATABASE D"),
+            names=replace(names(), provisioner_role=role),
         )

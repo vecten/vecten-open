@@ -27,7 +27,7 @@
 ## 4. Identities in a shared account
 
 - [ ] 4.1 The provisioner script in the shared layout: suffixed roles and users, the authentication policy and `APPLY` on it, the environment's integration, comments on every object, and the stop on a foreign comment
-- [ ] 4.2 `READ_GRANT` refuses a target whose name does not end in the environment's suffix before the ownership check, which stays the guard
+- [ ] 4.2 `READ_GRANT` refuses a target whose name does not end in the environment's suffix before the ownership check, which stays the guard; its TARGET pattern (`^[A-Z][A-Z0-9_]{0,62}$` today) must admit a suffixed group role, up to 63 characters before a suffix of up to 64
 - [ ] 4.3 `SnowflakeAdapter` appends the suffix when it names users and roles, strips it from `SHOW GRANTS` before registry lookups, sets the authentication policy on every user it creates, and refuses adoption in a shared account
 - [ ] 4.4 `check_scope` accepts `APPLY` on the environment's policy and nothing of another environment
 - [ ] 4.5 Tests: the script's statements for fixed and shared layouts (no fixed name in the shared script); `READ_GRANT` refusals; adapter names, adoption refusal and scope check against a mocked connector

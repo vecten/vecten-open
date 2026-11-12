@@ -58,9 +58,9 @@ resource "snowflake_account_role" "this" {
 # preview features, which the thin root enables.
 data "snowflake_current_role" "deployer" {}
 
-# Ownership of the schemas moves to the loader role, so the deploy role keeps reading them on the next
-# plan only through a role it holds: every role created here is granted to SYSADMIN, as
-# Snowflake's role hierarchy expects, and to the role Terraform runs as.
+# Ownership of the schemas moves to the loader role, so the deploy role keeps reading them on
+# the next plan only through a role it holds: every role created here is granted to SYSADMIN,
+# as Snowflake's role hierarchy expects, and to the role Terraform runs as.
 resource "snowflake_grant_account_role" "sysadmin" {
   for_each = snowflake_account_role.this
 

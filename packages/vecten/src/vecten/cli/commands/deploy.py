@@ -228,7 +228,7 @@ def _progress(line: str) -> None:
     print(line, file=sys.stderr, flush=True)
 
 
-def _destroy_message(data: dict, provisioner_role: str | None = None) -> str:
+def _destroy_message(data: dict, provisioner_role: str | None) -> str:
     # The snapshot identifiers were printed as progress before Terraform ran.
     lines = []
     if data["data_deleted"]:

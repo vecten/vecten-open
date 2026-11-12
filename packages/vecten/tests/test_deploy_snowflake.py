@@ -314,6 +314,8 @@ def test_the_destroy_message_names_the_environments_provisioner_role():
     }
     message = _destroy_message(data, provisioner_role="PROVISIONER_ACME_DEV")
     assert "the users and roles PROVISIONER_ACME_DEV created stay in Snowflake" in message
+    with pytest.raises(TypeError):
+        _destroy_message(data)
 
 
 def test_the_root_takes_every_name_from_the_snowflake_names(tmp_path, monkeypatch):

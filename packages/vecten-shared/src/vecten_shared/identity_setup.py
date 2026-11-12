@@ -31,8 +31,9 @@ def postgres_access_helpers():
 
 
 def _name(value):
-    """An account-level name the script writes unquoted, as an administrator reads it."""
-    if not re.fullmatch(r"[A-Z_][A-Z0-9_]{0,254}", value or ""):
+    """An account-level name the script writes unquoted, as an administrator reads it; the
+    Snowflake module's role variables accept the same names."""
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,254}", value or ""):
         raise ValueError(f"invalid Snowflake name {value!r}")
     return value
 
