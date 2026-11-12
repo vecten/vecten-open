@@ -93,60 +93,80 @@ def lock_lines(path: Path, wanted: list[Requirement]) -> list[str]:
                 raise InvalidRequirement()
         return lines
     except OSError, InvalidRequirement:
-        raise Failure(
-            ExitCode.REFUSED, f"invalid or missing {path.name}; rerun vecten extension add"
-        ) from None
+        message = f"invalid or missing {path.name}; run `vecten lock`"
+        raise Failure(ExitCode.REFUSED, message) from None
+
+
+STALE = "project dependency records are stale; run `vecten lock`"
+RUNTIME = (("platform", "airflow"), ("mcp", "mcp"))
+
+
+def _legacy_lines(root: Path, config: VectenConfig, reqs: list[str]) -> list[str]:
+    """Locks an earlier release wrote, without inputs lines: checked name by name."""
+    inputs, lock = root / "requirements.txt", root / "requirements.lock"
+    if not inputs.is_file() or not lock.is_file():
+        raise Failure(ExitCode.REFUSED, STALE)
+    direct = [
+        requirement(line)
+        for line in inputs.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    configured = [requirement(text) for text in reqs]
+    if {canonicalize_name(r.name) for r in direct} != {
+        canonicalize_name(r.name) for r in configured
+    }:
+        raise Failure(ExitCode.REFUSED, STALE)
+    for wanted in configured:
+        for candidate in (
+            r for r in direct if canonicalize_name(r.name) == canonicalize_name(wanted.name)
+        ):
+            pins = list(candidate.specifier)
+            compatible = candidate.specifier == wanted.specifier or (
+                len(pins) == 1 and pins[0].operator == "==" and pins[0].version in wanted.specifier
+            )
+            if candidate.extras != wanted.extras or not compatible:
+                raise Failure(ExitCode.REFUSED, STALE)
+    return lock_lines(lock, [*configured, *direct])
 
 
 def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | None) -> None:
+    from vecten import locking
+
     build_dir = stack_dir / BUILD_DIR
-    build_dir.mkdir(parents=True, exist_ok=True)
     reqs = project_requirements(config)
     root = stack_dir.parent.parent
-    inputs, lock = root / "requirements.txt", root / "requirements.lock"
     runtime = {}
-    if inputs.exists() or lock.exists():
-        if not inputs.is_file() or not lock.is_file():
+    records = [locking.PINS_FILE, locking.RECORD_FILE, *locking.LOCK_FILES.values()]
+    if not any((root / name).exists() for name in records):
+        if any(config.dependencies.python(c) for c in locking.LOCK_FILES):
             raise Failure(
-                ExitCode.REFUSED, "project dependency records are stale; rerun vecten extension add"
+                ExitCode.REFUSED,
+                "[dependencies] Python requirements install only from locks; run `vecten lock`",
             )
-        direct = [
-            requirement(line)
-            for line in inputs.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
-        configured = [requirement(text) for text in reqs]
-        if {canonicalize_name(r.name) for r in direct} != {
-            canonicalize_name(r.name) for r in configured
-        }:
-            raise Failure(
-                ExitCode.REFUSED, "project dependency records are stale; rerun vecten extension add"
-            )
-        for wanted in configured:
-            for candidate in (
-                r for r in direct if canonicalize_name(r.name) == canonicalize_name(wanted.name)
-            ):
-                pins = list(candidate.specifier)
-                compatible = candidate.specifier == wanted.specifier or (
-                    len(pins) == 1
-                    and pins[0].operator == "=="
-                    and pins[0].version in wanted.specifier
+    else:
+        legacy = None
+        for component, kind in RUNTIME:
+            if component not in config.components:
+                continue
+            name = locking.LOCK_FILES[component]
+            state = locking.lock_state(root, config, component)
+            if state == "unstamped" and not (root / locking.RECORD_FILE).exists():
+                legacy = legacy if legacy is not None else _legacy_lines(root, config, reqs)
+                runtime[kind] = lock_lines(root / name, [requirement(r) for r in reqs])
+            elif state == "fresh":
+                runtime[kind] = lock_lines(root / name, [])
+            else:
+                raise Failure(
+                    ExitCode.REFUSED,
+                    f"{name} is {state}: it does not match vecten.toml, requirements.txt and "
+                    f"{locking.RECORD_FILE}; run `vecten lock`",
                 )
-                if candidate.extras != wanted.extras or not compatible:
-                    raise Failure(
-                        ExitCode.REFUSED,
-                        "project dependency records are stale; rerun vecten extension add",
-                    )
-        reqs = lock_lines(lock, [*configured, *direct])
-        for component, kind in (("platform", "airflow"), ("mcp", "mcp")):
-            if component in config.components:
-                runtime[kind] = lock_lines(
-                    root / f"requirements-{kind}.lock", [*configured, *direct]
-                )
+        reqs = legacy if legacy is not None else []
+    build_dir.mkdir(parents=True, exist_ok=True)
     write_text_atomic(build_dir / "requirements.txt", "".join(f"{r}\n" for r in reqs))
     pins = {"airflow": f'"apache-airflow=={VERSIONS.airflow_version}" ', "mcp": ""}
     for kind, pin in pins.items():
-        source = "requirements.txt"
+        source, lines = "requirements.txt", runtime.get(kind, reqs)
         if kind in runtime:
             source = f"requirements-{kind}.txt"
             write_text_atomic(build_dir / source, "".join(f"{r}\n" for r in runtime[kind]))
@@ -180,5 +200,5 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         )
         write_text_atomic(
             build_dir / f"{kind}.Dockerfile",
-            f"FROM {base_image(kind, registry)}\n{install if reqs else ''}",
+            f"FROM {base_image(kind, registry)}\n{install if lines else ''}",
         )

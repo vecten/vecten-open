@@ -176,3 +176,73 @@ def test_images_use_separate_runtime_locks_and_preserve_base_packages(tmp_path):
         text = (stack / "build" / f"{kind}.Dockerfile").read_text()
         assert f"COPY requirements-{kind}.txt" in text
         assert "--constraint /tmp/vecten-base-constraints.txt" in text
+
+
+def _stamped_project(root, c, lock_text):
+    """A project as `vecten lock` leaves it: pins, record and fresh stamped locks."""
+    from vecten import locking
+
+    (root / "requirements.txt").write_text("acme-demo==1.0\n")
+    record = {"acme-demo": locking.Extension("1.0", ("platform",))}
+    (root / locking.RECORD_FILE).write_text(locking.record_text(record))
+    for component in locking.components(c):
+        roots = locking.roots(c, locking.read_pins(root), record, component)
+        stamp = locking.stamp_line(component, locking.inputs_hash(component, roots))
+        (root / locking.LOCK_FILES[component]).write_text(f"{stamp}\n{lock_text[component]}")
+
+
+def test_stamped_locks_give_each_image_its_own_packages(tmp_path):
+    c = config(extensions=["acme-demo"])
+    stack = tmp_path / ".vecten/stack"
+    _stamped_project(
+        tmp_path,
+        c,
+        {
+            "cli": "acme-demo==1.0\n",
+            "platform": "acme-demo==1.0\npolars==1.0\n",
+            "mcp": "acme-demo==1.0\nrapidfuzz==3.0\n",
+        },
+    )
+    write_project_layer(stack, c, None)
+    airflow = (stack / "build" / "requirements-airflow.txt").read_text()
+    mcp = (stack / "build" / "requirements-mcp.txt").read_text()
+    assert airflow == "acme-demo==1.0\npolars==1.0\n"
+    assert mcp == "acme-demo==1.0\nrapidfuzz==3.0\n"
+
+
+def test_a_stale_stamped_lock_is_refused_naming_the_lock_and_vecten_lock(tmp_path):
+    from vecten_shared.config import ComponentDependencies
+
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    c.dependencies.mcp = ComponentDependencies(python=["rapidfuzz"])
+    with pytest.raises(Failure) as caught:
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+    assert "requirements-mcp.lock" in caught.value.message
+    assert "vecten lock" in caught.value.message
+    assert not (tmp_path / ".vecten/stack/build/mcp.Dockerfile").exists()
+
+
+def test_a_stamped_lock_without_its_record_is_refused(tmp_path):
+    from vecten import locking
+
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    (tmp_path / locking.RECORD_FILE).unlink()
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_project_requirements_without_locks_are_refused(tmp_path):
+    c = config(extensions=[], dependencies={"platform": {"python": ["polars"]}})
+    with pytest.raises(Failure) as caught:
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+    assert "vecten lock" in caught.value.message
+
+
+def test_an_unstamped_lock_refusal_names_vecten_lock(tmp_path):
+    c = config()
+    (tmp_path / "requirements.txt").write_text("acme-demo==1.0\n")
+    write_locks(tmp_path, "acme-demo==9.0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)

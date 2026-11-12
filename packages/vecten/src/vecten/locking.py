@@ -161,7 +161,7 @@ def lock_state(root: Path, config: VectenConfig, component: str) -> str:
     if stamp is None:
         return "unstamped"
     record = read_record(root)
-    lock_roots = roots(config, read_pins(root), record or {}, component) if record else None
+    lock_roots = None if record is None else roots(config, read_pins(root), record, component)
     if lock_roots is None or stamp != (component, inputs_hash(component, lock_roots)):
         return "stale"
     return "fresh"

@@ -157,3 +157,13 @@ def test_divergence_lists_packages_pinned_differently_across_locks():
     assert locking.divergence(locks) == {
         "httpx": {"cli": "0.27.0", "mcp": "0.27.0", "platform": "0.26.0"}
     }
+
+
+def test_a_project_without_extensions_has_fresh_locks_with_an_empty_record(tmp_path):
+    c = config()
+    (tmp_path / locking.RECORD_FILE).write_text(locking.record_text({}))
+    for component in locking.components(c):
+        roots = locking.roots(c, {}, {}, component)
+        stamp = locking.stamp_line(component, locking.inputs_hash(component, roots))
+        (tmp_path / locking.LOCK_FILES[component]).write_text(stamp + "\n")
+    assert locking.lock_problems(tmp_path, c) == []

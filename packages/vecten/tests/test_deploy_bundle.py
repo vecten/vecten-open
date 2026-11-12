@@ -439,3 +439,30 @@ def test_bundle_carries_feedback_manifest_and_mcp_mount(project, tmp_path):
     server = compose["services"]["mcp-server"]
     assert server["environment"]["VECTEN_FEEDBACK_MANIFEST"] == "/app/feedback.json"
     assert "../ship/feedback.json:/app/feedback.json:ro" in server["volumes"]
+
+
+def test_bundle_ships_the_extension_record(project, tmp_path):
+    from vecten import locking
+
+    (project / locking.RECORD_FILE).write_text(locking.record_text({}))
+    (project / "requirements.txt").write_text("")
+    from vecten_shared.config import load_config
+
+    config = load_config(project)
+    for component in locking.components(config):
+        roots = locking.roots(config, {}, {}, component)
+        stamp = locking.stamp_line(component, locking.inputs_hash(component, roots))
+        (project / locking.LOCK_FILES[component]).write_text(stamp + "\n")
+    bundle = build(project, tmp_path / "out")
+    assert locking.RECORD_FILE in members(bundle)
+
+
+def test_a_stale_lock_stops_the_bundle_build(project, tmp_path):
+    from vecten import locking
+
+    (project / locking.RECORD_FILE).write_text(locking.record_text({}))
+    (project / "requirements.txt").write_text("")
+    for name in locking.LOCK_FILES.values():
+        (project / name).write_text("# vecten-lock: component=x inputs=0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        build(project, tmp_path / "out")
