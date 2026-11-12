@@ -113,6 +113,15 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   PROVISIONER;` (or drops the procedure). The earlier release's grants come back with it:
   its Terraform resources grant `ANALYST` `USAGE` and future `SELECT` on `CORE` and `MARTS`
   again.
+- Rebuilt relations keep their grants. A Snowflake project's `dbt/dbt_project.yml` sets
+  `+copy_grants: true` for every model, so a table or view dbt replaces keeps the grants of
+  the one it replaces, dataset grants included, in the same statement; `vecten update` adds the
+  setting to an existing project and leaves the rest of the file as it is. A new convention
+  test, `convention_no_grants`, fails the build when a model, snapshot or seed sets dbt's
+  `grants` config, or a Snowflake model sets `copy_grants` to `false`. On Postgres, which
+  cannot copy grants, the dbt DAG records when each build finished
+  (`dbt/build_finished_at`, beside the built commit) and the MCP reconciles as soon as that
+  time changes, so a dataset grant a rebuild dropped returns within a minute.
 
 ### Fixed
 

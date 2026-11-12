@@ -29,11 +29,11 @@ ship before areas.
 
 ## 2. Grants survive rebuilds
 
-- [ ] 2.1 Scaffold: `+copy_grants: true` in the Snowflake `dbt_project.yml`; `vecten update` merges it into existing projects; emulation profile per 0.4
-- [ ] 2.2 `vecten_convention`: `convention_no_grants` test (any node with `grants`; on Snowflake any model with `copy_grants` false)
-- [ ] 2.3 dbt DAG: write a finish time beside the built commit; the MCP reconciles when it changes (Postgres; harmless on Snowflake)
-- [ ] 2.4 unit: scaffold render and update merge; the convention test's failures and names; the reconcile trigger
-- [ ] 2.5 docker: Postgres dataset grant restored after a dbt rebuild, by the triggered reconciliation
+- [x] 2.1 Scaffold: `+copy_grants: true` in the Snowflake `dbt_project.yml`; `vecten update` merges it into existing projects; emulation profile per 0.4
+- [x] 2.2 `vecten_convention`: `convention_no_grants` test (any node with `grants`; on Snowflake any model with `copy_grants` false)
+- [x] 2.3 dbt DAG: write a finish time beside the built commit; the MCP reconciles when it changes (Postgres; harmless on Snowflake)
+- [x] 2.4 unit: scaffold render and update merge; the convention test's failures and names; the reconcile trigger
+- [x] 2.5 docker: Postgres dataset grant restored after a dbt rebuild, by the triggered reconciliation
 - [ ] 2.6 live: dataset grant on a mart survives `dbt build` on Snowflake with no reconciliation running
 
 ## 3. Restricted areas
