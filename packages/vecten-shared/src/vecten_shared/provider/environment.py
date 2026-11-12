@@ -5,8 +5,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializerFunctionWrapHandler,
+    ValidationError,
+    model_serializer,
+)
 
 from vecten_shared.output import ExitCode, Failure
 
@@ -18,6 +25,17 @@ class HostOutput(BaseModel):
     public_ip: str
     components: list[str]
     hostnames: list[str]
+    # The service hostnames whose records point at this host.
+    service_hostnames: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _dump(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # Left out when empty, so the outputs of a project without services keep their bytes
+        # in the bundle.
+        data = handler(self)
+        if not data.get("service_hostnames"):
+            data.pop("service_hostnames", None)
+        return data
 
 
 class PostgresOutput(BaseModel):

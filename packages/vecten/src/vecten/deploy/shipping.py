@@ -9,16 +9,24 @@ import time
 from collections.abc import Callable, Iterable
 from typing import NamedTuple
 
-from vecten.stack.compose import vm_hostnames
-from vecten.stack.nginx import AIRFLOW_HEALTH_PATH
+from vecten.stack.compose import service_host_name, vm_hostnames
+from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, SERVICE_HEALTH_PATH
+from vecten_shared.config import VectenConfig
+from vecten_shared.extension_record import Extension
 from vecten_shared.issues import redact
 from vecten_shared.provider.environment import EnvironmentOutputs
+from vecten_shared.services import bound_services
 
 POLL_INTERVAL = 5
+# How long one service may take to answer healthy; it bounds the ship, never fails it.
+SERVICE_WINDOW = 60
 FETCH_TIMEOUT = 10
 # The VM agent prefixes compose's last output and each failing container's log line with
 # this; the lines quote what they printed, so they are redacted again here and capped.
 AGENT_LOG_PREFIX = "vecten agent log: "
+# The agent names on this prefix each service volume its release does not declare.
+AGENT_VOLUME_PREFIX = "vecten agent volume: "
+_VOLUME_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}")
 LOG_LINE_LIMIT = 300
 LOG_LINES_MAX = 40
 _UNPRINTABLE = re.compile(r"[^\x20-\x7e]")
@@ -125,4 +133,81 @@ def container_log_message(lines: list[str]) -> str:
         return ""
     return "\nlast output of compose and the failing containers:\n" + "\n".join(
         "  " + x for x in lines
+    )
+
+
+HEALTHY, UNHEALTHY, WAITING, NOT_ROUTED, SERVED = (
+    "healthy",
+    "unhealthy",
+    "waiting for deploy",
+    "not routed",
+    "served",
+)
+
+
+def service_healthy(status: int, body: str) -> bool:
+    # The Compose check is `curl --fail`, which passes every answer below 400.
+    return 200 <= status < 400
+
+
+def _listed(outputs: EnvironmentOutputs, component: str, name: str) -> bool:
+    host = host_for(outputs, component)
+    return host is not None and name in outputs.hosts[host].service_hostnames
+
+
+def unserved_hostnames(
+    config: VectenConfig, record: dict[str, Extension], outputs: EnvironmentOutputs
+) -> list[str]:
+    """Bound service hostnames with no record on the host that runs their service."""
+    hosts = vm_hostnames(outputs)
+    names = (
+        (service, service_host_name("vm", service.binding.hostname, hosts))
+        for service in bound_services(config, record)
+        if service.binding.hostname is not None
+    )
+    return sorted(name for service, name in names if not _listed(outputs, service.host, name))
+
+
+def service_report(
+    config: VectenConfig, record: dict[str, Extension], outputs: EnvironmentOutputs
+) -> dict:
+    """Each bound service's state once the hosts are shipped, and the routes whose hostname
+    has no record yet; empty when nothing is bound. A state never fails the ship."""
+    bound = bound_services(config, record)
+    if not bound:
+        return {}
+    hosts = vm_hostnames(outputs)
+    states: dict[str, str] = {}
+    waiting: list[str] = []
+    for service in bound:
+        label = service.binding.hostname
+        if label is None:
+            states[service.key] = NOT_ROUTED
+            continue
+        name = service_host_name("vm", label, hosts)
+        if not _listed(outputs, service.host, name):
+            states[service.key] = WAITING
+            waiting += [f"{service.key}.{route}" for route in service.routes]
+            continue
+        if service.service.health_path is None:
+            states[service.key] = SERVED
+            continue
+        url = f"https://{name}{SERVICE_HEALTH_PATH}"
+        healthy = poll(url, SERVICE_WINDOW, healthy=service_healthy)
+        states[service.key] = HEALTHY if healthy else UNHEALTHY
+    return {"services": states, "waiting_routes": waiting}
+
+
+def volume_names(values: Iterable[object]) -> list[str]:
+    """The orphaned volumes a VM named; its output is not trusted, so only what can be a
+    Docker volume name passes."""
+    names = {v for v in values if isinstance(v, str) and _VOLUME_NAME.fullmatch(v)}
+    return sorted(names)[:LOG_LINES_MAX]
+
+
+def agent_volumes(stderr: str) -> list[str]:
+    return volume_names(
+        line[len(AGENT_VOLUME_PREFIX) :]
+        for line in stderr.splitlines()
+        if line.startswith(AGENT_VOLUME_PREFIX)
     )

@@ -34,11 +34,12 @@ from vecten.stack.compose import (
     generate_compose,
     host_services,
     platform_secrets,
+    served_services,
     vm_hostnames,
     write_extension_dag_loader,
 )
 from vecten.stack.images import write_project_layer
-from vecten.stack.nginx import write_nginx
+from vecten.stack.nginx import service_site, write_nginx
 from vecten.stack.up import PUBLISHED_REGISTRY
 from vecten_shared.config import VectenConfig
 from vecten_shared.declarations import check_settings
@@ -46,7 +47,7 @@ from vecten_shared.extension_record import Extension, read_record
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.records import write_text_atomic
-from vecten_shared.services import check_bindings
+from vecten_shared.services import Bound, check_bindings
 from vecten_shared.sql import setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -191,6 +192,18 @@ def _copy_content(project_root: Path, stage: Path) -> None:
             _copy_tree(project_root, stage, entry)
 
 
+def _served(
+    config: VectenConfig, record: dict[str, Extension], outputs: EnvironmentOutputs, host: str
+) -> list[tuple[Bound, str]]:
+    return served_services(
+        config,
+        record,
+        list(outputs.hosts[host].components),
+        vm_hostnames(outputs),
+        outputs.hosts[host].service_hostnames,
+    )
+
+
 def _render_stack(
     stage: Path,
     config: VectenConfig,
@@ -198,6 +211,7 @@ def _render_stack(
     components: list[str],
     project: str,
     tfvars: dict[str, Any],
+    served: list[tuple[Bound, str]],
 ) -> None:
     stack_dir = stage / STACK_DIR
     stack_dir.mkdir(parents=True, exist_ok=True)
@@ -224,6 +238,7 @@ def _render_stack(
         admin_panel=config.mcp.admin_panel,
         admin_allow=config.mcp.admin_allow,
         airflow_allow=config.airflow.allow,
+        services=[service_site(bound, name) for bound, name in served],
     )
     write_project_layer(stack_dir, config, PUBLISHED_REGISTRY)
 
@@ -267,6 +282,7 @@ def host_document(
     sizing = _host_tier(host, cloud, tfvars)
     components = list(outputs.hosts[host].components)
     service_secrets, service_network = host_services(config, record or {}, components)
+    served = _served(config, record or {}, outputs, host)
     doc = {
         "host": host,
         "cloud": cloud,
@@ -278,7 +294,8 @@ def host_document(
         "bucket": outputs.bucket,
         "commit": commit,
         "setup_host": outputs.setup_host == host,
-        "hostnames": list(outputs.hosts[host].hostnames),
+        # The agent issues and renews a certificate for every name listed here.
+        "hostnames": [*outputs.hosts[host].hostnames, *sorted(name for _, name in served)],
         "secret_prefix": outputs.secret_prefix,
         "compose_project": compose_project(config, env),
         # Every platform name the project and its extensions declare, not connectors' alone.
@@ -376,18 +393,23 @@ def build_host_bundle(
             f"host {host!r} is not in the outputs of {env!r}; hosts: {', '.join(outputs.hosts)}",
         )
     tfvars = check_tfvars(project_root, config, env)
-    check_settings(config, read_record(project_root) or {}, env)
-    check_bindings(config, read_record(project_root) or {})
-    host_doc = host_document(
-        config, env, outputs, host, commit, tfvars, read_record(project_root) or {}
-    )
+    record = read_record(project_root) or {}
+    check_settings(config, record, env)
+    check_bindings(config, record)
+    host_doc = host_document(config, env, outputs, host, commit, tfvars, record)
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / bundle_name(host, commit)
     with tempfile.TemporaryDirectory(dir=out_dir, prefix=".bundle-") as tmp:
         stage = Path(tmp)
         _copy_content(project_root, stage)
         _render_stack(
-            stage, config, outputs, host_doc["components"], host_doc["compose_project"], tfvars
+            stage,
+            config,
+            outputs,
+            host_doc["components"],
+            host_doc["compose_project"],
+            tfvars,
+            _served(config, record, outputs, host),
         )
         _write_ship_files(stage, env, outputs, host_doc)
         lineage, feedback = metadata or prepare_bundle_metadata(

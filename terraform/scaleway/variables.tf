@@ -64,6 +64,32 @@ variable "components" {
   }
 }
 
+# Set by `vecten deploy` from the hostnames vecten.toml binds.
+variable "service_hostnames" {
+  description = "Service hostname labels below domain (@ for domain itself), each mapped to the component whose host serves it."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for label in keys(var.service_hostnames) : label == "@" || can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", label))])
+    error_message = "service_hostnames labels are DNS labels of lowercase letters, digits and inner hyphens, or @ for the domain itself."
+  }
+  validation {
+    condition     = alltrue([for label in keys(var.service_hostnames) : !contains(["airflow", "mcp", "www"], label) && !startswith(label, "_")])
+    error_message = "service_hostnames labels airflow, mcp, www and labels starting with _ are reserved."
+  }
+  validation {
+    # A second A record at a zone apex sits beside the zone owner's own website.
+    condition     = !(contains(keys(var.service_hostnames), "@") && var.domain == var.dns_zone)
+    error_message = "service_hostnames: @ is refused where domain is the DNS zone itself; choose a label."
+  }
+  validation {
+    condition     = alltrue([for c in values(var.service_hostnames) : contains(var.components, c)])
+    error_message = "service_hostnames components must be among components."
+  }
+}
+
 variable "profile" {
   description = "standard runs one VM per component and separate state and warehouse instances; minimal runs one VM and one instance."
   type        = string

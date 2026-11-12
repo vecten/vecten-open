@@ -238,12 +238,15 @@ def ship_hosts(
     )
     s3 = plane.storage("project")
     shipped: list[str] = []
+    plane.orphaned_volumes = {}
     with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
         for host in ship_order(outputs):
             bundle = build_host_bundle(
                 project_root, config, env, outputs, host, commit, Path(tmp), metadata=metadata
             )
-            ship_host(plane, s3, outputs, host, bundle, commit, first=host in keyed)
+            plane.orphaned_volumes[host] = ship_host(
+                plane, s3, outputs, host, bundle, commit, first=host in keyed
+            )
             shipped.append(host)
     return shipped
 
@@ -257,9 +260,10 @@ def ship_host(
     commit: str,
     *,
     first: bool = False,
-) -> None:
+) -> list[str]:
     """Upload `bundle`, point `host` at it, wait for its watcher, poll its components and
-    point it back at the previous commit when a poll fails.
+    point it back at the previous commit when a poll fails; the orphaned service volumes
+    the watcher reported.
 
     A failed agent run is not rolled back from here: the agent restores the previous release
     itself when it fails after its swap, and its line says so. Only the pointer moves back, to
@@ -345,6 +349,9 @@ def ship_host(
             message,
             details={"component": name, "host": host, "url": url, "rolled_back": rolled_back},
         )
+
+    volumes = status.get("volumes")
+    return shipping.volume_names(volumes) if isinstance(volumes, list) else []
 
 
 def _point_back(

@@ -799,3 +799,43 @@ def test_a_login_record_that_is_not_an_object_counts_as_no_session(deploy_layer,
     signed_in(token_cache, config, root)
     (root / ".vecten" / "records" / "login" / "prod.json").write_text("[]")
     assert _asks_for_login(root, config)
+
+
+# Service hostnames bound after the deploy wait for the next one.
+
+
+def _hostname_layer(tmp_path, listed):
+    import copy
+
+    from .deploy_fixtures import STANDARD_OUTPUTS, write_outputs
+    from .services_fixtures import with_services
+
+    root = render_fixture(tmp_path, "postgres", deploy=True)
+    with_services(root, {"bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}}})
+    if listed is not None:
+        outputs = copy.deepcopy(STANDARD_OUTPUTS)
+        outputs["hosts"]["platform"]["service_hostnames"] = listed
+        write_outputs(root, outputs)
+    config = oidc_ready(load_config(root))
+    config.environments["prod"].oidc_registered = True
+    return root, config
+
+
+WAITING_HOSTNAME = Item(
+    "command", "Create the DNS record for bot.data.acme.com", "vecten deploy --env prod"
+)
+
+
+def test_a_bound_hostname_the_outputs_do_not_list_offers_deploy_first(tmp_path):
+    root, config = _hostname_layer(tmp_path, [])
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == WAITING_HOSTNAME
+
+
+def test_a_hostname_the_outputs_list_asks_for_nothing(tmp_path):
+    root, config = _hostname_layer(tmp_path, ["bot.data.acme.com"])
+    assert WAITING_HOSTNAME not in post_deploy_items(root, config, "prod", CLEAN)
+
+
+def test_without_an_outputs_file_next_does_not_guess(tmp_path):
+    root, config = _hostname_layer(tmp_path, None)
+    assert WAITING_HOSTNAME not in post_deploy_items(root, config, "prod", CLEAN)

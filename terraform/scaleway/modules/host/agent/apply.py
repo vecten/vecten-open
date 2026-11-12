@@ -151,6 +151,9 @@ STATUS_ATTEMPTS = 3
 STATUS_RETRY_SECONDS = 5
 SHIP_LINE_MAX = 300
 LOG_PREFIX = "vecten agent log: "
+VOLUME_PREFIX = "vecten agent volume: "
+# The Compose volume of a bound service: `svc-<extension>-<service>-data`.
+_SERVICE_VOLUME = re.compile(r"svc-[a-z0-9-]+-data")
 LOG_TAIL_LINES = 20
 LOG_EXCERPT_MAX = 40
 COMPOSE_TAIL_LINES = 20
@@ -1226,6 +1229,43 @@ def swap(releases: Path, new: Path) -> None:
             shutil.rmtree(child)
 
 
+def _compose(release: Path, host: dict) -> list:
+    stack = _real(release) / STACK_DIR
+    args = ["docker", "compose", "--project-name", host["compose_project"]]
+    args += ["--project-directory", str(stack), "-f", str(stack / "docker-compose.yml")]
+    override = _real(release) / OVERRIDE_FILE
+    if override.is_file():
+        # The project's additions merge over the generated file, so they come after it.
+        args += ["-f", str(override)]
+    for component in host["components"]:
+        args += ["--profile", component]
+    return args
+
+
+def orphaned_volumes(release: Path, host: dict, env: dict, run: Run) -> list:
+    """The project's service volumes the release no longer declares. They hold a removed
+    service's data, so they are named for the operator and never removed; a listing that
+    fails names none, since the release already runs."""
+    try:
+        declared = run(_compose(release, host) + ["config", "--volumes"], env=env)
+        listed = run(
+            ["docker", "volume", "ls"]
+            + ["--filter", f"label=com.docker.compose.project={host['compose_project']}"]
+            + ["--format", '{{.Name}}\t{{.Label "com.docker.compose.volume"}}']
+        )
+        if declared.returncode != 0 or listed.returncode != 0:
+            return []
+        kept = set(declared.stdout.split())
+        found = []
+        for line in listed.stdout.splitlines():
+            name, _, volume = line.partition("\t")
+            if _SERVICE_VOLUME.fullmatch(volume) and volume not in kept:
+                found.append(name)
+        return sorted(found)
+    except Exception:
+        return []
+
+
 def compose_up(
     release: Path,
     host: dict,
@@ -1236,15 +1276,7 @@ def compose_up(
 ) -> None:
     """Start the release's stack; a failure carries the tail of compose's own output, which
     names a failed pull, build or port when no container is running yet."""
-    stack = _real(release) / STACK_DIR
-    args = ["docker", "compose", "--project-name", host["compose_project"]]
-    args += ["--project-directory", str(stack), "-f", str(stack / "docker-compose.yml")]
-    override = _real(release) / OVERRIDE_FILE
-    if override.is_file():
-        # The project's additions merge over the generated file, so they come after it.
-        args += ["-f", str(override)]
-    for component in host["components"]:
-        args += ["--profile", component]
+    args = _compose(release, host)
     # Every release tags its project images alike, so `--build` keeps the tag on this one.
     args += ["up", "-d", "--build", "--remove-orphans"]
     if force_recreate:
@@ -1371,7 +1403,8 @@ def ship(
     run_dir: Path | None = None,
     sleep: Callable[[float], None] = time.sleep,
     resolve: Callable[[str], list[str]] = resolve,
-) -> None:
+) -> list:
+    """Install and start `release`; the service volumes it no longer declares."""
     with step("release"):
         host = load_host(release)
         outputs = load_outputs(release, host["env"])
@@ -1425,6 +1458,7 @@ def ship(
         raise AgentError(f"{exc}; {outcome}", log[:LOG_EXCERPT_MAX]) from None
     with contextlib.suppress(FileNotFoundError):
         (_real(release) / NEVER_STARTED).unlink()
+    return orphaned_volumes(release, host, {**stack, **env}, run)
 
 
 def _ensure_nginx(host: dict, run: Run) -> None:
@@ -1638,15 +1672,15 @@ def _log_lines(stderr: str) -> list[str]:
 
 
 def _pull_and_ship(store: Backend, host: str, releases: Path, commit: str, run: Run):
-    """Download, extract and ship `commit`: whether it shipped, the line to report and the
-    failing containers' log lines the release's agent printed."""
+    """Download, extract and ship `commit`: whether it shipped, the line to report, the
+    failing containers' log lines and the orphaned volumes the release's agent printed."""
     key = f"bundles/{host}/{commit}.tar.gz"
     release = releases / commit
     try:
         with step("download"):
             data = store.get_object(key)
         if data is None:
-            return False, f"vecten agent watch: bundle {key} is missing", []
+            return False, f"vecten agent watch: bundle {key} is missing", [], []
         incoming = releases.parent / "incoming"
         archive = incoming / f"{commit}.tar.gz"
         try:
@@ -1667,19 +1701,27 @@ def _pull_and_ship(store: Backend, host: str, releases: Path, commit: str, run: 
             with contextlib.suppress(OSError):
                 archive.unlink()
     except AgentError as exc:
-        return False, f"vecten agent watch: {exc}", []
+        return False, f"vecten agent watch: {exc}", [], []
     agent = release / SHIP_DIR / "apply.py"
     # Only the agent bundled with a release knows the contract that release was built against.
     result = run([sys.executable, str(agent), "ship", "--release", str(release)])
     if result.returncode != 0:
         line = _last_line(result.stderr) or f"vecten agent ship: failed (exit {result.returncode})"
-        return False, line, _log_lines(result.stderr)
+        return False, line, _log_lines(result.stderr), []
     line = f"shipped {commit}"
     try:
         _refresh_agent_copy(agent)
     except OSError as exc:
         line += f"; the watcher's agent copy was not refreshed ({type(exc).__name__})"
-    return True, line, []
+    return True, line, [], _volume_lines(result.stderr)
+
+
+def _volume_lines(stderr: str) -> list:
+    return [
+        line[len(VOLUME_PREFIX) :][:SHIP_LINE_MAX]
+        for line in stderr.splitlines()
+        if line.startswith(VOLUME_PREFIX)
+    ][:LOG_EXCERPT_MAX]
 
 
 def _running(releases: Path) -> str | None:
@@ -1716,21 +1758,23 @@ def _report(
     log: list[str],
     running,
     sleep,
+    volumes=(),
 ) -> None:
     """The status object CI polls; a lost one would make CI roll back a release that runs.
 
     `running` names the release the host runs after the agent finished, any rollback of its
     own included, so CI can point the pointer back at it when the ship failed.
     """
-    body = json.dumps(
-        {
-            "ok": ok,
-            "line": line,
-            "requested_at": wanted["requested_at"],
-            "running": running,
-            "log": log,
-        }
-    )
+    doc = {
+        "ok": ok,
+        "line": line,
+        "requested_at": wanted["requested_at"],
+        "running": running,
+        "log": log,
+    }
+    if volumes:
+        doc["volumes"] = list(volumes)
+    body = json.dumps(doc)
     key = f"{component}/ship-status/{wanted['commit']}.json"
     for attempt in range(1, STATUS_ATTEMPTS + 1):
         try:
@@ -1812,8 +1856,11 @@ def watch(
                 f"waiting for a release requested after this server's key: the pointer to "
                 f"{wanted['commit']} predates it"
             )
+        volumes = []
         if to_ship:
-            ok, line, log = _pull_and_ship(store, config["host"], releases, wanted["commit"], run)
+            ok, line, log, volumes = _pull_and_ship(
+                store, config["host"], releases, wanted["commit"], run
+            )
             if ok:
                 with contextlib.suppress(FileNotFoundError):
                     pending.unlink()
@@ -1821,7 +1868,15 @@ def watch(
             ok, line, log = True, f"{wanted['commit']} is already the current release", []
         with step("status"):
             _report(
-                store, config["components"][0], wanted, ok, line, log, _running(releases), sleep
+                store,
+                config["components"][0],
+                wanted,
+                ok,
+                line,
+                log,
+                _running(releases),
+                sleep,
+                volumes=volumes,
             )
         _write_root_only(handled_file, json.dumps(wanted))
         return line
@@ -1839,7 +1894,8 @@ def main(argv: list[str] | None = None, run: Run = run) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "ship":
-            ship(args.release, run)
+            for name in ship(args.release, run):
+                print(VOLUME_PREFIX + name, file=sys.stderr)
         elif args.command == "rollback":
             for line in rollback(RELEASES, run):
                 print(LOG_PREFIX + line, file=sys.stderr)

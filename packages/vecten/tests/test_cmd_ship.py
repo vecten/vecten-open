@@ -346,3 +346,169 @@ def test_check_names_what_services_reserve_on_each_host(invoke, no_cloud, tmp_pa
     text = invoke("ship", "--env", "prod", "--check").stdout
     assert "services on platform reserve 768 MB and 1 CPUs" in text
     assert "bootstrapped=false deployed=false" in text
+
+
+# Services: reported after the component polls, never rolled back for.
+
+
+def _ship_with_services(invoke, project, monkeypatch, answers, outputs=None):
+    from vecten.deploy import shipping
+
+    from .services_fixtures import BOT, locked, with_services
+
+    portal = {**BOT, "components": ["platform", "mcp"]}
+    worker = {"command": ["run"], "health": {"command": ["true"]}}
+    with_services(
+        project,
+        {
+            "bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}},
+            "portal": {
+                "hostname": "portal",
+                "host": "mcp",
+                "routes": {"admin": {"access": "public"}},
+            },
+            "worker": {},
+        },
+        declared={"bot": BOT, "portal": portal, "worker": worker},
+    )
+    locked(project)
+    if outputs is None:
+        outputs = json.loads(json.dumps(STANDARD_OUTPUTS))
+        outputs["hosts"]["platform"]["service_hostnames"] = ["bot.data.acme.com"]
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        return answers.get(url)
+
+    monkeypatch.setattr(shipping, "fetch_response", fetch)
+    monkeypatch.setattr(shipping, "SERVICE_WINDOW", 0)
+    aws_credentials(monkeypatch, project)
+    set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    ssm = FakeSsm()
+    with mock_aws():
+        s3 = boto3.client("s3", region_name=REGION)
+        for bucket in (BUCKET, STATE_BUCKET):
+            s3.create_bucket(
+                Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": REGION}
+            )
+        s3.put_object(Bucket=STATE_BUCKET, Key="prod/outputs.json", Body=json.dumps(outputs))
+        real = clients.client
+        monkeypatch.setattr(
+            clients, "client", lambda svc, region: ssm if svc == "ssm" else real(svc, region)
+        )
+        monkeypatch.setattr(ship_mod, "poll", lambda url, timeout, **kw: True)
+        json_run = invoke("ship", "--env", "prod", "--json")
+        text_run = invoke("ship", "--env", "prod")
+    return json_run, text_run, asked, ssm
+
+
+def test_an_unhealthy_service_is_reported_and_the_bundle_stays(invoke, project, monkeypatch):
+    health = "https://bot.data.acme.com/_vecten/health"
+    r, text, asked, ssm = _ship_with_services(invoke, project, monkeypatch, {health: (500, "")})
+    assert r.exit_code == 0, r.stdout
+    data = doc(r)
+    assert data["hosts"] == ["mcp", "platform"]
+    assert data["services"] == {
+        "acme.bot": "unhealthy",
+        "acme.portal": "waiting for deploy",
+        "acme.worker": "not routed",
+    }
+    assert data["waiting_routes"] == ["acme.portal.admin"]
+    assert asked[:1] == [health]
+    assert not any("rollback" in " ".join(map(str, sent)) for sent in ssm.sent)
+    assert text.exit_code == 0, text.stdout
+    assert "service acme.bot: unhealthy" in text.stdout
+    assert "routes waiting for `vecten deploy --env prod`: acme.portal.admin" in text.stdout
+
+
+def test_a_healthy_service_is_reported_healthy(invoke, project, monkeypatch):
+    health = "https://bot.data.acme.com/_vecten/health"
+    r, _, _, _ = _ship_with_services(invoke, project, monkeypatch, {health: (200, "ok")})
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["services"]["acme.bot"] == "healthy"
+
+
+def test_a_service_that_does_not_answer_is_unhealthy_and_fails_nothing(
+    invoke, project, monkeypatch
+):
+    r, _, _, _ = _ship_with_services(invoke, project, monkeypatch, {})
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["services"]["acme.bot"] == "unhealthy"
+
+
+def test_a_ship_without_services_reports_none(invoke, project, monkeypatch):
+    aws_credentials(monkeypatch, project)
+    set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    ssm = FakeSsm()
+    with mock_aws():
+        s3 = boto3.client("s3", region_name=REGION)
+        for bucket in (BUCKET, STATE_BUCKET):
+            s3.create_bucket(
+                Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": REGION}
+            )
+        s3.put_object(
+            Bucket=STATE_BUCKET, Key="prod/outputs.json", Body=json.dumps(STANDARD_OUTPUTS)
+        )
+        real = clients.client
+        monkeypatch.setattr(
+            clients, "client", lambda svc, region: ssm if svc == "ssm" else real(svc, region)
+        )
+        monkeypatch.setattr(ship_mod, "poll", lambda url, timeout, **kw: True)
+        r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert "services" not in doc(r) and "waiting_routes" not in doc(r)
+
+
+# Volumes of services a host does not run, as each host's agent names them.
+
+
+def test_an_aws_ship_reports_the_volumes_each_agent_named(invoke, project, monkeypatch):
+    aws_credentials(monkeypatch, project)
+    set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    stderr = (
+        "vecten agent volume: acme-prod_svc-acme-old-data\n"
+        "vecten agent volume: bad name; rm -rf /\n"
+    )
+    ssm = FakeSsm(results={("i-0platform", "ship"): ("Success", stderr)})
+    with mock_aws():
+        s3 = boto3.client("s3", region_name=REGION)
+        for bucket in (BUCKET, STATE_BUCKET):
+            s3.create_bucket(
+                Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": REGION}
+            )
+        s3.put_object(
+            Bucket=STATE_BUCKET, Key="prod/outputs.json", Body=json.dumps(STANDARD_OUTPUTS)
+        )
+        real = clients.client
+        monkeypatch.setattr(
+            clients, "client", lambda svc, region: ssm if svc == "ssm" else real(svc, region)
+        )
+        monkeypatch.setattr(ship_mod, "poll", lambda url, timeout, **kw: True)
+        r = invoke("ship", "--env", "prod", "--json")
+        text = invoke("ship", "--env", "prod")
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["orphaned_volumes"] == {"platform": ["acme-prod_svc-acme-old-data"]}
+    assert (
+        "volumes of services no longer bound on platform: acme-prod_svc-acme-old-data"
+        in text.stdout
+    )
+
+
+def test_a_scaleway_ship_reports_the_volumes_its_watcher_named(invoke, scaleway):
+    scaleway.watcher.volumes[("platform", COMMIT)] = ["acme-prod_svc-acme-old-data", 7]
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["orphaned_volumes"] == {"platform": ["acme-prod_svc-acme-old-data"]}
+
+
+def test_a_ship_whose_agents_name_no_volume_reports_none(invoke, scaleway):
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert "orphaned_volumes" not in doc(r)

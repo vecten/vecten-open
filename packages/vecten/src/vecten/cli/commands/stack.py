@@ -20,6 +20,7 @@ def register(app: typer.Typer) -> None:
             if res.left_out:
                 lines.append(f"not started: {', '.join(res.left_out)}; {up_mod.SNOWFLAKE_MCP_NOTE}")
             lines += [f"service {key}: {state}" for key, state in res.services.items()]
+            lines += [f"route {key}: {url}" for key, url in res.routes.items()]
             if res.services:
                 lines.append(
                     f"services reserve {res.limits['memory_mb']} MB and {res.limits['cpus']:g} CPUs"
@@ -32,6 +33,7 @@ def register(app: typer.Typer) -> None:
                     "left_out": res.left_out,
                     "services": res.services,
                     "limits": res.limits,
+                    "routes": res.routes,
                     **res.airflow_api,
                 },
                 message="stack is up\n" + "\n".join(lines),

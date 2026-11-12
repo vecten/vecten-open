@@ -116,6 +116,15 @@ def test_unknown_keys_are_reported_not_refused():
             },
             "routes.b.path",
         ),
+        (
+            {
+                "routes": {
+                    "a": {"path": "/h", "access": "public"},
+                    "b": {"path": "/h/", "access": "public"},
+                }
+            },
+            "routes.b.path",
+        ),
     ],
 )
 def test_a_malformed_known_key_is_refused_naming_extension_service_and_key(change, key):
@@ -256,3 +265,12 @@ def test_two_bindings_with_one_compose_name_are_refused():
     )
     with pytest.raises(Failure, match="acme.bot-admin and acme-bot.admin"):
         bound_services(config, record)
+
+
+@pytest.mark.parametrize(
+    ("path", "prefix"), [("/", "/"), ("/api", "/api"), ("/api/", "/api"), ("/a/b/", "/a/b")]
+)
+def test_a_route_covers_its_path_as_whole_segments_whatever_its_trailing_slash(path, prefix):
+    from vecten_shared.services import route_prefix
+
+    assert route_prefix(path) == prefix

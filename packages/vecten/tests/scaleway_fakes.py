@@ -869,6 +869,8 @@ class FakeWatcher:
         # None as a result: that pointer is never answered.
         self.results: dict[tuple[str, str], tuple[bool, str] | None] = {}
         self.logs: dict[tuple[str, str], object] = {}
+        # (host, commit) to the status's `volumes`, the orphaned volumes the agent named.
+        self.volumes: dict[tuple[str, str], object] = {}
         self.silent: set[str] = set()
         self.no_ack: set[str] = set()
         self.pointers: list[tuple[str, dict]] = []
@@ -904,6 +906,8 @@ class FakeWatcher:
         }
         if (host, commit) in self.logs:
             status["log"] = self.logs[(host, commit)]
+        if (host, commit) in self.volumes:
+            status["volumes"] = self.volumes[(host, commit)]
         status_key = f"{self._first(host)}/ship-status/{commit}.json"
         self.storage.put(bucket, status_key, json.dumps(status).encode())
 

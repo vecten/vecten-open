@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -19,13 +19,14 @@ from vecten.stack.compose import (
     STACK_DIR,
     compose_project_name,
     local_hostnames,
+    service_host_name,
     services_to_run,
     write_compose,
 )
 from vecten.stack.docker import DockerRunner, SubprocessDocker
 from vecten.stack.env import ensure_local_env
 from vecten.stack.images import base_image, write_project_layer
-from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, HOST_KEYS, write_nginx
+from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, HOST_KEYS, service_site, write_nginx
 from vecten_shared.config import load_config
 from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
@@ -58,6 +59,8 @@ class UpResult:
     services: dict[str, str]
     # What the started services reserve together on this machine.
     limits: dict[str, float]
+    # Each bound route of a started service, by `<extension>.<service>.<route>`, at its URL.
+    routes: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -171,6 +174,12 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
     running = services_to_run(config, "local", components, stack_dir)
     names = {bound.compose_name: bound.key for bound in running}
     hosts = local_hostnames()
+    routed = [
+        (bound, service_host_name("local", bound.binding.hostname, hosts))
+        for bound in running
+        if bound.binding.hostname is not None
+    ]
+    sites = [service_site(bound, name) for bound, name in routed]
     write_nginx(
         stack_dir,
         components,
@@ -178,9 +187,10 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
         "local",
         admin_panel=config.mcp.admin_panel,
         admin_allow=config.mcp.admin_allow,
+        services=sites,
     )
     served = {HOST_KEYS[c]: hosts[HOST_KEYS[c]] for c in components}
-    ensure_self_signed(stack_dir, list(served.values()))
+    ensure_self_signed(stack_dir, [*served.values(), *(site.host for site in sites)])
     if "platform" in components:
         passwords = {_env(env, "AIRFLOW_ADMIN_USER"): _env(env, "AIRFLOW_ADMIN_PASSWORD")}
         write_text_atomic(stack_dir / "airflow_passwords.json", json.dumps(passwords), mode=0o600)
@@ -215,6 +225,11 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
     }
     urls = {key: f"https://{host}" for key, host in served.items()}
     wait_for_front_doors(urls, wait_seconds)
+    routes = {
+        f"{bound.key}.{name}": f"https://{host}{route.path}"
+        for bound, host in routed
+        for name, route in bound.routes.items()
+    }
     airflow_api = (
         {
             "airflow_api": f"http://127.0.0.1:{LOCAL_AIRFLOW_API_PORT}",
@@ -237,6 +252,7 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
         left_out=left_out,
         services=states,
         limits=limits,
+        routes=routes,
     )
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from vecten.deploy.sizing import TIERS
-from vecten_shared.config import VectenConfig
+from vecten_shared.config import APEX, VectenConfig
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
 
@@ -202,4 +202,28 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
             ExitCode.CONFIG,
             f"{rel} sets {DAGS_PAUSED_AT_CREATION} = {paused!r}; it must be true or false",
         )
+    _check_service_hostnames(rel, config, values)
     return values
+
+
+def _check_service_hostnames(rel: str, config: VectenConfig, values: dict[str, Any]) -> None:
+    # `deploy` derives the variable from vecten.toml, so a tfvars entry would be a second
+    # source that one environment alone follows.
+    if "service_hostnames" in values:
+        raise Failure(
+            ExitCode.CONFIG,
+            f"{rel} sets service_hostnames; `vecten deploy` passes it from the hostnames "
+            "vecten.toml binds, so remove the line",
+        )
+    # Each environment serves under its own tfvars domain, which may be the zone itself.
+    if values["domain"] != values["dns_zone"]:
+        return
+    for extension, bindings in sorted(config.services.items()):
+        for name, binding in sorted(bindings.items()):
+            if binding.hostname == APEX:
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"vecten.toml: services.{extension}.{name}.hostname: @ is "
+                    f"{values['domain']}, the DNS zone itself in {rel}, whose apex records "
+                    "the zone keeps; choose a label",
+                )

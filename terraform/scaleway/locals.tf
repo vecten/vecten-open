@@ -43,6 +43,12 @@ locals {
   host_hostnames = {
     for h, cs in local.host_components : h => [for c in cs : local.hostname_of[c]]
   }
+  service_hostname_of = {
+    for label, c in var.service_hostnames : (label == "@" ? var.domain : "${label}.${var.domain}") => local.host_of[c]
+  }
+  host_service_hostnames = {
+    for h in keys(local.host_components) : h => sort([for name, host in local.service_hostname_of : name if host == h])
+  }
   setup_host = var.profile == "minimal" ? "main" : (local.has_mcp ? "mcp" : "platform")
 
   default_host_types = {

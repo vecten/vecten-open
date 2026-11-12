@@ -5,6 +5,7 @@ from pathlib import Path
 
 import tomli_w
 
+from vecten_shared.config import load_config
 from vecten_shared.extension_record import Extension, record_text
 from vecten_shared.services import parse_service
 
@@ -31,3 +32,20 @@ def with_services(root: Path, bindings: dict, declared: dict | None = None, **en
     (root / "extensions.lock.json").write_text(
         record_text({"acme": Extension("1.0", (), services=services, **entry)})
     )
+
+
+def locked(root):
+    """Stamps every lock fresh for the project's `acme==1.0` and its record."""
+    from vecten import locking
+    from vecten_shared.extension_record import read_record
+
+    (root / "requirements.txt").write_text("acme==1.0\n")
+    config, record = load_config(root), read_record(root)
+    for component in locking.components(config):
+        roots = locking.roots(config, locking.read_pins(root), record, component)
+        digest = locking.inputs_hash(component, [*roots, *locking.metadata_markers(record)])
+        body = "".join(f"{r}\n" for r in roots)
+        (root / locking.LOCK_FILES[component]).write_text(
+            locking.stamp_line(component, digest) + "\n" + body
+        )
+    return root

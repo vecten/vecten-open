@@ -11,7 +11,7 @@ import yaml
 
 from vecten.stack.images import BUILD_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
-from vecten_shared.config import VectenConfig, stack_project_name
+from vecten_shared.config import APEX, VectenConfig, service_hostname, stack_project_name
 from vecten_shared.declarations import component_for, secret_problem
 from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
@@ -333,14 +333,43 @@ def _literal(value: str) -> str:
     return value.replace("$", "$$")
 
 
-def _public_url(mode: str, label: str, hosts: dict[str, str]) -> str:
+def environment_domain(hosts: dict[str, str]) -> str:
+    """The deployed environment's domain, read off its built-in names: it comes from the
+    environment's tfvars, which vecten.toml does not repeat."""
+    return (hosts.get("mcp") or hosts["airflow"]).split(".", 1)[1]
+
+
+def service_host_name(mode: str, label: str, hosts: dict[str, str]) -> str:
+    """The name a service hostname label is served at: below the environment's domain on a
+    VM, below `localhost` with the published port on the laptop."""
     if mode == "local":
-        name = "localhost" if label == "@" else f"{label}.localhost"
-        return f"https://{name}:{LOCAL_HTTPS_PORT}"
-    # An environment's domain comes from its tfvars, so it is read off its built-in names.
-    builtin = hosts.get("mcp") or hosts["airflow"]
-    domain = builtin.split(".", 1)[1]
-    return f"https://{domain if label == '@' else f'{label}.{domain}'}"
+        name = "localhost" if label == APEX else f"{label}.localhost"
+        return f"{name}:{LOCAL_HTTPS_PORT}"
+    return service_hostname(label, environment_domain(hosts))
+
+
+def _public_url(mode: str, label: str, hosts: dict[str, str]) -> str:
+    return f"https://{service_host_name(mode, label, hosts)}"
+
+
+def served_services(
+    config: VectenConfig,
+    record: dict[str, Extension],
+    components: list[str],
+    hosts: dict[str, str],
+    listed: list[str],
+) -> list[tuple[Bound, str]]:
+    """The services on a VM whose hostname the environment's records list for that VM, each
+    with its name; a name the outputs do not list waits for `vecten deploy`."""
+    served = []
+    for bound in bound_services(config, record):
+        label = bound.binding.hostname
+        if label is None or bound.host not in components:
+            continue
+        name = service_host_name("vm", label, hosts)
+        if name in listed:
+            served.append((bound, name))
+    return served
 
 
 def _service(

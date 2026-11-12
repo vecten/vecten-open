@@ -85,6 +85,34 @@ def _sign_in_items(
     return [Item("command", "Sign in to the MCP as an admin", f"vecten login --env {env}")]
 
 
+def _waiting_hostname_items(root: Path, config: VectenConfig, env: str) -> list[Item]:
+    """A bound service hostname gets its DNS record from the next deploy; without the
+    environment's outputs on this machine there is nothing to compare with."""
+    # Deferred so that `next` loads the deploy modules only for a project with a hostname.
+    from vecten.deploy.shipping import unserved_hostnames
+    from vecten_shared.extension_record import read_record as read_extension_record
+    from vecten_shared.provider.environment import environment_file, load_outputs
+
+    if not any(b.hostname for bindings in config.services.values() for b in bindings.values()):
+        return []
+    path = environment_file(root, env)
+    if not path.is_file():
+        return []
+    try:
+        outputs = load_outputs(path, env)
+        names = unserved_hostnames(config, read_extension_record(root) or {}, outputs)
+    except Failure:
+        return []
+    if not names:
+        return []
+    noun = "record" if len(names) == 1 else "records"
+    return [
+        Item(
+            "command", f"Create the DNS {noun} for {', '.join(names)}", f"vecten deploy --env {env}"
+        )
+    ]
+
+
 def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState) -> list[Item]:
     facts = config.environments.get(env) or EnvironmentFacts()
     if not facts.deployed_commit:
@@ -94,6 +122,7 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
     items: list[Item] = [PUSH] if git.dirty or git.ahead else []
     # An extension added after the deploy can declare secrets the environment does not hold.
     items += declared_secret_items(root, config, env)
+    items += _waiting_hostname_items(root, config, env)
     if not config.has("mcp"):
         return items
     # Nothing below works before the MCP runs, and it cannot start without its identity.

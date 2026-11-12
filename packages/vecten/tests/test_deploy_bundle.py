@@ -23,6 +23,7 @@ from .deploy_fixtures import (
     render_aws,
     set_facts,
 )
+from .services_fixtures import locked
 
 
 @pytest.fixture
@@ -533,23 +534,6 @@ def test_the_bundle_build_checks_the_service_bindings(project, tmp_path):
         build(project, tmp_path / "out")
 
 
-def locked(root):
-    """Stamps every lock fresh for the project's `acme==1.0` and its record."""
-    from vecten import locking
-    from vecten_shared.extension_record import read_record
-
-    (root / "requirements.txt").write_text("acme==1.0\n")
-    config, record = load_config(root), read_record(root)
-    for component in locking.components(config):
-        roots = locking.roots(config, locking.read_pins(root), record, component)
-        digest = locking.inputs_hash(component, [*roots, *locking.metadata_markers(record)])
-        body = "".join(f"{r}\n" for r in roots)
-        (root / locking.LOCK_FILES[component]).write_text(
-            locking.stamp_line(component, digest) + "\n" + body
-        )
-    return root
-
-
 def host_json(bundle):
     return json.loads(read(bundle, ".vecten/ship/host.json"))
 
@@ -607,3 +591,90 @@ def test_one_vm_under_minimal_reads_each_service_secret_from_its_hosts_scope(tmp
     host = host_json(build(locked(root), tmp_path / "out", host="main", outputs=minimal_outputs()))
     assert host["service_network"] == "vecten-services"
     assert host["service_secrets"] == ["ACME_BOT_TOKEN", "MCP_ACME_TOKEN"]
+
+
+def _outputs_with(names: dict[str, list[str]]) -> dict:
+    import copy
+
+    outputs = copy.deepcopy(STANDARD_OUTPUTS)
+    for host, listed in names.items():
+        outputs["hosts"][host]["service_hostnames"] = listed
+    return outputs
+
+
+def _portal_and_bot(root):
+    from .services_fixtures import BOT, with_services
+
+    portal = {**BOT, "components": ["platform", "mcp"]}
+    with_services(
+        root,
+        {
+            "bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}},
+            "portal": {
+                "hostname": "portal",
+                "host": "mcp",
+                "routes": {"admin": {"access": "public"}},
+            },
+        },
+        declared={"bot": BOT, "portal": portal},
+    )
+    return locked(root)
+
+
+def test_host_json_appends_the_service_hostnames_the_outputs_list_for_the_host(project, tmp_path):
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com"], "mcp": ["portal.data.acme.com"]})
+    platform = host_json(build(project, tmp_path / "p", outputs=outputs))
+    assert platform["hostnames"] == ["airflow.data.acme.com", "bot.data.acme.com"]
+    mcp = host_json(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert mcp["hostnames"] == ["mcp.data.acme.com", "portal.data.acme.com"]
+
+
+def test_a_bound_hostname_missing_from_the_outputs_is_not_handed_to_the_agent(project, tmp_path):
+    _portal_and_bot(project)
+    platform = host_json(build(project, tmp_path / "p"))
+    assert platform["hostnames"] == ["airflow.data.acme.com"]
+
+
+def test_a_listed_hostname_no_longer_bound_on_the_host_is_not_handed_to_the_agent(
+    project, tmp_path
+):
+    # The record still points at the platform VM while the binding moved the portal to mcp.
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com", "portal.data.acme.com"]})
+    platform = host_json(build(project, tmp_path / "p", outputs=outputs))
+    assert platform["hostnames"] == ["airflow.data.acme.com", "bot.data.acme.com"]
+    mcp = host_json(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert mcp["hostnames"] == ["mcp.data.acme.com"]
+
+
+def nginx_conf(bundle):
+    return read(bundle, ".vecten/stack/nginx/conf.d/default.conf")
+
+
+def test_the_bundle_serves_each_listed_service_hostname_on_the_host_that_runs_it(project, tmp_path):
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com"], "mcp": ["portal.data.acme.com"]})
+    platform = nginx_conf(build(project, tmp_path / "p", outputs=outputs))
+    assert "server_name bot.data.acme.com;" in platform
+    assert "set $upstream http://svc-acme-bot:8000;" in platform
+    assert "portal.data.acme.com" not in platform
+    mcp = nginx_conf(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert "server_name portal.data.acme.com;" in mcp
+    assert "server_name bot.data.acme.com;" not in mcp
+
+
+def test_a_hostname_waiting_for_deploy_is_not_rendered(project, tmp_path):
+    _portal_and_bot(project)
+    platform = nginx_conf(build(project, tmp_path / "p"))
+    assert "bot.data.acme.com" not in platform
+    assert "svc-acme-bot" not in platform
+
+
+def test_a_bundle_without_services_renders_the_nginx_of_a_project_without_them(project, tmp_path):
+    from vecten.stack.compose import vm_hostnames
+    from vecten.stack.nginx import generate_nginx_conf
+
+    outputs = EnvironmentOutputs.model_validate(STANDARD_OUTPUTS)
+    expected = generate_nginx_conf(["platform"], vm_hostnames(outputs), "vm")
+    assert nginx_conf(build(project, tmp_path / "p")) == expected
