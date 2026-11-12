@@ -1131,7 +1131,8 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
 - What a shared account protects: one environment's keys (its loader key, provisioner key and
   MCP signing key) reach no other environment's data. It does not protect an environment from
   an administrator who already controls another environment's provisioner, which may create
-  account-level users and roles: create `prod` first, or give it an account of its own, and
+  account-level users and roles named for that environment before its first script run:
+  create `prod` first, or give it an account of its own, and
   keep every deploy user on a key-pair-only policy. Parts of this rest on Snowflake behaviour
   the project's live checks have yet to confirm (several External OAuth integrations in one
   account, authentication policies binding them); until they pass, treat a shared account as

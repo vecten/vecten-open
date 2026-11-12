@@ -670,7 +670,7 @@ def test_a_kept_environment_deployed_without_a_record_keeps_its_fixed_names(
     assert "PROVISIONER_ACME_PROD" not in r.stdout
 
 
-def _shared(root, monkeypatch, *, owned=(), provisioner_user=False, fails=False):
+def _shared(root, monkeypatch, *, owned=(), provisioner_user=False, integration=False, fails=False):
     """A shared-account environment, with the Snowflake reads answered from `owned`."""
     from vecten.deploy import run
     from vecten.deploy.snowflake_leftovers import Leftovers
@@ -685,7 +685,12 @@ def _shared(root, monkeypatch, *, owned=(), provisioner_user=False, fails=False)
         reads.append((credentials["SNOWFLAKE_USER"], names.provisioner_role))
         if fails:
             raise Failure(ExitCode.TOOL_FAILED, "could not read PROVISIONER_ACME_PROD's objects")
-        return Leftovers(names=names, owned=tuple(owned), provisioner_user=provisioner_user)
+        return Leftovers(
+            names=names,
+            owned=tuple(owned),
+            provisioner_user=provisioner_user,
+            integration=integration,
+        )
 
     monkeypatch.setattr(run, "read_leftovers", read)
     return reads
@@ -723,6 +728,17 @@ def test_data_deletion_is_refused_while_the_provisioner_user_stays(invoke, snowf
         r = invoke(*DELETE)
     assert r.exit_code == 4, r.stdout
     assert "DROP USER IF EXISTS PROVISIONER_ACME_PROD;" in json.loads(r.stdout)["error"]
+    assert FakeTerraform.calls() == []
+
+
+def test_data_deletion_is_refused_while_the_integration_stays(invoke, snowflake, monkeypatch):
+    _shared(snowflake, monkeypatch, integration=True)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke(*DELETE)
+    assert r.exit_code == 4, r.stdout
+    error = json.loads(r.stdout)["error"]
+    assert "DROP SECURITY INTEGRATION IF EXISTS EXTERNAL_OAUTH_ACME_PROD;" in error
     assert FakeTerraform.calls() == []
 
 

@@ -8,17 +8,24 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 ### Added
 
 - Several environments of a Snowflake project in one account: `shared_account = true` under
-  `[warehouse]` (asked by `next` after the Snowflake account, `vecten answer
-  snowflake_shared_account yes|no`, written by `init --deploy`) gives each environment its own
-  database `<BASE>_<ENV>`, warehouse, roles, loader, provisioner, External OAuth integration and
-  users, every account-level name ending in `_<BASE>_<ENV>`. Each environment records the layout
-  of its first deploy and keeps it; `deploy` refuses a changed layout or base, a hyphen in a
-  shared environment's name and a suffix over 64 characters. The MCP's users are bound to their
-  environment's integration by an authentication policy, the service users sign in by key pair
-  only, the administrator's script runs as one block that stops at a name another project or
-  environment holds, `osi/` sources naming the project's database are read as the environment's,
-  and `destroy --delete-data` refuses while the provisioner's users and roles stay, printing the
-  statements that drop them. Several guarantees await live checks on a Snowflake account
+  `[warehouse]` gives each environment its own database `<BASE>_<ENV>`, warehouse, roles,
+  loader, provisioner, External OAuth integration and users, every account-level name ending
+  in `_<BASE>_<ENV>`. `next` asks it after the Snowflake account, `vecten answer
+  snowflake_shared_account yes|no` records it and `init --deploy` writes it
+  ([#34](https://github.com/vecten/vecten-open/issues/34)).
+- Each environment records the Snowflake layout and base of its first deploy and keeps them;
+  `deploy` refuses a changed layout or base, a hyphen in a shared environment's name and a
+  suffix over 64 characters ([#34](https://github.com/vecten/vecten-open/issues/34)).
+- In a shared account the MCP's users are bound to their environment's integration by an
+  authentication policy, the provisioner and loader sign in by key pair only, and the
+  administrator's script runs as one block that stops at a name another project or environment
+  holds ([#34](https://github.com/vecten/vecten-open/issues/34)).
+- `osi/` sources naming the project's database are read as the environment's, so one commit
+  serves every environment of a shared account
+  ([#34](https://github.com/vecten/vecten-open/issues/34)).
+- `destroy --delete-data` in a shared account refuses while the provisioner's users and roles,
+  its user or the integration stay, printing the statements that drop them; several guarantees
+  of shared accounts await live checks on a Snowflake account
   ([#34](https://github.com/vecten/vecten-open/issues/34)).
 - Each environment of a Snowflake project names its own account in its tfvars; `[warehouse]
   account` names `prod`'s, and `ship` hands the environment's account to its hosts

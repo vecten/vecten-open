@@ -544,8 +544,9 @@ def _shared_leftovers(
         statements = found.statements()
         raise Failure(
             ExitCode.REFUSED,
-            f"{names.provisioner_role} still owns users or roles, or its user stays, and their "
-            "sign-in policies live in the database --delete-data drops; nothing was destroyed. "
+            f"users or roles {names.provisioner_role} owns, its user or the integration "
+            f"{names.integration} stay in Snowflake, and the users' sign-in policies live in "
+            "the database --delete-data drops; nothing was destroyed. "
             "Have an ACCOUNTADMIN run, in order:\n" + "\n".join(statements),
             details={"statements": statements},
         )
