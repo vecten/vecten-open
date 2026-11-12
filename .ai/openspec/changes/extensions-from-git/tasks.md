@@ -25,9 +25,9 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 
 ## 2. Source identity
 
-- [ ] 2.1 Check out the extension's directory from the fetched commit into a fetched copy; refuse symbolic links; read static name and version and `[build-system]` with `tomllib`.
-- [ ] 2.2 `source_sha256` (Decision 4) in `vecten_shared.git_sources`, and `python -m vecten_shared.git_sources verify <dir> <extensions.lock.json>` for the image build.
-- [ ] 2.3 Tests: the hash is unchanged by file order and modification times, changed by any file's bytes, path or executable bit; a symbolic link is refused; the same commit gives the same hash on macOS and Linux runners.
+- [x] 2.1 Check out the extension's directory from the fetched commit into a fetched copy; refuse symbolic links; read static name and version and `[build-system]` with `tomllib`.
+- [x] 2.2 `source_sha256` (Decision 4) in `vecten_shared.git_sources`, and `python -m vecten_shared.git_sources verify <dir> <extensions.lock.json>` for the image build.
+- [x] 2.3 Tests: the hash is unchanged by file order and modification times, changed by any file's bytes, path or executable bit; a symbolic link is refused; the same commit gives the same hash on macOS and Linux runners.
 
 ## 3. Records and `extension add`
 

@@ -134,3 +134,27 @@ def test_metadata_that_decides_resolution_or_wiring_must_be_static(tmp_path, fie
     make(tmp_path, text=PYPROJECT.replace("[project]\n", f'[project]\ndynamic = ["{field}"]\n'))
     with pytest.raises(Failure, match=field):
         in_repo.check(tmp_path, "./extensions/acme-portal")
+
+
+def test_a_fetched_copys_static_metadata_is_read_wherever_it_lies(tmp_path):
+    path = make(tmp_path, directory="anything")
+    found = in_repo.read_metadata(path, "acme/extensions@3f2c")
+    assert (found.name, found.version, found.extras) == ("acme-portal", "0.1.0", ("platform",))
+    assert found.groups == ("vecten.skills",)
+    assert found.build_requires == ("hatchling==1.26.3",)
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        (PYPROJECT.replace('version = "0.1.0"\n', 'dynamic = ["version"]\n'), "static version"),
+        (PYPROJECT.replace('version = "0.1.0"\n', ""), "static version"),
+        (PYPROJECT.split("[build-system]")[0], "build-system"),
+    ],
+)
+def test_a_fetched_copy_names_where_it_came_from_when_its_metadata_is_refused(tmp_path, text, said):
+    path = make(tmp_path, text=text)
+    with pytest.raises(Failure) as caught:
+        in_repo.read_metadata(path, "acme/extensions@3f2c")
+    assert said in caught.value.message
+    assert "acme/extensions@3f2c" in caught.value.message

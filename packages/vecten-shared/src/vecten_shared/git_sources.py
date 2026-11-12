@@ -8,10 +8,12 @@ URL, a command argument or a message carries a token.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -685,3 +687,183 @@ def _adopt_tag(source: GitSource, commit: str, tag: str, into: Path, shown: str)
             raise Failure(
                 ExitCode.TOOL_FAILED, f"git could not record the fetched commit in {into}"
             )
+
+
+def _git_bytes(args: list[str], run: GitRun, stdin: bytes = b"") -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=run.cwd,
+            env=run.env,
+            input=stdin,
+            capture_output=True,
+            timeout=GIT_TIMEOUT,
+            check=False,
+        )
+    except FileNotFoundError:
+        raise Failure(ExitCode.PREREQUISITE, "git is not installed; install git") from None
+    except subprocess.TimeoutExpired:
+        raise Failure(ExitCode.TOOL_FAILED, f"git timed out after {GIT_TIMEOUT}s") from None
+
+
+REGULAR_MODES = {b"100644": 0o644, b"100664": 0o644, b"100755": 0o755}
+SYMBOLIC_LINK_MODE = b"120000"
+
+
+def _tree_path(raw: bytes) -> str:
+    """`raw` as a relative path, refused when any part could leave the copy or name git's
+    own directory, under any letter case."""
+    parts = raw.split(b"/")
+    if any(part in (b"", b".", b"..") or part.lower() == b".git" for part in parts):
+        shown = raw.decode("utf-8", "replace")
+        raise Failure(ExitCode.REFUSED, f"the source holds a path no checkout may write: {shown}")
+    return os.fsdecode(raw)
+
+
+def checkout(repository: Path, into: Path, subdirectory: str | None = None) -> Path:
+    """Write the files of `SOURCE_REF` in `repository`, or of its `subdirectory`, into `into`.
+
+    The files are read from git's objects, so nothing in the repository's own attributes
+    changes them; a symbolic link or a submodule anywhere in the directory is refused."""
+    into = Path(os.path.abspath(into))
+    if into.exists() and (not into.is_dir() or any(into.iterdir())):
+        raise Failure(ExitCode.REFUSED, f"{into} must be absent or empty to check out a source")
+    run = _local(repository)
+    commit = _peel(repository, SOURCE_REF)
+    tree = f"{SOURCE_REF}^{{commit}}:{subdirectory}" if subdirectory else f"{SOURCE_REF}^{{tree}}"
+    listing = _git_bytes(["ls-tree", "-r", "-z", "--full-tree", tree], run)
+    if listing.returncode != 0 or not commit:
+        where = f"the directory {subdirectory}" if subdirectory else "a tree"
+        raise Failure(
+            ExitCode.REFUSED,
+            f"the commit {commit or '(none)'} has no {where}; check the source's #subdirectory",
+        )
+    files: list[tuple[str, bytes, int]] = []
+    for record in listing.stdout.split(b"\0"):
+        if not record:
+            continue
+        header, _, raw = record.partition(b"\t")
+        mode, kind, oid = header.split(b" ")
+        path = _tree_path(raw)
+        if mode == SYMBOLIC_LINK_MODE:
+            raise Failure(
+                ExitCode.REFUSED,
+                f"{path} is a symbolic link; a git source holds no symbolic links",
+            )
+        if kind != b"blob" or mode not in REGULAR_MODES:
+            raise Failure(
+                ExitCode.REFUSED, f"{path} is a submodule or special file; a git source holds files"
+            )
+        files.append((path, oid, REGULAR_MODES[mode]))
+    contents = _git_bytes(
+        ["cat-file", "--batch"], run, stdin=b"".join(oid + b"\n" for _, oid, _ in files)
+    )
+    if contents.returncode != 0:
+        raise Failure(ExitCode.TOOL_FAILED, f"git could not read the source in {repository}")
+    output, offset = contents.stdout, 0
+    into.mkdir(parents=True, exist_ok=True)
+    for path, oid, mode in files:
+        end = output.index(b"\n", offset)
+        found, kind, size = output[offset:end].split(b" ")
+        if (found, kind) != (oid, b"blob"):
+            raise Failure(ExitCode.TOOL_FAILED, f"git could not read {path} in {repository}")
+        size = int(size)
+        data = output[end + 1 : end + 1 + size]
+        offset = end + 2 + size
+        target = into / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        except FileExistsError:
+            raise Failure(
+                ExitCode.REFUSED,
+                f"{path} collides with another path of the source on this file system",
+            ) from None
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+        # The process umask may have cleared the bits git records.
+        os.chmod(target, mode)
+    return into
+
+
+def source_sha256(directory: Path) -> str:
+    """The sha256 identifying the source in `directory`, from what git stores alone.
+
+    It hashes, in the byte order of their paths, one `<mode> <sha256 of bytes> <path>\\0`
+    entry per file, where mode is `100755` when the owner may execute it and `100644`
+    otherwise, and path is relative to `directory`. `.git` is skipped; a symbolic link or a
+    special file anywhere is refused, so nothing outside the directory is ever read."""
+    directory = Path(directory)
+    entries: list[tuple[bytes, bytes]] = []
+    for current, directories, names in os.walk(directory):
+        here = Path(current)
+        directories[:] = [d for d in directories if d != ".git"]
+        for name in [*directories, *(n for n in names if n != ".git")]:
+            path = here / name
+            relative = path.relative_to(directory).as_posix()
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                raise Failure(
+                    ExitCode.REFUSED,
+                    f"{relative} is a symbolic link; a git source holds no symbolic links",
+                )
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise Failure(ExitCode.REFUSED, f"{relative} is not a regular file")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
+            key = os.fsencode(relative)
+            entries.append((key, f"{mode} {digest} ".encode() + key + b"\0"))
+    total = hashlib.sha256()
+    for _, entry in sorted(entries):
+        total.update(entry)
+    return total.hexdigest()
+
+
+def verify(extensions: Path, record_path: Path, out: TextIO | None = None) -> None:
+    """Check every git-sourced extension's directory, `<extensions>/<name>`, against the
+    `source_sha256` that `record_path` holds for it."""
+    from vecten_shared.extension_record import parse_record
+
+    out = sys.stdout if out is None else out
+    try:
+        record = parse_record(Path(record_path).read_text(encoding="utf-8"))
+    except OSError, UnicodeDecodeError:
+        record = None
+    if record is None:
+        raise Failure(ExitCode.REFUSED, f"{record_path} is missing or malformed")
+    for name, entry in sorted(record.items()):
+        if entry.git is None:
+            continue
+        directory = Path(extensions) / name
+        if not directory.is_dir():
+            raise Failure(ExitCode.REFUSED, f"{name} at {entry.git.commit}: the source is missing")
+        actual = source_sha256(directory)
+        if actual != entry.source_sha256:
+            raise Failure(
+                ExitCode.REFUSED,
+                f"{name} at {entry.git.commit}: source_sha256 {actual} differs from the "
+                f"recorded {entry.source_sha256}",
+            )
+        out.write(f"verified {name} at {entry.git.commit}\n")
+
+
+USAGE = "usage: python -m vecten_shared.git_sources verify <extensions-dir> <extensions.lock.json>"
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 3 or args[0] != "verify":
+        print(USAGE, file=sys.stderr)
+        return ExitCode.USAGE
+    try:
+        verify(Path(args[1]), Path(args[2]))
+    except Failure as failure:
+        print(failure.message, file=sys.stderr)
+        return failure.code
+    return ExitCode.OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
