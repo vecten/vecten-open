@@ -230,8 +230,19 @@ def test_a_bound_group_the_app_does_not_admit_never_feeds_its_queries(stack):
     assert rows(sql(stack, "SELECT sum(amount) FROM marts.orders")) == [["100"]]
 
 
+def extra_roles(stack):
+    health = stack.admin(stack.ada, "access-health")["data"]
+    return [
+        entry["roles"]
+        for entry in health.get("apps", [])
+        if entry.get("reason") == "warehouse roles beyond the admitted groups"
+    ]
+
+
 def test_a_role_granted_outside_the_mcp_refuses_the_app_query(stack):
     name = stack.principal["warehouse_name"]
+    # Postgres reports the principal's memberships; the MCP's own grants leave nothing extra.
+    assert extra_roles(stack) == []
     stack.pg.sql(f"GRANT finance TO {name}")
     try:
         result = sql(stack, "SELECT sum(amount) FROM marts.orders")
@@ -242,3 +253,4 @@ def test_a_role_granted_outside_the_mcp_refuses_the_app_query(stack):
     stack.pg.sql(f"CREATE ROLE stray_reader NOLOGIN; GRANT stray_reader TO {name}")
     result = sql(stack, "SELECT sum(amount) FROM marts.orders")
     assert result["isError"] and "stray_reader" in result["content"][0]["text"]
+    assert extra_roles(stack) == [["stray_reader"]]

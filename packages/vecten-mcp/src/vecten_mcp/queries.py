@@ -37,9 +37,10 @@ def query_setting(state, name, default, maximum):
 
 # The roles the session user holds through membership that none of the given roles grants.
 STRAY_ROLES = (
-    "SELECT r.rolname FROM pg_roles r WHERE r.rolname <> current_user "
-    "AND pg_has_role(current_user, r.oid, 'USAGE') AND NOT EXISTS ("
-    "SELECT FROM unnest(%s::text[]) AS a(name) WHERE pg_has_role(a.name, r.oid, 'USAGE'))"
+    "SELECT r.rolname FROM pg_catalog.pg_roles r WHERE r.rolname <> current_user "
+    "AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE') AND NOT EXISTS ("
+    "SELECT FROM pg_catalog.unnest(%s::text[]) AS a(name) "
+    "WHERE pg_catalog.pg_has_role(a.name, r.oid, 'USAGE'))"
 )
 
 

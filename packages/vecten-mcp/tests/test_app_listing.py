@@ -457,3 +457,112 @@ def test_adopting_an_unmarked_principal_whose_account_holds_other_roles_is_refus
     error = refused(apps, {"name": "acme-sales.overview", "adopt": True})
     assert "PII_READER" in error and "FINANCE" not in error
     assert apps.runtime.state.get(APP_PRINCIPALS, created["id"]) is None
+
+
+def failing_revoke(apps, monkeypatch, role):
+    adapter = apps.adapter
+    original = adapter.membership
+
+    def membership(target, name, grant=True):
+        if target == role and not grant and name == "svc_app_overview":
+            raise RuntimeError("warehouse refused the revoke")
+        return original(target, name, grant)
+
+    monkeypatch.setattr(adapter, "membership", membership)
+    return original
+
+
+def flip_to_sales(apps):
+    access = apps.runtime.access
+    access.grant("sales", "dataset", "orders")
+    access.revoke("default", "schema", "marts")
+    assert apps.runtime.apps.admitted("overview") == {"sales"}
+
+
+def admit_only(apps, *groups):
+    from vecten_mcp.apps import ADMISSION
+
+    apps.runtime.state.put(
+        ADMISSION,
+        "acme-sales.overview",
+        {"admitted": list(groups), "excluded": [], "checked_at": 0},
+    )
+
+
+def test_a_role_whose_revoke_failed_stays_recorded_and_is_revoked_later(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    original = failing_revoke(apps, monkeypatch, "analyst")
+    # One sync moves the principal from default's role to sales'; the revoke fails.
+    admit_only(apps, "sales")
+    with pytest.raises(RuntimeError):
+        access.sync_app_roles(pid)
+    assert access.held_roles(pid) == {"analyst", "sales"}
+    monkeypatch.setattr(apps.adapter, "membership", original)
+    admit_only(apps, "default")
+    access.sync_app_roles(pid)
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", False)
+    assert access.held_roles(pid) == {"analyst"}
+
+
+def test_a_failed_role_sync_during_admission_is_logged(apps, monkeypatch, caplog):
+    connected(apps)
+    failing_revoke(apps, monkeypatch, "analyst")
+    flip_to_sales(apps)
+    assert "roles not synced" in caplog.text
+
+
+def connected_id(apps):
+    return next(
+        p["id"]
+        for p in apps.runtime.state.principals()
+        if p["warehouse_name"] == "svc_app_overview"
+    )
+
+
+def test_a_failed_role_sync_is_in_access_health(apps, monkeypatch):
+    connected(apps)
+    failing_revoke(apps, monkeypatch, "analyst")
+    flip_to_sales(apps)
+    entry = next(
+        f for f in api_read(apps, "access-health")["apps"] if f.get("reason") == "role sync failed"
+    )
+    assert entry["app"] == "acme-sales.overview" and "analyst" in entry["roles"]
+    assert "vecten reconcile" in entry["message"]
+
+
+def test_deleting_an_app_principal_revokes_every_recorded_role(apps, monkeypatch):
+    connected(apps)
+    failing_revoke(apps, monkeypatch, "analyst")
+    flip_to_sales(apps)
+    monkeypatch.undo()
+    before = len(apps.adapter.operations)
+    apps.runtime.administration.delete_principal(connected_id(apps))
+    revoked = {
+        op[1] for op in apps.adapter.operations[before:] if op[0] == "member" and op[3] is False
+    }
+    assert revoked == {"analyst", "sales"}
+
+
+def test_deleting_a_group_revokes_its_role_from_an_app_principal(apps):
+    connected(apps)
+    apps.runtime.access.grant("sales", "dataset", "orders")
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", True)
+    apps.runtime.access.delete_group("sales")
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")
+
+
+def test_warehouse_roles_beyond_the_admitted_groups_are_in_access_health(apps):
+    connected(apps)
+    from vecten_mcp.warehouse.base import Account
+
+    apps.adapter.accounts["svc_app_overview"] = Account(
+        "svc_app_overview", ("ANALYST", "PII_READER", "PUBLIC")
+    )
+    entry = next(
+        f
+        for f in api_read(apps, "access-health")["apps"]
+        if f.get("reason") == "warehouse roles beyond the admitted groups"
+    )
+    assert entry["roles"] == ["PII_READER"]
+    assert "REVOKE" in entry["message"] or "revoke" in entry["message"]

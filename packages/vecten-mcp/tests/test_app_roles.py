@@ -179,3 +179,12 @@ def test_the_pool_opens_a_new_connection_when_the_roles_change():
         assert narrowed is not first
     assert [roles for _, roles in opened] == [{"role_a", "role_b"}, {"role_a"}]
     first.close.assert_called_once()
+
+
+def test_the_role_check_names_catalog_functions_by_schema():
+    from vecten_mcp.queries import STRAY_ROLES
+
+    # A function of the same name in a schema on the search path never answers the check.
+    assert "pg_catalog.pg_has_role(" in STRAY_ROLES and "pg_catalog.unnest(" in STRAY_ROLES
+    assert " pg_has_role(" not in STRAY_ROLES and " unnest(" not in STRAY_ROLES
+    assert "pg_catalog.pg_roles" in STRAY_ROLES

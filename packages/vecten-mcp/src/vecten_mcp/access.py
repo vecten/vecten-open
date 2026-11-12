@@ -63,13 +63,87 @@ class AccessService:
             else {self.state.group(g)["warehouse_role"] for g in groups}
         )
         name = principal["warehouse_name"]
-        for role in sorted(wanted - held):
-            self.adapter.membership(role, name, True)
-        for role in sorted(held - wanted):
-            self.adapter.membership(role, name, False)
-        self.state.put(APP_ROLES, principal_id, {"roles": sorted(wanted)})
-        if wanted != held:
-            self.invalidate(principal_id)
+        # A role leaves this superset only once its revoke succeeds.
+        recorded = held | wanted
+        self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded)})
+        try:
+            for role in sorted(wanted - held):
+                self.adapter.membership(role, name, True)
+            for role in sorted(held - wanted):
+                self.adapter.membership(role, name, False)
+                recorded.discard(role)
+                self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded)})
+        except Exception as exc:
+            failure = {"at": time.time(), "error": describe_error(exc)}
+            self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded), "failed": failure})
+            raise
+        finally:
+            if wanted != held:
+                self.invalidate(principal_id)
+
+    def app_role_health(self):
+        """Access-health entries for app principals whose warehouse roles may exceed their
+        admitted groups': a role sync that failed, and roles the warehouse reports beyond
+        them, such as one an administrator granted by hand."""
+        entries = []
+        for principal_id, _ in self.state.scan(APP_PRINCIPALS):
+            principal = self.state.principal(principal_id)
+            marked, app = self.apps.app_of(principal_id)
+            if principal is None or app is None:
+                continue
+            name = principal["warehouse_name"]
+            record = self.state.get(APP_ROLES, principal_id) or {}
+            failed = record.get("failed")
+            if failed:
+                entries.append(
+                    {
+                        "app": app.key,
+                        "principal_id": principal_id,
+                        "warehouse_name": name,
+                        "reason": "role sync failed",
+                        "roles": list(record.get("roles", [])),
+                        "error": failed.get("error"),
+                        "message": (
+                            f"the MCP could not set {name}'s warehouse roles to those of the "
+                            f"groups {app.key} admits ({failed.get('error')}); app queries are "
+                            "refused on Postgres until it succeeds. It retries at every "
+                            "reconciliation; `vecten reconcile --env <env>` retries now"
+                        ),
+                    }
+                )
+            inspect = getattr(self.adapter, "inspect_account", None)
+            if inspect is None:
+                continue
+            try:
+                account = inspect(name)
+            except Exception as exc:
+                logger.warning("app principal %s roles not read: %s", name, describe_error(exc))
+                continue
+            groups = self.apps.query_groups(principal_id, self.state.groups_for(principal_id))
+            allowed = {"public"} | {
+                self.state.group(g)["warehouse_role"].casefold() for g in groups or ()
+            }
+            extra = sorted(
+                r for r in (account.roles if account else ()) if r.casefold() not in allowed
+            )
+            if extra:
+                entries.append(
+                    {
+                        "app": app.key,
+                        "principal_id": principal_id,
+                        "warehouse_name": name,
+                        "reason": "warehouse roles beyond the admitted groups",
+                        "roles": extra,
+                        "message": (
+                            f"{name} holds {', '.join(extra)} in the warehouse, beyond the roles "
+                            f"of the groups {app.key} admits; app queries are refused on "
+                            "Postgres while it does. A warehouse administrator revokes them "
+                            f"(REVOKE <role> FROM {name}); a role the MCP granted is revoked "
+                            "again at the next reconciliation"
+                        ),
+                    }
+                )
+        return entries
 
     def held_roles(self, principal_id):
         """The warehouse roles an app principal holds, as recorded, or None for any other."""
@@ -303,7 +377,7 @@ class AccessService:
             "failures": [],
         }
         if self.apps is not None and self.apps.apps:
-            health = {**health, "apps": self.apps.health()}
+            health = {**health, "apps": self.apps.health() + self.app_role_health()}
         return health
 
     def model_changed(self, datasets):

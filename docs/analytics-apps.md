@@ -194,6 +194,17 @@ from an app principal is refused if its warehouse user holds any other role, for
 granted by hand. The principal cannot be added to a group outside its app's binding. The
 column deny lists of its groups apply combined, as they do for anyone in several groups.
 
+A role the MCP fails to revoke stays on its record, so the next sync (every reconciliation)
+retries it and deleting the principal revokes it. Access health reports a failed sync, and any
+warehouse role the principal holds beyond its admitted groups' roles where the warehouse can
+list them.
+
+What the MCP does not check: privileges and row policies that a warehouse administrator grants
+directly to the principal's own role (`svc_app_<app>`) or to `PUBLIC`. Those apply to the app
+like to anyone. On Postgres, the role check runs in the query's transaction just before the
+statement, at `READ COMMITTED`. A role an administrator grants between the check and the
+statement can take effect for that one query.
+
 On top of its roles, the MCP holds it to the app's declared datasets:
 
 - **Tools.** An app principal sees only `describe`, `search`, `sql-exec` and `query_metrics`.
@@ -324,6 +335,10 @@ reads everything its groups can. Review who uses it, then run `vecten app connec
 
 Admission is computed now. Once the gate is merged, it admits a person at an app's hostname
 only through these groups.
+
+Access health also lists an app principal whose warehouse roles may exceed its admitted
+groups': a role sync that failed (`vecten reconcile --env <env>` retries it) and roles the
+warehouse reports beyond them (a warehouse administrator revokes those).
 
 An app principal whose groups differ from its app's binding, as after the binding changed, is
 an access-health entry too. `vecten app connect <extension>.<app> --env <env> --groups-only`
