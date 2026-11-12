@@ -25,10 +25,10 @@ template can run on; B must land in the same release, before any public route re
 
 ## 3. Isolation in the VM agent (PR B)
 
-- [ ] 3.1 `bundle.py`: `service_secrets` and `service_network` in `host.json`
-- [ ] 3.2 `deploy/vm/apply.py`: the two `HOST_KEYS` with legacy defaults, the isolation step on ship and at boot (before Compose), service secrets read from the host's scopes and masked; copy byte-identical to `terraform/scaleway/modules/host/agent/apply.py`
-- [ ] 3.3 Compose: no cloud key, `AIRFLOW_CONN_*` or published port on any service
-- [ ] 3.4 Tests: agent unit tests with a fake runner (rule order before `compose up`, failure fails the step and recovers, legacy release starts without the step, masking); the existing byte-identity and Python 3.9 syntax checks; a Docker-tier test that a container on the services bridge cannot reach a fake metadata listener bound to the link-local address while a default-network container can
+- [x] 3.1 `bundle.py`: `service_secrets` and `service_network` in `host.json`
+- [x] 3.2 `deploy/vm/apply.py`: the two `HOST_KEYS` with legacy defaults, the isolation step on ship and at boot (before Compose), service secrets read from the host's scopes and masked; copy byte-identical to `terraform/scaleway/modules/host/agent/apply.py`
+- [x] 3.3 Compose: no cloud key, `AIRFLOW_CONN_*` or published port on any service
+- [x] 3.4 Tests: agent unit tests with a fake runner (rule order before `compose up`, failure fails the step and recovers, legacy release starts without the step, masking); the existing byte-identity and Python 3.9 syntax checks; a Docker-tier test that a container on the services bridge cannot reach a fake metadata listener bound to the link-local address while a default-network container can
 - [ ] 3.5 **[deploy]** On AWS and on Scaleway, a service cannot obtain the instance role or the VM key, and Airflow and the MCP server still read their secrets
 
 ## 4. Hostnames and public routes (PR C)
