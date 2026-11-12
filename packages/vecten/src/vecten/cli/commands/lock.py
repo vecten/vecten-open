@@ -18,12 +18,20 @@ def lock(
 
     def run(ctx: CliContext) -> Result:
         from vecten.extensions import lock as lock_project
+        from vecten.extensions import secrets_message
 
         data = lock_project(ctx.require_project(), tuple(upgrade or ()))
-        message = "wrote " + ", ".join(["requirements.txt", *data["locks"]])
+        files = ["requirements.txt", *data["locks"], "extensions.lock.json"]
+        lines = ["wrote " + ", ".join(files)]
         if data["divergence"]:
-            message += "; pinned differently across locks: " + ", ".join(data["divergence"])
-        return Result(data=data, message=message)
+            lines.append("pinned differently across locks: " + ", ".join(data["divergence"]))
+        lines += secrets_message(data["missing_locally"], data["undelivered"])
+        if data["unsupported"]:
+            lines.append(
+                "manifest keys this release does not support: "
+                + "; ".join(f"{n}: {', '.join(k)}" for n, k in data["unsupported"].items())
+            )
+        return Result(data=data, message="\n".join(lines))
 
     run_command(json_output, run)
 
