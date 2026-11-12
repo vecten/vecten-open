@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vecten.cli.context import CliContext
 from vecten.intake.answers import read_answers
+from vecten.next.areas import area_access_ask_items
 from vecten.next.declared import declared_secret_items
 from vecten.next.deploy import (
     deploy_gate_items,
@@ -47,6 +48,7 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
             *stack_items(root, config),
             *declared_secret_items(root, config),
             *ingestion_items(root, config),
+            *area_access_ask_items(config),
             *modelling_items(root, config),
             *semantic_items(root, config),
         ]
@@ -56,6 +58,7 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
             *lock_items(root, config),
             *declared_secret_items(root, config),
             *ingestion_items(root, config),
+            *area_access_ask_items(config),
             *modelling_items(root, config),
             *semantic_items(root, config),
             *existing_warehouse_items(root, config, ENV),

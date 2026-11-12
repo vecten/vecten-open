@@ -8,6 +8,7 @@ from pathlib import Path
 from vecten.deploy.snowflake import identity_pending
 from vecten.intake.facts import OIDC_REGISTERED_PREFIX
 from vecten.mcp_url import mcp_url
+from vecten.next.areas import area_access_apply_items
 from vecten.next.declared import declared_secret_items
 from vecten.next.deploy import PUSH
 from vecten.next.gitstate import GitState
@@ -150,6 +151,7 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
             for link in owed(root, env)
         ]
     admin_work += access_apply_items(root, config, env)
+    admin_work += area_access_apply_items(root, config, env)
     if admin_work and mcp.admins:
         items += _sign_in_items(root, config, env, facts)
     items += admin_work

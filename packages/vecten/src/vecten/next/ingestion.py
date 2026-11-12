@@ -5,15 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from vecten.connectors.names import run_record_name
+from vecten.next.areas import known_groups
 from vecten.next.items import Item
 from vecten_platform.sync.fixtures import fixture_files
 from vecten_shared.config import ConnectorDecl, VectenConfig
 from vecten_shared.records import read_record
-
-
-def _known_groups(config: VectenConfig) -> tuple[str, ...]:
-    groups = {g for c in config.connectors if c.access for g in c.access.groups}
-    return ("default", *sorted(groups - {"default"}))
 
 
 def access_ask_item(config: VectenConfig, decl: ConnectorDecl) -> Item:
@@ -25,7 +21,7 @@ def access_ask_item(config: VectenConfig, decl: ConnectorDecl) -> Item:
             "Name one or more groups, comma-separated."
         ),
         answer_keys=(f"access.{decl.name}",),
-        allowed=_known_groups(config),
+        allowed=known_groups(config),
     )
 
 
