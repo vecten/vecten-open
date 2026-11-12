@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from vecten import git_extensions
 from vecten.deploy.aws import clients
 from vecten.deploy.aws.bootstrap import (
     caller_account,
@@ -34,7 +35,6 @@ from vecten.deploy.aws.snapshots import final_snapshots
 from vecten.deploy.aws.tunnel import free_port, get_tunnel
 from vecten.deploy.bundle import (
     build_host_bundle,
-    fetch_git_sources,
     head_commit,
     prepare_bundle_metadata,
 )
@@ -492,7 +492,8 @@ class AwsProvider(AwsRuntimeProvider):
             with_mcp=any("mcp" in host.components for host in outputs.hosts.values()),
         )
         with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
-            sources = fetch_git_sources(project_root, config, Path(tmp) / "sources")
+            # Every source is fetched and checked before any host changes.
+            sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
             for host in ship_order(outputs):
                 bundle = build_host_bundle(
                     project_root,

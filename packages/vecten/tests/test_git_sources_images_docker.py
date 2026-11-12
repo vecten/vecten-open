@@ -1,6 +1,6 @@
 """Both images build a git-sourced extension from a ship bundle: CI fetched the recorded commit
-from a git host that needs a token, and the host builds the bundled source with no git, no
-network to that host and no token, after checking its source_sha256."""
+from a git host that needs a token, and the image build checks the bundled source's
+source_sha256 and builds it with no token and without a single request to the git host."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from vecten_shared.provider.environment import EnvironmentOutputs
 
 from . import test_git_ship
 from .deploy_fixtures import COMMIT, STANDARD_OUTPUTS, render_aws
-from .docker_util import docker_available
+from .docker_util import require_base_image
 from .test_git_extensions import PYPROJECT
 from .test_git_ship import NAME, TAG, git_project, served_origin
 
@@ -33,18 +33,6 @@ remote, served = test_git_ship.remote, test_git_ship.served
 # The base images `vecten dev build-images` tags, under the registry `vecten lock` also reads.
 REGISTRY = os.environ.get("VECTEN_IMAGE_REGISTRY") or None
 HOSTS = {"airflow": "platform", "mcp": "mcp"}
-
-
-def _require_base_image(kind: str) -> str:
-    if not docker_available():
-        pytest.skip("Docker is not available")
-    image = base_image(kind, REGISTRY)
-    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode:
-        message = f"{image} is missing; build it with vecten dev build-images"
-        if os.environ.get("CI"):
-            pytest.fail(message)
-        pytest.skip(message)
-    return image
 
 
 def _base_pin(kind: str, name: str) -> str:
@@ -82,6 +70,11 @@ def _ship_bundle(root: Path, out: Path, host: str) -> Path:
     # The agent extracts with GNU tar, which keeps each member's mode.
     with tarfile.open(bundle, "r:gz") as tar:
         tar.extractall(release, filter="tar")
+    # BuildKit hands a build its copy of a context file whose size and modification time match
+    # one it has seen, and every bundle member's time is 0; runs of this test differ only in
+    # commit hashes of one length, so each file gets a time of its own.
+    for path in release.rglob("*"):
+        os.utime(path, follow_symlinks=False)
     return release
 
 
@@ -108,15 +101,18 @@ def _build(release: Path, kind: str, image: str) -> subprocess.CompletedProcess:
 
 @pytest.mark.parametrize("kind", ["airflow", "mcp"])
 def test_the_image_builds_the_bundled_git_source_without_the_token(served, tmp_path, kind):
-    _require_base_image(kind)
+    require_base_image(kind, REGISTRY)
     root = _project(tmp_path, served, kind)
     release = _ship_bundle(root, tmp_path / "out", HOSTS[kind])
     bundle = next((tmp_path / "out").glob("*.tar.gz"))
     assert served.token.encode() not in gzip.decompress(bundle.read_bytes())
     image = f"vecten-git-ship-test-{kind}-{uuid.uuid4().hex[:8]}"
+    served.server.authorizations.clear()
     try:
         built = _build(release, kind, image)
         assert built.returncode == 0, built.stdout + built.stderr
+        # The git host saw no request while the image was built.
+        assert served.server.authorizations == []
         assert f"verified {NAME} at {served.commits.commits[TAG]}" in built.stdout + built.stderr
         probe = (
             "import importlib.metadata as m, pathlib, acme_resolution as e; "
@@ -152,7 +148,7 @@ def test_a_tampered_bundled_source_fails_the_build_naming_both_hashes(served, tm
     from vecten_shared.git_sources import source_sha256
 
     kind = "mcp"
-    _require_base_image(kind)
+    require_base_image(kind, REGISTRY)
     root = _project(tmp_path, served, kind)
     release = _ship_bundle(root, tmp_path / "out", HOSTS[kind])
     source = release / "extensions" / NAME

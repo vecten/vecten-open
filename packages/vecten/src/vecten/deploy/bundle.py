@@ -209,12 +209,6 @@ def _write_git_sources(stage: Path, sources: Mapping[str, Path]) -> None:
         shutil.copytree(directory, target)
 
 
-def fetch_git_sources(project_root: Path, config: VectenConfig, into: Path) -> dict[str, Path]:
-    """Every git-sourced extension's recorded commit, fetched with the CI credential into
-    `into` and checked against its `source_sha256`; a ship calls it before any host changes."""
-    return git_extensions.write_sources(project_root, config, into)
-
-
 def _served(
     config: VectenConfig, record: dict[str, Extension], outputs: EnvironmentOutputs, host: str
 ) -> list[tuple[Bound, str]]:
@@ -419,8 +413,8 @@ def build_host_bundle(
 ) -> Path:
     """Write `<out_dir>/<host>-<commit>.tar.gz`; equal inputs give byte-identical tarballs.
 
-    `sources` holds the git sources `fetch_git_sources` wrote, by name; without it they are
-    fetched here."""
+    `sources` holds the git sources `git_extensions.write_sources` wrote, by name; without it
+    they are fetched here."""
     check_commit(commit)
     if host not in outputs.hosts:
         raise Failure(
@@ -438,7 +432,7 @@ def build_host_bundle(
         stage = Path(tmp) / "stage"
         stage.mkdir()
         if sources is None:
-            sources = fetch_git_sources(project_root, config, Path(tmp) / "sources")
+            sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
         _copy_content(project_root, stage)
         _write_git_sources(stage, sources)
         _render_stack(

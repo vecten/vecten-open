@@ -839,19 +839,13 @@ def sync(root: Path) -> dict:
             "run `vecten lock`, then commit the records",
         )
     # The lock's URL lines are left to the fetched sources, so each must be a recorded one.
-    problems = locking.git_problems(root, config)
-    if problems:
-        raise Failure(
-            ExitCode.REFUSED,
-            "; ".join(problems) + "; record each git source again with "
-            "`vecten extension add` and its tag",
-        )
+    git_extensions.refuse_git_problems(root, config)
     record = locking.read_record(root) or {}
     with (
         _git_project(has_git_sources(root)),
         tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
     ):
-        directories = git_extensions.write_sources(root, config, Path(fetched))
+        directories = git_extensions.write_sources(root, config, Path(fetched), checked=True)
         lock = (root / locking.LOCK_FILES["cli"]).read_text(encoding="utf-8")
         install_lock(lock, root, [e.source_path for e in record.values() if e.source_path])
         if directories:

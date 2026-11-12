@@ -122,13 +122,12 @@ def _in_repo_extensions(root: Path) -> list:
     return sorted(local, key=lambda e: e.source_path)
 
 
-def _git_sources(root: Path, config: VectenConfig) -> dict[str, str]:
+def _git_sources(config: VectenConfig, record: dict) -> dict[str, str]:
     """The record line of each registered git-sourced extension, by name, as
     `requirements.txt` and every lock hold it; the build gets its source under `sources`."""
     from vecten import git_extensions
-    from vecten_shared.extension_record import read_record
 
-    registered = git_extensions.registered_sources(config, read_record(root) or {})
+    registered = git_extensions.registered_sources(config, record)
     return {
         name: git_extensions.line_for(name, extras, entry.git)
         for name, (extras, entry) in registered.items()
@@ -253,6 +252,7 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     root = stack_dir.parent.parent
     runtime = {}
     legacy = None
+    record = locking.read_record(root) or {}
     records = [locking.PINS_FILE, locking.RECORD_FILE, *locking.LOCK_FILES.values()]
     records_exist = any((root / name).exists() for name in records)
     if not records_exist:
@@ -275,14 +275,10 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
                 "[dependencies] Python requirements install only from locks; run `vecten lock`",
             )
     else:
-        problems = locking.git_problems(root, config)
-        if problems:
-            raise Failure(
-                ExitCode.REFUSED,
-                "; ".join(problems) + "; record each git source again with "
-                "`vecten extension add` and its tag",
-            )
-        sources = frozenset(_git_sources(root, config).values())
+        from vecten import git_extensions
+
+        git_extensions.refuse_git_problems(root, config)
+        sources = frozenset(_git_sources(config, record).values())
         for component, kind in RUNTIME:
             if component not in config.components:
                 continue
@@ -305,13 +301,10 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     # in-repo extension's name is never looked up on an index.
     closure = bool(runtime) and legacy is None
     local = _in_repo_extensions(root) if closure else []
-    fetched = list(_git_sources(root, config)) if closure else []
+    fetched = list(_git_sources(config, record)) if closure else []
     build_dir.mkdir(parents=True, exist_ok=True)
     constraints = build_dir / BUILD_CONSTRAINTS
     if local or fetched:
-        from vecten_shared.extension_record import read_record
-
-        record = read_record(root) or {}
         entries = [*local, *(record[name] for name in fetched)]
         build = sorted({line for entry in entries for line in entry.build_requires})
         write_text_atomic(constraints, "".join(f"{line}\n" for line in build))

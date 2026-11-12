@@ -285,23 +285,10 @@ def _kept(directory: Path, digest: str | None) -> bool:
         return False
 
 
-def write_sources(
-    root: Path, config: VectenConfig, into: Path, keep: bool = False
-) -> dict[str, Path]:
-    """Fetch the recorded commit of every registered git-sourced extension and write its
-    source to `into/<name>/`, after checking its `source_sha256` against the record.
-
-    Nothing is fetched, and no credential read, for a project without git sources. With
-    `keep`, a folder already holding the recorded source is used again and any other entry
-    of `into` is removed."""
+def refuse_git_problems(root: Path, config: VectenConfig) -> None:
+    """Refuse records whose git sources disagree, naming `vecten extension add`."""
     from vecten import locking
 
-    record = locking.read_record(root) or {}
-    wanted = registered_sources(config, record)
-    if not wanted:
-        if keep and into.is_dir():
-            shutil.rmtree(into)
-        return {}
     problems = locking.git_problems(root, config)
     if problems:
         raise Failure(
@@ -309,15 +296,47 @@ def write_sources(
             "; ".join(problems) + "; record each git source again with "
             "`vecten extension add` and its tag",
         )
+
+
+def _clear(path: Path) -> None:
+    """Remove `path`; a link is removed itself, never what it points at."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def write_sources(
+    root: Path,
+    config: VectenConfig,
+    into: Path,
+    keep: bool = False,
+    checked: bool = False,
+) -> dict[str, Path]:
+    """Fetch the recorded commit of every registered git-sourced extension and write its
+    source to `into/<name>/`, after checking its `source_sha256` against the record.
+
+    Nothing is fetched, and no credential read, for a project without git sources. With
+    `keep`, a folder already holding the recorded source is used again and any other entry
+    of `into` is removed; `into` itself is never a link, so nothing outside it is written.
+    `checked` says the caller already refused disagreeing records."""
+    from vecten import locking
+
+    record = locking.read_record(root) or {}
+    wanted = registered_sources(config, record)
+    if keep and into.is_symlink():
+        into.unlink()
+    if not wanted:
+        if keep:
+            _clear(into)
+        return {}
+    if not checked:
+        refuse_git_problems(root, config)
     into.mkdir(parents=True, exist_ok=True)
     if keep:
         for entry in into.iterdir():
-            if entry.name in wanted:
-                continue
-            if entry.is_dir() and not entry.is_symlink():
-                shutil.rmtree(entry)
-            else:
-                entry.unlink()
+            if entry.name not in wanted:
+                _clear(entry)
     pending = {
         name: entry
         for name, (_, entry) in wanted.items()
@@ -344,9 +363,6 @@ def write_sources(
                         f"{entry.source_sha256}",
                     )
                 target = into / name
-                if target.is_symlink() or target.is_file():
-                    target.unlink()
-                elif target.exists():
-                    shutil.rmtree(target)
+                _clear(target)
                 shutil.copytree(copy.directory, target)
     return {name: into / name for name in wanted}

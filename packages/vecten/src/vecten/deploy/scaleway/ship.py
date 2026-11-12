@@ -37,10 +37,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from vecten import git_extensions
 from vecten.deploy import shipping
 from vecten.deploy.bundle import (
     build_host_bundle,
-    fetch_git_sources,
     prepare_bundle_metadata,
 )
 from vecten.deploy.names import name_prefix
@@ -244,7 +244,8 @@ def ship_hosts(
     shipped: list[str] = []
     plane.orphaned_volumes = {}
     with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
-        sources = fetch_git_sources(project_root, config, Path(tmp) / "sources")
+        # Every source is fetched and checked before any host changes.
+        sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
         for host in ship_order(outputs):
             bundle = build_host_bundle(
                 project_root,

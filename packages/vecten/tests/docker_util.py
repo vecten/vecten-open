@@ -183,7 +183,7 @@ def pg_container(init_dir, env: dict[str, str]):
         subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
 
 
-def require_base_image(kind: str) -> str:
+def require_base_image(kind: str, registry: str | None = None) -> str:
     """The local base image `vecten dev build-images` tags; skipped on a laptop without it.
 
     In CI a missing image fails the test, because the job that runs it builds the images and a
@@ -193,7 +193,7 @@ def require_base_image(kind: str) -> str:
 
     if not docker_available():
         pytest.skip("Docker is not available")
-    image = base_image(kind, None)
+    image = base_image(kind, registry)
     if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode:
         message = f"{image} is missing; build it with vecten dev build-images"
         if os.environ.get("CI"):

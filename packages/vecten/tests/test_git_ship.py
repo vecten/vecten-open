@@ -325,6 +325,29 @@ def test_a_kept_entry_that_is_a_link_is_replaced_by_a_fetched_folder(served, tmp
     assert (elsewhere / NAME / "pyproject.toml").is_file()
 
 
+def test_a_kept_folder_that_is_a_link_is_never_written_through(served, tmp_path):
+    from .test_extension_builds import _stamped_project
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep-me").write_text("not the stack's\n")
+    root = served_project(tmp_path / "p", served)
+    into = tmp_path / "kept"
+    into.symlink_to(elsewhere)
+    git_extensions.write_sources(root, config(), into, keep=True)
+    assert not into.is_symlink() and (into / NAME / "pyproject.toml").is_file()
+    assert sorted(p.name for p in elsewhere.iterdir()) == ["keep-me"]
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    c = config(extensions=["acme-demo"])
+    _stamped_project(plain, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    other = tmp_path / "plain-kept"
+    other.symlink_to(elsewhere)
+    assert git_extensions.write_sources(plain, c, other, keep=True) == {}
+    assert not other.exists() and not other.is_symlink()
+    assert sorted(p.name for p in elsewhere.iterdir()) == ["keep-me"]
+
+
 # --- the bundle ------------------------------------------------------------------------------
 
 
@@ -513,3 +536,43 @@ def test_only_a_git_sources_files_keep_their_executable_bit():
     assert mode(f"extensions/{NAME}/bin/check", frozenset({NAME})) == 0o755
     assert mode("extensions/acme-portal/bin/run", frozenset({NAME})) == 0o644
     assert mode(".vecten/ship/apply.py", frozenset({NAME})) == 0o644
+
+
+# The decompressed bundles a project without git sources ships, as the release without git
+# sources built them for this project; gzip's own bytes depend on the zlib build, so they are
+# left out. A change meant to alter every bundle updates these.
+UNCHANGED_BUNDLES = {
+    "platform": "e067df99cedd1462f16d12c9af99d9e133697648438108e8b7b50e21807a3126",
+    "mcp": "09cf66b7d99f6cebe4e89353bdc85d46d50147aad6d565447528bac972e09a7f",
+}
+
+
+def test_a_project_without_git_sources_ships_the_bytes_it_shipped_before_them(tmp_path):
+    import gzip
+    import hashlib
+
+    from vecten.deploy.bundle import build_host_bundle
+    from vecten_shared.provider.environment import EnvironmentOutputs
+
+    from .deploy_fixtures import COMMIT as SHIPPED
+    from .deploy_fixtures import STANDARD_OUTPUTS, render_aws
+
+    root = render_aws(tmp_path / "proj")
+    extension = root / "extensions" / "acme-portal"
+    (extension / "src" / "acme_portal").mkdir(parents=True)
+    (extension / "pyproject.toml").write_text("[project]\nname = 'acme-portal'\n")
+    (extension / "src" / "acme_portal" / "__init__.py").write_text("")
+    (extension / "bin").mkdir()
+    (extension / "bin" / "run").write_text("#!/bin/sh\n")
+    (extension / "bin" / "run").chmod(0o755)
+    outputs = EnvironmentOutputs.model_validate(STANDARD_OUTPUTS)
+    # Lineage and feedback come from git and the MCP; pinned, the bundle depends on files alone.
+    lineage = {"commit": SHIPPED, "ancestors": []}
+    metadata = (lineage, {**lineage, "resolutions": [], "unreviewed": []})
+    found = {}
+    for host in UNCHANGED_BUNDLES:
+        bundle = build_host_bundle(
+            root, load(root), "prod", outputs, host, SHIPPED, tmp_path / "out", metadata=metadata
+        )
+        found[host] = hashlib.sha256(gzip.decompress(bundle.read_bytes())).hexdigest()
+    assert found == UNCHANGED_BUNDLES
