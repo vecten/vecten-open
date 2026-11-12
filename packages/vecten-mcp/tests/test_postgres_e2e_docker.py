@@ -47,6 +47,7 @@ ADMIN_TOOLS = {
     "read_audit_row",
     "list_grants",
     "read_settings",
+    "list_apps",
 }
 SEED = """
 CREATE TABLE marts.orders (

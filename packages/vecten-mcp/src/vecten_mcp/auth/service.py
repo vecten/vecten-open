@@ -362,6 +362,15 @@ class OAuthService:
         )
         return dict(client_id=cid, client_secret=secret)
 
+    def replace_service_credentials(self, principal_id):
+        """New client credentials for a service principal; every earlier client of it and
+        every session they opened stop working first."""
+        for client_id, client in self.state.scan("clients"):
+            if client.get("principal_id") == principal_id:
+                self.state.remove("clients", client_id)
+        self.revoke_principal(principal_id)
+        return self.service_credentials(principal_id)
+
     def client_credentials(self, client_id, secret, resource):
         client = self.client(client_id)
         if (

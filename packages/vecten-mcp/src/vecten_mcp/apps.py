@@ -13,7 +13,7 @@ import dataclasses
 import re
 import time
 from dataclasses import dataclass
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from sqlglot import exp
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
@@ -28,6 +28,11 @@ APP_PRINCIPALS = "app_principals"
 ADMISSION = "app_admission"
 # An email as X-Vecten-User carries it: RFC 5321's length limit, visible characters only.
 VIEWER_LIMIT = 254
+# Why a snowflake app has no URL: Vecten does not create the objects that would publish it.
+SNOWFLAKE_UNPUBLISHED = (
+    "Streamlit in Snowflake needs warehouse resources Vecten does not create yet: an apps "
+    "schema, a stage per app and an app role owning the Streamlit object"
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,10 @@ class BoundApp:
     kind: str
     datasets: tuple[str, ...]
     groups: tuple[str, ...]
+    version: str = ""
+    description: str = ""
+    # A container app's hostname label below the environment's domain; None for any other app.
+    hostname: str | None = None
 
     @property
     def key(self):
@@ -61,6 +70,7 @@ def read_bound_apps(root, config):
         entry = record.get(extension)
         for name, binding in sorted(bindings.items()):
             declared = entry.apps.get(name) if entry else None
+            container = declared is not None and declared.service is not None
             found[name] = BoundApp(
                 extension=extension,
                 name=name,
@@ -68,8 +78,26 @@ def read_bound_apps(root, config):
                 kind=declared.kind if declared else "undeclared",
                 datasets=tuple(declared.datasets) if declared else (),
                 groups=tuple(binding.groups),
+                version=entry.version if entry else "",
+                description=declared.description if declared else "",
+                hostname=(binding.hostname or name) if container else None,
             )
     return found
+
+
+def app_url(issuer, label):
+    """Where a container app with hostname `label` is served: beside the MCP, whose own name
+    is `mcp.<domain>` (with the laptop's published port), so `@` is the domain itself."""
+    if label is None:
+        return None
+    parts = urlsplit(issuer)
+    host = parts.hostname or ""
+    if not host.startswith("mcp."):
+        return None
+    domain = host.removeprefix("mcp.")
+    name = domain if label == "@" else f"{label}.{domain}"
+    port = f":{parts.port}" if parts.port else ""
+    return f"https://{name}{port}/"
 
 
 def principal_name(app):
@@ -140,6 +168,64 @@ class AppScopes:
         if not principal or principal["kind"] != "service":
             raise ValueError("an app principal must be a service principal")
         self.state.put(APP_PRINCIPALS, principal_id, {"extension": extension, "app": app})
+
+    def principal(self, app):
+        """The service principal named as `app`'s, with whether it is marked as it, or None."""
+        target = principal_name(app.name)
+        found = next(
+            (
+                p
+                for p in self.state.principals()
+                if p["kind"] == "service" and p["warehouse_name"] == target
+            ),
+            None,
+        )
+        if found is None:
+            return None
+        marker = self.state.get(APP_PRINCIPALS, found["id"])
+        return {
+            "id": found["id"],
+            "warehouse_name": target,
+            "marked": marker == {"extension": app.extension, "app": app.name},
+            "enabled": bool(found["enabled"]),
+        }
+
+    def listing(self, issuer):
+        """Every bound app as the Analytics screen, the admin API and the admin tool show it."""
+        failures = self.health()
+        entries = []
+        for app in sorted(self.apps.values(), key=lambda a: a.key):
+            published = app.kind == "container"
+            entries.append(
+                {
+                    "app": app.key,
+                    "extension": app.extension,
+                    "version": app.version,
+                    "name": app.name,
+                    "title": app.title,
+                    "description": app.description,
+                    "kind": app.kind,
+                    "url": app_url(issuer, app.hostname) if published else None,
+                    "groups": list(app.groups),
+                    "admitted": [g for g in app.groups if g in self.admitted(app.name)],
+                    "datasets": list(app.datasets),
+                    "state": "bound" if published else "not published",
+                    "reason": None if published else self._unpublished(app),
+                    # `vecten ship` reports a service's health to the person who ships;
+                    # nothing hands it to the MCP.
+                    "health": None,
+                    "binding": f"[apps.{app.extension}.{app.name}] in vecten.toml",
+                    "principal": self.principal(app),
+                    "failures": [f for f in failures if f["app"] == app.key],
+                }
+            )
+        return entries
+
+    @staticmethod
+    def _unpublished(app):
+        if app.kind == "snowflake":
+            return SNOWFLAKE_UNPUBLISHED
+        return f"extensions.lock.json declares no app {app.name} for {app.extension}"
 
     def scope(self, principal_id):
         """The scope of an app principal, or None for any other principal. A principal whose

@@ -20,6 +20,7 @@ NAV = (
     ("/admin/access", "Grants and deny lists"),
     ("/admin/model", "Model"),
     ("/admin/analytics", "Usage"),
+    ("/admin/apps", "Analytics"),
     ("/admin/gaps", "Gaps"),
     ("/admin/audit", "Audit"),
     ("/admin/clients", "Connected clients"),
