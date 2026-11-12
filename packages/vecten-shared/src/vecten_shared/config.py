@@ -643,6 +643,15 @@ def _plain(item: Any) -> Any:
 def save_config(project_root: Path, config: VectenConfig) -> None:
     import tomlkit
 
+    # A command that adds to a loaded configuration builds it with model_copy, which skips the
+    # validators; what fails them would make every later command refuse the file.
+    try:
+        VectenConfig.model_validate(config.model_dump(mode="json"))
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        loc = ".".join(str(p) for p in first["loc"])
+        where = f"{loc}: " if loc else ""
+        raise Failure(ExitCode.CONFIG, f"{CONFIG_FILE} not saved: {where}{first['msg']}") from None
     data = config.model_dump(mode="json", exclude_none=True)
     for optional in ("dependencies", "secrets", "settings", "services", "areas"):
         if not data.get(optional):

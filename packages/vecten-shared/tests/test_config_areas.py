@@ -65,3 +65,19 @@ def test_an_area_is_refused_under_a_connectors_name(tmp_path):
         )
     assert exc.value.code == ExitCode.CONFIG
     assert "area hubspot" in exc.value.message and "raw_hubspot" in exc.value.message
+
+
+def test_a_configuration_that_breaks_a_rule_is_never_saved(tmp_path):
+    from vecten_shared.config import AreaDecl, ConnectorDecl
+
+    save_config(tmp_path, _config(areas={"hubspot": {}}))
+    before = (tmp_path / "vecten.toml").read_text()
+    # model_copy skips validation, as every command that adds to a loaded configuration does.
+    broken = load_config(tmp_path).model_copy(
+        update={"connectors": [ConnectorDecl(name="hubspot", source="dlt")]}
+    )
+    with pytest.raises(Failure) as exc:
+        save_config(tmp_path, broken)
+    assert exc.value.code == ExitCode.CONFIG and "area hubspot" in exc.value.message
+    assert (tmp_path / "vecten.toml").read_text() == before
+    assert load_config(tmp_path).areas == {"hubspot": AreaDecl()}
