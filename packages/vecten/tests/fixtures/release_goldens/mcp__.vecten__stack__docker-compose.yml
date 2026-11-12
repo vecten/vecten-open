@@ -1,0 +1,57 @@
+name: vecten-acme-prod
+services:
+  mcp-server:
+    build:
+      context: ./build
+      dockerfile: mcp.Dockerfile
+    image: vecten-acme-prod-mcp:0.1.0
+    profiles:
+    - mcp
+    environment:
+      VECTEN_MCP_PUBLIC_URL: https://mcp.data.acme.com
+      VECTEN_PROVIDER: ${VECTEN_PROVIDER}
+      VECTEN_ENV: ${VECTEN_ENV}
+      VECTEN_COMPONENT: mcp
+      VECTEN_PROJECT_ROOT: /app
+      MCP_STATE_DB_PASSWORD: ${MCP_STATE_DB_PASSWORD}
+      AWS_REGION: ${AWS_REGION}
+      AWS_DEFAULT_REGION: ${AWS_REGION}
+      VECTEN_ENVIRONMENT_FILE: /opt/vecten-env/environment.json
+      VECTEN_BUNDLE_COMMIT: ${VECTEN_BUNDLE_COMMIT}
+      VECTEN_ARTIFACT_URL: ${VECTEN_ARTIFACT_URL}
+      VECTEN_MCP_POOL_CAP: ${VECTEN_MCP_POOL_CAP}
+      VECTEN_FEEDBACK_MANIFEST: /app/feedback.json
+    volumes:
+    - ../../osi:/app/osi:ro
+    - ../../vecten.toml:/app/vecten.toml:ro
+    - ../environments/${VECTEN_ENV}.json:/opt/vecten-env/environment.json:ro
+    - ../ship/feedback.json:/app/feedback.json:ro
+    depends_on: {}
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - --fail
+      - http://localhost:8001/health
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  nginx:
+    image: nginx:1.30-alpine
+    profiles:
+    - platform
+    - mcp
+    - local
+    ports:
+    - 443:443
+    - 80:80
+    volumes:
+    - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    - /etc/letsencrypt:/etc/letsencrypt:ro
+    - /var/www/certbot:/var/www/certbot:ro
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    restart: unless-stopped
+volumes: {}
