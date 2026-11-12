@@ -112,21 +112,30 @@ def test_the_laptop_ignores_allow():
     assert "allow " not in body and "deny all;" not in body
 
 
-def test_every_location_of_a_service_hostname_clears_the_identity_headers_and_the_gate_cookie():
+@pytest.mark.parametrize("components", [("platform", "mcp"), ("platform",)])
+def test_every_location_of_a_service_hostname_sets_the_identity_headers_itself(components):
     routes = [
         ServiceRoute("/", "public", websocket=True),
         ServiceRoute("/api", "public", allow=("10.0.0.0/8",)),
-        ServiceRoute("/settings", "login", groups=("finance",)),
+        ServiceRoute("/settings", "login", groups=("finance",), key="acme-bot.bot.settings"),
     ]
-    block = tls(conf(site(routes=routes)), "bot.data.acme.com")
+    block = tls(conf(site(routes=routes), components=components), "bot.data.acme.com")
     found = locations(block)
-    assert len(found) >= 7
+    assert len(found) >= 13
     assert len(IDENTITY_HEADERS) == 5
     for key, body in found.items():
+        login = key in ("= /settings", "/settings/")
         for header in IDENTITY_HEADERS:
-            assert f'proxy_set_header {header} "";' in body, (key, header)
-        if "proxy_pass" in body:
+            variable = "$vecten_gate_" + header.removeprefix("X-Vecten-").lower()
+            expected = variable if login else '""'
+            assert f"proxy_set_header {header} {expected};" in body, (key, header)
+            assert body.count(f"proxy_set_header {header} ") == 1, (key, header)
+        if "proxy_pass $vecten_gate_upstream/gate/" not in body and "proxy_pass" in body:
             assert "proxy_set_header Cookie $vecten_service_cookie;" in body, key
+        elif "proxy_pass" in body:
+            # The gate's own paths forward the gate's cookies alone, to the MCP.
+            assert "proxy_set_header Cookie $vecten_service_cookie;" not in body, key
+            assert '"__Host-vecten-gate=$vecten_gate_session' in body, key
 
 
 def test_the_gate_cookie_is_stripped_by_a_map_that_keeps_every_other_cookie():
@@ -183,12 +192,17 @@ def test_vectens_own_paths_never_reach_the_service():
         assert "return 404;" in found[key] and "proxy_pass" not in found[key]
 
 
-def test_a_login_route_is_not_forwarded_until_the_gate_serves_it():
+def test_a_login_route_is_held_where_no_mcp_can_admit_it():
+    # A laptop whose components leave the MCP out has no gate to ask.
     routes = [ServiceRoute("/", "public"), ServiceRoute("/settings", "login", groups=("finance",))]
-    found = locations(tls(conf(site(routes=routes)), "bot.data.acme.com"))
+    text = conf(
+        site(host="bot.localhost:8443", routes=routes), mode="local", components=["platform"]
+    )
+    found = locations(tls(text, "bot.localhost"))
     for key in ("= /settings", "/settings/"):
         assert "return 503;" in found[key]
-        assert "proxy_pass" not in found[key]
+        assert "proxy_pass" not in found[key] and "auth_request" not in found[key]
+    assert "/_vecten/gate/" not in text
 
 
 def test_a_route_refuses_a_path_nginx_would_read_otherwise_than_the_service():

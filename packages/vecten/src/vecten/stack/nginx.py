@@ -23,8 +23,8 @@ PROXY_HEADERS = """        proxy_http_version 1.1;
 RESOLVER = "resolver 127.0.0.11 valid=10s ipv6=off;\n"
 
 
-def _upstream(url: str, uri: str = "") -> str:
-    return f"        set $upstream {url};\n        proxy_pass $upstream{uri};\n"
+def _upstream(url: str, uri: str = "", variable: str = "$upstream") -> str:
+    return f"        set {variable} {url};\n        proxy_pass {variable}{uri};\n"
 
 
 AIRFLOW_UPSTREAM = "http://airflow-api-server:8080"
@@ -112,6 +112,8 @@ class ServiceRoute:
     allow: tuple[str, ...] = ()
     websocket: bool = False
     max_body_mb: int = 1
+    # `<extension>.<service>.<route>`: the name the gate checks a login request against.
+    key: str = ""
 
 
 @dataclass(frozen=True)
@@ -164,6 +166,58 @@ SERVICE_MAPS = (
 )
 
 
+# The gate's cookies, read by their exact names, are the only cookies the MCP is sent.
+GATE_STATE_COOKIE = "vecten-gate-state"
+GATE_MAPS = (
+    "map $http_cookie $vecten_gate_session {\n"
+    '    default "";\n'
+    f'    "~(?:^|;\\s*){GATE_COOKIE}=(?<vecten_gate_session_value>[^;]*)" '
+    "$vecten_gate_session_value;\n"
+    "}\n"
+    "map $http_cookie $vecten_gate_state {\n"
+    '    default "";\n'
+    f'    "~(?:^|;\\s*){GATE_STATE_COOKIE}=(?<vecten_gate_state_value>[^;]*)" '
+    "$vecten_gate_state_value;\n"
+    "}\n"
+)
+GATE_PATH = "/_vecten/gate"
+GATE_PATHS = ("start", "callback", "logout")
+GATE_IDENTITY = {h: "$vecten_gate_" + h.removeprefix("X-Vecten-").lower() for h in IDENTITY_HEADERS}
+# The verify answer's headers, copied into the request forwarded to the service; NGINX sends
+# no client header of a name it sets itself.
+IDENTITY_FROM_GATE = "".join(
+    f"        proxy_set_header {header} {variable};\n" for header, variable in GATE_IDENTITY.items()
+)
+GATE_DENIED_PAGE = (
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>No access</title>'
+    "</head><body><h1>No access</h1><p>Your account does not have access to this page. "
+    f'<a href="{GATE_PATH}/logout">Sign out</a> to use another account.</p></body></html>'
+)
+CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+GATE_UPSTREAM = "$vecten_gate_upstream"
+
+
+@dataclass(frozen=True)
+class GateUpstream:
+    """Where a host's NGINX reaches the MCP's gate: on the Compose network beside it, or over
+    HTTPS at mcp.<domain> with the certificate checked when the MCP runs on another VM."""
+
+    url: str
+    host: str
+    tls: bool
+
+
+def gate_upstream(
+    host_components: list[str], hosts: dict[str, str], mode: str
+) -> GateUpstream | None:
+    if "mcp" in host_components:
+        return GateUpstream("http://mcp-server:8001", _bare(hosts["mcp"]), False)
+    if mode == "vm" and hosts.get("mcp"):
+        name = _bare(hosts["mcp"])
+        return GateUpstream(f"https://{name}", name, True)
+    return None
+
+
 def service_site(bound: Bound, host: str) -> ServiceSite:
     """A bound service served at `host`: paths and proxy needs from the declaration, access
     and networks from vecten.toml."""
@@ -180,16 +234,22 @@ def service_site(bound: Bound, host: str) -> ServiceSite:
                 allow=tuple(bound.route_bindings[name].allow),
                 websocket=route.websocket,
                 max_body_mb=route.max_body_mb,
+                key=f"{bound.key}.{name}",
             )
             for name, route in bound.routes.items()
         ),
     )
 
 
-def _service_proxy(upstream: str, uri: str = "") -> str:
+REFUSE_REPEATED_COOKIE = (
+    "        if ($vecten_cookie_repeated) {\n            return 400;\n        }\n"
+)
+
+
+def _service_proxy(upstream: str, uri: str = "", identity: str = IDENTITY_CLEARED) -> str:
     return (
-        "        if ($vecten_cookie_repeated) {\n            return 400;\n        }\n"
-        + IDENTITY_CLEARED
+        REFUSE_REPEATED_COOKIE
+        + identity
         + "        proxy_set_header Cookie $vecten_service_cookie;\n"
         + _upstream(upstream, uri)
         + PROXY_HEADERS
@@ -197,11 +257,28 @@ def _service_proxy(upstream: str, uri: str = "") -> str:
     )
 
 
-def _route_body(site: ServiceSite, route: ServiceRoute, mode: str) -> str:
-    if route.access != "public":
-        # Only the gate may forward a login route; until a host serves it the path is held
-        # here, so a public route covering it never forwards it unchecked.
+def _gate_check(route: ServiceRoute) -> str:
+    return (
+        f"        auth_request {GATE_PATH}/verify/{route.key};\n"
+        + "".join(
+            f"        auth_request_set {variable} $upstream_http_"
+            + header.lower().replace("-", "_")
+            + ";\n"
+            for header, variable in GATE_IDENTITY.items()
+        )
+        + "        error_page 401 = @vecten_gate_sign_in;\n"
+        + "        error_page 403 = @vecten_gate_denied;\n"
+    )
+
+
+def _route_body(
+    site: ServiceSite, route: ServiceRoute, mode: str, gate: GateUpstream | None
+) -> str:
+    if route.access != "public" and gate is None:
+        # Only the gate may forward a login route; where no MCP can admit a request the path
+        # is held here, so a public route covering it never forwards it unchecked.
         return IDENTITY_CLEARED + "        return 503;\n"
+    login = route.access != "public"
     allow = _allow_rules(list(route.allow)) if route.allow and mode == "vm" else ""
     timeout = (
         "        proxy_read_timeout 86400s;\n        proxy_buffering off;\n"
@@ -210,9 +287,12 @@ def _route_body(site: ServiceSite, route: ServiceRoute, mode: str) -> str:
     )
     return (
         "        if ($vecten_ambiguous_path) {\n            return 400;\n        }\n"
+        # The access phase runs allow before auth_request, so a refused address never
+        # reaches the gate.
         + allow
+        + (_gate_check(route) if login else "")
         + f"        client_max_body_size {route.max_body_mb}m;\n"
-        + _service_proxy(site.upstream)
+        + _service_proxy(site.upstream, identity=IDENTITY_FROM_GATE if login else IDENTITY_CLEARED)
         + "        proxy_set_header Upgrade $http_upgrade;\n"
         + "        proxy_set_header Connection $connection_upgrade;\n"
         + timeout
@@ -223,7 +303,74 @@ def _location(match: str, body: str) -> str:
     return f"    location {match} {{\n{body}    }}\n"
 
 
-def _service_locations(site: ServiceSite, mode: str) -> str:
+def _gate_proxy(gate: GateUpstream, site: ServiceSite, uri: str, cookie: str) -> str:
+    body = (
+        IDENTITY_CLEARED
+        + f'        proxy_set_header Cookie "{cookie}";\n'
+        + f"        proxy_set_header X-Vecten-Gate-Host {_bare(site.host)};\n"
+        # A subrequest shares the request's variables: the gate's address in $upstream would
+        # replace the service's before the request is forwarded.
+        + _upstream(gate.url, uri, GATE_UPSTREAM)
+        + PROXY_HEADERS
+        + f"        proxy_set_header Host {gate.host};\n"
+    )
+    if gate.tls:
+        body += (
+            "        proxy_ssl_server_name on;\n"
+            f"        proxy_ssl_name {gate.host};\n"
+            "        proxy_ssl_verify on;\n"
+            f"        proxy_ssl_trusted_certificate {CA_BUNDLE};\n"
+        )
+    return body
+
+
+def _gate_locations(site: ServiceSite, gate: GateUpstream) -> list[str]:
+    logins = [route for route in site.routes if route.access != "public"]
+    if not logins:
+        return []
+    if not all(route.key for route in logins):
+        raise Failure(ExitCode.INTERNAL, f"a login route on {site.host} has no name")
+    both = "__Host-vecten-gate=$vecten_gate_session; vecten-gate-state=$vecten_gate_state"
+    out = [
+        _location(
+            f"= {GATE_PATH}/{path}",
+            REFUSE_REPEATED_COOKIE + _gate_proxy(gate, site, f"/gate/{path}$is_args$args", both),
+        )
+        for path in GATE_PATHS
+    ]
+    for route in sorted(logins, key=lambda r: r.key):
+        out.append(
+            _location(
+                f"= {GATE_PATH}/verify/{route.key}",
+                "        internal;\n"
+                + REFUSE_REPEATED_COOKIE
+                + "        proxy_method GET;\n"
+                + "        proxy_pass_request_body off;\n"
+                + '        proxy_set_header Content-Length "";\n'
+                + f"        proxy_set_header X-Vecten-Gate-Route {route.key};\n"
+                + _gate_proxy(
+                    gate, site, "/gate/verify", "__Host-vecten-gate=$vecten_gate_session"
+                ),
+            )
+        )
+    out += [
+        _location(
+            "@vecten_gate_sign_in",
+            IDENTITY_CLEARED
+            + "        absolute_redirect off;\n"
+            + f"        return 302 {GATE_PATH}/start?rd=$request_uri;\n",
+        ),
+        _location(
+            "@vecten_gate_denied",
+            IDENTITY_CLEARED
+            + "        default_type text/html;\n"
+            + f"        return 403 '{GATE_DENIED_PAGE}';\n",
+        ),
+    ]
+    return out
+
+
+def _service_locations(site: ServiceSite, mode: str, gate: GateUpstream | None) -> str:
     out = []
     if site.health_path is not None:
         # Open to every address, as `ship` polls it from CI; the declared path is forwarded
@@ -237,10 +384,12 @@ def _service_locations(site: ServiceSite, mode: str) -> str:
         )
     reserved = IDENTITY_CLEARED + "        return 404;\n"
     out += [_location("= /_vecten", reserved), _location("/_vecten/", reserved)]
+    if gate is not None:
+        out += _gate_locations(site, gate)
     covered = False
     for route in sorted(site.routes, key=lambda r: route_prefix(r.path)):
         prefix = route_prefix(route.path)
-        body = _route_body(site, route, mode)
+        body = _route_body(site, route, mode, gate)
         if prefix == "/":
             covered = True
             out.append(_location("/", body))
@@ -251,13 +400,13 @@ def _service_locations(site: ServiceSite, mode: str) -> str:
     return "".join(out)
 
 
-def _service_servers(site: ServiceSite, mode: str) -> list[str]:
+def _service_servers(site: ServiceSite, mode: str, gate: GateUpstream | None) -> list[str]:
     host = _bare(site.host)
     return [
         _redirect_server(site.host),
         f"server {{\n    listen 443 ssl;\n    server_name {host};\n"
         + _tls(host, mode)
-        + _service_locations(site, mode)
+        + _service_locations(site, mode, gate)
         + "}\n",
     ]
 
@@ -288,8 +437,13 @@ def generate_nginx_conf(
     served = [hosts[HOST_KEYS[c]] for c in host_components]
     if not served:
         raise Failure(ExitCode.INTERNAL, "NGINX needs at least one served component")
+    gate = gate_upstream(host_components, hosts, mode)
+    gated = gate is not None and any(r.access != "public" for s in services for r in s.routes)
     out = [
-        CONNECTION_UPGRADE_MAP + (SERVICE_MAPS if services else "") + RESOLVER,
+        CONNECTION_UPGRADE_MAP
+        + (SERVICE_MAPS if services else "")
+        + (GATE_MAPS if gated else "")
+        + RESOLVER,
         "server {\n    listen 80 default_server;\n    listen 443 ssl default_server;\n"
         "    server_name _;\n    ssl_reject_handshake on;\n    return 444;\n}\n",
     ]
@@ -316,7 +470,7 @@ def generate_nginx_conf(
             + "    }\n}\n"
         )
     for site in services:
-        out += _service_servers(site, mode)
+        out += _service_servers(site, mode, gate)
     return "\n".join(out)
 
 
