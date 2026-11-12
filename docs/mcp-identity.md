@@ -36,15 +36,22 @@ before a release; unit tests and generated SQL are not that verification.
 The generated Snowflake setup SQL grants `analyst` database and compute warehouse usage only,
 plus the provisioner's table SELECT grant options on core/marts. It installs an owner-rights
 procedure in the configured database's `VECTEN_ACCESS` schema. The procedure accepts only
-`ANALYST` or provisioner-owned reader roles, and the convention schemas, `RAW_<SOURCE>` schemas
-and schemas matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$` (restricted areas, by pattern, so declaring
-an area needs no rerun), and can grant/revoke only read privileges. A schema or area grant
-covers tables, views, materialized views, dynamic tables, external tables and Iceberg tables,
-each with its current and future grants; a kind the account refuses is listed in access health
-with Snowflake's message while the others apply. A dataset grant names its relation's kind
-from `INFORMATION_SCHEMA.TABLES`. On Postgres the helpers cover tables, partitioned tables,
-views, materialized views and foreign tables. Run setup under an administrator authorized to manage existing and future
-grants; that authority is kept on the procedure owner, never granted to provisioner.
+`ANALYST` or provisioner-owned reader roles, and the convention schemas, `RAW_<SOURCE>`
+schemas and schemas matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$` (restricted areas, matched by
+pattern, so declaring an area needs no rerun), and can grant/revoke only read privileges.
+
+A schema or area grant covers tables, views, materialized views, dynamic tables, external
+tables and Iceberg tables, each with its current and future grants. On a grant, a kind the
+account refuses is listed in access health with Snowflake's message while the others apply;
+on a revoke, a refusal fails the call while the role still reads anything in the schema, and
+the revoke is retried on every reconciliation. A dataset grant takes its relation's object
+type from `INFORMATION_SCHEMA.TABLES`, trying a base table as a table, a dynamic table and an
+Iceberg table in turn, and counts a statement only once `SHOW GRANTS` reads the change back.
+On Postgres the helpers cover tables, partitioned tables, views, materialized views and
+foreign tables.
+
+Run setup under an administrator authorized to manage existing and future grants; that
+authority is kept on the procedure owner, never granted to provisioner.
 See Snowflake's [owner-rights procedure rules](https://docs.snowflake.com/en/developer-guide/stored-procedure/stored-procedures-rights)
 and [grant authority requirements](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#access-control-requirements).
 
@@ -154,29 +161,42 @@ holds. Without the MCP, setup grants `analyst` the two schemas. Raw ingestion sc
 `staging`, and `snapshots` have no default grant.
 
 Reconciliation also reads the read grants `analyst` and every group role hold in the
-convention and `raw_<source>` schemas and the schemas of declared areas (on Snowflake through the owner-rights
-`VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and revokes those the
-state does not hold. The `reconcile_drift` setting, `revoke` by default, can be set to
-`report` to list them in access health without revoking; an MCP state created by an earlier
-release starts at `report`. A grant in any other schema, or to a
-role the MCP does not manage, is left alone. While the installed procedures are older than the
-MCP, this step is skipped, area grants are refused and wait, and access health names
-`vecten mcp provisioner-script`. Memberships combine the permissions of all
-assigned groups. Removing a grant from one group does not remove access provided by another.
+convention and `raw_<source>` schemas and the schemas of declared areas (on Snowflake through
+the owner-rights `VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and
+revokes those the state does not hold. The `reconcile_drift` setting, `revoke` by default, can
+be set to `report` to list them in access health without revoking; an MCP state created by an
+earlier release starts at `report`. A grant in any other schema, or to a role the MCP does not
+manage, is left alone. While the installed procedures are older than the MCP, this step is
+skipped, grants that reach an area are refused and wait, and access health names
+`vecten mcp provisioner-script`. Memberships combine the permissions of all assigned groups. Removing a grant from one group does not remove access provided by another.
 
 Use `vecten group`, `vecten grant`, `vecten revoke`, and `vecten reconcile` for group membership
 and desired grants. A dataset grant names one dataset in the semantic model under `osi/`;
 a schema grant covers an entire schema. This implementation accepts only the literal schemas
 `core`, `marts`, `staging`, `snapshots`, names beginning with `raw_`, such as
 `raw_hubspot`, and the schemas of an area `vecten.toml` declares; it rejects arbitrary other
-schema names. An area grant (`vecten grant --area finance --group finance`) is a schema grant on
-both `core_finance` and `marts_finance`, applied and revoked together; it is refused for an area
-with no `[areas.<area>]` entry. No role reads an area until it is granted, and each granted
-schema carries its own future or default grant, so a relation dbt rebuilds there is readable by
-the granted groups and no one else without waiting for a reconciliation. On Postgres the setup
-that `ship` runs creates every declared area's schemas as `loader` and installs their helpers;
-over an existing warehouse, rerun the printed script once dbt has created them. Desired grants are reconciled every fifteen
-minutes, on a semantic-model update, and on demand. The default setup grants are recorded once,
+schema names.
+
+An area grant (`vecten grant --area finance --group finance`) is a schema grant on both
+`core_finance` and `marts_finance`, applied and revoked together; one that fails on the second
+schema is rolled back on the first. It is refused for an area with no `[areas.<area>]` entry,
+and an area removed from `vecten.toml` has its grants revoked and forgotten, so declaring it
+again starts with none. Each granted schema carries its own future or default grant, so a
+relation dbt rebuilds there is readable by the granted groups and no group without the grant,
+with no reconciliation in between. No group reads an area until it is granted, with these
+exceptions, which the warehouse and not the MCP decides:
+
+- a dataset grant on a mart in the area, which reaches that one relation;
+- a future grant an administrator made for the whole database, which reaches every schema
+  without a schema-level one; access health lists those it finds on managed roles;
+- `loader`, which owns the area's schemas and builds them, and the roles above it: on
+  Snowflake `SYSADMIN` and the deploy role, on Postgres the master that sets its role.
+
+On Postgres the setup that `ship` runs creates every declared area's schemas as `loader` and
+installs their helpers; over an existing warehouse, rerun the printed script once dbt has
+created them.
+
+Desired grants are reconciled every fifteen minutes, on a semantic-model update, and on demand. The default setup grants are recorded once,
 so an administrator's later revocation is not undone merely by restarting MCP. See the
 schema-grant limitations above before relying on these operations. Reconciliation
 attempts independent grants even when another grant fails. Its Boolean `complete` field is

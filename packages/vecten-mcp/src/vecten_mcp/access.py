@@ -146,15 +146,17 @@ class AccessService:
     def _source(self, kind, target):
         if kind not in KINDS:
             raise ValueError("a grant's kind is dataset, schema or area")
+        if not isinstance(target, str) or not target:
+            raise ValueError("a grant's target is a dataset, schema or area name")
         if kind == "area":
-            if not isinstance(target, str) or target not in self.areas:
+            if target not in self.areas:
                 raise Undeclared(
                     f"no [areas.{target}] in vecten.toml: declare the area {target} and ship "
                     "before granting it"
                 )
             return area_schemas(target)
         if kind == "schema":
-            area = AREA_SCHEMA.fullmatch(target) if isinstance(target, str) else None
+            area = AREA_SCHEMA.fullmatch(target)
             if area and area.group(2) not in self.areas:
                 raise Undeclared(
                     f"{target} belongs to no declared area: no [areas.{area.group(2)}] in "
@@ -169,7 +171,15 @@ class AccessService:
             return target
         if target not in self.datasets:
             raise ValueError("unknown dataset")
-        return self.datasets[target]
+        source = self.datasets[target]
+        parts = source.lower().split(".")
+        area = AREA_SCHEMA.fullmatch(parts[-2]) if len(parts) > 1 else None
+        if area and area.group(2) not in self.areas:
+            raise Undeclared(
+                f"dataset {target} reads {parts[-2]}, which belongs to no declared area: no "
+                f"[areas.{area.group(2)}] in vecten.toml"
+            )
+        return source
 
     def _current(self, kind, source):
         """Whether the grant reaches an area schema, which an older READ_GRANT refuses."""
@@ -186,16 +196,23 @@ class AccessService:
             return {"installed": installed, "required": ACCESS_VERSION, "fix": OUTDATED_FIX}
         return None
 
-    def _apply(self, grant, source, allowed):
-        """The relation kinds the warehouse refused, each with its message; the grant holds
-        for every other kind."""
+    def _apply(self, grant, source, allowed, done=None):
+        """The relation kinds the warehouse refused a grant, each with its message; the grant
+        holds for every other kind. A revoke that leaves anything refused raises, so its
+        applied record stays for the next pass. `done` collects the schemas applied before a
+        failure."""
+        done = [] if done is None else done
         role = self.require_group(grant["group"])["warehouse_role"]
         if grant["kind"] == "dataset":
-            return list(self.adapter.dataset_grant(role, source, allowed) or [])
-        refused = []
-        for schema in source if grant["kind"] == "area" else [source]:
-            kinds = self.adapter.schema_grant(role, schema, allowed) or []
-            refused += [f"{schema}: {kind}" for kind in kinds]
+            refused = list(self.adapter.dataset_grant(role, source, allowed) or [])
+        else:
+            refused = []
+            for schema in source if grant["kind"] == "area" else [source]:
+                kinds = self.adapter.schema_grant(role, schema, allowed) or []
+                refused += [f"{schema}: {kind}" for kind in kinds]
+                done.append(schema)
+        if refused and not allowed:
+            raise RuntimeError("the warehouse refused part of the revoke: " + "; ".join(refused))
         if refused:
             logger.warning(
                 "%s of %s %s for %s left out: %s",
@@ -214,11 +231,33 @@ class AccessService:
             raise ValueError(f"areas need the current access procedures. {OUTDATED_FIX}")
         row = {"group": group, "kind": kind, "target": target}
         with self.lock:
-            refused = self._apply(row, source, True)
+            done = []
+            try:
+                refused = self._apply(row, source, True, done)
+            except Exception:
+                if kind == "area" and done:
+                    self._roll_back(row, done)
+                raise
             key = self._key(group, kind, target)
             self.state.put("grants", key, row)
             self.state.put("applied_grants", key, dict(row, source=source))
         return dict(row, refused=refused) if refused else row
+
+    def _roll_back(self, row, schemas):
+        """Revoke the schemas of an area grant that failed part-way; what cannot be revoked is
+        recorded as applied, so reconciliation keeps revoking it and lists each failure."""
+        role = self.require_group(row["group"])["warehouse_role"]
+        left = []
+        for schema in schemas:
+            try:
+                if self.adapter.schema_grant(role, schema, False):
+                    raise RuntimeError("the warehouse refused part of the revoke")
+            except Exception as exc:
+                logger.warning("Rolling back %s on %s failed: %s", row, schema, describe_error(exc))
+                left.append(schema)
+        if left:
+            key = self._key(row["group"], row["kind"], row["target"])
+            self.state.put("applied_grants", key, dict(row, source=left))
 
     def revoke(self, group, kind, target):
         self.require_group(group)
@@ -226,10 +265,15 @@ class AccessService:
         with self.lock:
             row = self.state.get("grants", key)
             applied = self.state.get("applied_grants", key)
-            if applied:
-                self._apply(applied, applied["source"], False)
             self.state.remove("grants", key)
-            self.state.remove("applied_grants", key)
+            if applied:
+                # A revoke the warehouse refuses keeps its applied record: the reconciliation
+                # below and every later one retry it and list the failure.
+                try:
+                    self._apply(applied, applied["source"], False)
+                    self.state.remove("applied_grants", key)
+                except Exception as exc:
+                    logger.warning("Revoking %s failed: %s", applied, describe_error(exc))
             reconciliation = self.reconcile()
         result = row or {"group": group, "kind": kind, "target": target}
         if not reconciliation["complete"]:
@@ -260,6 +304,13 @@ class AccessService:
         with self.lock:
             desired = dict(self.state.scan("grants"))
             applied = dict(self.state.scan("applied_grants"))
+            for key, row in list(desired.items()):
+                if self._undeclared(row):
+                    # An area that left vecten.toml closes: its grants are forgotten, so a
+                    # later area of the same name starts with none.
+                    self.state.remove("grants", key)
+                    del desired[key]
+                    logger.info("Forgot %s: its area is not declared", row)
             for key, old in applied.items():
                 if self._source_of(desired.get(key)) != old["source"]:
                     try:
@@ -275,11 +326,12 @@ class AccessService:
                 if outdated and self._current(row["kind"], source):
                     failed(key, row, "grant", outdated["fix"])
                     continue
+                done = []
                 try:
                     role = self.require_group(row["group"])["warehouse_role"]
                     pieces = self._pieces(role, row["kind"], source)
                     absent = key not in applied if held is None else not pieces <= _folded(held)
-                    refused = self._apply(row, source, True)
+                    refused = self._apply(row, source, True, done)
                     self.state.put("applied_grants", key, dict(row, source=source))
                     reconciled += 1
                     if refused:
@@ -289,15 +341,27 @@ class AccessService:
                         logger.info("Granted %s %s to %s", row["kind"], row["target"], row["group"])
                 except Exception as exc:
                     failed(key, row, "grant", exc)
+                    if done and key not in applied:
+                        # The schemas granted before the failure stay revocable.
+                        self.state.put("applied_grants", key, dict(row, source=done))
         health = {"checked_at": time.time(), "failures": failures, **report}
         if outdated:
             health["outdated"] = outdated
         self.state.put("access_health", "reconciliation", health)
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
+    def _undeclared(self, row):
+        try:
+            self._source(row["kind"], row["target"])
+        except Undeclared:
+            return True
+        except ValueError:
+            return False
+        return False
+
     def _source_of(self, row):
-        """What a desired grant reaches now, or None when its dataset is not in the model or
-        its area is not declared: such a grant stays recorded and is applied nowhere."""
+        """What a desired grant reaches now, or None when there is no such grant or its
+        dataset is not in the model."""
         if row is None or (row["kind"] == "dataset" and row["target"] not in self.datasets):
             return None
         try:

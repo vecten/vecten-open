@@ -439,22 +439,111 @@ def test_a_schema_named_like_an_undeclared_area_is_outside_the_scope():
     assert access.health()["drift"] == []
 
 
-def test_an_area_no_longer_declared_is_closed_and_opens_again_once_declared():
+def test_an_area_no_longer_declared_is_revoked_and_forgotten():
     state, adapter = StateStore("sqlite://"), Adapter()
     declared = AccessService(state, adapter, areas={"finance"})
     declared.seed_defaults()
     declared.create_group("finance")
+    declared.datasets = {"finance_revenue": "warehouse.marts_finance.finance_revenue"}
     declared.grant("finance", "area", "finance")
+    declared.grant("finance", "dataset", "finance_revenue")
     adapter.ops.clear()
     undeclared = AccessService(state, adapter)
+    undeclared.datasets = dict(declared.datasets)
     result = undeclared.reconcile()
     assert ("schema", "finance", "core_finance", False) in adapter.ops
     assert ("schema", "finance", "marts_finance", False) in adapter.ops
+    assert ("dataset", "finance", "warehouse.marts_finance.finance_revenue", False) in adapter.ops
     assert result["complete"]
-    assert {"group": "finance", "kind": "area", "target": "finance"} in undeclared.list_grants()
+    assert [g for g in undeclared.list_grants() if g["group"] == "finance"] == []
+    assert not [k for k, row in state.scan("applied_grants") if row["group"] == "finance"]
     adapter.ops.clear()
     AccessService(state, adapter, areas={"finance"}).reconcile()
-    assert ("schema", "finance", "marts_finance", True) in adapter.ops
+    assert not [op for op in adapter.ops if op[1] == "finance"]
+
+
+def test_a_dataset_in_an_undeclared_area_is_refused():
+    adapter = Adapter()
+    access = service(adapter, areas=set())
+    access.datasets = {"finance_revenue": "warehouse.marts_finance.finance_revenue"}
+    adapter.ops.clear()
+    with pytest.raises(ValueError, match=r"\[areas\.finance\]"):
+        access.grant("default", "dataset", "finance_revenue")
+    assert adapter.ops == []
+
+
+def test_a_non_string_target_is_a_value_error():
+    access = service(Adapter())
+    for kind in ("schema", "area", "dataset"):
+        with pytest.raises(ValueError):
+            access.grant("default", kind, 123)
+
+
+class RefusingRevoke(Adapter):
+    """A warehouse that refuses to revoke: READ_GRANT throws while the target still reads."""
+
+    def schema_grant(self, role, schema, grant=True):
+        if not grant:
+            self.ops.append(("schema", role, schema, grant))
+            raise RuntimeError("the target still holds SELECT in D.MARTS after refusals")
+        return super().schema_grant(role, schema, grant)
+
+
+def test_a_refused_revoke_keeps_the_applied_grant_and_is_retried_as_a_failure():
+    adapter = RefusingRevoke()
+    access = service(adapter, seeded=False)
+    access.create_group("finance")
+    access.grant("finance", "schema", "staging")
+    result = access.revoke("finance", "schema", "staging")
+    assert result["reconciliation"]["complete"] is False
+    [failure] = [f for f in result["reconciliation"]["failures"] if f["kind"] == "schema"]
+    assert (failure["target"], failure["operation"]) == ("staging", "revoke")
+    assert "still holds" in failure["error"]
+    assert not access.list_grants()
+    [(_, applied)] = list(access.state.scan("applied_grants"))
+    assert applied["target"] == "staging"
+    adapter.ops.clear()
+    access.reconcile()
+    assert ("schema", "finance", "staging", False) in adapter.ops
+    assert [row["target"] for _, row in access.state.scan("applied_grants")] == ["staging"]
+
+
+def test_a_half_applied_area_grant_is_rolled_back():
+    class RefusingMarts(Adapter):
+        def schema_grant(self, role, schema, grant=True):
+            if grant and schema.startswith("marts_"):
+                raise RuntimeError("no helper for marts_finance")
+            return super().schema_grant(role, schema, grant)
+
+    adapter = RefusingMarts()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    adapter.ops.clear()
+    with pytest.raises(RuntimeError, match="no helper"):
+        access.grant("finance", "area", "finance")
+    assert adapter.ops == [
+        ("schema", "finance", "core_finance", True),
+        ("schema", "finance", "core_finance", False),
+    ]
+    assert not [g for g in access.list_grants() if g["kind"] == "area"]
+
+
+def test_a_half_applied_area_grant_that_cannot_be_rolled_back_is_recorded_for_revoking():
+    class Stuck(Adapter):
+        def schema_grant(self, role, schema, grant=True):
+            if schema.startswith("marts_") or not grant:
+                raise RuntimeError(f"refused on {schema}")
+            return super().schema_grant(role, schema, grant)
+
+    adapter = Stuck()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    with pytest.raises(RuntimeError, match="marts_finance"):
+        access.grant("finance", "area", "finance")
+    leftovers = [row for _, row in access.state.scan("applied_grants") if row["kind"] == "area"]
+    assert [row["source"] for row in leftovers] == [["core_finance"]]
+    result = access.reconcile()
+    assert any(f["kind"] == "area" and f["operation"] == "revoke" for f in result["failures"])
 
 
 class RefusingIceberg(Adapter):

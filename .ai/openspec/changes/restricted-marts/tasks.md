@@ -56,7 +56,7 @@ ship before areas.
 - [x] 4.1 `snowflake_access.js`: per-kind `ALL`/`FUTURE` grants and revokes; single-relation kind from 0.2; `READ_GRANTS` covers the same kinds
 - [x] 4.2 `check_scope` and the Postgres adapter's relation lookup unchanged except where 4.1 needs
 - [x] 4.3 unit: generated statements per kind; refusal surfaced in access health
-- [ ] 4.4 live: a dynamic table and a materialized view in a granted schema are readable; a dataset grant on each works
+- [ ] 4.4 live: a dynamic table and a materialized view in a granted schema are readable; a dataset grant on each works, and its revoke removes it (read back with `SHOW GRANTS TO ROLE`)
 
 ## 5. Group roles: chosen names and bound roles
 

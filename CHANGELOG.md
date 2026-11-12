@@ -83,15 +83,19 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   (answered with `vecten answer access.<area>`) and, after deploy, reports the command that
   grants each declared group the area. Snowflake's `READ_GRANT` and the Postgres helpers accept
   schemas matching `(core|marts)_<area>` by pattern; on Postgres the setup `ship` runs creates
-  every declared area's schemas as `loader` before it installs the helpers. The access
-  procedures are version 3: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, area
-  grants are refused and drift is neither listed nor revoked, while every other grant keeps
+  every declared area's schemas as `loader` before it installs the helpers. An area removed
+  from `vecten.toml` has its grants revoked and forgotten. The access procedures are version
+  4: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, grants that reach an area
+  are refused and drift is neither listed nor revoked, while every other grant keeps
   reconciling ([#51](https://github.com/vecten/vecten-open/issues/51)).
 - Read grants on Snowflake cover every relation kind a mart can be: a schema or area grant
   grants and revokes `SELECT` on all and future tables, views, materialized views, dynamic
-  tables, external tables and Iceberg tables, and a dataset grant names its relation's kind. A
-  kind the account refuses is a failure in access health carrying Snowflake's message, and the
-  other kinds still apply; a refusal on tables or views fails the grant
+  tables, external tables and Iceberg tables, and a dataset grant names its relation's kind,
+  read back through `SHOW GRANTS`. On a grant, a kind the account refuses is a failure in
+  access health carrying Snowflake's message, the other kinds still apply, and
+  `vecten grant` exits with code 5 naming the refusals; a refusal on tables or views fails the
+  grant. A revoke the warehouse refuses while the role still reads in the schema fails and
+  stays recorded, so every reconciliation retries it
   ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
 ### Changed

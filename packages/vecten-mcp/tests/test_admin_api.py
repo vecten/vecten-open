@@ -302,3 +302,16 @@ def test_an_area_is_granted_and_listed_over_the_admin_api_and_an_undeclared_one_
     assert refused.status_code == 400
     assert "[areas.hr]" in refused.json()["error"]
     assert {"group": "finance", "kind": "area", "target": "finance"} in listed.json()["data"]
+
+
+def test_a_grant_naming_no_string_target_is_a_bad_request(admin):
+    service, _ = admin
+    client, headers = http_admin(service)
+    with client:
+        for kind in ("schema", "area", "dataset"):
+            response = client.post(
+                "/api/admin/grant",
+                headers=headers,
+                json={"group": "default", "kind": kind, "target": 123},
+            )
+            assert response.status_code == 400, (kind, response.text)

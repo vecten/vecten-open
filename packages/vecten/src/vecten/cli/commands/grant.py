@@ -29,6 +29,12 @@ def _grant(ctx, env, dataset, schema, area, group, revoke=False):
         )
     if kind != "dataset" and not revoke:
         _record_declared_access(root, env, client, kind, target)
+    if data.get("refused"):
+        raise Failure(
+            ExitCode.TOOL_FAILED,
+            "Grant applied except where the warehouse refused it: " + "; ".join(data["refused"]),
+            data,
+        )
     return Result(data=data, message="Grant revoked." if revoke else "Grant applied.")
 
 

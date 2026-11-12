@@ -138,3 +138,27 @@ def test_an_area_grant_records_the_declared_access_once_every_group_holds_it(
     held.append({"group": "board", "kind": "area", "target": "finance"})
     assert invoke("grant", "--area", "finance", "--group", "board").exit_code == 0
     assert load_config(workdir).environments["prod"].area_access_applied == ["finance"]
+
+
+def test_a_grant_the_warehouse_applied_only_in_part_names_the_refusals_and_fails(
+    invoke, workdir, monkeypatch
+):
+    _areas_project(invoke, workdir)
+    refusal = "marts_finance: FUTURE ICEBERG TABLES: unsupported feature 'ICEBERG'"
+
+    class Client:
+        def __init__(self, root, env):
+            pass
+
+        def call(self, operation, data=None):
+            if operation == "grants":
+                return []
+            return dict(data or {}, refused=[refusal])
+
+    monkeypatch.setattr("vecten.mcp_client.AdminClient", Client)
+    result = invoke("grant", "--area", "finance", "--group", "finance", "--json")
+    assert result.exit_code == 5, result.output
+    doc = json.loads(result.output)
+    assert refusal in doc["error"] and doc["refused"] == [refusal]
+    result = invoke("grant", "--area", "finance", "--group", "finance")
+    assert result.exit_code == 5 and "ICEBERG" in result.output
