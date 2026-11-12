@@ -501,6 +501,43 @@ def test_a_failed_grant_is_an_issue_per_target():
     assert "bounded reader role" in issues[0].evidence["error"]
 
 
+DRIFT = {
+    "group": "default",
+    "role": "analyst",
+    "privilege": "FUTURE SELECT",
+    "schema": "marts",
+    "relation": None,
+}
+
+
+def test_drift_listed_in_report_mode_is_an_issue_per_grant():
+    table = {**DRIFT, "privilege": "SELECT", "relation": "payroll"}
+    health = {"checked_at": 1792627200, "failures": [], "drift": [DRIFT, table]}
+    issues = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert [i.id for i in issues] == [
+        "iss_mcp_drift_analyst_FUTURE-SELECT_marts",
+        "iss_mcp_drift_analyst_SELECT_marts_payroll",
+    ]
+    assert issues[0].title == "default's role analyst holds FUTURE SELECT on marts"
+    assert "reconcile_drift" in issues[0].resolution and "revoke" in issues[0].resolution
+    assert issues[1].evidence["relation"] == "payroll"
+
+
+def test_revoked_drift_is_not_an_issue():
+    health = {"checked_at": 1792627200, "failures": [], "revoked": [DRIFT]}
+    assert mcp_issues(context([], admin=admin_with(access_health=health))) == []
+
+
+def test_older_access_procedures_are_one_issue_naming_the_script():
+    outdated = {"installed": 1, "required": 2, "fix": "An ACCOUNTADMIN reruns the script"}
+    health = {"checked_at": 1792627200, "failures": [], "outdated": outdated}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_access_procedures"
+    assert issue.kind == "command"
+    assert "vecten mcp provisioner-script --env prod" in issue.resolution
+    assert issue.evidence["installed"] == 1 and issue.evidence["required"] == 2
+
+
 def test_an_mcp_without_access_health_reads_as_unavailable():
     def admin(operation, params):
         if operation == "access-health":
