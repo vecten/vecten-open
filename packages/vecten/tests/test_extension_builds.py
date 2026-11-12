@@ -292,3 +292,13 @@ def test_a_dockerfile_without_system_packages_is_unchanged(tmp_path):
         text = (with_none / "build" / f"{kind}.Dockerfile").read_text()
         assert "USER root" not in text and "apt-get" not in text
         assert text == (with_empty / "build" / f"{kind}.Dockerfile").read_text()
+
+
+@pytest.mark.parametrize("body", ["acme-demo==9.0\n", ""])
+def test_a_stamped_lock_whose_body_breaks_its_inputs_is_refused(tmp_path, body):
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    stamp = (tmp_path / "requirements-mcp.lock").read_text().splitlines()[0]
+    (tmp_path / "requirements-mcp.lock").write_text(f"{stamp}\n{body}")
+    with pytest.raises(Failure, match="requirements-mcp.lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
