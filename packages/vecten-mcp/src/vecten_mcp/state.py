@@ -82,7 +82,27 @@ audit_log = Table(
     Column("at", Float, primary_key=True),
     Column("body", JSON, nullable=False),
 )
+# A gate session's id reaches only the browser that holds it; the table keeps its hash.
+gate_sessions = Table(
+    "gate_sessions",
+    metadata,
+    Column("key", String, primary_key=True),
+    Column(
+        "principal_id",
+        String,
+        ForeignKey("principals.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("hostname", String, nullable=False),
+    Column("created_at", Float, nullable=False),
+    Column("expires_at", Float, nullable=False),
+)
 schema_version = Table("schema_version", metadata, Column("version", Integer, primary_key=True))
+SCHEMA_VERSION = 2
+# Each step brings a database from the version before it; create_all has made every table
+# of this release already, so a step only adds what an existing table lacks.
+MIGRATIONS = {2: lambda conn: gate_sessions.create(conn, checkfirst=True)}
 
 
 class StateStore:
@@ -108,8 +128,13 @@ class StateStore:
         else:
             metadata.create_all(self.engine)
         with self.transaction() as conn:
-            if conn.execute(select(schema_version)).first() is None:
-                conn.execute(insert(schema_version).values(version=1))
+            current = conn.execute(select(schema_version.c.version)).scalar_one_or_none()
+            if current is None:
+                conn.execute(insert(schema_version).values(version=SCHEMA_VERSION))
+            elif current < SCHEMA_VERSION:
+                for version in range(current + 1, SCHEMA_VERSION + 1):
+                    MIGRATIONS[version](conn)
+                conn.execute(update(schema_version).values(version=SCHEMA_VERSION))
             if conn.execute(select(groups).where(groups.c.name == "default")).first() is None:
                 conn.execute(insert(groups).values(name="default", warehouse_role="analyst"))
 
@@ -408,6 +433,46 @@ class StateStore:
     def prune(self, now):
         with self.transaction() as conn:
             conn.execute(delete(records).where(records.c.expires_at <= now))
+            conn.execute(delete(gate_sessions).where(gate_sessions.c.expires_at <= now))
+
+    def open_gate_session(self, key, principal_id, hostname, *, now, expires_at, conn=None):
+        if conn is None:
+            with self.transaction() as connection:
+                return self.open_gate_session(
+                    key, principal_id, hostname, now=now, expires_at=expires_at, conn=connection
+                )
+        conn.execute(
+            insert(gate_sessions).values(
+                key=key,
+                principal_id=principal_id,
+                hostname=hostname,
+                created_at=now,
+                expires_at=expires_at,
+            )
+        )
+
+    def gate_session(self, key, *, now):
+        with self.transaction() as conn:
+            row = (
+                conn.execute(
+                    select(gate_sessions).where(
+                        gate_sessions.c.key == key, gate_sessions.c.expires_at > now
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            return dict(row) if row else None
+
+    def end_gate_session(self, key):
+        with self.transaction() as conn:
+            conn.execute(delete(gate_sessions).where(gate_sessions.c.key == key))
+
+    def end_gate_sessions(self, principal_id, *, conn=None):
+        if conn is None:
+            with self.transaction() as connection:
+                return self.end_gate_sessions(principal_id, conn=connection)
+        conn.execute(delete(gate_sessions).where(gate_sessions.c.principal_id == principal_id))
 
     def access_event(self, principal_id, operation, subject, outcome, *, now):
         with self.transaction() as conn:
