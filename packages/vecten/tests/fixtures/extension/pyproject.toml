@@ -24,3 +24,5 @@ fixture = "vecten_test_extension:identity"
 fixture = "vecten_test_extension:provision"
 [project.entry-points."vecten.mcp.audit_sinks"]
 fixture = "vecten_test_extension:audit"
+[project.entry-points."vecten.manifest"]
+fixture = "vecten_test_extension:manifest"

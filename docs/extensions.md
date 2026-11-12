@@ -288,7 +288,7 @@ Exactly three Enterprise extensions sit outside this repository:
 
 They use the same public extension points as any third-party package. Setting `[mcp] auth = "saml"` in `vecten.toml` without
 installing its extension fails startup with the backend's name. No SAML implementation is
-bundled. A test in this repository's CI (`scripts/check_extension_wheels.py`) exercises a fixture declaring all nine groups and scans
+bundled. A test in this repository's CI (`scripts/check_extension_wheels.py`) exercises a fixture declaring all ten groups and scans
 shipped Python for prohibited licence-gating and telemetry symbols/imports. This automated
 scan is a regression guard; code review remains necessary for behavior it cannot recognize.
 
