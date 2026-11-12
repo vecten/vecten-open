@@ -38,7 +38,11 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from vecten.deploy import shipping
-from vecten.deploy.bundle import build_host_bundle, prepare_bundle_metadata
+from vecten.deploy.bundle import (
+    build_host_bundle,
+    fetch_git_sources,
+    prepare_bundle_metadata,
+)
 from vecten.deploy.names import name_prefix
 from vecten.deploy.scaleway import clients
 from vecten.deploy.scaleway.bootstrap import (
@@ -240,9 +244,18 @@ def ship_hosts(
     shipped: list[str] = []
     plane.orphaned_volumes = {}
     with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
+        sources = fetch_git_sources(project_root, config, Path(tmp) / "sources")
         for host in ship_order(outputs):
             bundle = build_host_bundle(
-                project_root, config, env, outputs, host, commit, Path(tmp), metadata=metadata
+                project_root,
+                config,
+                env,
+                outputs,
+                host,
+                commit,
+                Path(tmp),
+                metadata=metadata,
+                sources=sources,
             )
             plane.orphaned_volumes[host] = ship_host(
                 plane, s3, outputs, host, bundle, commit, first=host in keyed

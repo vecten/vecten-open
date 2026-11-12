@@ -32,7 +32,12 @@ from vecten.deploy.aws.clients import aws_errors, aws_failure, aws_reason, error
 from vecten.deploy.aws.ship import host_for, remember_secret, ship_host, ship_order
 from vecten.deploy.aws.snapshots import final_snapshots
 from vecten.deploy.aws.tunnel import free_port, get_tunnel
-from vecten.deploy.bundle import build_host_bundle, head_commit, prepare_bundle_metadata
+from vecten.deploy.bundle import (
+    build_host_bundle,
+    fetch_git_sources,
+    head_commit,
+    prepare_bundle_metadata,
+)
 from vecten.deploy.control import (
     DESTROYING_VAR,
     CloudBootstrap,
@@ -487,9 +492,18 @@ class AwsProvider(AwsRuntimeProvider):
             with_mcp=any("mcp" in host.components for host in outputs.hosts.values()),
         )
         with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
+            sources = fetch_git_sources(project_root, config, Path(tmp) / "sources")
             for host in ship_order(outputs):
                 bundle = build_host_bundle(
-                    project_root, config, env, outputs, host, commit, Path(tmp), metadata=metadata
+                    project_root,
+                    config,
+                    env,
+                    outputs,
+                    host,
+                    commit,
+                    Path(tmp),
+                    metadata=metadata,
+                    sources=sources,
                 )
                 self.orphaned_volumes[host] = self.ship_host(host, bundle, commit)
                 shipped.append(host)

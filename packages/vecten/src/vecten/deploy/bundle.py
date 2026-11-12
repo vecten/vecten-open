@@ -15,12 +15,14 @@ import re
 import shutil
 import tarfile
 import tempfile
+from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from vecten import git_extensions
 from vecten.deploy.feedback import feedback_manifest
 from vecten.deploy.names import name_prefix
 from vecten.deploy.outputs import outputs_text
@@ -192,6 +194,27 @@ def _copy_content(project_root: Path, stage: Path) -> None:
             _copy_tree(project_root, stage, entry)
 
 
+def _write_git_sources(stage: Path, sources: Mapping[str, Path]) -> None:
+    """Place each fetched git source at `extensions/<name>/`, beside the in-repo extensions."""
+    for name, directory in sorted(sources.items()):
+        target = stage / "extensions" / name
+        if target.exists():
+            raise Failure(
+                ExitCode.REFUSED,
+                f"extensions/{name} is a folder of the project, but {name} comes from git; "
+                "remove the folder, or add it as an in-repo extension with "
+                f"`vecten extension add ./extensions/{name}`",
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(directory, target)
+
+
+def fetch_git_sources(project_root: Path, config: VectenConfig, into: Path) -> dict[str, Path]:
+    """Every git-sourced extension's recorded commit, fetched with the CI credential into
+    `into` and checked against its `source_sha256`; a ship calls it before any host changes."""
+    return git_extensions.write_sources(project_root, config, into)
+
+
 def _served(
     config: VectenConfig, record: dict[str, Extension], outputs: EnvironmentOutputs, host: str
 ) -> list[tuple[Bound, str]]:
@@ -327,21 +350,29 @@ def _write_ship_files(stage: Path, env: str, outputs: EnvironmentOutputs, host_d
     shutil.copyfile(setup_sql_path(), ship_dir / "warehouse_setup.sql")
 
 
-def _normalised(info: tarfile.TarInfo) -> tarfile.TarInfo:
+def _normalised(info: tarfile.TarInfo, sources: frozenset[str] = frozenset()) -> tarfile.TarInfo:
     info.uid = info.gid = 0
     info.uname = info.gname = ""
     info.mtime = MEMBER_MTIME
     # Airflow runs in group 0 and dbt writes into its own project directory.
     writable = info.name == DBT_DIR or info.name.startswith(f"{DBT_DIR}/")
-    # No file needs an execute bit: the agent is started as `python3 <path>`.
+    # A git source's executable bits are part of the source_sha256 the host's build checks.
+    # Nothing else needs one: the agent is started as `python3 <path>`.
+    parts = info.name.split("/")
+    executable = (
+        len(parts) > 2
+        and parts[0] == "extensions"
+        and parts[1] in sources
+        and bool(info.mode & 0o100)
+    )
     if info.isdir():
         info.mode = 0o775 if writable else 0o755
     else:
-        info.mode = 0o664 if writable else 0o644
+        info.mode = 0o755 if executable else 0o664 if writable else 0o644
     return info
 
 
-def _write_tarball(stage: Path, target: Path) -> None:
+def _write_tarball(stage: Path, target: Path, sources: frozenset[str] = frozenset()) -> None:
     entries = sorted((p.relative_to(stage).as_posix(), p) for p in stage.rglob("*"))
     fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
     try:
@@ -351,7 +382,7 @@ def _write_tarball(stage: Path, target: Path) -> None:
             tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar,
         ):
             for name, path in entries:
-                info = _normalised(tar.gettarinfo(str(path), arcname=name))
+                info = _normalised(tar.gettarinfo(str(path), arcname=name), sources)
                 if info.isfile():
                     with path.open("rb") as handle:
                         tar.addfile(info, handle)
@@ -384,8 +415,12 @@ def build_host_bundle(
     out_dir: Path,
     *,
     metadata: tuple | None = None,
+    sources: Mapping[str, Path] | None = None,
 ) -> Path:
-    """Write `<out_dir>/<host>-<commit>.tar.gz`; equal inputs give byte-identical tarballs."""
+    """Write `<out_dir>/<host>-<commit>.tar.gz`; equal inputs give byte-identical tarballs.
+
+    `sources` holds the git sources `fetch_git_sources` wrote, by name; without it they are
+    fetched here."""
     check_commit(commit)
     if host not in outputs.hosts:
         raise Failure(
@@ -400,8 +435,12 @@ def build_host_bundle(
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / bundle_name(host, commit)
     with tempfile.TemporaryDirectory(dir=out_dir, prefix=".bundle-") as tmp:
-        stage = Path(tmp)
+        stage = Path(tmp) / "stage"
+        stage.mkdir()
+        if sources is None:
+            sources = fetch_git_sources(project_root, config, Path(tmp) / "sources")
         _copy_content(project_root, stage)
+        _write_git_sources(stage, sources)
         _render_stack(
             stage,
             config,
@@ -423,5 +462,5 @@ def build_host_bundle(
             stage / SHIP_DIR / "feedback.json",
             json.dumps(feedback, sort_keys=True) + "\n",
         )
-        _write_tarball(stage, target)
+        _write_tarball(stage, target, frozenset(sources))
     return target

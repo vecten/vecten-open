@@ -128,15 +128,11 @@ def _git_sources(root: Path, config: VectenConfig) -> dict[str, str]:
     from vecten import git_extensions
     from vecten_shared.extension_record import read_record
 
-    record = read_record(root) or {}
-    lines = {}
-    for registration in config.extensions:
-        req = parse_requirement(registration)
-        name = normalize_name(req.name) if req else None
-        entry = record.get(name) if name else None
-        if entry is not None and entry.git is not None:
-            lines[name] = git_extensions.line_for(name, req.extras, entry.git)
-    return dict(sorted(lines.items()))
+    registered = git_extensions.registered_sources(config, read_record(root) or {})
+    return {
+        name: git_extensions.line_for(name, extras, entry.git)
+        for name, (extras, entry) in registered.items()
+    }
 
 
 RUNTIME = (("platform", "airflow"), ("mcp", "mcp"))

@@ -25,7 +25,7 @@ from vecten.stack.compose import (
 )
 from vecten.stack.docker import DockerRunner, SubprocessDocker
 from vecten.stack.env import ensure_local_env
-from vecten.stack.images import base_image, write_project_layer
+from vecten.stack.images import SOURCES_DIR, base_image, write_project_layer
 from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, HOST_KEYS, service_site, write_nginx
 from vecten_shared.config import load_config
 from vecten_shared.declarations import check_settings
@@ -195,6 +195,10 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
         passwords = {_env(env, "AIRFLOW_ADMIN_USER"): _env(env, "AIRFLOW_ADMIN_PASSWORD")}
         write_text_atomic(stack_dir / "airflow_passwords.json", json.dumps(passwords), mode=0o600)
     registry = _registry(runner, components)
+    from vecten import git_extensions
+
+    # Kept under the stack directory between runs, re-fetched once its hash stops matching.
+    git_extensions.write_sources(project_root, config, stack_dir / SOURCES_DIR, keep=True)
     write_project_layer(stack_dir, config, registry)
     profiles = [*components, "local"]
     # A restarting container resets its health check, so an unbounded --wait can block forever.
