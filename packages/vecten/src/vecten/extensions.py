@@ -11,7 +11,9 @@ import sys
 import sysconfig
 import tempfile
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path, PurePosixPath
@@ -59,10 +61,34 @@ def package_environment(root: Path) -> dict[str, str]:
     return env
 
 
+# Set while `extension add` or `vecten lock` works on a project with git sources: every uv
+# call then runs, with the build backends it starts, without the git credential.
+_GIT_PROJECT: ContextVar[bool] = ContextVar("git_project", default=False)
+
+
+@contextmanager
+def _git_project(active: bool) -> Iterator[None]:
+    token = _GIT_PROJECT.set(_GIT_PROJECT.get() or active)
+    try:
+        yield
+    finally:
+        _GIT_PROJECT.reset(token)
+
+
+def has_git_sources(root: Path) -> bool:
+    """Whether the project's records hold a git source."""
+    record = locking.read_record(root) or {}
+    return any(e.git is not None for e in record.values()) or any(
+        git_extensions.is_source(line) for line in locking.read_pins(root).values()
+    )
+
+
 def uv_environment(root: Path, served: Mapping[str, Path] | None = None) -> dict[str, str]:
-    """The environment uv and the build backends it runs get: never a git credential, and
-    with git sources, a git that reads each one from the repository serving its URL."""
-    return git_extensions.uv_settings(package_environment(root), served or {})
+    """The environment uv and the build backends it runs get: in a project with git sources,
+    no git credential, and a git that reads each source from the repository serving its URL."""
+    return git_extensions.uv_settings(
+        package_environment(root), served or {}, git_project=_GIT_PROJECT.get()
+    )
 
 
 def _uv(
@@ -563,7 +589,11 @@ def lock_project(
     directory that is removed when this returns.
     """
     _check_connector_dependencies(config)
-    with tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched:
+    git = has_git_sources(root) or (added is not None and added.git is not None)
+    with (
+        _git_project(git),
+        tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
+    ):
         return _lock_project(root, config, upgrade, added, Path(fetched))
 
 
@@ -858,7 +888,11 @@ def _refuse_bare_name_of_a_git_source(root: Path, req) -> None:
 
 
 def add_extension(root: Path, package: str) -> dict:
-    with tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched:
+    git = has_git_sources(root) or git_extensions.is_source(package)
+    with (
+        _git_project(git),
+        tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
+    ):
         return _add_extension(root, package, Path(fetched))
 
 

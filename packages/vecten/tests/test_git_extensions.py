@@ -751,9 +751,30 @@ def test_inputs_lines_change_with_the_commit(invoke, served):
         assert (root / name).read_text().split("\n", 1)[0] != stamp
 
 
-def test_uv_never_sees_a_credential_even_without_git_sources(project, monkeypatch):
+def test_uv_gets_the_environment_unchanged_in_a_project_without_git_sources(project, monkeypatch):
     monkeypatch.setenv("GIT_CREDENTIALS", "https://u:t@example.com")
-    monkeypatch.setenv("MCP_GIT_CREDENTIALS", "https://u:t@example.com")
-    env = extensions.uv_environment(project)
-    assert "GIT_CREDENTIALS" not in env and "MCP_GIT_CREDENTIALS" not in env
-    assert "UV_NO_GITHUB_FAST_PATH" not in env
+    monkeypatch.setenv("NETRC", "/somewhere/.netrc")
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i key")
+    assert extensions.uv_environment(project) == extensions.package_environment(project)
+
+
+def test_every_uv_call_in_a_project_with_git_sources_runs_without_the_credential(
+    invoke, served, monkeypatch
+):
+    assert _add(invoke, served, "acme-resolution/v1.2.0").exit_code == 0
+    for variable in ("GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"):
+        monkeypatch.setenv(variable, f"https://x-access-token:{served.token}@{served.host}")
+    monkeypatch.setattr(
+        extensions,
+        "inspect_package",
+        lambda package, root: extensions.PackageMetadata(
+            "acme-demo", "1.0.0", (SimpleNamespace(group="vecten.dags"),), ()
+        ),
+    )
+    first = len(served.uv())
+    assert invoke("extension", "add", "acme-demo==1.0.0").exit_code == 0
+    assert invoke("lock").exit_code == 0
+    calls = served.uv()[first:]
+    assert calls
+    for call in calls:
+        assert not {"GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"} & set(call["env"]), call["args"]

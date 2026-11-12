@@ -205,26 +205,29 @@ def serve_copies(copies: Iterable[Copy], workdir: Path) -> dict[str, Path]:
     return served
 
 
-def uv_settings(base: Mapping[str, str], served: Mapping[str, Path]) -> dict[str, str]:
-    """`base` for uv: never a git credential, and while git sources are locked, a git that
-    reads each source URL from the repository `served` names for it and reaches nothing else,
-    with GitHub's API left unasked."""
-    env = {name: value for name, value in base.items() if name not in CREDENTIAL_VARIABLES}
-    if not served:
-        return env
+def uv_settings(
+    base: Mapping[str, str], served: Mapping[str, Path], git_project: bool = False
+) -> dict[str, str]:
+    """`base` for uv in a project with git sources: no git credential, git isolated from the
+    user's configuration, and while sources are locked, a git that reads each source URL from
+    the repository `served` names for it and reaches nothing else, with GitHub's API left
+    unasked. In any other project, `base` as it is."""
+    if not served and not git_project:
+        return dict(base)
     env = {
         name: value
-        for name, value in env.items()
-        if (not name.startswith("GIT_") or name in git_sources.KEPT_GIT_VARIABLES)
+        for name, value in base.items()
+        if name not in CREDENTIAL_VARIABLES
+        and (not name.startswith("GIT_") or name in git_sources.KEPT_GIT_VARIABLES)
         and name not in git_sources.DROPPED_VARIABLES
     }
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
+    if not served:
+        return env
     settings = [git_sources.NO_HELPER]
     for url, repository in sorted(served.items()):
         settings.append((f"url.file://{repository}.insteadOf", url))
     env.update(
-        GIT_CONFIG_GLOBAL=os.devnull,
-        GIT_CONFIG_NOSYSTEM="1",
-        GIT_TERMINAL_PROMPT="0",
         # Every source is rewritten to a local repository, so git never needs another transport.
         GIT_ALLOW_PROTOCOL="file",
         UV_NO_GITHUB_FAST_PATH="1",
