@@ -34,6 +34,34 @@ def with_services(root: Path, bindings: dict, declared: dict | None = None, **en
     )
 
 
+OVERVIEW = {
+    "title": "Sales overview",
+    "description": "",
+    "kind": "container",
+    "runtime": "streamlit",
+    "entry": "acme/app.py",
+    "datasets": ["orders"],
+    "groups": ["default"],
+}
+
+
+def with_apps(root: Path, bindings: dict, declared: dict | None = None) -> None:
+    """`acme` declares the apps in `declared` (the container app `overview` by default)."""
+    from vecten_shared.apps import parse_app
+
+    doc = tomllib.loads((root / "vecten.toml").read_text())
+    doc["extensions"] = ["acme"]
+    doc["apps"] = {"acme": bindings} if bindings else {}
+    (root / "vecten.toml").write_text(tomli_w.dumps(doc))
+    apps = {
+        name: parse_app("acme", name, value).app
+        for name, value in (declared if declared is not None else {"overview": OVERVIEW}).items()
+    }
+    (root / "extensions.lock.json").write_text(
+        record_text({"acme": Extension("1.0", (), apps=apps)})
+    )
+
+
 def locked(root):
     """Stamps every lock fresh for the project's `acme==1.0` and its record."""
     from vecten import locking

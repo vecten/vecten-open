@@ -218,12 +218,13 @@ def _check_service_hostnames(rel: str, config: VectenConfig, values: dict[str, A
     # Each environment serves under its own tfvars domain, which may be the zone itself.
     if values["domain"] != values["dns_zone"]:
         return
-    for extension, bindings in sorted(config.services.items()):
-        for name, binding in sorted(bindings.items()):
-            if binding.hostname == APEX:
-                raise Failure(
-                    ExitCode.CONFIG,
-                    f"vecten.toml: services.{extension}.{name}.hostname: @ is "
-                    f"{values['domain']}, the DNS zone itself in {rel}, whose apex records "
-                    "the zone keeps; choose a label",
-                )
+    for table, tables in (("services", config.services), ("apps", config.apps)):
+        for extension, bindings in sorted(tables.items()):
+            for name, binding in sorted(bindings.items()):
+                if binding.hostname == APEX:
+                    raise Failure(
+                        ExitCode.CONFIG,
+                        f"vecten.toml: {table}.{extension}.{name}.hostname: @ is "
+                        f"{values['domain']}, the DNS zone itself in {rel}, whose apex records "
+                        "the zone keeps; choose a label",
+                    )

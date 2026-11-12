@@ -93,7 +93,10 @@ def _waiting_hostname_items(root: Path, config: VectenConfig, env: str) -> list[
     from vecten_shared.extension_record import read_record as read_extension_record
     from vecten_shared.provider.environment import environment_file, load_outputs
 
-    if not any(b.hostname for bindings in config.services.values() for b in bindings.values()):
+    # A bound container app is served at its own name when it binds no hostname.
+    if not config.apps and not any(
+        b.hostname for bindings in config.services.values() for b in bindings.values()
+    ):
         return []
     path = environment_file(root, env)
     if not path.is_file():

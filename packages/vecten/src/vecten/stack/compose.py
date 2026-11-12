@@ -11,6 +11,7 @@ import yaml
 
 from vecten.stack.images import BUILD_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
+from vecten_shared.apps import credential_names
 from vecten_shared.config import APEX, VectenConfig, service_hostname, stack_project_name
 from vecten_shared.declarations import component_for, secret_problem
 from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
@@ -315,6 +316,8 @@ def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str
         problem = secret_problem(name)
         if problem:
             raise Failure(ExitCode.CONFIG, f"{RECORD_FILE}: {bound.extension}: {problem}")
+    if bound.app is not None:
+        names = sorted([*names, *credential_names(bound.app, bound.host)])
     return names
 
 
@@ -390,6 +393,8 @@ def _service(
         environment["PORT"] = str(declared.port)
     if bound.binding.hostname is not None:
         environment["VECTEN_PUBLIC_URL"] = _public_url(mode, bound.binding.hostname, hosts)
+    if bound.app is not None:
+        environment["VECTEN_MCP_URL"] = f"https://{hosts['mcp']}/mcp"
     secrets = service_secret_names(bound, project_record(stack_dir))
     for secret in secrets:
         if secret in environment:

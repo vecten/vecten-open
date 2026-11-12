@@ -839,3 +839,17 @@ def test_a_hostname_the_outputs_list_asks_for_nothing(tmp_path):
 def test_without_an_outputs_file_next_does_not_guess(tmp_path):
     root, config = _hostname_layer(tmp_path, None)
     assert WAITING_HOSTNAME not in post_deploy_items(root, config, "prod", CLEAN)
+
+
+def test_an_app_hostname_the_outputs_do_not_list_offers_deploy_first(tmp_path):
+    from .deploy_fixtures import STANDARD_OUTPUTS, write_outputs
+    from .services_fixtures import with_apps
+
+    root = render_fixture(tmp_path, "postgres", deploy=True)
+    with_apps(root, {"overview": {"groups": ["default"]}})
+    write_outputs(root, STANDARD_OUTPUTS)
+    config = oidc_ready(load_config(root))
+    config.environments["prod"].oidc_registered = True
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == Item(
+        "command", "Create the DNS record for overview.data.acme.com", "vecten deploy --env prod"
+    )

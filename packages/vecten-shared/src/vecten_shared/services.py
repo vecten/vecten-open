@@ -380,7 +380,7 @@ def bound_services(config: VectenConfig, record: dict[str, Extension]) -> list[B
 
 
 def unbound_parts(config: VectenConfig, record: dict[str, Extension]) -> list[str]:
-    """Services and routes listed extensions declare that `vecten.toml` does not bind."""
+    """Services, routes and apps listed extensions declare that `vecten.toml` does not bind."""
     from vecten_shared.requirements import parse_requirement
     from vecten_shared.versions import normalize_name
 
@@ -400,6 +400,8 @@ def unbound_parts(config: VectenConfig, record: dict[str, Extension]) -> list[st
                 for route in sorted(service.routes)
                 if route not in binding.routes
             ]
+        apps = config.apps.get(extension, {})
+        found += [f"{extension} app {name}" for name in sorted(entry.apps) if name not in apps]
     return found
 
 
