@@ -32,6 +32,8 @@ from vecten_shared.extensions import (
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
 from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
+from vecten_shared.services import GROUP as SERVICES_GROUP
+from vecten_shared.services import Declaration, parse_service
 from vecten_shared.versions import VERSIONS, normalize_name
 
 
@@ -421,11 +423,13 @@ def lock_project(
         locks[component] = f"{locking.stamp_line(component, digest)}\n{body}"
     install_lock(locks["cli"], root, [e.source_path for e in record.values() if e.source_path])
     manifests = load_manifests(config)
+    services = load_services(config)
     record = {
         name: replace(
             entry,
             secrets=manifests[name].secrets if name in manifests else (),
             settings=manifests[name].settings if name in manifests else None,
+            services={s: d.service for s, d in services.get(name, {}).items()},
         )
         for name, entry in record.items()
     }
@@ -444,9 +448,7 @@ def lock_project(
         "extensions": {name: entry.version for name, entry in sorted(record.items())},
         "divergence": locking.divergence(locks),
         **_secrets_report(root, config, record),
-        "unsupported": {
-            name: list(m.unknown) for name, m in sorted(manifests.items()) if m.unknown
-        },
+        "unsupported": _unsupported(manifests, services),
     }
     return files, report
 
@@ -512,6 +514,41 @@ def load_manifests(config: VectenConfig, candidates=None) -> dict[str, Manifest]
             ) from exc
         found[name] = parse_manifest(name, value)
     return found
+
+
+def load_services(config: VectenConfig, candidates=None) -> dict[str, dict[str, Declaration]]:
+    """Each listed extension's `vecten.services` declarations, by extension and service."""
+    found: dict[str, dict[str, Declaration]] = {}
+    listed = {normalize_name(requirement(r).name) for r in config.extensions}
+    points = metadata.entry_points(group=SERVICES_GROUP) if candidates is None else candidates
+    for point in points:
+        dist = getattr(point, "dist", None)
+        if dist is None or normalize_name(dist.name) not in listed:
+            continue
+        name = normalize_name(dist.name)
+        try:
+            value = point.load()
+        except Exception as exc:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: cannot load service {point.name} ({type(exc).__name__})",
+            ) from exc
+        found.setdefault(name, {})[point.name] = parse_service(name, point.name, value)
+    return found
+
+
+def _unsupported(
+    manifests: dict[str, Manifest], services: dict[str, dict[str, Declaration]]
+) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for name, manifest in manifests.items():
+        found.setdefault(name, []).extend(manifest.unknown)
+    for name, declared in services.items():
+        for service, declaration in sorted(declared.items()):
+            found.setdefault(name, []).extend(
+                f"services.{service}.{k}" for k in declaration.unknown
+            )
+    return {name: keys for name, keys in sorted(found.items()) if keys}
 
 
 def lock(root: Path, upgrade: tuple[str, ...] = ()) -> dict:

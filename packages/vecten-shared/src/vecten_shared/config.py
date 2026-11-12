@@ -33,6 +33,8 @@ from vecten_shared.names import (
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
 from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
+from vecten_shared.services import CPUS, MEMORY_MB
+from vecten_shared.services import name_problem as service_name_problem
 from vecten_shared.versions import normalize_name
 
 CONFIG_FILE = "vecten.toml"
@@ -165,6 +167,75 @@ class AirflowSection(Strict):
     @classmethod
     def _networks(cls, value: list[str]) -> list[str]:
         return allow_networks(value)
+
+
+APEX = "@"
+_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+# The stack's own hostnames, and `_`-prefixed names that DNS and ACME use for their records.
+RESERVED_LABELS = frozenset({"airflow", "mcp", "www"})
+
+
+class RouteBinding(Strict):
+    access: Literal["public", "login"]
+    groups: list[str] = Field(default_factory=list)
+    # Networks that may reach the route on a deployed host; empty admits every address.
+    allow: list[str] = Field(default_factory=list)
+
+    @field_validator("groups")
+    @classmethod
+    def _groups(cls, value: list[str]) -> list[str]:
+        for group in value:
+            _checked(group_name_problem(group), group)
+        return value
+
+    @field_validator("allow")
+    @classmethod
+    def _networks(cls, value: list[str]) -> list[str]:
+        return allow_networks(value)
+
+    @model_validator(mode="after")
+    def _groups_match_access(self) -> RouteBinding:
+        if self.access == "login" and not self.groups:
+            raise ValueError("groups: a login route admits one or more groups")
+        if self.access == "public" and self.groups:
+            raise ValueError("groups: only a login route names groups")
+        return self
+
+
+class ServiceBinding(Strict):
+    # A DNS label below the environment's domain, or `@` for the domain itself.
+    hostname: str | None = None
+    host: Component | None = None
+    local: bool = True
+    memory_mb: int | None = Field(default=None, ge=MEMORY_MB[0], le=MEMORY_MB[1])
+    cpus: float | None = Field(default=None, ge=CPUS[0], le=CPUS[1])
+    routes: dict[str, RouteBinding] = Field(default_factory=dict)
+
+    @field_validator("hostname")
+    @classmethod
+    def _label(cls, value: str | None) -> str | None:
+        if value is None or value == APEX:
+            return value
+        if value in RESERVED_LABELS or value.startswith("_"):
+            raise ValueError(f"{value} is reserved; choose another label")
+        if not _LABEL.fullmatch(value):
+            raise ValueError(
+                "a DNS label of lowercase letters, digits and inner hyphens, or @ for the apex"
+            )
+        return value
+
+    @field_validator("routes")
+    @classmethod
+    def _route_names(cls, value: dict[str, RouteBinding]) -> dict[str, RouteBinding]:
+        for name in value:
+            _checked(service_name_problem("route", name), name)
+        return value
+
+    @model_validator(mode="after")
+    def _routes_need_a_hostname(self) -> ServiceBinding:
+        if self.routes and self.hostname is None:
+            raise ValueError("hostname is required when a route is bound")
+        return self
 
 
 def _checked(problem: str | None, value: Any) -> Any:
@@ -366,6 +437,8 @@ class VectenConfig(Strict):
     secrets: list[str] = Field(default_factory=list)
     # `[settings.<extension>]` and `[settings.project]`, with `env.<env>` overrides.
     settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # `[services.<extension>.<service>]`: where and how each declared service runs.
+    services: dict[str, dict[str, ServiceBinding]] = Field(default_factory=dict)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -425,6 +498,44 @@ class VectenConfig(Strict):
                     raise ValueError(f"{where}.env.{env}: {env_name_problem(env)}")
                 if not isinstance(values, dict):
                     raise ValueError(f"{where}.env.{env}: a table of settings")
+        return self
+
+    @model_validator(mode="after")
+    def _service_bindings(self) -> VectenConfig:
+        listed = {
+            normalize_name(req.name)
+            for req in map(parse_requirement, self.extensions)
+            if req is not None
+        }
+        labels: set[str] = set()
+        for extension, bindings in self.services.items():
+            if extension not in listed:
+                raise ValueError(
+                    f"services.{extension}: no extension of that name is listed in extensions"
+                )
+            for name, binding in bindings.items():
+                where = f"services.{extension}.{name}"
+                problem = service_name_problem("service", name)
+                if problem:
+                    raise ValueError(f"{where}: {problem}")
+                if binding.host is not None and not self.has(binding.host):
+                    raise ValueError(f"{where}.host: the project does not enable {binding.host}")
+                label = binding.hostname
+                if label is not None:
+                    if label in labels:
+                        raise ValueError(f"{where}.hostname: {label} is bound twice")
+                    labels.add(label)
+                    if label == APEX and self.deploy and self.deploy.domain == self.deploy.dns_zone:
+                        raise ValueError(
+                            f"{where}.hostname: @ is {self.deploy.domain}, the DNS zone itself, "
+                            "whose apex records the zone keeps; choose a label"
+                        )
+                for route_name, route in binding.routes.items():
+                    if route.access == "login" and not self.has("mcp"):
+                        raise ValueError(
+                            f"{where}.routes.{route_name}.access: a login route needs the mcp "
+                            "component, whose sign-in admits people"
+                        )
         return self
 
     @model_validator(mode="after")
@@ -499,7 +610,7 @@ def save_config(project_root: Path, config: VectenConfig) -> None:
     import tomlkit
 
     data = config.model_dump(mode="json", exclude_none=True)
-    for optional in ("dependencies", "secrets", "settings"):
+    for optional in ("dependencies", "secrets", "settings", "services"):
         if not data.get(optional):
             data.pop(optional, None)
     path = project_root / CONFIG_FILE

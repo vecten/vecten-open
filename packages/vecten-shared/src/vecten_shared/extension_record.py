@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from vecten_shared.services import Service, name_problem, service_from_json, service_to_json
+
 RECORD_FILE = "extensions.lock.json"
 
 
@@ -26,6 +28,8 @@ class Extension:
     source_path: str | None = None
     metadata_sha256: str | None = None
     build_requires: tuple[str, ...] = ()
+    # The `vecten.services` declarations, by service name.
+    services: dict[str, Service] = field(default_factory=dict, hash=False)
 
 
 def record_text(record: dict[str, Extension]) -> str:
@@ -46,6 +50,16 @@ def record_text(record: dict[str, Extension]) -> str:
                     if entry.source_path
                     else {}
                 ),
+                **(
+                    {
+                        "services": {
+                            service: service_to_json(declared)
+                            for service, declared in sorted(entry.services.items())
+                        }
+                    }
+                    if entry.services
+                    else {}
+                ),
             }
             for name, entry in sorted(record.items())
         },
@@ -64,6 +78,11 @@ def parse_record(text: str) -> dict[str, Extension] | None:
             source = entry.get("source") or {}
             path, digest = source.get("path"), entry.get("metadata_sha256")
             build = entry.get("build_requires", [])
+            services = entry.get("services", {})
+            if not isinstance(services, dict) or any(
+                name_problem("service", service) for service in services
+            ):
+                return None
             if (
                 not isinstance(version, str)
                 or not isinstance(secrets, list)
@@ -84,6 +103,7 @@ def parse_record(text: str) -> dict[str, Extension] | None:
                 source_path=path,
                 metadata_sha256=digest,
                 build_requires=tuple(build),
+                services={service: service_from_json(value) for service, value in services.items()},
             )
         return record
     except ValueError, KeyError, TypeError, AttributeError:
