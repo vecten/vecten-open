@@ -35,6 +35,7 @@ from vecten_platform.dbt.runner import (
     CONVENTION_STEP,
     OSI_PATH_VAR,
     DbtRun,
+    area_vars,
     base_env,
     build_args,
     failed_nodes,
@@ -183,8 +184,9 @@ def build_step(
     *,
     full_refresh: bool = False,
 ) -> None:
+    args = (*build_args(select, exclude, full_refresh=full_refresh), *_area_vars())
     try:
-        _raise_for_nodes("build", build_args(select, exclude, full_refresh=full_refresh), run_id)
+        _raise_for_nodes("build", args, run_id)
     finally:
         _record_finished()
 
@@ -204,7 +206,11 @@ def _record_finished() -> None:
 
 
 def convention_step(run_id: str) -> None:
-    _raise_for_nodes("convention", CONVENTION_STEP, run_id)
+    _raise_for_nodes("convention", (*CONVENTION_STEP, *_area_vars()), run_id)
+
+
+def _area_vars() -> tuple[str, ...]:
+    return area_vars(load_config(Path(runtime().project_root)).areas)
 
 
 def _stale_sources(path: Path) -> list[str]:

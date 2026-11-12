@@ -146,6 +146,18 @@ def test_the_dag_steps_use_the_selectors_of_the_local_build(project, monkeypatch
     assert local == calls
 
 
+def test_the_dag_steps_pass_the_declared_areas(project, monkeypatch):
+    from vecten_shared.config import AreaDecl, load_config
+
+    config = load_config(project)
+    save_config(project, config.model_copy(update={"areas": {"finance": AreaDecl()}}))
+    calls = fake_dbt(monkeypatch, {"build": (0, results()), "test": (0, results())})
+    build_step(RUN_ID)
+    convention_step(RUN_ID)
+    areas = ["--vars", '{"vecten_areas": ["finance"]}']
+    assert calls == [BUILD_ARGS + areas, CONVENTION_ARGS + areas]
+
+
 def test_build_archives_results_and_raises_naming_the_failed_node(project, monkeypatch):
     doc = results(
         ("model.acme.company", "success", None),

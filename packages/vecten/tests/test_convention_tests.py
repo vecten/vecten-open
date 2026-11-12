@@ -4,6 +4,7 @@ import pytest
 import yaml
 
 from vecten_platform.dbt import runner
+from vecten_shared.config import AreaDecl, load_config, save_config
 
 from .fixture_project import build_fixture, render_fixture
 
@@ -48,8 +49,20 @@ def _configure(path: Path, config: str) -> None:
     path.write_text("{{ config(" + config + ") }}\n" + path.read_text())
 
 
+def _declare(root: Path, *areas: str) -> None:
+    config = load_config(root)
+    declared = {name: AreaDecl() for name in areas}
+    save_config(root, config.model_copy(update={"areas": declared}))
+
+
+def _into_area(root: Path, model: str, schema: str, *declared: str) -> None:
+    _declare(root, *declared)
+    _configure(root / model, f"schema='{schema}'")
+
+
 CORE_YML = "dbt/models/core/schema.yml"
 MART = "dbt/models/marts/company_overview.sql"
+CORE_DEAL = "dbt/models/core/deal.sql"
 
 # (id, failing convention test, mutation, violation line the message must carry)
 MUTATIONS = [
@@ -82,6 +95,40 @@ MUTATIONS = [
         "convention_staging_load_metadata",
         lambda d: _strip_source(d / "dbt/models/staging/staging_demo_deal.sql"),
         "model staging_demo_deal: lacks column _source",
+    ),
+    (
+        "undeclared_area",
+        "convention_model_naming",
+        lambda d: _into_area(d, MART, "marts_fiance", "finance"),
+        "model company_overview: lands in schema marts_fiance, an area vecten.toml does not "
+        "declare; add [areas.fiance]",
+    ),
+    (
+        "area_core_without_key",
+        "convention_core_primary_key",
+        lambda d: (
+            _into_area(d, CORE_DEAL, "core_finance", "finance"),
+            _drop_key(d / CORE_YML, "deal", "deal_id", "data_tests"),
+        ),
+        "model deal: declares no primary key column with unique and not_null tests",
+    ),
+    (
+        "area_mart_without_description",
+        "convention_descriptions",
+        lambda d: (
+            _into_area(d, MART, "marts_finance", "finance"),
+            _drop_key(
+                d / "dbt/models/marts/schema.yml", "company_overview", "country", "description"
+            ),
+        ),
+        "model company_overview: column country has no description",
+    ),
+    (
+        "schema_outside_the_convention",
+        "convention_model_naming",
+        lambda d: _configure(d / MART, "schema='marts_fin_ops'"),
+        "model company_overview: lands in schema marts_fin_ops; the convention allows staging, "
+        "snapshots, core, marts and the core_<area> and marts_<area> schemas of declared areas",
     ),
     (
         "grants",
@@ -123,3 +170,11 @@ def test_mutated_fixture_fails_the_named_test(tmp_path, name, mutate, violation)
     failed = {f["name"]: f["message"] for f in runner.failed_nodes(root / "dbt")}
     assert set(failed) == {name}, failed
     assert violation in failed[name]
+
+
+def test_models_in_declared_areas_pass_every_convention_test(tmp_path):
+    root = render_fixture(tmp_path, "snowflake")
+    _into_area(root, MART, "marts_finance", "finance", "payroll")
+    _configure(root / CORE_DEAL, "schema='core_finance'")
+    runs = build_fixture(root)
+    assert [r.returncode for r in runs] == [0, 0], runner.failed_nodes(root / "dbt")

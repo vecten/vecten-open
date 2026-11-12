@@ -20,6 +20,7 @@ from vecten_platform.dbt.raw_replay import missing_fixtures, replay_fixtures
 from vecten_platform.dbt.runner import (
     OSI_PATH_VAR,
     DbtRun,
+    area_vars,
     base_env,
     dbt_step,
     failed_nodes,
@@ -161,11 +162,14 @@ def _build_and_generate(build: _Build, env: dict[str, str]) -> str:
     # A build that fails before running any node writes no results, and an earlier build's
     # failures must not be reported in its place.
     (dbt_dir / "target" / "run_results.json").unlink(missing_ok=True)
-    last = run_build(project_dir=dbt_dir, env=env, in_process=in_process)[-1]
+    areas = build.config.areas
+    last = run_build(project_dir=dbt_dir, env=env, in_process=in_process, areas=areas)[-1]
     if last.returncode != 0:
         raise build.red(last)
     build.log("generating the dbt catalog")
-    docs = dbt_step(["docs", "generate"], project_dir=dbt_dir, env=env, in_process=in_process)
+    docs = dbt_step(
+        ["docs", "generate", *area_vars(areas)], project_dir=dbt_dir, env=env, in_process=in_process
+    )
     if docs.returncode != 0:
         raise build.red(docs)
 
