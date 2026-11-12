@@ -543,6 +543,34 @@ def test_platform_script_grants_on_the_database_the_root_creates(platform_snowfl
     assert '"ACME_DATA"' in sql and "ACME-DATA" not in sql
 
 
+def _shared_dev(root, account="ACME-SHARED"):
+    import re
+
+    from vecten.deploy.tfvars import env_tfvars_path
+    from vecten_shared.config import load_config, save_config
+
+    prod = env_tfvars_path(root, "prod").read_text()
+    dev = re.sub(r'environment\s*=\s*"prod"', 'environment = "dev"', prod)
+    dev = re.sub(r'domain\s*=\s*"[^"]*"', 'domain = "dev.acme.com"', dev)
+    dev = re.sub(r'snowflake_account\s*=\s*"[^"]*"', f'snowflake_account = "{account}"', dev)
+    env_tfvars_path(root, "dev").write_text(dev)
+    config = load_config(root)
+    config.warehouse.shared_account = True
+    save_config(root, config)
+
+
+def test_a_shared_environments_script_names_its_own_objects_and_account(platform_snowflake):
+    from vecten.mcp_onboarding import setup_script
+
+    _shared_dev(platform_snowflake)
+    sql = setup_script(platform_snowflake, "dev")["sql"]
+    assert "CREATE ROLE IF NOT EXISTS ANALYST_ACME_DEV" in sql
+    assert "EXTERNAL_OAUTH_ACME_DEV" in sql
+    assert "'https://ACME-SHARED.snowflakecomputing.com'" in sql
+    assert "'https://mcp.dev.acme.com'" in sql
+    assert "ACME-PROD" not in sql
+
+
 @pytest.fixture
 def existing_snowflake(tmp_path):
     from .test_next_deploy import render_mcp_only_deploy

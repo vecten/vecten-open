@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -146,8 +148,24 @@ class SnowflakeNames:
         return f"https://{self.account}.snowflakecomputing.com"
 
 
+# The environment's Snowflake account, which `ship` writes into every host's Compose
+# environment from the environment's tfvars.
+SNOWFLAKE_ACCOUNT_VAR = "VECTEN_SNOWFLAKE_ACCOUNT"
+
+
+def shipped_account() -> str | None:
+    """The Snowflake account `ship` handed this host; None off a deployed host."""
+    return os.environ.get(SNOWFLAKE_ACCOUNT_VAR) or None
+
+
 ACCESS_SCHEMA = "VECTEN_ACCESS"
 AUTHENTICATION_POLICY = "MCP_SIGN_IN"
+
+
+# Every account-level name is at most 63 characters before the suffix, so with a suffix of
+# at most 64 each fits Snowflake's 255-character limit.
+SUFFIX_LIMIT = 64
+_SUFFIX = re.compile(r"_[A-Z0-9_]+")
 
 
 def _identifier(value: str) -> str:
@@ -155,17 +173,71 @@ def _identifier(value: str) -> str:
     return value.replace("-", "_").upper()
 
 
+def recorded_layout(config: VectenConfig, env: str) -> bool | None:
+    """The layout `env`'s first deploy recorded; fixed for an environment deployed before
+    layouts were recorded, None for one never deployed."""
+    facts = config.environments.get(env)
+    if facts is None:
+        return None
+    if facts.snowflake_shared_account is not None:
+        return facts.snowflake_shared_account
+    return False if facts.deployed_commit else None
+
+
+def shared_layout(config: VectenConfig, env: str) -> bool:
+    """Whether `env`'s Snowflake names carry its suffix: its recorded layout, else the
+    project's setting."""
+    recorded = recorded_layout(config, env)
+    return config.warehouse.shared_account if recorded is None else recorded
+
+
+def _shared_suffix(config: VectenConfig, env: str) -> str:
+    if "-" in env:
+        raise Failure(
+            ExitCode.CONFIG,
+            f"environment {env!r} holds a hyphen, which the names of a shared Snowflake "
+            f"account cannot carry, since `_` separates the project from the environment in "
+            f"them; name it {env.replace('-', '')!r}",
+        )
+    base = config.warehouse.database or config.project.name
+    suffix = "_" + _identifier(f"{base}_{env}")
+    if not _SUFFIX.fullmatch(suffix):
+        raise Failure(
+            ExitCode.CONFIG,
+            f"[warehouse] database {base!r} gives the environment suffix {suffix!r}, which "
+            "an unquoted Snowflake name cannot end in; use letters, digits, `_` and `-`",
+        )
+    if len(suffix) > SUFFIX_LIMIT:
+        raise Failure(
+            ExitCode.CONFIG,
+            f"environment {env!r} gives the suffix {suffix} of {len(suffix)} characters; a "
+            f"shared Snowflake account allows {SUFFIX_LIMIT}, so shorten [warehouse] database "
+            "(or the project name when it is unset) or the environment's name",
+        )
+    return suffix
+
+
 def snowflake_names(
-    config: VectenConfig, env: str, *, shared_account: bool = False
+    config: VectenConfig,
+    env: str,
+    *,
+    account: str | None = None,
+    shared_account: bool | None = None,
 ) -> SnowflakeNames:
-    """The names for `env`. The fixed layout is the one every environment deployed before
-    shared accounts carries, so each of its names must stay exactly as it is; a shared
-    account ends every account-level name in the environment's suffix `_<BASE>_<ENV>`."""
+    """The names for `env` in `account`, by default the one `[warehouse] account` names.
+
+    The layout is the environment's own (`shared_layout`) unless given. The
+    fixed layout is the one every environment deployed before shared accounts carries, so
+    each of its names must stay exactly as it is; a shared account ends every account-level
+    name in the environment's suffix `_<BASE>_<ENV>`."""
+    if shared_account is None:
+        shared_account = shared_layout(config, env)
+    account = account or config.warehouse.account
     project = config.project.name.replace("-", "_")
     if not shared_account:
         loader = "LOADER"
         return SnowflakeNames(
-            account=config.warehouse.account,
+            account=account,
             suffix="",
             database=(config.warehouse.database or project).upper(),
             warehouse=_identifier(f"{project}_{env}_WH"),
@@ -178,12 +250,12 @@ def snowflake_names(
             access_schema=ACCESS_SCHEMA,
             authentication_policy=None,
         )
-    base = _identifier(f"{config.warehouse.database or project}_{env}")
-    suffix = f"_{base}"
+    suffix = _shared_suffix(config, env)
+    base = suffix[1:]
     # dlt and dbt pass one name as both the loader's user and its role.
     loader = f"LOADER{suffix}"
     return SnowflakeNames(
-        account=config.warehouse.account,
+        account=account,
         suffix=suffix,
         database=base,
         warehouse=f"{base}_WH",

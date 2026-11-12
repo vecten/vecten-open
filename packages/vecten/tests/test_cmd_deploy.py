@@ -636,6 +636,59 @@ def test_laptop_deploy_dispatches_follows_and_records_the_run_commit(
     assert FakeTerraform.calls == []
 
 
+def test_a_postgres_deploy_records_no_snowflake_layout(invoke, laptop, project, monkeypatch):
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    assert invoke("deploy", "--env", "prod", "--json").exit_code == 0
+    assert load_config(project).environments["prod"].snowflake_shared_account is None
+
+
+def _share_account(root, **facts):
+    config = load_config(root)
+    config.warehouse.shared_account = True
+    save_config(root, config)
+    if facts:
+        set_facts(root, **facts)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_a_snowflake_deploy_records_the_layout_it_was_first_deployed_with(
+    invoke, laptop, snowflake, monkeypatch, shared
+):
+    if shared:
+        _share_account(snowflake)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    assert facts.snowflake_shared_account is shared
+    assert facts.deployed_commit == COMMIT
+
+
+def test_a_changed_layout_is_refused_before_any_dispatch(invoke, laptop, snowflake, monkeypatch):
+    dev = env_tfvars_path(snowflake, "prod").read_text().replace('"prod"', '"dev"', 1)
+    env_tfvars_path(snowflake, "dev").write_text(dev)
+    _share_account(snowflake, snowflake_shared_account=False)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    error = doc(r)["error"]
+    assert "snowflake_shared_account = false" in error and "new deployment" in error
+    assert "deploy/envs/dev.tfvars" in error
+    assert laptop.named("workflow", "run") == []
+    assert load_config(snowflake).environments["prod"].snowflake_shared_account is False
+
+
+def test_a_shared_environment_applies_its_suffixed_names(invoke, deploy_secrets, snowflake):
+    _share_account(snowflake)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = next(args for args, _ in _calls_in("snowflake") if args[0] == "plan")
+    assert _var(plan, "database_name") == "ACME_PROD"
+    assert _var(plan, "warehouse_name") == "ACME_PROD_WH"
+    assert _var(plan, "analyst_role_name") == "ANALYST_ACME_PROD"
+    assert _var(plan, "loader_user_name") == "LOADER_ACME_PROD"
+
+
 def test_laptop_deploy_records_the_vm_keys_handed_over(invoke, laptop, project, monkeypatch):
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ids = {"project": "p", "retiring_platform": "SCWOLDPLATFORM", "retiring_deploy": "SCWOLDCI"}

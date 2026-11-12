@@ -172,6 +172,16 @@ def test_shipped_dags_start_paused_only_when_the_tfvars_opt_in(project, tmp_path
     assert paused(tmp_path / "opted-out") == "False"
 
 
+def test_a_snowflake_host_ships_with_its_environments_account(tmp_path):
+    root = render_aws(tmp_path / "snow", warehouse="snowflake", snowflake_account="ACME-PROD")
+    outputs = json.loads(json.dumps(STANDARD_OUTPUTS))
+    del outputs["postgres"]["warehouse"]
+    for host, service in (("platform", "airflow-scheduler"), ("mcp", "mcp-server")):
+        out = build(root, tmp_path / host, host=host, outputs=outputs)
+        doc = yaml.safe_load(read(out, ".vecten/stack/docker-compose.yml"))
+        assert doc["services"][service]["environment"]["VECTEN_SNOWFLAKE_ACCOUNT"] == "ACME-PROD"
+
+
 def test_shipped_nginx_carries_the_airflow_allow_list(project, tmp_path):
     path = ".vecten/stack/nginx/conf.d/default.conf"
     assert "deny all;" not in read(build(project, tmp_path / "open"), path)

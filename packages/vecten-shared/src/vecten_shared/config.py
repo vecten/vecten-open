@@ -64,6 +64,9 @@ class WarehouseSection(Strict):
     account: str | None = None
     # The login introspection signs in as, named by warehouse_url.
     admin_user: str | None = None
+    # Whether an environment's Snowflake account may hold anything besides that environment;
+    # each environment records the value it was first deployed with.
+    shared_account: bool = False
 
 
 _REGION = re.compile(r"[a-z0-9-]{2,32}")
@@ -333,6 +336,9 @@ class EnvironmentFacts(Strict):
     alert_webhook_asked: bool = False
     oidc_registered: bool = False
     admin_link_issued: bool = False
+    # The `[warehouse] shared_account` value the environment's first deploy used; its
+    # Snowflake objects carry the names that value gives for the environment's life.
+    snowflake_shared_account: bool | None = None
 
     @field_validator("cloud_ids")
     @classmethod
@@ -454,6 +460,17 @@ class VectenConfig(Strict):
         for env in value:
             _checked(env_name_problem(env), env)
         return value
+
+    @model_validator(mode="after")
+    def _shared_account_needs_the_snowflake_root(self) -> VectenConfig:
+        # Only the platform's Snowflake root creates the per-environment database, warehouse
+        # and roles the shared account's names separate environments by.
+        if self.warehouse.shared_account:
+            if self.warehouse.kind != "snowflake":
+                raise ValueError("[warehouse] shared_account needs a Snowflake warehouse")
+            if not self.has("platform"):
+                raise ValueError("[warehouse] shared_account needs the platform component")
+        return self
 
     @model_validator(mode="after")
     def _airflow_needs_platform(self) -> VectenConfig:

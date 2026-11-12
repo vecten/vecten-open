@@ -46,7 +46,12 @@ from vecten.deploy.guards import (
     require_on_default_branch,
 )
 from vecten.deploy.shipping import service_report
-from vecten.deploy.snowflake import has_snowflake_root, identity_pending, identity_pending_note
+from vecten.deploy.snowflake import (
+    check_layout,
+    has_snowflake_root,
+    identity_pending,
+    identity_pending_note,
+)
 from vecten.deploy.terraform import PlannedRoot, TerraformRunner, require_terraform
 from vecten.deploy.tfvars import check_tfvars
 from vecten.github.gh import ToolRunner, require_gh
@@ -55,6 +60,7 @@ from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.provider import shared_layout
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
 from vecten_shared.records import write_text_atomic
 from vecten_shared.services import check_bindings, limits_per_host
@@ -257,6 +263,8 @@ def deploy_env(
         return found
     deploy = require_deploy_cloud(config)
     plane = get_control_plane(deploy.cloud, project_root, env)
+    # Before the tfvars, whose account rules follow from the layout this refusal settles.
+    check_layout(project_root, config, env)
     check_tfvars(project_root, config, env)
     require_bootstrapped(config, env)
     data = _deploy(
@@ -288,6 +296,9 @@ def _deploy(
         if gh is None:
             raise Failure(ExitCode.INTERNAL, "dispatching the apply workflow needs the gh runner")
         require_on_default_branch(project_root, deploy.github_repository, gh, git)
+        # The run read this checkout's vecten.toml from GitHub, so it named the objects as
+        # this layout does.
+        layout = shared_layout(config, env) if has_snowflake_root(config) else None
         followed = dispatch_and_follow(project_root, APPLY_WORKFLOW, env, gh, git)
         try:
             deployed = check_commit(followed["head_sha"])
@@ -302,6 +313,8 @@ def _deploy(
         recorded = load_config(project_root)
         facts = recorded.environments[env]
         facts.deployed_commit = deployed
+        if layout is not None and facts.snowflake_shared_account is None:
+            facts.snowflake_shared_account = layout
         # A deploy hands every VM its current key and waits for the acknowledgement, so no VM
         # key is waiting any more; bootstrap deletes the old keys on its next run.
         facts.cloud_ids = {
@@ -471,6 +484,10 @@ def destroy_env(
         # The run took minutes, so the file is read again and edits made meanwhile survive.
         recorded = load_config(project_root)
         recorded.environments[env].deployed_commit = None
+        if delete_data is not None:
+            # The Snowflake objects the layout named are gone, so a new deploy of the
+            # environment takes the project's setting afresh.
+            recorded.environments[env].snowflake_shared_account = None
         cleared = _clear_state_facts(recorded, env)
         save_config(project_root, recorded)
         # Both records name what the destroyed `state` database held: the session it issued

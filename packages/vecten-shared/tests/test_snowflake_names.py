@@ -8,15 +8,22 @@ from pathlib import Path
 import pytest
 
 from vecten_shared.config import VectenConfig
+from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import SnowflakeNames, snowflake_names
 
 
-def config(name, database=None, account="ACME-PROD"):
+def config(name, database=None, account="ACME-PROD", *, shared=False, environments=None):
     return VectenConfig.model_validate(
         {
             "users": 3,
             "project": {"name": name, "scaffold_version": "0.1.0"},
-            "warehouse": {"kind": "snowflake", "account": account, "database": database},
+            "warehouse": {
+                "kind": "snowflake",
+                "account": account,
+                "database": database,
+                "shared_account": shared,
+            },
+            "environments": environments or {},
         }
     )
 
@@ -88,6 +95,62 @@ def test_two_shared_environments_share_no_name():
     prod = snowflake_names(config("acme"), "prod", shared_account=True)
     shared = set(astuple(dev)) & set(astuple(prod))
     assert shared == {"ACME-PROD", "VECTEN_ACCESS", "MCP_SIGN_IN"}
+
+
+def test_an_undeployed_environment_takes_the_projects_setting():
+    assert snowflake_names(config("acme", shared=True), "dev").suffix == "_ACME_DEV"
+    assert snowflake_names(config("acme"), "dev").suffix == ""
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_the_layout_an_environment_recorded_wins_over_the_setting(shared):
+    recorded = {"prod": {"snowflake_shared_account": not shared}}
+    names = snowflake_names(config("acme", shared=shared, environments=recorded), "prod")
+    assert names.suffix == ("" if shared else "_ACME_PROD")
+
+
+def test_an_environment_deployed_without_a_record_keeps_its_fixed_names():
+    deployed = {"prod": {"deployed_commit": "a" * 40}}
+    names = snowflake_names(config("acme", shared=True, environments=deployed), "prod")
+    assert names.suffix == ""
+    assert names.analyst_role == "ANALYST"
+
+
+@pytest.mark.parametrize("project", ["acme", "acme-co"])
+def test_a_shared_account_refuses_an_environment_name_with_a_hyphen(project):
+    with pytest.raises(Failure) as caught:
+        snowflake_names(config(project, shared=True), "dev-2")
+    assert caught.value.code == ExitCode.CONFIG
+    assert "hyphen" in caught.value.message
+    assert "'dev2'" in caught.value.message
+
+
+def test_a_fixed_environment_keeps_a_hyphen_in_its_warehouse_name():
+    assert snowflake_names(config("acme"), "dev-2").warehouse == "ACME_DEV_2_WH"
+
+
+def test_a_shared_account_refuses_a_suffix_over_64_characters():
+    base = "d" * 59
+    assert len(snowflake_names(config("acme", base, shared=True), "dev").suffix) == 64
+    with pytest.raises(Failure) as caught:
+        snowflake_names(config("acme", base + "x", shared=True), "dev")
+    assert caught.value.code == ExitCode.CONFIG
+    assert "_" + base.upper() + "X_DEV" in caught.value.message
+    assert "64" in caught.value.message
+
+
+@pytest.mark.parametrize("database", ["lake.raw", "lake raw", 'la"ke'])
+def test_a_shared_account_refuses_a_base_that_is_no_plain_identifier(database):
+    with pytest.raises(Failure) as caught:
+        snowflake_names(config("acme", database, shared=True), "dev")
+    assert "[warehouse] database" in caught.value.message
+
+
+def test_the_environments_own_account_wins_over_vecten_toml():
+    names = snowflake_names(config("acme"), "dev", account="ACME-DEV")
+    assert names.account == "ACME-DEV"
+    assert names.audience == "https://ACME-DEV.snowflakecomputing.com"
+    assert snowflake_names(config("acme"), "dev", account=None).account == "ACME-PROD"
 
 
 def test_the_audience_needs_an_account():

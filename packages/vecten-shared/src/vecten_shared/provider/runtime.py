@@ -16,6 +16,7 @@ from vecten_shared.provider import (
     DbName,
     LogTarget,
     check_db_name,
+    shipped_account,
     snowflake_names,
 )
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file, load_outputs
@@ -136,11 +137,11 @@ class OutputsRuntimeProvider:
 
     def _snowflake_warehouse(self) -> ConnectionSpec:
         config = self.config()
-        if not config.warehouse.account:
+        names = snowflake_names(config, self.env, account=shipped_account())
+        if not names.account:
             raise Failure(
                 ExitCode.CONFIG, "vecten.toml: warehouse.account is required on Snowflake"
             )
-        names = snowflake_names(config, self.env)
         return ConnectionSpec(
             kind="snowflake",
             database=names.database,
