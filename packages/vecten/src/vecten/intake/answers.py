@@ -13,9 +13,11 @@ from vecten.intake.facts import (
     ALERT_PREFIX,
     MCP_KEYS,
     OIDC_REGISTERED_PREFIX,
+    PROMOTION_KEY,
     is_alert_key,
     is_mcp_key,
     is_oidc_registered_key,
+    is_promotion_key,
 )
 from vecten_shared.config import deploy_value_problem, parse_warehouse_locator
 from vecten_shared.names import CONNECTOR_RULE, connector_name_problem
@@ -118,7 +120,7 @@ def validate_answer(key: str, raw: str) -> Any:
             f"{key} is recorded on the connector declaration in vecten.toml, "
             f"not in {ANSWERS_FILE}; run `vecten answer {key} <groups>` inside the project",
         )
-    if is_mcp_key(key) or is_alert_key(key) or is_oidc_registered_key(key):
+    if is_mcp_key(key) or is_alert_key(key) or is_oidc_registered_key(key) or is_promotion_key(key):
         raise Failure(
             ExitCode.USAGE,
             f"{key} is recorded in vecten.toml, not in {ANSWERS_FILE}; "
@@ -131,6 +133,7 @@ def validate_answer(key: str, raw: str) -> Any:
             *MCP_KEYS,
             f"{ALERT_PREFIX}<env>",
             f"{OIDC_REGISTERED_PREFIX}<env>",
+            PROMOTION_KEY,
         )
         known = ", ".join((*ANSWER_KEYS, *extra))
         raise Failure(ExitCode.USAGE, f"unknown answer key {key!r}; known keys: {known}")

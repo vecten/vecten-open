@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, get_args
 from urllib.parse import urlsplit
 
-from vecten_shared.config import McpAuth, load_config, save_config
+from vecten_shared.config import McpAuth, load_config, promotion_problem, save_config
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
 
@@ -14,6 +14,8 @@ MCP_KEYS = ("mcp.auth", "mcp.oidc_issuer", "mcp.oidc_client_id", "mcp.admins")
 ALERT_PREFIX = "alert_webhook."
 ALERT_CHOICES = ("yes", "no")
 OIDC_REGISTERED_PREFIX = "oidc_registered."
+PROMOTION_KEY = "deploy.promotion"
+NO_PROMOTION = "none"
 
 
 def is_mcp_key(key: str) -> bool:
@@ -107,3 +109,34 @@ def set_wanted(root: Path, sources: list[str]) -> list[str]:
     config.wanted = [s for s in sources if s not in declared]
     save_config(root, config)
     return config.wanted
+
+
+def is_promotion_key(key: str) -> bool:
+    return key == PROMOTION_KEY
+
+
+def set_promotion(project_root: Path, raw: str) -> list[str] | None:
+    """Record the promotion order, or remove it on `none`; `save_config` refuses an order
+    under workflows that predate it."""
+    from vecten.deploy.tfvars import env_tfvars_path
+
+    config = load_config(project_root)
+    if config.deploy is None:
+        raise Failure(
+            ExitCode.PREREQUISITE,
+            f"{PROMOTION_KEY} orders the deployed environments; run `vecten init --deploy` first",
+        )
+    order: list[str] | None = None
+    if raw.strip().lower() != NO_PROMOTION:
+        order = [env.strip() for env in raw.split(",") if env.strip()]
+        if not order:
+            raise _usage(f"{PROMOTION_KEY} must list environments, as in dev,prod, or be none")
+        problem = promotion_problem(order)
+        if problem:
+            raise _usage(f"{PROMOTION_KEY} {problem}")
+        for env in order:
+            if not env_tfvars_path(project_root, env).is_file():
+                raise _usage(f"{PROMOTION_KEY}: {env} has no deploy/envs/{env}.tfvars")
+    config.deploy.promotion = order
+    save_config(project_root, config)
+    return order
