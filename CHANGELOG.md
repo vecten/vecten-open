@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
+- `vecten lock` writes `requirements.txt` (one pin per extension), one lock per component and
+  `extensions.lock.json` together. An extension's `platform`, `mcp` and `cli` extras install
+  only in that component, and `[dependencies.platform|mcp|cli] python` in `vecten.toml` adds a
+  project's own packages to one component. Each lock records a hash of its inputs, which `up`
+  and the bundle build check, naming `vecten lock` when stale; re-locking keeps existing pins,
+  and `--upgrade <package>` moves one. `extension add` and `connector add` lock the same way
+  ([#50](https://github.com/vecten/vecten-open/issues/50)).
 - Deployed hosts: `dags_paused_at_creation = true` in `deploy/envs/<env>.tfvars` makes that
   environment's new DAGs start paused, `[airflow] allow` in `vecten.toml` limits which networks
   reach `airflow.<domain>` (Airflow's health path stays open for `vecten ship`), and
@@ -43,6 +50,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Changed
 
+- `requirements.txt` holds only extension pins after the first `vecten lock`; connector
+  dependencies live in the locks. Locks written by an earlier release keep building until then.
 - The `connector` skill names the `build_sync_dag` option for each scheduling request, and says
   that a new sync DAG syncs the latest whole day as soon as it is unpaused rather than at the
   next midnight.
