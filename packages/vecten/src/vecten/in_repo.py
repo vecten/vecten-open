@@ -18,6 +18,14 @@ from vecten_shared.versions import normalize_name
 
 EXTENSIONS_DIR = "extensions"
 RULE = "in-repo extensions live under extensions/<name>/ in the project"
+STATIC_FIELDS = frozenset(
+    {"version", "dependencies", "optional-dependencies", "entry-points", "scripts", "gui-scripts"}
+)
+
+
+def has_folder(root: Path, name: str) -> bool:
+    """Whether the project keeps an extension of this normalised name in extensions/."""
+    return (root / EXTENSIONS_DIR / name / "pyproject.toml").is_file()
 
 
 @dataclass(frozen=True)
@@ -89,7 +97,14 @@ def read(root: Path, relative: PurePosixPath) -> InRepo:
     project = doc.get("project") if isinstance(doc.get("project"), dict) else {}
     build = doc.get("build-system") if isinstance(doc.get("build-system"), dict) else {}
     name, version = project.get("name"), project.get("version")
-    if "version" in project.get("dynamic", []) or not isinstance(version, str):
+    dynamic = sorted(set(project.get("dynamic", [])) & STATIC_FIELDS)
+    if dynamic:
+        raise Failure(
+            ExitCode.CONFIG,
+            f"{relative}/pyproject.toml: {', '.join(dynamic)} must be written in [project], "
+            "not dynamic: they decide what is locked and wired, and only this file is hashed",
+        )
+    if not isinstance(version, str):
         raise Failure(
             ExitCode.CONFIG, f"{relative}/pyproject.toml: [project] needs a static version"
         )

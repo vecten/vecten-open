@@ -35,7 +35,9 @@ __all__ = [
     "inputs_hash",
     "lock_problems",
     "lock_state",
+    "listed_paths",
     "metadata_current",
+    "paths_listed",
     "metadata_markers",
     "parse_record",
     "read_pins",
@@ -152,6 +154,24 @@ def metadata_current(root: Path, record: dict[str, Extension]) -> bool:
     return True
 
 
+def listed_paths(root: Path) -> set[str]:
+    """The `./extensions/<name>` lines of requirements.txt, as project-relative paths."""
+    path = root / PINS_FILE
+    if not path.is_file():
+        return set()
+    return {
+        line[2:].split("[")[0].rstrip("/")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("./extensions/")
+    }
+
+
+def paths_listed(root: Path, record: dict[str, Extension]) -> bool:
+    """Whether requirements.txt still lists every in-repo extension by its path."""
+    listed = listed_paths(root)
+    return all(e.source_path in listed for e in record.values() if e.source_path)
+
+
 def inputs_hash(component: str, lock_roots: list[str]) -> str:
     base = BASE_IMAGES.get(component)
     inputs = {
@@ -188,7 +208,7 @@ def lock_state(root: Path, config: VectenConfig, component: str) -> str:
         return "unstamped"
     record = read_record(root)
     lock_roots = None if record is None else roots(config, read_pins(root), record, component)
-    if lock_roots is None or not metadata_current(root, record):
+    if lock_roots is None or not metadata_current(root, record) or not paths_listed(root, record):
         return "stale"
     digest = inputs_hash(component, [*lock_roots, *metadata_markers(record)])
     return "fresh" if stamp == (component, digest) else "stale"

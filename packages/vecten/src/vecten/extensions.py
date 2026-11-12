@@ -309,7 +309,10 @@ def _extension_pins(
         name = normalize_name(req.name)
         extras = f"[{','.join(sorted(req.extras))}]" if req.extras else ""
         added_here = added is not None and normalize_name(added.name) == name
-        if (added_here and added.in_repo) or (not added_here and name in paths):
+        # A folder in extensions/ makes the name in-repo even when requirements.txt lost its
+        # line, so the name is never looked up on an index, where a stranger may own it.
+        local = name in paths or in_repo.has_folder(root, name)
+        if (added_here and added.in_repo) or (not added_here and local):
             info = in_repo.read(root, PurePosixPath(in_repo.EXTENSIONS_DIR, name))
             found_pins[name] = f"./{info.path}{extras}"
             found_record[name] = _in_repo_entry(root, info, record.get(name))
@@ -320,7 +323,7 @@ def _extension_pins(
             pinned, entry = pins.get(name), record.get(name)
             version = _pinned_version(pinned) if pinned else None
             satisfied = version is not None and (not req.specifier or version in req.specifier)
-            if satisfied and entry and version == entry.version:
+            if satisfied and entry and not entry.source_path and version == entry.version:
                 found_pins[name], found_record[name] = f"{name}{extras}=={entry.version}", entry
                 continue
             dist = inspect_package(pinned if satisfied else registration, root)
@@ -530,8 +533,16 @@ def add_extension(root: Path, package: str) -> dict:
     config = load_config(root)
     if in_repo.is_path(package):
         dist, package = _in_repo_package(root, package)
-    req = requirement(package)
-    if not in_repo.is_path(package) and not locals().get("dist"):
+        req = requirement(package)
+    else:
+        req = requirement(package)
+        name = normalize_name(req.name)
+        if in_repo.has_folder(root, name):
+            raise Failure(
+                ExitCode.REFUSED,
+                f"the project keeps {name} in extensions/{name}; add it with "
+                f"`vecten extension add ./extensions/{name}`, so it is never fetched by name",
+            )
         dist = inspect_package(str(req), root)
     known = sorted({ep.group for ep in dist.entry_points if ep.group in GROUPS})
     unknown = sorted(

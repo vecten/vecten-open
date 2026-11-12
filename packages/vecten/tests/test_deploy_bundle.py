@@ -512,3 +512,14 @@ def test_the_bundle_carries_in_repo_extensions_without_build_output(project, tmp
         for n in names
         if n.startswith("extensions")
     )
+
+
+def test_build_output_is_skipped_only_at_an_extension_root(project, tmp_path):
+    ext = project / "extensions" / "acme-portal"
+    for kept in ("src/acme_portal/static/dist/app.js", "src/acme_portal/build/__init__.py"):
+        (ext / kept).parent.mkdir(parents=True, exist_ok=True)
+        (ext / kept).write_text("x")
+    (ext / "pyproject.toml").write_text("[project]\nname = 'acme-portal'\n")
+    names = members(build(project, tmp_path / "out"))
+    assert "extensions/acme-portal/src/acme_portal/static/dist/app.js" in names
+    assert "extensions/acme-portal/src/acme_portal/build/__init__.py" in names

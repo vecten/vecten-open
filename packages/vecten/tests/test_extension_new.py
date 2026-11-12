@@ -158,3 +158,51 @@ def test_the_cli_command_creates_and_reports(invoke, workdir, monkeypatch):
     r = invoke("extension", "new", "acme-portal", "--no-add", "--json")
     assert r.exit_code == 0, r.output
     assert json.loads(r.stdout)["path"] == "extensions/acme-portal"
+
+
+def test_build_output_and_the_template_file_are_skipped_only_at_the_template_root(
+    project, tmp_path
+):
+    source = template(tmp_path, requires=">=0.1")
+    nested = source / "src" / "__vecten_package__" / "static" / "dist"
+    nested.mkdir(parents=True)
+    (nested / "app.js").write_text("x")
+    (source / "src" / "__vecten_package__" / "vecten-template.toml").write_text("kept = true\n")
+    extension_new.new_extension(project, "acme-portal", template=str(source), add=False)
+    package = project / "extensions" / "acme-portal" / "src" / "acme_portal"
+    assert (package / "static" / "dist" / "app.js").is_file()
+    assert (package / "vecten-template.toml").is_file()
+    assert not (project / "extensions" / "acme-portal" / "dist").exists()
+
+
+def test_a_git_template_subdirectory_that_is_a_link_is_refused(project, tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("credentials")
+
+    def clone(url, ref, destination):
+        destination.mkdir(parents=True)
+        (destination / "template").symlink_to(outside)
+
+    monkeypatch.setattr(extension_new, "_clone", clone)
+    spec = "git+https://github.com/example/templates@v1#subdirectory=template"
+    with pytest.raises(Failure, match="link"):
+        extension_new.new_extension(project, "acme-bot", template=spec, add=False)
+    assert not (project / "extensions" / "acme-bot").exists()
+
+
+def test_a_failed_registration_removes_the_copy(project, monkeypatch):
+    def refuse(root, arg):
+        raise Failure(ExitCode.PREREQUISITE, "Docker is not reachable")
+
+    monkeypatch.setattr(extension_new, "add_extension", refuse)
+    with pytest.raises(Failure, match="Docker"):
+        extension_new.new_extension(project, "acme-portal")
+    assert not (project / "extensions" / "acme-portal").exists()
+
+
+@pytest.mark.parametrize("name", ["3d-portal", "import", "class"])
+def test_a_name_whose_package_is_not_a_python_identifier_is_refused(project, name):
+    with pytest.raises(Failure) as caught:
+        extension_new.new_extension(project, name, add=False)
+    assert caught.value.code == ExitCode.USAGE

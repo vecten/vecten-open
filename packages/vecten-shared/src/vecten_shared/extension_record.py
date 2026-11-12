@@ -70,7 +70,9 @@ def parse_record(text: str) -> dict[str, Extension] | None:
                 or not all(isinstance(e, str) for e in extras)
                 or not all(isinstance(s, str) for s in secrets)
                 or not (settings is None or isinstance(settings, dict))
-                or not (path is None or (isinstance(path, str) and isinstance(digest, str)))
+                # An in-repo extension lives in its own folder, never elsewhere in or outside
+                # the project.
+                or not (path is None or (path == f"extensions/{name}" and isinstance(digest, str)))
                 or not all(isinstance(b, str) for b in build)
             ):
                 return None

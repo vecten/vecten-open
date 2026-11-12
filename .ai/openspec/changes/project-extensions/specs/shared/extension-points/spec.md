@@ -33,7 +33,7 @@ An extension SHALL be resolved as an ordinary pip dependency, at the same versio
 
 ### Requirement: In-repo extensions are registered only from the project's extensions folder
 
-`vecten extension add <path>` SHALL accept a path only when, after normalising it, it names a directory exactly one level under `<project>/extensions/`, the argument holds no `..` component, neither the path nor anything under it is a symbolic link, and the directory's name equals the normalised distribution name in its `pyproject.toml`. That `pyproject.toml` SHALL declare `[build-system]` and a static `[project]` name and version. `vecten lock`, `up` and `ship` SHALL apply the same checks to every recorded in-repo extension. Any other path SHALL be refused with a message naming the rule it breaks.
+`vecten extension add <path>` SHALL accept a path only when, after normalising it, it names a directory exactly one level under `<project>/extensions/`, the argument holds no `..` component, neither the path nor anything under it is a symbolic link, and the directory's name equals the normalised distribution name in its `pyproject.toml`. That `pyproject.toml` SHALL declare `[build-system]` and a static `[project]` name, version, `dependencies`, `optional-dependencies`, `entry-points`, `scripts` and `gui-scripts`; none of them may be listed in `dynamic`. A name with a folder under `extensions/` SHALL never be installed or inspected by name from an index. `vecten lock`, `up` and `ship` SHALL apply the same checks to every recorded in-repo extension. Any other path SHALL be refused with a message naming the rule it breaks.
 
 #### Scenario: Register an in-repo extension
 

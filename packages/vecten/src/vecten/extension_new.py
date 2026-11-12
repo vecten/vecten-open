@@ -6,6 +6,7 @@ template is read once with the person's own git setup.
 
 from __future__ import annotations
 
+import keyword
 import os
 import re
 import shutil
@@ -25,7 +26,9 @@ from vecten_shared.versions import VERSIONS
 
 SKELETON = Path(__file__).parent / "extension_skeleton"
 TEMPLATE_FILE = "vecten-template.toml"
-SKIPPED = frozenset({".git", "__pycache__", ".venv", "dist", "build", TEMPLATE_FILE})
+SKIPPED = frozenset({".git", "__pycache__", ".venv"})
+# A build tool's output and the template's own description, at the template's root only.
+SKIPPED_AT_ROOT = frozenset({"dist", "build", TEMPLATE_FILE})
 # A normalised distribution name: what the directory and every record use.
 NAME = re.compile(r"[a-z0-9]([a-z0-9]|-(?=[a-z0-9]))*")
 
@@ -84,7 +87,14 @@ def _git_source(spec: str, temp: Path) -> Path:
         if key != "subdirectory" or relative.is_absolute() or ".." in relative.parts:
             raise Failure(ExitCode.USAGE, "the only fragment is #subdirectory=<path inside>")
     _clone(repository, ref, temp)
-    return temp / subdirectory if subdirectory else temp
+    source = temp / subdirectory if subdirectory else temp
+    # A link on the way to the template would copy files from outside the clone.
+    here = temp
+    for part in PurePosixPath(subdirectory).parts if subdirectory else ():
+        here = here / part
+        if here.is_symlink():
+            raise Failure(ExitCode.REFUSED, f"the template's {subdirectory} is a symbolic link")
+    return source
 
 
 def _check_template(source: Path) -> None:
@@ -107,7 +117,8 @@ def _check_template(source: Path) -> None:
 def _copy(source: Path, target: Path, values: dict[str, str]) -> None:
     for current, directories, files in os.walk(source):
         here = Path(current)
-        directories[:] = [d for d in directories if d not in SKIPPED]
+        skipped = SKIPPED | SKIPPED_AT_ROOT if here == source else SKIPPED
+        directories[:] = [d for d in directories if d not in skipped]
         for name in [*directories, *files]:
             if (here / name).is_symlink():
                 raise Failure(
@@ -118,7 +129,7 @@ def _copy(source: Path, target: Path, values: dict[str, str]) -> None:
         destination = target / _substitute(str(relative), values)
         destination.mkdir(parents=True, exist_ok=True)
         for name in files:
-            if name in SKIPPED:
+            if name in skipped:
                 continue
             path = destination / _substitute(name, values)
             data = (here / name).read_bytes()
@@ -132,11 +143,13 @@ def _copy(source: Path, target: Path, values: dict[str, str]) -> None:
 
 
 def new_extension(root: Path, name: str, *, template: str | None = None, add: bool = True) -> dict:
-    if not NAME.fullmatch(name):
+    package = name.replace("-", "_")
+    if not NAME.fullmatch(name) or not package.isidentifier() or keyword.iskeyword(package):
         raise Failure(
             ExitCode.USAGE,
-            f"{name!r} is not a normalised distribution name: lowercase letters, digits and "
-            "single hyphens, such as acme-portal",
+            f"{name!r} is not a normalised distribution name whose package Python can import: "
+            "lowercase letters, digits and single hyphens, starting with a letter, such as "
+            "acme-portal",
         )
     target = root / EXTENSIONS_DIR / name
     if target.exists():
@@ -158,5 +171,10 @@ def new_extension(root: Path, name: str, *, template: str | None = None, add: bo
     path = f"{EXTENSIONS_DIR}/{name}"
     result = {"name": name, "path": path, "registered": False}
     if add:
-        result |= {"registered": True, **add_extension(root, f"./{path}")}
+        try:
+            result |= {"registered": True, **add_extension(root, f"./{path}")}
+        except Failure:
+            # A refused registration leaves the project as it was, so the command can rerun.
+            shutil.rmtree(target)
+            raise
     return result

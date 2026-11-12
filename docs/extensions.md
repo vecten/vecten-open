@@ -87,8 +87,8 @@ checked and not copied. `--no-add` copies without registering.
 
 **Register one.** `vecten extension add ./extensions/acme-portal` accepts only a directory
 directly under `extensions/` whose name is the package's normalised name, with no `..` and no
-symbolic link anywhere under it, and a `pyproject.toml` with a static name and version and a
-`[build-system]`. `vecten.toml` lists `acme-portal`; `requirements.txt` holds
+symbolic link anywhere under it, and a `pyproject.toml` with a `[build-system]` and a static name, version, dependencies, extras and
+entry points: those decide what is locked and wired, and only this file is hashed. `vecten.toml` lists `acme-portal`; `requirements.txt` holds
 `./extensions/acme-portal`; `extensions.lock.json` records its path, version, the hash of its
 `pyproject.toml` and its build requirements, pinned. `vecten lock`, `up` and `ship` check the
 same rules again.

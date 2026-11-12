@@ -393,3 +393,11 @@ def test_a_stamped_lock_whose_body_breaks_its_inputs_is_refused(tmp_path, body):
     (tmp_path / "requirements-mcp.lock").write_text(f"{stamp}\n{body}")
     with pytest.raises(Failure, match="requirements-mcp.lock"):
         write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_an_unlocked_project_never_installs_an_in_repo_name_from_an_index(tmp_path):
+    from .test_in_repo import make
+
+    make(tmp_path)
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", config(extensions=["acme-portal"]), None)

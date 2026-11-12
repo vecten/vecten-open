@@ -125,3 +125,12 @@ def test_metadata_must_be_static_and_declare_its_build(tmp_path, text, said):
 def test_a_missing_directory_is_refused(tmp_path):
     with pytest.raises(Failure, match="acme-portal"):
         in_repo.check(tmp_path, "./extensions/acme-portal")
+
+
+@pytest.mark.parametrize(
+    "field", ["dependencies", "optional-dependencies", "entry-points", "scripts", "gui-scripts"]
+)
+def test_metadata_that_decides_resolution_or_wiring_must_be_static(tmp_path, field):
+    make(tmp_path, text=PYPROJECT.replace("[project]\n", f'[project]\ndynamic = ["{field}"]\n'))
+    with pytest.raises(Failure, match=field):
+        in_repo.check(tmp_path, "./extensions/acme-portal")

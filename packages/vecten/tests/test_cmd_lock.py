@@ -451,3 +451,38 @@ def test_a_registered_in_repo_extension_that_breaks_a_rule_stops_the_lock(invoke
     r = invoke("lock", "--json")
     assert r.exit_code != 0
     assert "symbolic link" in r.output
+
+
+def test_an_in_repo_extension_stays_in_repo_when_its_requirements_line_is_lost(
+    invoke, project, fakes
+):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    (project / "requirements.txt").write_text("")
+    assert invoke("lock").exit_code == 0
+    assert fakes["inspected"] == []
+    assert (project / "requirements.txt").read_text() == "./extensions/acme-portal\n"
+
+
+def test_adding_by_name_an_extension_kept_in_the_project_is_refused(invoke, project, fakes):
+    make(project)
+    r = invoke("extension", "add", "acme-portal", "--json")
+    assert r.exit_code != 0
+    assert "./extensions/acme-portal" in r.output
+    assert fakes["inspected"] == []
+
+
+def test_switching_requirements_to_an_index_pin_makes_the_locks_stale_and_relocks_by_name(
+    invoke, project, fakes
+):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    import shutil
+
+    shutil.rmtree(project / "extensions")
+    (project / "requirements.txt").write_text("acme-portal==0.1.0\n")
+    assert "requirements-airflow.lock" in locking.lock_problems(project, load_config(project))
+    fakes["packages"]["acme-portal"] = ("0.1.0", ())
+    assert invoke("lock").exit_code == 0
+    entry = json.loads((project / locking.RECORD_FILE).read_text())["extensions"]["acme-portal"]
+    assert "source" not in entry

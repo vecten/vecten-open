@@ -13,7 +13,7 @@ from vecten_shared.extensions import requirement
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
 from vecten_shared.requirements import parse_requirement
-from vecten_shared.versions import VERSIONS
+from vecten_shared.versions import VERSIONS, normalize_name
 
 LOCAL_AIRFLOW = "vecten-airflow"
 LOCAL_MCP = "vecten-mcp"
@@ -204,6 +204,19 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     records = [locking.PINS_FILE, locking.RECORD_FILE, *locking.LOCK_FILES.values()]
     records_exist = any((root / name).exists() for name in records)
     if not records_exist:
+        from vecten import in_repo
+
+        local = [
+            r
+            for r in map(parse_requirement, config.extensions)
+            if r and in_repo.has_folder(root, normalize_name(r.name))
+        ]
+        if local:
+            raise Failure(
+                ExitCode.REFUSED,
+                f"{local[0].name} is kept in extensions/ and installs only from locks; "
+                "run `vecten lock`",
+            )
         if any(config.dependencies.python(c) for c in locking.LOCK_FILES):
             raise Failure(
                 ExitCode.REFUSED,
