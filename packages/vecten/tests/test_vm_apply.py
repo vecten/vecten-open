@@ -165,6 +165,11 @@ class FakeRun:
         self.chains = set()
         self.iptables_fails = False
         self.systemctl_fails = False
+        # The volumes `docker compose config --volumes` names, and the (name, compose volume)
+        # rows `docker volume ls` lists for the project.
+        self.compose_volumes = []
+        self.volumes = []
+        self.volumes_fail = False
 
     def __call__(self, args, env=None, input=None):
         self.calls.append({"args": list(args), "env": dict(env or {}), "input": input})
@@ -180,6 +185,15 @@ class FakeRun:
         if args[:3] == ["docker", "buildx", "version"]:
             out = f"github.com/docker/buildx v{self.buildx_version} 0123abc\n"
             return subprocess.CompletedProcess(args, 0, out, "")
+        if args[:2] == ["docker", "compose"] and "config" in args:
+            return subprocess.CompletedProcess(
+                args, 0, "".join(f"{v}\n" for v in self.compose_volumes), ""
+            )
+        if args[:3] == ["docker", "volume", "ls"]:
+            if self.volumes_fail:
+                return subprocess.CompletedProcess(args, 1, "", "daemon gone")
+            rows = "".join("\t".join(row) + "\n" for row in self.volumes)
+            return subprocess.CompletedProcess(args, 0, rows, "")
         if args[:2] == ["docker", "ps"] and "--format" in args:
             if self.ps_fails:
                 return subprocess.CompletedProcess(args, 1, "", "daemon gone")
@@ -291,7 +305,9 @@ def resolves_here(hostname):
 
 def ship(agent, release, run, tmp_path):
     with_certs(agent, json.loads((release / ".vecten/ship/host.json").read_text())["hostnames"])
-    agent.ship(release, run, releases=release.parent, sleep=lambda s: None, resolve=resolves_here)
+    return agent.ship(
+        release, run, releases=release.parent, sleep=lambda s: None, resolve=resolves_here
+    )
 
 
 def test_agent_parses_as_python_3_9_and_imports_only_the_stdlib():
@@ -2081,3 +2097,51 @@ def test_a_stale_guard_agent_copy_is_replaced(agent, tmp_path):
         tmp_path,
     )
     assert agent.GUARD_AGENT.read_bytes() == APPLY.read_bytes()
+
+
+# Volumes of services the release does not run are reported, never removed.
+
+
+def test_ship_names_the_volumes_of_services_the_release_no_longer_runs(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform", **with_services())
+    run = FakeRun(store=seeded(out))
+    run.compose_volumes = ["pgdata", "svc-acme-bot-data"]
+    run.volumes = [
+        ("acme-prod_svc-acme-bot-data", "svc-acme-bot-data"),
+        ("acme-prod_svc-acme-old-data", "svc-acme-old-data"),
+        ("acme-prod_logs", "logs"),
+    ]
+    assert ship(agent, release, run, tmp_path) == ["acme-prod_svc-acme-old-data"]
+    (listing,) = run.argv("docker", "volume", "ls")
+    assert (
+        "label=com.docker.compose.project="
+        + json.loads((release / ".vecten/ship/host.json").read_text())["compose_project"]
+        in listing
+    )
+    assert not [c for c in run.calls if c["args"][:3] == ["docker", "volume", "rm"]]
+
+
+def test_a_host_whose_last_service_went_still_names_its_volume(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform")
+    run = FakeRun(store=seeded(out))
+    run.volumes = [("acme-prod_svc-acme-bot-data", "svc-acme-bot-data")]
+    assert ship(agent, release, run, tmp_path) == ["acme-prod_svc-acme-bot-data"]
+
+
+def test_a_failed_volume_listing_fails_no_ship(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform")
+    run = FakeRun(store=seeded(out))
+    run.volumes_fail = True
+    assert ship(agent, release, run, tmp_path) == []
+
+
+def test_main_prints_each_orphaned_volume_after_a_ship(agent, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(agent, "ship", lambda release, run: ["p_svc-a-data", "p_svc-b-data"])
+    assert agent.main(["ship", "--release", str(tmp_path)]) == 0
+    assert capsys.readouterr().err.splitlines() == [
+        "vecten agent volume: p_svc-a-data",
+        "vecten agent volume: p_svc-b-data",
+    ]

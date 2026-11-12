@@ -335,8 +335,18 @@ def _deploy(
     if identity_pending(config, env):
         return {**data, "hosts": [], "ship_skipped": identity_pending_note(env)}
     hosts = plane.ship_hosts(project_root, config, env, outputs, commit)
-    report = service_report(config, read_extension_record(project_root) or {}, outputs)
+    report = _services_after_ship(plane, project_root, config, outputs)
     return {**data, "hosts": hosts, **report}
+
+
+def _services_after_ship(
+    plane: ControlPlane, project_root: Path, config: VectenConfig, outputs: EnvironmentOutputs
+) -> dict:
+    """What the ship found about services: their states, the routes waiting for a deploy and
+    the volumes of services each host no longer runs."""
+    report = service_report(config, read_extension_record(project_root) or {}, outputs)
+    orphaned = {host: names for host, names in plane.orphaned_volumes.items() if names}
+    return {**report, "orphaned_volumes": orphaned} if orphaned else report
 
 
 def ship_env(
@@ -371,7 +381,7 @@ def ship_env(
         return {**data, "ship_skipped": identity_pending_note(env)}
     outputs = fetch_outputs(plane)
     hosts = plane.ship_hosts(project_root, config, env, outputs, commit)
-    report = service_report(config, read_extension_record(project_root) or {}, outputs)
+    report = _services_after_ship(plane, project_root, config, outputs)
     return {"env": env, "dispatched": False, "commit": commit, "hosts": hosts, **report}
 
 

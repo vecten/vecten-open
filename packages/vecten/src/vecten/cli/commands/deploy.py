@@ -45,6 +45,11 @@ def _service_lines(data: dict) -> list[str]:
             f"routes waiting for `vecten deploy --env {data['env']}`: "
             + ", ".join(data["waiting_routes"])
         )
+    lines += [
+        f"volumes of services no longer bound on {host}: {', '.join(names)}; they keep their "
+        "data until removed on the VM"
+        for host, names in data.get("orphaned_volumes", {}).items()
+    ]
     return lines
 
 

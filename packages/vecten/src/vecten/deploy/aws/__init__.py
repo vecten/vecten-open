@@ -144,6 +144,10 @@ class AwsProvider(AwsRuntimeProvider):
     # RDS deletion protection, which the module sets in prod, refuses a database deletion.
     guarded_resources: tuple[str, ...] = ()
 
+    def __init__(self, project_root: Path, env: str):
+        super().__init__(project_root, env)
+        self.orphaned_volumes: dict[str, list[str]] = {}
+
     def _client(self, service: str) -> Any:
         if service not in self._clients:
             self._clients[service] = clients.client(service, self.region())
@@ -475,6 +479,7 @@ class AwsProvider(AwsRuntimeProvider):
         """Build and ship one bundle per host, setup host first; stops at the first failure."""
         self._check_env(env)
         shipped: list[str] = []
+        self.orphaned_volumes = {}
         metadata = prepare_bundle_metadata(
             project_root,
             config,
@@ -486,7 +491,7 @@ class AwsProvider(AwsRuntimeProvider):
                 bundle = build_host_bundle(
                     project_root, config, env, outputs, host, commit, Path(tmp), metadata=metadata
                 )
-                self.ship_host(host, bundle, commit)
+                self.orphaned_volumes[host] = self.ship_host(host, bundle, commit)
                 shipped.append(host)
         return shipped
 
@@ -579,8 +584,8 @@ class AwsProvider(AwsRuntimeProvider):
             bundle = build_host_bundle(project_dir, config, env, outputs, host, commit, Path(tmp))
             self.ship_host(host, bundle, commit)
 
-    def ship_host(self, host: str, bundle: Path, commit: str) -> None:
-        ship_host(self, host, bundle, commit)
+    def ship_host(self, host: str, bundle: Path, commit: str) -> list[str]:
+        return ship_host(self, host, bundle, commit)
 
 
 def register() -> None:

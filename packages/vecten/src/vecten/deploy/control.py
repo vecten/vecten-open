@@ -128,6 +128,9 @@ class ControlPlane(Protocol):
     to change one; such a plan compares the configuration with the stored state."""
     project_root: Path
     env: str
+    orphaned_volumes: dict[str, list[str]]
+    """Per host, the service volumes its agent named as no longer declared, set by each
+    `ship_hosts` run."""
 
     admin_grants: tuple[str, ...]
     """The roles `user add-admin` grants an admin login on the warehouse instance; each one

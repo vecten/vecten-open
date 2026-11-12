@@ -462,3 +462,53 @@ def test_a_ship_without_services_reports_none(invoke, project, monkeypatch):
         r = invoke("ship", "--env", "prod", "--json")
     assert r.exit_code == 0, r.stdout
     assert "services" not in doc(r) and "waiting_routes" not in doc(r)
+
+
+# Volumes of services a host does not run, as each host's agent names them.
+
+
+def test_an_aws_ship_reports_the_volumes_each_agent_named(invoke, project, monkeypatch):
+    aws_credentials(monkeypatch, project)
+    set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    stderr = (
+        "vecten agent volume: acme-prod_svc-acme-old-data\n"
+        "vecten agent volume: bad name; rm -rf /\n"
+    )
+    ssm = FakeSsm(results={("i-0platform", "ship"): ("Success", stderr)})
+    with mock_aws():
+        s3 = boto3.client("s3", region_name=REGION)
+        for bucket in (BUCKET, STATE_BUCKET):
+            s3.create_bucket(
+                Bucket=bucket, CreateBucketConfiguration={"LocationConstraint": REGION}
+            )
+        s3.put_object(
+            Bucket=STATE_BUCKET, Key="prod/outputs.json", Body=json.dumps(STANDARD_OUTPUTS)
+        )
+        real = clients.client
+        monkeypatch.setattr(
+            clients, "client", lambda svc, region: ssm if svc == "ssm" else real(svc, region)
+        )
+        monkeypatch.setattr(ship_mod, "poll", lambda url, timeout, **kw: True)
+        r = invoke("ship", "--env", "prod", "--json")
+        text = invoke("ship", "--env", "prod")
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["orphaned_volumes"] == {"platform": ["acme-prod_svc-acme-old-data"]}
+    assert (
+        "volumes of services no longer bound on platform: acme-prod_svc-acme-old-data"
+        in text.stdout
+    )
+
+
+def test_a_scaleway_ship_reports_the_volumes_its_watcher_named(invoke, scaleway):
+    scaleway.watcher.volumes[("platform", COMMIT)] = ["acme-prod_svc-acme-old-data", 7]
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["orphaned_volumes"] == {"platform": ["acme-prod_svc-acme-old-data"]}
+
+
+def test_a_ship_whose_agents_name_no_volume_reports_none(invoke, scaleway):
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert "orphaned_volumes" not in doc(r)

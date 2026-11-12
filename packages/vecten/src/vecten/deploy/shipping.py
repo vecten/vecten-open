@@ -24,6 +24,9 @@ FETCH_TIMEOUT = 10
 # The VM agent prefixes compose's last output and each failing container's log line with
 # this; the lines quote what they printed, so they are redacted again here and capped.
 AGENT_LOG_PREFIX = "vecten agent log: "
+# The agent names on this prefix each service volume its release does not declare.
+AGENT_VOLUME_PREFIX = "vecten agent volume: "
+_VOLUME_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}")
 LOG_LINE_LIMIT = 300
 LOG_LINES_MAX = 40
 _UNPRINTABLE = re.compile(r"[^\x20-\x7e]")
@@ -193,3 +196,18 @@ def service_report(
         healthy = poll(url, SERVICE_WINDOW, healthy=service_healthy)
         states[service.key] = HEALTHY if healthy else UNHEALTHY
     return {"services": states, "waiting_routes": waiting}
+
+
+def volume_names(values: Iterable[object]) -> list[str]:
+    """The orphaned volumes a VM named; its output is not trusted, so only what can be a
+    Docker volume name passes."""
+    names = {v for v in values if isinstance(v, str) and _VOLUME_NAME.fullmatch(v)}
+    return sorted(names)[:LOG_LINES_MAX]
+
+
+def agent_volumes(stderr: str) -> list[str]:
+    return volume_names(
+        line[len(AGENT_VOLUME_PREFIX) :]
+        for line in stderr.splitlines()
+        if line.startswith(AGENT_VOLUME_PREFIX)
+    )
