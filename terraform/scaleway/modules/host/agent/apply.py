@@ -109,6 +109,11 @@ LEGACY_OUTPUT_KEYS = ("bucket", "secret_prefix")
 # What the watcher needs before any release exists on the host; user data writes it.
 WATCH_KEYS = ("host", "components", "bucket", "region", "project_id", "secret_prefix")
 
+# Each cloud's instance metadata address, where an instance role or user data is served.
+METADATA_ADDRESSES = {"aws": "169.254.169.254", "scaleway": "169.254.42.42"}
+# A Linux interface name; it is an iptables argument, so it may not start with `-`.
+_INTERFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}")
+
 # The metadata server answers user data only to a request from a source port below 1024.
 METADATA_KEY_URL = "http://169.254.42.42/user_data/vecten-key"
 PRIVILEGED_PORTS = range(1, 1024)
@@ -808,6 +813,13 @@ def secret_env(
         )
     if "mcp" in components:
         env["MCP_STATE_DB_PASSWORD"] = _required(backend, "MCP_STATE_DB_PASSWORD")
+    requested = set(env) | set(host["connector_secrets"] if "platform" in components else ())
+    # Optional like connector secrets: an unset name reaches its service empty.
+    for name in host["service_secrets"]:
+        if name not in requested:
+            value = backend.read_secret(name)
+            if value is not None:
+                env[name] = value
     if host.get("private_package_index", False):
         if "platform" in components:
             env["PACKAGE_INDEX_URL"] = _required(backend, "PACKAGE_INDEX_URL")
@@ -860,6 +872,31 @@ def stack_env(host: dict, key: tuple[str, str] | None = None) -> dict[str, str]:
             }
         )
     return env
+
+
+def isolate_services(host: dict, run: Run) -> None:
+    """Keep containers on the services bridge off the metadata address, before they start.
+
+    A reboot clears the rule, so boot inserts it again; `-C` first keeps one rule however
+    often this runs.
+    """
+    bridge = host["service_network"]
+    if not bridge:
+        return
+    if not _INTERFACE.fullmatch(bridge):
+        raise AgentError(f"service_network {bridge!r} is no interface name")
+    address = METADATA_ADDRESSES.get(host["cloud"])
+    if address is None:
+        raise AgentError(f"no metadata address known for cloud {host['cloud']!r}")
+    rule = ["DOCKER-USER", "-i", bridge, "-d", address, "-j", "DROP"]
+    # `-w` waits for the xtables lock dockerd may hold instead of failing at once.
+    if run(["iptables", "-w", "-C", *rule]).returncode == 0:
+        return
+    result = run(["iptables", "-w", "-I", *rule])
+    if result.returncode != 0:
+        raise AgentError(
+            f"inserting the DOCKER-USER rule for {bridge} failed (exit {result.returncode})"
+        )
 
 
 def scram_verifier(password: str, salt: bytes | None = None) -> str:
@@ -1231,6 +1268,8 @@ def _start(
             sleep(BOOT_RETRY_SECONDS)
     injected = _injected(env, backend)
     log = container_log_excerpt(host, run, injected) if excerpt else []
+    with step("service isolation"):
+        isolate_services(host, run)
     try:
         with step("compose up"):
             stack = stack_env(host, backend.container_key)
@@ -1268,6 +1307,8 @@ def ship(
     try:
         with step("run files"):
             write_run_files(host, env, run_dir or RUN_DIR)
+        with step("service isolation"):
+            isolate_services(host, run)
     except AgentError:
         # The certificate step may have stopped NGINX, and the running release still serves.
         _ensure_nginx(host, run)

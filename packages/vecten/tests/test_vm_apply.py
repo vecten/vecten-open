@@ -93,7 +93,7 @@ def outputs(shape):
     }
 
 
-def host_doc(out, name, commit="c1", connector_secrets=()):
+def host_doc(out, name, commit="c1", connector_secrets=(), **services):
     h = out["hosts"][name]
     return {
         "host": name,
@@ -117,6 +117,7 @@ def host_doc(out, name, commit="c1", connector_secrets=()):
         "postgres_image": f"postgres:{VERSIONS.postgres_major}",
         "airflow_parallelism": 16,
         "mcp_pool_cap": 20,
+        **services,
     }
 
 
@@ -158,12 +159,16 @@ class FakeRun:
         self.logs = dict(logs or {})
         self.ps_fails = False
         self.downloads = {}
+        self.rules = set()
+        self.iptables_fails = False
 
     def __call__(self, args, env=None, input=None):
         self.calls.append({"args": list(args), "env": dict(env or {}), "input": input})
         ok = subprocess.CompletedProcess(args, 0, "", "")
         if args[0] == "aws":
             return self._aws(args, input)
+        if args[0] == "iptables":
+            return self._iptables(args)
         if args[:3] == ["docker", "compose", "version"]:
             return subprocess.CompletedProcess(args, 0, f"{self.compose_version}\n", "")
         if args[:3] == ["docker", "buildx", "version"]:
@@ -186,6 +191,15 @@ class FakeRun:
             url = args[-1]
             dest.write_bytes(self.downloads.get(url, b""))
         return ok
+
+    def _iptables(self, args):
+        rule = tuple(args[3:])
+        if args[2] == "-C":
+            return subprocess.CompletedProcess(args, 0 if rule in self.rules else 1, "", "")
+        if self.iptables_fails:
+            return subprocess.CompletedProcess(args, 4, "", "can't initialize iptables table")
+        self.rules.add(rule)
+        return subprocess.CompletedProcess(args, 0, "", "")
 
     def _aws(self, args, input):
         op = args[args.index("secretsmanager") + 1]
@@ -1717,3 +1731,187 @@ def test_private_package_index_read_is_component_scoped(agent, tmp_path, compone
     assert env[secret] == f"value-of-{secret}"
     other = "MCP_PACKAGE_INDEX_URL" if component == "platform" else "PACKAGE_INDEX_URL"
     assert other not in env
+
+
+BRIDGE = "vecten-services"
+AWS_DROP = ("DOCKER-USER", "-i", BRIDGE, "-d", "169.254.169.254", "-j", "DROP")
+
+
+def with_services(secrets=()):
+    """The host.json keys of a host that runs services declaring `secrets`."""
+    return {"service_network": BRIDGE, "service_secrets": list(secrets)}
+
+
+def kinds(run):
+    """The isolation and compose calls, in order."""
+    found = []
+    for call in run.calls:
+        args = call["args"]
+        if args[0] == "iptables":
+            found.append(f"iptables {args[2]}")
+        elif call in compose_calls(run):
+            found.append("compose up")
+    return found
+
+
+def test_ship_drops_the_services_bridge_to_the_metadata_address_before_compose(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform", **with_services())
+    run = FakeRun(store=seeded(out))
+    ship(agent, release, run, tmp_path)
+    assert kinds(run) == ["iptables -C", "iptables -I", "compose up"]
+    (insert,) = [c["args"] for c in run.calls if c["args"][:3] == ["iptables", "-w", "-I"]]
+    assert tuple(insert[3:]) == AWS_DROP
+
+
+def test_a_rule_already_in_place_is_not_inserted_twice(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform", **with_services())
+    run = FakeRun(store=seeded(out))
+    run.rules.add(AWS_DROP)
+    ship(agent, release, run, tmp_path)
+    assert kinds(run) == ["iptables -C", "compose up"]
+
+
+def test_on_scaleway_the_rule_drops_its_metadata_address(agent):
+    run = FakeRun()
+    host = {"cloud": "scaleway", "service_network": BRIDGE}
+    agent.isolate_services(host, run)
+    assert run.rules == {("DOCKER-USER", "-i", BRIDGE, "-d", "169.254.42.42", "-j", "DROP")}
+
+
+def test_a_host_without_services_runs_no_iptables(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform")
+    run = FakeRun(store=seeded(out))
+    ship(agent, release, run, tmp_path)
+    assert run.argv("iptables") == []
+
+
+@pytest.mark.parametrize("bridge", ["-j", "vecten services", "a" * 16, "x/y"])
+def test_a_bridge_name_that_is_no_interface_name_is_refused(agent, bridge):
+    run = FakeRun()
+    with pytest.raises(agent.AgentError, match="interface name"):
+        agent.isolate_services({"cloud": "aws", "service_network": bridge}, run)
+    assert run.calls == []
+
+
+def test_a_failed_rule_fails_the_ship_and_leaves_the_running_release(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    first = stage(releases, out, "platform", commit="c1")
+    run = FakeRun(store=seeded(out), nginx_ids="ngx1\n")
+    ship(agent, first, run, tmp_path)
+    second = stage(releases, out, "platform", commit="c2", **with_services())
+    run.calls.clear()
+    run.iptables_fails = True
+    with pytest.raises(agent.AgentError) as exc:
+        ship(agent, second, run, tmp_path)
+    assert str(exc.value).startswith("service isolation: ")
+    assert "(exit 4)" in str(exc.value)
+    assert compose_calls(run) == []
+    assert os.readlink(releases / "current") == str(first.resolve())
+    # The certificate step may have stopped NGINX; the running release must keep serving.
+    assert nginx_starts(run) == [["docker", "start", "ngx1"]]
+
+
+def test_main_names_the_isolation_step(agent, tmp_path, capsys, monkeypatch):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform", **with_services())
+    with_certs(agent, [f"airflow.{DOMAIN}"])
+    monkeypatch.setattr(agent, "RELEASES", tmp_path / "releases")
+    run = FakeRun(store=seeded(out))
+    run.iptables_fails = True
+    assert agent.main(["ship", "--release", str(release)], run=run) == 1
+    (line,) = capsys.readouterr().err.strip().splitlines()
+    assert line.startswith("vecten agent ship: service isolation: ")
+
+
+def test_boot_restores_the_rule_before_it_starts_the_stack(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    release = stage(releases, out, "platform", **with_services())
+    ship(agent, release, FakeRun(store=seeded(out)), tmp_path)
+    # A reboot clears every iptables rule.
+    run = FakeRun(store=seeded(out))
+    agent.boot(releases, run)
+    assert kinds(run) == ["iptables -C", "iptables -I", "compose up"]
+
+
+def test_a_failed_rule_at_boot_starts_nothing(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    release = stage(releases, out, "platform", **with_services())
+    ship(agent, release, FakeRun(store=seeded(out)), tmp_path)
+    run = FakeRun(store=seeded(out))
+    run.iptables_fails = True
+    with pytest.raises(agent.AgentError, match="^service isolation: "):
+        agent.boot(releases, run)
+    assert compose_calls(run) == []
+
+
+def test_rollback_isolates_a_previous_release_that_runs_services(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    run = FakeRun(store=seeded(out))
+    ship(
+        agent,
+        stage(releases, out, "platform", "c1", **with_services()),
+        run,
+        tmp_path,
+    )
+    ship(agent, stage(releases, out, "platform", commit="c2"), run, tmp_path)
+    fresh = FakeRun(store=seeded(out))
+    agent.rollback(releases, fresh)
+    assert kinds(fresh) == ["iptables -C", "iptables -I", "compose up"]
+
+
+def test_rollback_to_a_release_from_before_services_installs_no_rule(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    run = FakeRun(store=seeded(out))
+    ship(agent, legacy(stage(releases, out, "platform", commit="c1")), run, tmp_path)
+    ship(
+        agent,
+        stage(releases, out, "platform", "c2", **with_services()),
+        run,
+        tmp_path,
+    )
+    fresh = FakeRun(store=seeded(out))
+    agent.rollback(releases, fresh)
+    assert fresh.argv("iptables") == [] and len(compose_calls(fresh)) == 1
+
+
+def test_service_secrets_reach_compose_from_their_scope(agent, tmp_path):
+    out = outputs("standard")
+    services = with_services(("MCP_ACME_TOKEN",))
+    release = stage(tmp_path / "releases", out, "mcp", **services)
+    store = seeded(out, extra=("MCP_ACME_TOKEN",))
+    run = FakeRun(store=store)
+    ship(agent, release, run, tmp_path)
+    (up,) = compose_calls(run)
+    assert up["env"]["MCP_ACME_TOKEN"] == "value-of-MCP_ACME_TOKEN"
+    read = [c["args"] for c in run.calls if "get-secret-value" in c["args"]]
+    assert f"{PREFIX}mcp/MCP_ACME_TOKEN" in [a[a.index("--secret-id") + 1] for a in read]
+    assert not [c for c in run.calls if "value-of-MCP_ACME_TOKEN" in " ".join(c["args"])]
+
+
+def test_an_unset_service_secret_stays_unset(agent, tmp_path):
+    out = outputs("standard")
+    services = with_services(("ACME_BOT_TOKEN",))
+    release = stage(tmp_path / "releases", out, "platform", **services)
+    run = FakeRun(store=seeded(out))
+    ship(agent, release, run, tmp_path)
+    (up,) = compose_calls(run)
+    assert "ACME_BOT_TOKEN" not in up["env"]
+
+
+def test_a_service_secret_is_masked_in_compose_output(agent, tmp_path):
+    out = outputs("standard")
+    services = with_services(("ACME_BOT_TOKEN",))
+    release = stage(tmp_path / "releases", out, "platform", "c1", **services)
+    stderr = "svc-acme-bot: bad token value-of-ACME_BOT_TOKEN\n"
+    fake = FakeRun(store=seeded(out, extra=("ACME_BOT_TOKEN",)))
+    with pytest.raises(agent.AgentError) as exc:
+        ship(agent, release, FailingUpWith(fake, stderr), tmp_path)
+    assert exc.value.log[-1] == "compose: svc-acme-bot: bad token ***"
