@@ -231,7 +231,7 @@ def test_snowflake_sources_name_the_database_the_root_creates(project, database)
 
     config = SimpleNamespace(
         project=SimpleNamespace(name=project),
-        warehouse=SimpleNamespace(kind="snowflake", database=database),
+        warehouse=SimpleNamespace(kind="snowflake", database=database, account=None),
     )
     created = snowflake_names(config, "prod").database
     assert dataset_database(config).upper() == created
