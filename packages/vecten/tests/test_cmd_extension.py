@@ -127,6 +127,27 @@ def test_upgrade_changes_only_dependency_records(invoke, project, monkeypatch):
     assert "acme-demo==2.0.0\n" in lock_body(project / "requirements.lock")
 
 
+def test_index_adds_print_what_they_printed_before_git_sources(invoke, project, monkeypatch):
+    from vecten import extensions
+
+    installer(monkeypatch)
+    first = invoke("extension", "add", "acme-demo==1.2.0")
+    again = invoke("extension", "add", "acme-demo==1.2.0")
+    monkeypatch.setattr(
+        extensions,
+        "inspect_package",
+        lambda *args: extensions.PackageMetadata(
+            name="acme-demo", version="2.0.0", entry_points=(SimpleNamespace(group="vecten.dags"),)
+        ),
+    )
+    upgraded = invoke("extension", "add", "acme-demo[cli]==2.0.0")
+    assert [r.stdout for r in (first, again, upgraded)] == [
+        "installed acme-demo==1.2.0\n",
+        "installed acme-demo==1.2.0\n",
+        "installed acme-demo[cli]==2.0.0\n",
+    ]
+
+
 def test_resolution_and_installation_keep_release_constraints(tmp_path, monkeypatch):
     from pathlib import Path
 

@@ -481,6 +481,16 @@ def _register(root):
     (root / "requirements.txt").write_text("./extensions/acme-portal\n")
 
 
+def test_an_in_repo_version_bump_prints_what_it_printed_before_git_sources(invoke, project, fakes):
+    path = make(project)
+    assert invoke("extension", "add", "./extensions/acme-portal").exit_code == 0
+    text = (path / "pyproject.toml").read_text().replace('version = "0.1.0"', 'version = "0.2.0"')
+    (path / "pyproject.toml").write_text(text)
+    r = invoke("extension", "add", "./extensions/acme-portal")
+    assert r.exit_code == 0, r.output
+    assert r.stdout == "installed ./extensions/acme-portal\n"
+
+
 def test_extension_add_registers_an_in_repo_extension_by_its_path(invoke, project, fakes):
     make(project)
     r = invoke("extension", "add", "./extensions/acme-portal", "--json")

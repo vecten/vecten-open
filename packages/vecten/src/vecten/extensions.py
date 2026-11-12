@@ -903,6 +903,7 @@ def _add_extension(root: Path, package: str, fetched: Path) -> dict:
     except ValidationError as exc:
         raise Failure(ExitCode.CONFIG, f"binding the services of {name}: {exc}") from None
     check_bindings(bound, record)
+    changed = _differs({root / "vecten.toml": text, **files})
     write_project_files({root / "vecten.toml": text, **files})
     if dist.git is not None:
         pinned = git_extensions.root_line(name, req.extras, dist.git.origin)
@@ -924,7 +925,7 @@ def _add_extension(root: Path, package: str, fetched: Path) -> dict:
             else {}
         ),
         "previous": _origin(previous),
-        "changed": _origin(previous) != _origin(entry),
+        "changed": changed,
     }
 
 
@@ -1013,20 +1014,46 @@ def services_message(data: dict) -> list[str]:
 
 
 def source_changes(data: dict) -> list[str]:
-    """Lines naming how `extension add` changed where an extension comes from."""
+    """Lines naming how `extension add` changed a git source, or switched to or from one;
+    nothing for an extension that is not from git before or after."""
     previous, source = data.get("previous"), data.get("source")
-    if previous is None:
+    if previous is None or (previous["kind"] != "git" and source is None):
         return []
-    if not data.get("changed"):
-        return [f"already recorded at {source['commit']}; nothing changed"] if source else []
-    if previous["kind"] != "git" or source is None:
-        now = "git" if source else ("a path" if data["package"].startswith("./") else "the index")
-        was = {"git": "git", "path": "a path", "index": "the index"}[previous["kind"]]
-        return [f"switched from {was} (version {previous['version']}) to {now}"]
-    lines = [f"previous commit {previous['commit']}, now {source['commit']}"]
-    if source["tag"] and source["tag"] == previous["tag"] and source["url"] == previous["url"]:
-        lines.append(f"the tag {source['tag']} moved since it was recorded")
+    if source is None:
+        now = "a path" if data["package"].startswith("./") else "the index"
+        return [f"switched from git (commit {previous['commit']}) to {now}"]
+    if previous["kind"] != "git":
+        was = "the index" if previous["kind"] == "index" else "a path"
+        return [f"switched from {was} (version {previous['version']}) to git"]
+    if previous["commit"] != source["commit"]:
+        lines = [f"previous commit {previous['commit']}, now {source['commit']}"]
+        if source["tag"] and (source["url"], source["tag"]) == (previous["url"], previous["tag"]):
+            lines.append(f"the tag {source['tag']} moved since it was recorded")
+        return lines
+    if not data["changed"]:
+        return [f"already recorded at {source['commit']}; nothing changed"]
+    lines = [f"still at commit {source['commit']}"]
+    if source["public"] != previous["public"]:
+        lines.append(
+            "the repository now answers without a credential"
+            if source["public"]
+            else "the repository now needs a credential"
+        )
     return lines
+
+
+def _differs(files: dict[Path, str | Path | None]) -> bool:
+    """Whether writing `files` would change anything under the project."""
+    for path, content in files.items():
+        if isinstance(content, Path):
+            if not path.is_symlink() or Path(os.readlink(path)) != content:
+                return True
+        elif content is None:
+            if path.exists() or path.is_symlink():
+                return True
+        elif not path.is_file() or path.read_text(encoding="utf-8") != content:
+            return True
+    return False
 
 
 def secrets_message(missing: list[str], undelivered: list[str]) -> list[str]:

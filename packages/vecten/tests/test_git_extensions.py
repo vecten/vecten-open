@@ -484,6 +484,47 @@ def test_re_adding_a_moved_tag_records_the_new_commit_and_says_it_moved(invoke, 
         served.commits.move("moving", old)
 
 
+def test_a_repository_that_turned_private_is_not_reported_as_a_moved_tag(invoke, served):
+    served.server.public.add(REPOSITORY)
+    try:
+        assert _add(invoke, served, "acme-resolution/v1.2.0").exit_code == 0
+    finally:
+        served.server.public.discard(REPOSITORY)
+    r = invoke("extension", "add", _source(served, "acme-resolution/v1.2.0"))
+    assert r.exit_code == 0, r.output
+    assert "moved" not in r.output
+    assert "nothing changed" not in r.output
+    assert "credential" in r.output
+    entry = json.loads((served.root / locking.RECORD_FILE).read_text())["extensions"][NAME]
+    assert entry["source"]["public"] is False
+
+
+def test_adding_extras_to_a_git_source_is_not_reported_as_unchanged(invoke, served):
+    assert _add(invoke, served, "acme-resolution/v1.2.0").exit_code == 0
+    extras = _source(served, "acme-resolution/v1.2.0").replace(NAME, f"{NAME}[cli]", 1)
+    r = invoke("extension", "add", extras, "--json")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["changed"] is True
+    r = invoke("extension", "add", extras)
+    assert "nothing changed" in r.output
+
+
+def test_switching_between_sources_is_reported(invoke, served, monkeypatch):
+    monkeypatch.setattr(
+        extensions,
+        "inspect_package",
+        lambda package, root: extensions.PackageMetadata(
+            NAME, "1.5.0", (SimpleNamespace(group="vecten.dags"),), ("platform",)
+        ),
+    )
+    assert invoke("extension", "add", f"{NAME}==1.5.0").exit_code == 0
+    r = invoke("extension", "add", _source(served, "acme-resolution/v1.2.0"))
+    assert "switched from the index (version 1.5.0) to git" in r.output
+    r = invoke("extension", "add", f"{NAME}==1.5.0")
+    commit = served.commits.commits["acme-resolution/v1.2.0"]
+    assert f"switched from git (commit {commit}) to the index" in r.output
+
+
 def test_a_moved_tag_does_not_change_a_relock(invoke, served):
     assert _add(invoke, served, "moving").exit_code == 0
     old = served.commits.commits["moving"]
