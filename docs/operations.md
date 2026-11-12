@@ -183,7 +183,8 @@ two environments, each with its own `deploy/envs/<env>.tfvars`, without repeats,
 
 - **A merge ships the first environment.** The rendered `ship.yml` reads the order from the
   pushed commit when it runs, so changing the order needs no re-render. `vecten github push`
-  follows that ship and then names `vecten promote --env <next env>`.
+  follows that ship and then, once the next environment is deployed, names
+  `vecten promote --env <next env>`.
 - **A later environment ships only by promotion.** `vecten promote --env prod` ships `prod`
   the commit `dev` shipped last. `vecten ship --env prod` from the laptop refuses and names
   `promote`. `vecten deploy --env prod` applies `prod`'s Terraform roots and ships from that

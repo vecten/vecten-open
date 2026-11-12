@@ -294,7 +294,7 @@ def test_a_push_with_an_order_ships_dev_and_names_the_promotion_to_prod(
     invoke, project, monkeypatch
 ):
     fake = ShipGh()
-    deploy_in_order(invoke, project, fake, monkeypatch, deployed=("dev",))
+    deploy_in_order(invoke, project, fake, monkeypatch, deployed=("dev", "prod"))
     r = invoke("github", "push", "--json")
     assert r.exit_code == 0, r.stdout
     doc = json.loads(r.stdout)
@@ -327,3 +327,13 @@ def test_a_push_without_an_order_names_no_promotion(invoke, project, monkeypatch
     text = invoke("github", "push")
     assert text.exit_code == 0, text.stdout
     assert text.stdout.strip().endswith(f"shipped: {SHIP_URL}")
+
+
+def test_a_push_names_no_promotion_to_an_environment_never_deployed(invoke, project, monkeypatch):
+    fake = ShipGh()
+    deploy_in_order(invoke, project, fake, monkeypatch, deployed=("dev",))
+    r = invoke("github", "push", "--json")
+    assert r.exit_code == 0, r.stdout
+    doc = json.loads(r.stdout)
+    assert doc["ship"] == {"run_url": SHIP_URL, "conclusion": "success"}
+    assert doc["promote"] is None

@@ -443,6 +443,7 @@ def test_guide_evals_sign_in_with_a_password_link():
         "run `vecten promote --env <next env>` only on their explicit yes",
         "`vecten promote` without their yes to promoting",
         "`next` never asks about an order",
+        "as the way on, once the next environment is deployed",
     ],
 )
 def test_guide_walks_the_promotion_order(phrase):

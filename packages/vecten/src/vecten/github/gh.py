@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 from vecten.cli.injection import load_runner
-from vecten_shared.config import load_config
+from vecten_shared.config import VectenConfig, load_config
 from vecten_shared.output import ExitCode, Failure
 
 # The ship workflow `init` renders runs on pushes to this branch only.
@@ -135,6 +135,11 @@ def _remote_head(git: ToolRunner, project_root: Path, branch: str) -> str | None
     return r.stdout.strip() if r.returncode == 0 else None
 
 
+def _deployed(config: VectenConfig, env: str) -> bool:
+    facts = config.environments.get(env)
+    return facts is not None and bool(facts.deployed_commit)
+
+
 def github_push(
     project_root: Path, gh: ToolRunner, git: ToolRunner, message: str, *, wait: bool = True
 ) -> dict:
@@ -151,8 +156,7 @@ def github_push(
     repo = config.deploy.github_repository if config.deploy else None
     # The ship workflow ships the order's first environment, and only once it is deployed.
     order = config.promotion_order()
-    first = config.environments.get(order[0])
-    deployed = first is not None and bool(first.deployed_commit)
+    deployed = _deployed(config, order[0])
     ship = None
     promote = None
     # The ship workflow runs on pushes to main only, and a push that moved nothing starts none.
@@ -160,7 +164,8 @@ def github_push(
         from vecten.deploy.github_env import follow_push_run
 
         ship = follow_push_run(gh, project_root, repo, SHIP_WORKFLOW, commit)
-        if len(order) > 1:
+        # `promote` refuses an environment never deployed; `next` walks it to its deploy gate.
+        if len(order) > 1 and _deployed(config, order[1]):
             promote = f"vecten promote --env {order[1]}"
     return {
         "repository": repo,

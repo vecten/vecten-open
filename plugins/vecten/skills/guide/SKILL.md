@@ -219,7 +219,9 @@ set one up only when the human asks for a test or staging environment before pro
 `vecten answer deploy.promotion none` removes the order, and pushes ship `prod` again.
 
 After the push that ships a change to the first environment, `vecten github push` names
-`vecten promote --env <next env>` as the way on. Never run it yourself: put "Promote
+`vecten promote --env <next env>` as the way on, once the next environment is deployed;
+before that, `next` walks it to its own deploy gate, whose deploy ships the commit the
+environment before it shipped. Never run `vecten promote` yourself: put "Promote
 <commit> to <next env>?" to the human, and run `vecten promote --env <next env>` only on
 their explicit yes. `vecten promote --status --json` lists what each environment shipped
 last and whether it is `behind` the one before it.
