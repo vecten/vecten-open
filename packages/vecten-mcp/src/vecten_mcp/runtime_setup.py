@@ -276,7 +276,7 @@ def configured_runtime(root, config, extensions):
     )
 
     pools.validate = session_validator(state, oauth.clock)
-    access = AccessService(state, adapter, invalidate=pools.disable_principal)
+    access = AccessService(state, adapter, invalidate=pools.disable_principal, areas=config.areas)
     access.seed_defaults()
     idle_setting = state.get("settings", "session_idle_seconds")
     if idle_setting:

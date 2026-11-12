@@ -335,6 +335,7 @@ class EnvironmentFacts(Strict):
     deployed_commit: str | None = None
     first_user_added: bool = False
     connector_access_applied: list[str] = Field(default_factory=list)
+    area_access_applied: list[str] = Field(default_factory=list)
     provisioner_script_run: bool = False
     provisioner_secrets_set: bool = False
     connection_shown: bool = False

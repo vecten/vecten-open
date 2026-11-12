@@ -338,8 +338,8 @@ def access(ctx):
         "/admin/access/grant",
         ctx.csrf,
         select("group", groups, label="Group"),
-        select("kind", ["dataset", "schema"], label="Kind"),
-        field("Dataset or schema", "target"),
+        select("kind", ["dataset", "schema", "area"], label="Kind"),
+        field("Dataset, schema or area", "target"),
         hidden("action", "grant"),
         button="Grant",
     )
@@ -365,7 +365,10 @@ def access(ctx):
         ctx,
         "Grants and deny lists",
         h2("Grants"),
-        hint("Grants are reconciled every fifteen minutes, on model change and on demand."),
+        hint(
+            "Grants are reconciled every fifteen minutes, on model change and on demand. "
+            "An area grant covers both of its schemas, core_<area> and marts_<area>."
+        ),
         grants_table,
         grant_form,
         form("/admin/access/reconcile", ctx.csrf, button="Reconcile now"),

@@ -163,6 +163,20 @@ def test_grants_and_reconcile_from_the_access_screen(panel):
     assert post(panel, "/admin/access/reconcile", {}).status_code == 303
 
 
+def test_an_area_is_granted_from_the_access_screen(panel):
+    panel.runtime.access.areas = frozenset({"finance"})
+    page = panel.http.get("/admin/access").text
+    assert re.search(r'<option[^>]*value="area"', page)
+    response = post(
+        panel,
+        "/admin/access/grant",
+        {"group": "default", "kind": "area", "target": "finance", "action": "grant"},
+    )
+    assert response.status_code == 303
+    assert ("schema", "analyst", "marts_finance", True) in panel.adapter.operations
+    assert re.search(r"default\s+area\s+finance", text(panel.http.get("/admin/access")))
+
+
 def test_denying_a_column_hides_it_from_the_next_describe(panel):
     response = post(
         panel, "/admin/access/denied", {"group": "default", "columns": "orders.email\r\n"}

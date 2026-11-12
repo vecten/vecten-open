@@ -277,3 +277,28 @@ def test_access_health_reads_the_last_reconciliation(admin):
         service.access.reconcile()
         data = client.get("/api/admin/access-health", headers=headers).json()["data"]
     assert data["failures"] == [] and data["checked_at"] is not None
+
+
+def test_an_area_is_granted_and_listed_over_the_admin_api_and_an_undeclared_one_refused(admin):
+    service, adapter = admin
+    service.access.areas = frozenset({"finance"})
+    service.access.create_group("finance")
+    client, headers = http_admin(service)
+    with client:
+        granted = client.post(
+            "/api/admin/grant",
+            headers=headers,
+            json={"group": "finance", "kind": "area", "target": "finance"},
+        )
+        refused = client.post(
+            "/api/admin/grant",
+            headers=headers,
+            json={"group": "finance", "kind": "area", "target": "hr"},
+        )
+        listed = client.get("/api/admin/grants", headers=headers)
+    assert granted.status_code == 200, granted.text
+    assert ("schema", "finance", "core_finance", True) in adapter.operations
+    assert ("schema", "finance", "marts_finance", True) in adapter.operations
+    assert refused.status_code == 400
+    assert "[areas.hr]" in refused.json()["error"]
+    assert {"group": "finance", "kind": "area", "target": "finance"} in listed.json()["data"]

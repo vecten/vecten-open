@@ -118,7 +118,8 @@ def outdated_issue(ctx: IssueContext, outdated: dict[str, Any], checked_at: Any)
         kind="command",
         title="The warehouse's access procedures are older than the MCP",
         resolution=(
-            "Read grants the MCP's state does not hold are neither listed nor revoked until a "
+            "Area grants wait, and read grants the MCP's state does not hold are neither "
+            "listed nor revoked, until a "
             f"warehouse administrator runs the SQL `vecten mcp provisioner-script --env {ctx.env}` "
             "prints, as ACCOUNTADMIN, and the run is confirmed with --confirm-run."
         ),

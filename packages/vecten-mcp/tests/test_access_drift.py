@@ -1,6 +1,9 @@
-"""Reconciliation reads what each managed role holds and revokes read grants the state lacks."""
+"""Reconciliation reads what each managed role holds and revokes read grants the state lacks;
+area grants are two schema grants applied and revoked together."""
 
 import logging
+
+import pytest
 
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
@@ -56,8 +59,8 @@ class Adapter:
             self.held = {g for g in self.held if full(g)[:4] != (role, "select", schema, relation)}
 
 
-def service(adapter, *, seeded=True):
-    access = AccessService(StateStore("sqlite://"), adapter)
+def service(adapter, *, seeded=True, areas=()):
+    access = AccessService(StateStore("sqlite://"), adapter, areas=areas)
     if seeded:
         access.seed_defaults()
     return access
@@ -319,3 +322,125 @@ def test_database_level_future_grants_are_reported_and_kept():
     assert access.health()["database_future"] == [
         {"group": "default", "role": "analyst", "privilege": "FUTURE SELECT", "object": "table"}
     ]
+
+
+def test_an_area_grant_is_both_schema_grants_and_its_revoke_revokes_both():
+    adapter = Adapter()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    adapter.ops.clear()
+    row = access.grant("finance", "area", "finance")
+    assert row == {"group": "finance", "kind": "area", "target": "finance"}
+    assert adapter.ops == [
+        ("schema", "finance", "core_finance", True),
+        ("schema", "finance", "marts_finance", True),
+    ]
+    assert row in access.list_grants()
+    adapter.ops.clear()
+    access.revoke("finance", "area", "finance")
+    assert ("schema", "finance", "core_finance", False) in adapter.ops
+    assert ("schema", "finance", "marts_finance", False) in adapter.ops
+    assert not [g for g in access.list_grants() if g["kind"] == "area"]
+
+
+def test_a_grant_of_an_undeclared_area_is_refused_naming_its_entry():
+    adapter = Adapter()
+    access = service(adapter, areas={"finance"})
+    access.create_group("people")
+    adapter.ops.clear()
+    with pytest.raises(ValueError, match=r"\[areas\.hr\]"):
+        access.grant("people", "area", "hr")
+    with pytest.raises(ValueError, match=r"\[areas\.hr\]"):
+        access.grant("people", "schema", "marts_hr")
+    assert adapter.ops == []
+
+
+def test_a_schema_grant_takes_one_schema_of_a_declared_area():
+    adapter = Adapter()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    adapter.ops.clear()
+    access.grant("finance", "schema", "marts_finance")
+    assert adapter.ops == [("schema", "finance", "marts_finance", True)]
+    with pytest.raises(ValueError, match="convention schemas"):
+        access.grant("finance", "schema", "reference")
+
+
+def test_a_grant_of_an_unknown_kind_is_refused():
+    access = service(Adapter())
+    with pytest.raises(ValueError, match="dataset, schema or area"):
+        access.grant("default", "database", "warehouse")
+
+
+def test_an_older_procedure_refuses_area_grants_and_names_the_script():
+    adapter = Adapter(version=ACCESS_VERSION - 1)
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    adapter.ops.clear()
+    for kind, target in (("area", "finance"), ("schema", "core_finance")):
+        with pytest.raises(ValueError, match="vecten mcp provisioner-script"):
+            access.grant("finance", kind, target)
+    assert adapter.ops == []
+
+
+def test_an_area_grant_recorded_before_the_script_rerun_waits_and_the_rest_reconcile():
+    adapter = Adapter()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    access.grant("finance", "area", "finance")
+    adapter.version = ACCESS_VERSION - 1
+    adapter.ops.clear()
+    result = access.reconcile()
+    assert ("schema", "analyst", "core", True) in adapter.ops
+    assert not [op for op in adapter.ops if "finance" in op[2]]
+    [failure] = result["failures"]
+    assert (failure["group"], failure["kind"], failure["target"]) == ("finance", "area", "finance")
+    assert "vecten mcp provisioner-script" in failure["error"]
+
+
+def test_a_granted_area_is_not_drift_and_a_hand_grant_in_an_area_is_revoked():
+    adapter = Adapter()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    access.grant("finance", "area", "finance")
+    adapter.held |= {
+        ("analyst", "usage", "marts_finance", None),
+        ("analyst", "select", "core_finance", "invoice"),
+    }
+    adapter.ops.clear()
+    access.reconcile()
+    revokes = sorted(op for op in adapter.ops if not op[3])
+    assert revokes == [
+        ("dataset", "analyst", "core_finance.invoice", False),
+        ("schema", "analyst", "marts_finance", False),
+    ]
+    assert not access.health()["drift"]
+    held = {g[:4] for g in adapter.held if g[0] == "finance"}
+    assert ("finance", "future", "marts_finance", None) in held
+    assert ("finance", "future", "core_finance", None) in held
+
+
+def test_a_schema_named_like_an_undeclared_area_is_outside_the_scope():
+    adapter = Adapter(held={("analyst", "usage", "marts_legacy", None)})
+    access = service(adapter, areas={"finance"})
+    access.reconcile()
+    assert not [op for op in adapter.ops if not op[3]]
+    assert access.health()["drift"] == []
+
+
+def test_an_area_no_longer_declared_is_closed_and_opens_again_once_declared():
+    state, adapter = StateStore("sqlite://"), Adapter()
+    declared = AccessService(state, adapter, areas={"finance"})
+    declared.seed_defaults()
+    declared.create_group("finance")
+    declared.grant("finance", "area", "finance")
+    adapter.ops.clear()
+    undeclared = AccessService(state, adapter)
+    result = undeclared.reconcile()
+    assert ("schema", "finance", "core_finance", False) in adapter.ops
+    assert ("schema", "finance", "marts_finance", False) in adapter.ops
+    assert result["complete"]
+    assert {"group": "finance", "kind": "area", "target": "finance"} in undeclared.list_grants()
+    adapter.ops.clear()
+    AccessService(state, adapter, areas={"finance"}).reconcile()
+    assert ("schema", "finance", "marts_finance", True) in adapter.ops

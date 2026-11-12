@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import re
 import time
 from collections import defaultdict
 from threading import RLock
@@ -20,23 +21,42 @@ CONVENTION_SCHEMAS = frozenset({"core", "marts", "staging", "snapshots"})
 PRIVILEGES = {"usage": "USAGE", "select": "SELECT", "future": "FUTURE SELECT"}
 OUTDATED_FIX = (
     "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
-    "--confirm-run: until then read grants the state does not hold are neither listed nor "
-    "revoked."
+    "--confirm-run: until then area grants wait, and read grants the state does not hold "
+    "are neither listed nor revoked."
 )
 
 
-def in_scope(schema):
+AREA_SCHEMA = re.compile(r"(core|marts)_([a-z][a-z0-9]*)")
+KINDS = ("dataset", "schema", "area")
+
+
+def area_schemas(area):
+    return [f"core_{area}", f"marts_{area}"]
+
+
+def in_scope(schema, areas=()):
     """The schemas whose read grants the state database owns for every managed role: the
-    convention's, and every `raw_` schema, a prefix the convention keeps for loaded sources
-    and the bound READ_GRANT and the Postgres helpers already accept."""
-    return schema in CONVENTION_SCHEMAS or schema.startswith("raw_")
+    convention's, every `raw_` schema, a prefix the convention keeps for loaded sources
+    and the bound READ_GRANT and the Postgres helpers already accept, and the schemas of the
+    declared areas. A schema named like an undeclared area is the client's."""
+    area = AREA_SCHEMA.fullmatch(schema)
+    return (
+        schema in CONVENTION_SCHEMAS
+        or schema.startswith("raw_")
+        or bool(area and area.group(2) in areas)
+    )
+
+
+class Undeclared(ValueError):
+    """A grant naming an area `vecten.toml` does not declare, which stays closed."""
 
 
 class AccessService:
-    def __init__(self, state, adapter, *, invalidate=None):
+    def __init__(self, state, adapter, *, invalidate=None, areas=()):
         self.state, self.adapter = state, adapter
         self.invalidate = invalidate or (lambda pid: None)
         self.datasets = {}
+        self.areas = frozenset(areas)
         self.lock = RLock()
 
     def seed_defaults(self):
@@ -124,28 +144,58 @@ class AccessService:
         return hashlib.sha256(json.dumps([group, kind, target]).encode()).hexdigest()
 
     def _source(self, kind, target):
+        if kind not in KINDS:
+            raise ValueError("a grant's kind is dataset, schema or area")
+        if kind == "area":
+            if not isinstance(target, str) or target not in self.areas:
+                raise Undeclared(
+                    f"no [areas.{target}] in vecten.toml: declare the area {target} and ship "
+                    "before granting it"
+                )
+            return area_schemas(target)
         if kind == "schema":
-            if target not in {"core", "marts", "staging", "snapshots"} and not target.startswith(
-                "raw_"
-            ):
-                raise ValueError("schema grants are limited to convention schemas")
+            area = AREA_SCHEMA.fullmatch(target) if isinstance(target, str) else None
+            if area and area.group(2) not in self.areas:
+                raise Undeclared(
+                    f"{target} belongs to no declared area: no [areas.{area.group(2)}] in "
+                    "vecten.toml"
+                )
+            if not area and target not in CONVENTION_SCHEMAS and not target.startswith("raw_"):
+                raise ValueError(
+                    "schema grants are limited to convention schemas and declared areas"
+                )
             if not target.replace("_", "").isalnum():
                 raise ValueError("invalid schema name")
             return target
-        if kind != "dataset" or target not in self.datasets:
+        if target not in self.datasets:
             raise ValueError("unknown dataset")
         return self.datasets[target]
 
+    def _current(self, kind, source):
+        """Whether the grant needs procedures as recent as this server: an area schema is
+        outside what an older READ_GRANT accepts."""
+        schemas = source if kind == "area" else [source] if kind == "schema" else []
+        return any(AREA_SCHEMA.fullmatch(schema) for schema in schemas)
+
+    def _outdated(self):
+        installed = self.adapter.access_version()
+        if installed < ACCESS_VERSION:
+            return {"installed": installed, "required": ACCESS_VERSION, "fix": OUTDATED_FIX}
+        return None
+
     def _apply(self, grant, source, allowed):
         role = self.require_group(grant["group"])["warehouse_role"]
-        method = (
-            self.adapter.schema_grant if grant["kind"] == "schema" else self.adapter.dataset_grant
-        )
-        method(role, source, allowed)
+        if grant["kind"] == "dataset":
+            self.adapter.dataset_grant(role, source, allowed)
+            return
+        for schema in source if grant["kind"] == "area" else [source]:
+            self.adapter.schema_grant(role, schema, allowed)
 
     def grant(self, group, kind, target):
         self.require_group(group)
         source = self._source(kind, target)
+        if self._current(kind, source) and self._outdated():
+            raise ValueError(f"areas need the current access procedures. {OUTDATED_FIX}")
         row = {"group": group, "kind": kind, "target": target}
         with self.lock:
             self._apply(row, source, True)
@@ -179,7 +229,8 @@ class AccessService:
 
         def failed(key, row, operation, exc):
             blocked.add(key)
-            failure = dict(row, operation=operation, error=describe_error(exc))
+            error = exc if isinstance(exc, str) else describe_error(exc)
+            failure = dict(row, operation=operation, error=error)
             failures.append(failure)
             logger.warning(
                 "Grant %s of %s %s for %s failed: %s",
@@ -194,17 +245,7 @@ class AccessService:
             desired = dict(self.state.scan("grants"))
             applied = dict(self.state.scan("applied_grants"))
             for key, old in applied.items():
-                row = desired.get(key)
-                missing = (
-                    row is not None
-                    and row["kind"] == "dataset"
-                    and row["target"] not in self.datasets
-                )
-                if (
-                    row is None
-                    or missing
-                    or self._source(row["kind"], row["target"]) != old["source"]
-                ):
+                if self._source_of(desired.get(key)) != old["source"]:
                     try:
                         self._apply(old, old["source"], False)
                         self.state.remove("applied_grants", key)
@@ -212,12 +253,13 @@ class AccessService:
                         failed(key, old, "revoke", exc)
             held, outdated = self._converge(desired, report, failures)
             for key, row in desired.items():
-                if key in blocked or (
-                    row["kind"] == "dataset" and row["target"] not in self.datasets
-                ):
+                source = self._source_of(row)
+                if key in blocked or source is None:
+                    continue
+                if outdated and self._current(row["kind"], source):
+                    failed(key, row, "grant", outdated["fix"])
                     continue
                 try:
-                    source = self._source(row["kind"], row["target"])
                     role = self.require_group(row["group"])["warehouse_role"]
                     pieces = self._pieces(role, row["kind"], source)
                     absent = key not in applied if held is None else not pieces <= _folded(held)
@@ -235,9 +277,21 @@ class AccessService:
         self.state.put("access_health", "reconciliation", health)
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
+    def _source_of(self, row):
+        """What a desired grant reaches now, or None when its dataset is not in the model or
+        its area is not declared: such a grant stays recorded and is applied nowhere."""
+        if row is None or (row["kind"] == "dataset" and row["target"] not in self.datasets):
+            return None
+        try:
+            return self._source(row["kind"], row["target"])
+        except Undeclared:
+            return None
+
     def _pieces(self, role, kind, source):
         """The read grants, as `read_grants` names them without the object kind, that one
         desired grant consists of."""
+        if kind == "area":
+            return set().union(*(self._pieces(role, "schema", schema) for schema in source))
         if kind == "schema":
             return {(role, "usage", source, None), (role, "future", source, None)}
         schema, relation = source.lower().split(".")[-2:]
@@ -259,13 +313,14 @@ class AccessService:
         """Revoke, or list under `report`, the read grants managed roles hold that the state
         does not; returns what they held after it, or None when it could not be read."""
         try:
-            installed = self.adapter.access_version()
+            outdated = self._outdated()
         except Exception as exc:
             failures.append(self._read_failure(exc, "*"))
             return None, None
-        if installed < ACCESS_VERSION:
-            outdated = {"installed": installed, "required": ACCESS_VERSION, "fix": OUTDATED_FIX}
-            logger.warning("Access procedures are version %s; %s", installed, OUTDATED_FIX)
+        if outdated:
+            logger.warning(
+                "Access procedures are version %s; %s", outdated["installed"], OUTDATED_FIX
+            )
             return None, outdated
         roles = {row["warehouse_role"]: row["name"] for row in self.list_groups()}
         held, readable = self._read(roles, failures)
@@ -274,10 +329,12 @@ class AccessService:
         whole, datasets = set(), defaultdict(set)
         for row in desired.values():
             group = self.state.group(row["group"])
-            if group is None or (row["kind"] == "dataset" and row["target"] not in self.datasets):
+            source = self._source_of(row)
+            if group is None or source is None:
                 continue
-            source = self._source(row["kind"], row["target"])
-            if row["kind"] == "schema":
+            if row["kind"] == "area":
+                whole.update((group["warehouse_role"], schema) for schema in source)
+            elif row["kind"] == "schema":
                 whole.add((group["warehouse_role"], source))
             else:
                 schema, relation = source.lower().split(".")[-2:]
@@ -290,7 +347,7 @@ class AccessService:
             if schema is None:
                 report["database_future"].append(_entry(roles, grant, place=False))
                 continue
-            if not in_scope(schema) or (role, schema) in whole:
+            if not in_scope(schema, self.areas) or (role, schema) in whole:
                 continue
             allowed = datasets.get((role, schema), set())
             if (kind == "usage" and allowed) or (kind == "select" and relation.lower() in allowed):
