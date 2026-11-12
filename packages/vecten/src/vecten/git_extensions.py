@@ -267,9 +267,16 @@ def registered_sources(
 
 
 def _kept(directory: Path, digest: str | None) -> bool:
-    """Whether `directory` still holds exactly the source the record hashed."""
-    if not directory.is_dir() or any(
-        name.casefold() == ".git" for _, dirs, files in os.walk(directory) for name in dirs + files
+    """Whether `directory` still holds exactly the source the record hashed, in place: a link
+    could lead the build anywhere on the machine."""
+    if (
+        directory.is_symlink()
+        or not directory.is_dir()
+        or any(
+            name.casefold() == ".git"
+            for _, dirs, files in os.walk(directory)
+            for name in dirs + files
+        )
     ):
         return False
     try:
@@ -337,7 +344,9 @@ def write_sources(
                         f"{entry.source_sha256}",
                     )
                 target = into / name
-                if target.exists():
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                elif target.exists():
                     shutil.rmtree(target)
                 shutil.copytree(copy.directory, target)
     return {name: into / name for name in wanted}

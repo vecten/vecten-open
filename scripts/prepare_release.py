@@ -48,6 +48,7 @@ PUBLIC_DOCS = {
     "docs/admin-panel.md",
     "docs/exit-codes.md",
     "docs/extensions.md",
+    "docs/extensions-private-git.md",
     "docs/feedback-loop.md",
     "docs/mcp-audit.md",
     "docs/mcp-identity.md",

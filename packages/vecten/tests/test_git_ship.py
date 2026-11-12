@@ -313,6 +313,18 @@ def test_a_kept_copy_is_reused_only_while_its_hash_matches(served, tmp_path):
     assert source_sha256(into / NAME) == served.commits.hash_of(TAG, served.tmp)
 
 
+def test_a_kept_entry_that_is_a_link_is_replaced_by_a_fetched_folder(served, tmp_path):
+    root = served_project(tmp_path / "p", served)
+    elsewhere = tmp_path / "elsewhere"
+    git_extensions.write_sources(root, config(), elsewhere)
+    into = tmp_path / "kept"
+    into.mkdir()
+    (into / NAME).symlink_to(elsewhere / NAME)
+    git_extensions.write_sources(root, config(), into, keep=True)
+    assert not (into / NAME).is_symlink() and (into / NAME / "pyproject.toml").is_file()
+    assert (elsewhere / NAME / "pyproject.toml").is_file()
+
+
 # --- the bundle ------------------------------------------------------------------------------
 
 
