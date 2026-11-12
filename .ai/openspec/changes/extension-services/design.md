@@ -403,10 +403,20 @@ access. Containers on the default Compose network can also reach each other's po
 list, default `[]`; `service_network`, the bridge name, default `""` meaning no step), the
 iptables step, and the byte-identical Scaleway copy, all Python 3.9 standard library. Every
 bundle carries its own copy of the agent (`.vecten/ship/apply.py`), so a bundle with services is
-always applied by an agent that knows the keys; `load_host` already ignores keys it does not
-know and fills legacy defaults, so rolling back to an older bundle keeps working. The step runs
-at boot as well as on ship, and fails the ship when the rule cannot be installed while a service
-is declared, because a service without the rule would hold the host's identity.
+always shipped by an agent that knows the keys; `load_host` already ignores keys it does not
+know and fills legacy defaults, so rolling back to an older bundle keeps working. A rollback is
+run by the agent of the release that failed, so it knows the keys too, unless that release was
+built by a Vecten older than this change: downgrading Vecten on an environment whose previous
+release runs services is unsupported. After a reboot dockerd restarts running services as it
+starts, so a ship that runs services also installs `vecten-services-guard.service`, ordered
+before `docker.service` and required by it, which runs the shipping agent's own copy
+(`/opt/vecten/guard/apply.py guard`, since the current release may predate the command) to
+create `DOCKER-USER` and add the rule with no secret read; dockerd keeps a chain it finds
+(proven in the Docker tier on engines 25.0 and 28.5). A guard that fails keeps Docker, and
+with it the whole stack, down until an operator fixes it: fail-closed, proven under systemd. The boot step still adds the rule first, before any
+secret read; at boot and on rollback a failure stops the services rather than leave them
+running without the rule. On ship it runs before the swap and fails the ship, because a
+service without the rule would hold the host's identity.
 
 Consequences: a service reads secrets only as names its extension declares (the same names #49
 delivers); it cannot call the provider for anything else; it reaches the MCP through
@@ -553,6 +563,8 @@ starts on every host.
   which bounds how late a group change applies.
 - [The MCP being down takes `login` routes down] → It is the identity provider; `public` routes
   are unaffected. The docs say so.
+- [After a reboot Docker restarts services before the boot unit runs] → The guard unit adds
+  the rule before `docker.service`, which requires it, so a failed guard keeps Docker down. Task 3.5 probes the metadata address from a service while a VM reboots.
 - [iptables rules on two operating systems] → Amazon Linux 2023 and Ubuntu both run Docker with
   the iptables backend it manages, and `DOCKER-USER` is Docker's documented place for user
   rules. A Docker-tier test proves the block on the agent's own commands; a real deploy proves it
@@ -566,8 +578,9 @@ starts on every host.
 
 ## Migration Plan
 
-- Additive. A project without `[services]` renders byte-identical Compose, NGINX, `host.json` and
-  bundles, and `vecten deploy` passes no new variable; tests assert both.
+- Additive. A project without `[services]` renders byte-identical Compose and NGINX, its
+  `host.json` carries `service_secrets = []` and `service_network = ""`, and `vecten deploy`
+  passes no new variable; tests assert each.
 - Projects that bind a hostname run `vecten update` (thin root gains `service_hostnames`), then
   `vecten deploy --env <env>`, then ship as usual.
 - `host.json` gains two keys with legacy defaults in the agent, so a bundle built before this

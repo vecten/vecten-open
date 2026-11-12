@@ -32,6 +32,7 @@ from vecten.stack.compose import (
     PROJECT_MOUNTS,
     STACK_DIR,
     generate_compose,
+    host_services,
     platform_secrets,
     vm_hostnames,
     write_extension_dag_loader,
@@ -45,7 +46,7 @@ from vecten_shared.extension_record import Extension, read_record
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.records import write_text_atomic
-from vecten_shared.services import bound_services, check_bindings
+from vecten_shared.services import check_bindings
 from vecten_shared.sql import setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -264,10 +265,12 @@ def host_document(
         raise Failure(ExitCode.REFUSED, "no deploy answers; run `vecten init --deploy` first")
     cloud = config.deploy.cloud
     sizing = _host_tier(host, cloud, tfvars)
+    components = list(outputs.hosts[host].components)
+    service_secrets, service_network = host_services(config, record or {}, components)
     doc = {
         "host": host,
         "cloud": cloud,
-        "components": list(outputs.hosts[host].components),
+        "components": components,
         "env": env,
         "project": config.project.name,
         "region": outputs.region,
@@ -288,6 +291,8 @@ def host_document(
         "airflow_parallelism": sizing["airflow_parallelism"],
         "mcp_pool_cap": sizing["mcp_pool_cap"],
         "plugin_dir": PLUGIN_DIRS[cloud],
+        "service_secrets": service_secrets,
+        "service_network": service_network,
     }
     if set(doc) != set(HOST_KEYS):
         raise Failure(ExitCode.INTERNAL, "host.json keys differ from the agent's HOST_KEYS")
@@ -373,19 +378,6 @@ def build_host_bundle(
     tfvars = check_tfvars(project_root, config, env)
     check_settings(config, read_record(project_root) or {}, env)
     check_bindings(config, read_record(project_root) or {})
-    # Until the VM agent keeps services from the instance's cloud identity, a bundle carrying
-    # one would hand it the host's whole secret scope.
-    placed = [
-        bound.key
-        for bound in bound_services(config, read_record(project_root) or {})
-        if bound.host in outputs.hosts[host].components
-    ]
-    if placed:
-        raise Failure(
-            ExitCode.REFUSED,
-            f"{', '.join(placed)}: this release runs services under `vecten up` only, since its "
-            "VM agent does not yet keep a service from the instance's cloud identity",
-        )
     host_doc = host_document(
         config, env, outputs, host, commit, tfvars, read_record(project_root) or {}
     )

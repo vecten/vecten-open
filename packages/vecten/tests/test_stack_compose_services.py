@@ -224,3 +224,16 @@ def test_the_host_image_creates_each_declared_volume_for_its_runtime_user(tmp_pa
     )
     assert volume_step(config(BOUND), root, "mcp") == ""
     assert volume_step(config(), root, "airflow") == ""
+
+
+def test_a_record_naming_a_stack_secret_is_refused_for_a_service(tmp_path):
+    from vecten.stack.compose import host_services
+    from vecten_shared.extension_record import read_record
+    from vecten_shared.output import Failure
+
+    stack_dir = stack(tmp_path, secrets=("ACME_API_KEY", "AIRFLOW_FERNET_KEY"))
+    with pytest.raises(Failure, match="acme.*AIRFLOW_FERNET_KEY"):
+        generate_compose(config(BOUND), "vm", ["platform"], stack_dir, hosts=VM_HOSTS)
+    record = read_record(stack_dir.parent.parent)
+    with pytest.raises(Failure, match="acme.*AIRFLOW_FERNET_KEY"):
+        host_services(config(BOUND), record, ["platform"])

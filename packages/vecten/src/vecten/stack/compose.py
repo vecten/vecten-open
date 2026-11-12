@@ -12,7 +12,7 @@ import yaml
 from vecten.stack.images import BUILD_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
 from vecten_shared.config import VectenConfig, stack_project_name
-from vecten_shared.declarations import component_for
+from vecten_shared.declarations import component_for, secret_problem
 from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
@@ -303,6 +303,31 @@ SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
 SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
 
 
+def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str]:
+    """Only the extension's own names its host may read: no cloud key, no stack variable.
+
+    The record is a committed file, so a name `vecten lock` would refuse is refused here too:
+    the agent holds the stack's own secrets and would hand them over under that name.
+    """
+    entry = record.get(bound.extension)
+    names = sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+    for name in names:
+        problem = secret_problem(name)
+        if problem:
+            raise Failure(ExitCode.CONFIG, f"{RECORD_FILE}: {bound.extension}: {problem}")
+    return names
+
+
+def host_services(
+    config: VectenConfig, record: dict[str, Extension], components: list[str]
+) -> tuple[list[str], str]:
+    """What a VM's agent needs for the services it runs: the secret names it reads and hands
+    to Compose, and the bridge it keeps off the metadata address, or empty for no service."""
+    placed = [b for b in bound_services(config, record) if b.host in components]
+    names = sorted({n for bound in placed for n in service_secret_names(bound, record)})
+    return names, SERVICES_BRIDGE if placed else ""
+
+
 def _literal(value: str) -> str:
     # Compose interpolates `$` in every string, so a declared value keeps its own text this way.
     return value.replace("$", "$$")
@@ -336,9 +361,7 @@ def _service(
         environment["PORT"] = str(declared.port)
     if bound.binding.hostname is not None:
         environment["VECTEN_PUBLIC_URL"] = _public_url(mode, bound.binding.hostname, hosts)
-    # Only the extension's own names its host may read: no cloud key, no stack variable.
-    entry = project_record(stack_dir).get(bound.extension)
-    secrets = sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+    secrets = service_secret_names(bound, project_record(stack_dir))
     for secret in secrets:
         if secret in environment:
             raise Failure(
