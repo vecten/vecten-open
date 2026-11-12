@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -54,8 +56,10 @@ from vecten.deploy.promotion import (
     fetch_default_branch,
     given_commit,
     newest_shipped,
+    previous_in,
     promoted_tree,
     promotion_order,
+    read_head_facts,
     require_shipped_by,
 )
 from vecten.deploy.shipping import service_report
@@ -271,6 +275,10 @@ def deploy_env(
             ExitCode.USAGE,
             "--commit names what a deploy applies; use it without --plan-only and --check",
         )
+    if in_actions() and not (check or plan_only):
+        return _deploy_in_actions(
+            project_root, env, gh=gh, git=git, terraform=terraform, ref=commit
+        )
     config = load_config(project_root)
     if check:
         found = check_facts(config, env)
@@ -293,10 +301,14 @@ def deploy_env(
         cloud_only=cloud_only,
         commit=commit,
     )
+    return _with_renewal_warning(data, config, env)
+
+
+def _with_renewal_warning(data: dict, config: VectenConfig, env: str) -> dict:
     # An expiring key is warned of, never refused: the deploy that warns still works.
     expiring = expiring_keys(config.environments.get(env), datetime.now(UTC))
     if expiring:
-        data["warnings"] = [renewal_warning(env, expiring)]
+        data["warnings"] = [*data.get("warnings", []), renewal_warning(env, expiring)]
     return data
 
 
@@ -384,36 +396,60 @@ def _deploy(
         if identity_pending(recorded, env):
             result["ship_skipped"] = identity_pending_note(env)
         return result
-    require_terraform(terraform)
-    target = actions_commit(gh, git, project_root, config, env, commit)
-    with promoted_tree(git, project_root, target, config) as tree:
-        shipped = config
+    raise Failure(ExitCode.INTERNAL, "a deploy inside GitHub Actions runs _deploy_in_actions")
+
+
+def _deploy_in_actions(
+    project_root: Path,
+    env: str,
+    *,
+    gh: ToolRunner | None,
+    git: ToolRunner,
+    terraform: TerraformRunner,
+    ref: str | None,
+) -> dict:
+    """Apply the roots and ship every host of `env` from the commit `ref` names, else the
+    checked-out one; every refusal comes before the first Terraform call."""
+    with actions_view(git, project_root, ref) as view:
+        config, tree = view.config, view.root
+        deploy = require_deploy_cloud(config)
+        plane = get_control_plane(deploy.cloud, tree, env)
+        check_tfvars(tree, config, env)
+        require_bootstrapped(config, env)
         if tree != project_root:
-            shipped = _promoted_config(tree, env)
-            check_tfvars(tree, shipped, env)
-            plane = get_control_plane(deploy.cloud, tree, env)
+            record = read_extension_record(tree) or {}
+            check_settings(config, record, env)
+            check_bindings(config, record)
+        require_terraform(terraform)
+        require_promotable(gh, git, project_root, view, env)
         provisioned = provision_environment(plane, env, terraform)
         outputs = EnvironmentOutputs.model_validate(provisioned["outputs"])
         # CI never writes vecten.toml: the laptop that dispatched this run records the commit.
-        data = {
+        data: dict = {
             "env": env,
             "plan_only": False,
             "dispatched": False,
             "roots": provisioned["roots"],
-            "commit": target,
+            "commit": view.commit,
         }
+        warnings = list(view.warnings)
         if identity_pending(config, env):
-            return {**data, "hosts": [], "ship_skipped": identity_pending_note(env)}
-        hosts = recorded_ship(
-            gh,
-            project_root,
-            config,
-            env,
-            target,
-            lambda: plane.ship_hosts(tree, shipped, env, outputs, target),
-        )
-        report = _services_after_ship(plane, tree, shipped, outputs)
-    return {**data, "hosts": hosts, **report}
+            data = {**data, "hosts": [], "ship_skipped": identity_pending_note(env)}
+        else:
+            hosts, recorded = recorded_ship(
+                gh,
+                project_root,
+                deploy.github_repository,
+                env,
+                view.commit,
+                lambda: plane.ship_hosts(tree, config, env, outputs, view.commit),
+                required=env in view.order[:-1],
+            )
+            warnings += recorded
+            data = {**data, "hosts": hosts, **_services_after_ship(plane, tree, config, outputs)}
+    if warnings:
+        data["warnings"] = warnings
+    return _with_renewal_warning(data, config, env)
 
 
 def _services_after_ship(
@@ -435,21 +471,38 @@ def _run_url() -> str | None:
 def recorded_ship[Shipped](
     gh: ToolRunner | None,
     project_root: Path,
-    config: VectenConfig,
+    repository: str,
     env: str,
     commit: str,
     ship: Callable[[], Shipped],
-) -> Shipped:
-    """Run `ship` between a `pending` and a final `vecten/ship/<env>` status on `commit`.
+    *,
+    required: bool,
+) -> tuple[Shipped, list[str]]:
+    """Run `ship` between a `pending` and a final `vecten/ship/<env>` status on `commit`;
+    what `ship` returned, and a warning for every status that could not be set.
 
-    A promotion trusts only `success`, so a status that cannot be set to `pending` stops the
-    ship before any host changes, and one left `pending` never counts as shipped.
+    A promotion trusts only `success`, so when a later environment promotes from `env`
+    (`required`), a status that cannot be set to `pending` stops the ship before any host
+    changes, and one left `pending` never counts as shipped. Nothing promotes from the last
+    environment of the order, so there a GitHub outage costs only the record.
     """
     if gh is None:
         raise Failure(ExitCode.INTERNAL, "recording a ship's commit status needs the gh runner")
-    repository = require_deploy_cloud(config).github_repository
     url = _run_url()
-    set_ship_status(gh, project_root, repository, commit, env, "pending", target_url=url)
+    warnings: list[str] = []
+
+    def record(state: str) -> None:
+        try:
+            set_ship_status(gh, project_root, repository, commit, env, state, target_url=url)
+        except Failure as exc:
+            if required:
+                raise
+            warnings.append(
+                f"the {ship_context(env)} status of {commit[:8]} could not be set to {state}: "
+                f"{exc.message}"
+            )
+
+    record("pending")
     try:
         shipped = ship()
     except Exception as exc:
@@ -462,40 +515,68 @@ def recorded_ship[Shipped](
                     f"{status.message}"
                 )
         raise
-    set_ship_status(gh, project_root, repository, commit, env, "success", target_url=url)
-    return shipped
+    record("success")
+    return shipped, warnings
 
 
-def actions_commit(
-    gh: ToolRunner | None,
-    git: ToolRunner,
-    project_root: Path,
-    config: VectenConfig,
-    env: str,
-    ref: str | None,
-) -> str:
-    """The commit a run inside Actions ships to `env`: `ref`, else the checked-out one.
+@dataclass
+class ActionsView:
+    """What a run inside Actions ships: the checkout to read content, tfvars and roots from,
+    its configuration with the head's facts, the head's promotion order, and the commit."""
 
-    A named commit must be on the remote default branch, and an environment after the first
-    in the promotion order takes only a commit the environment before it shipped. Both are
-    refused before any Terraform or host changes.
+    root: Path
+    config: VectenConfig
+    order: tuple[str, ...]
+    named: bool
+    git: ToolRunner
+    warnings: list[str] = field(default_factory=list)
+    resolved: str | None = None
+
+    @property
+    def commit(self) -> str:
+        # Read only once a refusal that needs no git has had its chance.
+        if self.resolved is None:
+            self.resolved = head_commit(self.git, self.root)
+        return self.resolved
+
+
+@contextmanager
+def actions_view(git: ToolRunner, project_root: Path, ref: str | None) -> Iterator[ActionsView]:
+    """The checked-out commit read as it stands, or the commit `ref` names in a worktree.
+
+    The promoted commit pins the CLI that runs, possibly older than the one that wrote the
+    head's `vecten.toml`, so of the head only the order and the environment facts are read,
+    leniently.
     """
-    if ref is None:
-        commit = head_commit(git, project_root)
-    else:
+    if ref is not None:
         commit = given_commit(git, project_root, ref)
-    previous = config.promoted_from(env)
-    if ref is None and previous is None:
-        return commit
+        if commit != head_commit(git, project_root):
+            found = read_head_facts(project_root)
+            with promoted_tree(git, project_root, commit, found.environments) as tree:
+                config = load_config(tree)
+                yield ActionsView(tree, config, found.order, True, git, found.warnings, commit)
+            return
+    config = load_config(project_root)
+    order = promotion_order(project_root, config)
+    yield ActionsView(project_root, config, order, ref is not None, git)
+
+
+def require_promotable(
+    gh: ToolRunner | None, git: ToolRunner, project_root: Path, view: ActionsView, env: str
+) -> None:
+    """Refuse a named commit the remote default branch does not hold, and, for an environment
+    after the first in the order, one the environment before it did not ship."""
+    previous = previous_in(view.order, env)
+    if not view.named and previous is None:
+        return
     if gh is None:
         raise Failure(ExitCode.INTERNAL, "checking a promoted commit needs the gh runner")
-    repository = require_deploy_cloud(config).github_repository
-    require_gh(gh, project_root)
+    repository = require_deploy_cloud(view.config).github_repository
+    # Inside Actions GH_TOKEN authenticates gh; there is no login to check.
     branch = default_branch(gh, project_root, repository)
-    require_commit_on_default_branch(project_root, git, branch, commit)
+    require_commit_on_default_branch(project_root, git, branch, view.commit)
     if previous is not None:
-        require_shipped_by(gh, project_root, repository, commit, env, previous)
-    return commit
+        require_shipped_by(gh, project_root, repository, view.commit, env, previous)
 
 
 def _refuse_later_environment_from_the_laptop(config: VectenConfig, env: str) -> None:
@@ -522,11 +603,19 @@ def ship_env(
     Without `env`, only `check` runs, for the first environment of the promotion order: the
     gate of the ship workflow a push starts.
     """
+    if env is None and not check:
+        raise Failure(ExitCode.USAGE, "ship needs --env <env>")
+    if check and commit is not None:
+        raise Failure(
+            ExitCode.USAGE,
+            "--check reports facts from vecten.toml and ships nothing; drop --commit",
+        )
+    if env is not None and not check and in_actions():
+        check_env_name(env)
+        return _ship_in_actions(project_root, env, gh=gh, git=git, ref=commit)
     config = load_config(project_root)
     gate = env is None
     if env is None:
-        if not check:
-            raise Failure(ExitCode.USAGE, "ship needs --env <env>")
         env = promotion_order(project_root, config)[0]
     check_env_name(env)
     # The settings this commit would ship are checked before any host or cloud is touched.
@@ -540,55 +629,59 @@ def ship_env(
         limits = limits_per_host(config, read_extension_record(project_root) or {})
         return {**found, "service_limits": limits} if limits else found
     promotion_order(project_root, config)
-    plane = control_plane(config, project_root, env)
-    require_deployed(config, env)
-    # A ship workflow runs on every push, the first deploy's own included; inside Actions it
-    # finishes green with nothing shipped, so the push that records the confirmation ships.
-    pending = identity_pending(config, env)
-    if not in_actions():
-        _refuse_later_environment_from_the_laptop(config, env)
-        if commit is not None:
-            raise Failure(
-                ExitCode.USAGE,
-                "--commit ships a given commit inside GitHub Actions only; from the laptop, "
-                "ship dispatches the default branch's head",
-            )
-    if pending and not in_actions():
-        raise Failure(ExitCode.PREREQUISITE, identity_pending_note(env))
-    if not in_actions():
-        if gh is None:
-            raise Failure(ExitCode.INTERNAL, "dispatching the ship workflow needs the gh runner")
-        followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git)
-        return {"env": env, "dispatched": True, **followed}
-    require_bootstrapped(config, env)
-    target = actions_commit(gh, git, project_root, config, env, commit)
-    if pending:
-        data = {"env": env, "dispatched": False, "commit": target, "hosts": []}
-        return {**data, "ship_skipped": identity_pending_note(env)}
-    with promoted_tree(git, project_root, target, config) as tree:
-        shipped = config if tree == project_root else _promoted_config(tree, env)
-        if tree != project_root:
-            plane = control_plane(shipped, tree, env)
-        outputs = fetch_outputs(plane)
-        hosts = recorded_ship(
-            gh,
-            project_root,
-            config,
-            env,
-            target,
-            lambda: plane.ship_hosts(tree, shipped, env, outputs, target),
+    _refuse_later_environment_from_the_laptop(config, env)
+    if commit is not None:
+        raise Failure(
+            ExitCode.USAGE,
+            "--commit ships a given commit inside GitHub Actions only; from the laptop, "
+            "ship dispatches the default branch's head",
         )
-        report = _services_after_ship(plane, tree, shipped, outputs)
-    return {"env": env, "dispatched": False, "commit": target, "hosts": hosts, **report}
+    control_plane(config, project_root, env)
+    require_deployed(config, env)
+    if identity_pending(config, env):
+        raise Failure(ExitCode.PREREQUISITE, identity_pending_note(env))
+    if gh is None:
+        raise Failure(ExitCode.INTERNAL, "dispatching the ship workflow needs the gh runner")
+    followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git)
+    return {"env": env, "dispatched": True, **followed}
 
 
-def _promoted_config(tree: Path, env: str) -> VectenConfig:
-    """The promoted commit's configuration, checked as the head's is before a ship."""
-    config = load_config(tree)
-    record = read_extension_record(tree) or {}
-    check_settings(config, record, env)
-    check_bindings(config, record)
-    return config
+def _ship_in_actions(
+    project_root: Path, env: str, *, gh: ToolRunner | None, git: ToolRunner, ref: str | None
+) -> dict:
+    with actions_view(git, project_root, ref) as view:
+        config, tree = view.config, view.root
+        record = read_extension_record(tree) or {}
+        # The settings this commit would ship are checked before any host or cloud is touched.
+        check_settings(config, record, env)
+        check_bindings(config, record)
+        plane = control_plane(config, tree, env)
+        require_deployed(config, env)
+        require_bootstrapped(config, env)
+        require_promotable(gh, git, project_root, view, env)
+        data: dict = {"env": env, "dispatched": False, "commit": view.commit}
+        warnings = list(view.warnings)
+        # A ship workflow runs on every push, the first deploy's own included; inside Actions
+        # it finishes green with nothing shipped, so the push that records the confirmation
+        # ships.
+        if identity_pending(config, env):
+            data = {**data, "hosts": [], "ship_skipped": identity_pending_note(env)}
+        else:
+            outputs = fetch_outputs(plane)
+            hosts, recorded = recorded_ship(
+                gh,
+                project_root,
+                require_deploy_cloud(config).github_repository,
+                env,
+                view.commit,
+                lambda: plane.ship_hosts(tree, config, env, outputs, view.commit),
+                required=env in view.order[:-1],
+            )
+            warnings += recorded
+            data = {**data, "hosts": hosts, **_services_after_ship(plane, tree, config, outputs)}
+    if warnings:
+        data["warnings"] = warnings
+    return data
 
 
 def _promoted_from(config: VectenConfig, project_root: Path, env: str) -> str:

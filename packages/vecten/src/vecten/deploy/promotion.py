@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import re
 import tempfile
+import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from vecten.deploy.bundle import head_commit
+from pydantic import ValidationError
+
 from vecten.deploy.github_env import (
     SHIPPED_SEARCH_LIMIT,
     last_shipped,
@@ -26,15 +29,22 @@ from vecten.deploy.tfvars import env_tfvars_path
 from vecten.github.gh import ToolRunner
 from vecten_shared.config import (
     CONFIG_FILE,
+    DEFAULT_PROMOTION,
+    EnvironmentFacts,
     VectenConfig,
     load_config,
+    promotion_problem,
     promotion_scaffold_problem,
     save_config,
 )
+from vecten_shared.names import env_name_problem
 from vecten_shared.output import ExitCode, Failure
 
 __all__ = [
     "SHIPPED_SEARCH_LIMIT",
+    "HeadFacts",
+    "previous_in",
+    "read_head_facts",
     "fetch_default_branch",
     "given_commit",
     "newest_shipped",
@@ -124,19 +134,81 @@ def require_shipped_by(
         )
 
 
+def previous_in(order: tuple[str, ...], env: str) -> str | None:
+    """The environment `env` promotes from in `order`; None for the first or one outside it."""
+    if env not in order:
+        return None
+    index = order.index(env)
+    return order[index - 1] if index else None
+
+
+@dataclass
+class HeadFacts:
+    """What a promoted run takes from the default branch's head: the order and the facts."""
+
+    order: tuple[str, ...]
+    environments: dict[str, EnvironmentFacts]
+    warnings: list[str] = field(default_factory=list)
+
+
+def read_head_facts(project_root: Path) -> HeadFacts:
+    """The head's promotion order and `[environments.*]` facts, read leniently.
+
+    A promoted run's CLI is the release the promoted commit pins, which may be older than the
+    one that wrote the head's `vecten.toml`. It takes only what it knows from the head, names
+    every fact it does not, and never parses the rest of that file.
+    """
+    path = project_root / CONFIG_FILE
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise Failure(ExitCode.CONFIG, f"{path}: {exc}") from None
+    deploy = raw.get("deploy") if isinstance(raw.get("deploy"), dict) else {}
+    declared = deploy.get("promotion")
+    order = DEFAULT_PROMOTION
+    if declared is not None:
+        if not isinstance(declared, list) or not all(isinstance(e, str) for e in declared):
+            raise Failure(ExitCode.CONFIG, f"{path}: deploy.promotion: a list of environments")
+        problem = promotion_problem(declared)
+        if problem:
+            raise Failure(ExitCode.CONFIG, f"{path}: deploy.promotion: {problem}")
+        order = tuple(declared)
+    known = set(EnvironmentFacts.model_fields)
+    tables = raw.get("environments") if isinstance(raw.get("environments"), dict) else {}
+    environments: dict[str, EnvironmentFacts] = {}
+    warnings: list[str] = []
+    for env, table in tables.items():
+        if env_name_problem(env) or not isinstance(table, dict):
+            raise Failure(ExitCode.CONFIG, f"{path}: environments.{env} is no environment's facts")
+        unknown = sorted(set(table) - known)
+        if unknown:
+            warnings.append(
+                f"{CONFIG_FILE} [environments.{env}] sets {', '.join(unknown)}, which this "
+                "vecten does not know; the promoted run went on without them"
+            )
+        try:
+            environments[env] = EnvironmentFacts.model_validate(
+                {key: value for key, value in table.items() if key in known}
+            )
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(p) for p in first["loc"])
+            raise Failure(
+                ExitCode.CONFIG, f"{path}: environments.{env}.{where}: {first['msg']}"
+            ) from None
+    return HeadFacts(order, environments, warnings)
+
+
 @contextmanager
 def promoted_tree(
-    git: ToolRunner, project_root: Path, commit: str, head: VectenConfig
+    git: ToolRunner, project_root: Path, commit: str, facts: dict[str, EnvironmentFacts]
 ) -> Iterator[Path]:
-    """A checkout of `commit` whose `vecten.toml` holds the environment facts of `head`.
+    """A checkout of `commit` whose `vecten.toml` holds `facts`, the head's environment facts.
 
     The content, tfvars and Terraform roots come from the promoted commit, but the facts the
     CLI records describe the environments as they are now, which only the default branch's
-    head knows. The checked-out commit itself ships from where it stands.
+    head knows.
     """
-    if commit == head_commit(git, project_root):
-        yield project_root
-        return
     with tempfile.TemporaryDirectory(prefix="vecten-promoted-") as tmp:
         tree = Path(tmp) / "tree"
         _git(git, project_root, "worktree", "add", "--detach", str(tree), commit)
@@ -144,7 +216,7 @@ def promoted_tree(
             config = load_config(tree)
             config.environments.clear()
             config.environments.update(
-                {env: facts.model_copy(deep=True) for env, facts in head.environments.items()}
+                {env: found.model_copy(deep=True) for env, found in facts.items()}
             )
             save_config(tree, config)
             yield tree

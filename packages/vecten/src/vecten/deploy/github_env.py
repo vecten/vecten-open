@@ -328,6 +328,8 @@ SHIP_STATUS_DESCRIPTIONS = {
     "success": "every host answered its health poll",
     "failure": "the ship failed; the hosts kept or restored their previous bundle",
 }
+STATUS_ATTEMPTS = 3
+STATUS_RETRY_SECONDS = 5
 # How far back the default branch's history is searched for an environment's last ship.
 SHIPPED_SEARCH_LIMIT = 200
 _HISTORY_PAGE = 100
@@ -382,12 +384,20 @@ def set_ship_status(
     ]
     if target_url:
         args += ["-f", f"target_url={target_url}"]
-    _gh(
-        gh,
-        project_root,
-        *args,
-        what=f"api POST {path}",
-        hint="; the job that ships needs the `statuses: write` permission",
+    for attempt in range(1, STATUS_ATTEMPTS + 1):
+        result = gh.run(args, project_root)
+        if result.returncode == 0:
+            return
+        status = _http_status(result)
+        # Only GitHub's own trouble or a lost connection is worth another try.
+        if status is not None and status < 500 and status != 429:
+            break
+        if attempt < STATUS_ATTEMPTS:
+            sleep(STATUS_RETRY_SECONDS * attempt)
+    raise Failure(
+        ExitCode.TOOL_FAILED,
+        f"gh api POST {path} failed: {result.stderr.strip()[-300:]}; the job that ships needs "
+        "the `statuses: write` permission",
     )
 
 
@@ -395,7 +405,7 @@ def ship_status(
     gh: ToolRunner, project_root: Path, repository: str, commit: str, env: str
 ) -> str | None:
     """The latest `vecten/ship/<env>` state on `commit`, or None when it carries none."""
-    path = f"repos/{repository}/commits/{commit}/status"
+    path = f"repos/{repository}/commits/{commit}/status?per_page=100"
     body = _json(_gh(gh, project_root, "api", path, what=f"api GET {path}"), f"api GET {path}")
     statuses = body.get("statuses") if isinstance(body, dict) else None
     # The combined status holds the latest status of each context only.

@@ -447,3 +447,72 @@ def test_without_an_order_ship_and_deploy_dispatch_exactly_as_before(invoke, tmp
     }
     assert "commit" not in doc(deployed)
     assert load_config(root).environments["prod"].deployed_commit == COMMIT
+
+
+# A newer head than the promoted commit's CLI knows
+
+
+def test_an_unknown_fact_on_the_head_is_named_and_the_promotion_ships(invoke, repo, monkeypatch):
+    toml = repo.root / "vecten.toml"
+    toml.write_text(
+        toml.read_text().replace(
+            "[environments.prod]\n", "[environments.prod]\nfact_from_a_newer_vecten = true\n", 1
+        )
+    )
+    assert "fact_from_a_newer_vecten" in toml.read_text()
+    head = commit_all(repo.root, "A fact only a newer vecten records")
+    git(repo.root, "push", "-q", "origin", "main")
+    gh = use_gh(monkeypatch, FakeGh(history=[head, repo.b, repo.a], statuses={repo.a: [DEV_OK]}))
+    r = invoke("ship", "--env", "prod", "--commit", repo.a, "--json")
+    assert r.exit_code == 0, r.stdout
+    [warning] = doc(r)["warnings"]
+    assert "fact_from_a_newer_vecten" in warning and "environments.prod" in warning
+    shipped = load_config(released(repo.cloud, "mcp"))
+    assert shipped.environments["prod"].deployed_commit == COMMIT
+    assert gh.posted_statuses()[-1] == (repo.a, "vecten/ship/prod", "success")
+
+
+def test_an_environment_another_promotes_from_fails_closed_without_its_status(
+    invoke, repo, monkeypatch
+):
+    # prod promotes from dev, so a dev ship that cannot be recorded could never be promoted.
+    use_gh(monkeypatch, FakeGh(failing=("api",)))
+    r = invoke("ship", "--env", "dev", "--commit", repo.a, "--json")
+    assert r.exit_code == 5, r.stdout
+    assert "statuses" in doc(r)["error"]
+    assert released(repo.cloud, "mcp") is None
+
+
+def test_a_later_environment_from_the_laptop_names_promote_before_deployed(
+    invoke, laptop, monkeypatch
+):
+    set_facts(laptop, "prod", deployed_commit=None)
+    gh = use_gh(monkeypatch, FakeGh())
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    assert "vecten promote --env prod" in doc(r)["error"]
+    assert gh.calls == []
+
+
+def test_a_promoted_deploy_also_reads_the_heads_facts_leniently(invoke, repo, monkeypatch):
+    from vecten_mock_cloud import MockCloud
+
+    toml = repo.root / "vecten.toml"
+    toml.write_text(
+        toml.read_text().replace(
+            "[environments.prod]\n", "[environments.prod]\nfact_from_a_newer_vecten = 1\n", 1
+        )
+    )
+    commit_all(repo.root, "A fact only a newer vecten records")
+    git(repo.root, "push", "-q", "origin", "main")
+    use_gh(monkeypatch, FakeGh(statuses={repo.a: [DEV_OK]}))
+    monkeypatch.setattr(
+        run_mod,
+        "provision_environment",
+        lambda plane, env, terraform: {"roots": ["aws"], "outputs": MockCloud.OUTPUTS},
+    )
+    monkeypatch.setattr(run_mod, "require_terraform", lambda terraform: None)
+    r = invoke("deploy", "--env", "prod", "--commit", repo.a, "--json")
+    assert r.exit_code == 0, r.stdout
+    assert any("fact_from_a_newer_vecten" in w for w in doc(r)["warnings"])
+    assert (released(repo.cloud, "mcp") / MARKER).read_text() == "a\n"

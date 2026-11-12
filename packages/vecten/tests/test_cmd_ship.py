@@ -478,14 +478,15 @@ def test_a_ship_without_services_reports_none(invoke, project, monkeypatch):
 RUN_URL = "https://github.com/acme/data/actions/runs/77"
 
 
-def _ship_in_actions(invoke, project, monkeypatch, ssm):
+def _ship_in_actions(invoke, project, monkeypatch, ssm, *extra):
     aws_credentials(monkeypatch, project)
     set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
     monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setenv("GITHUB_RUN_ID", "77")
-    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    git = FakeGit(answers={("rev-parse", "--verify"): (0, COMMIT + "\n")})
+    monkeypatch.setattr(gh_mod, "get_git", lambda: git)
     with mock_aws():
         s3 = boto3.client("s3", region_name=REGION)
         for bucket in (BUCKET, STATE_BUCKET):
@@ -500,7 +501,7 @@ def _ship_in_actions(invoke, project, monkeypatch, ssm):
             clients, "client", lambda svc, region: ssm if svc == "ssm" else real(svc, region)
         )
         monkeypatch.setattr(ship_mod, "poll", lambda url, timeout, **kw: True)
-        return invoke("ship", "--env", "prod", "--json")
+        return invoke("ship", "--env", "prod", *extra, "--json")
 
 
 def test_a_ship_in_actions_sets_pending_then_success_on_its_commit(
@@ -526,13 +527,50 @@ def test_a_ship_that_rolls_back_sets_failure_on_its_commit(invoke, project, monk
     ]
 
 
-def test_a_status_that_cannot_be_set_ships_nothing(invoke, project, monkeypatch, status_gh):
+def test_the_last_environments_status_is_best_effort(invoke, project, monkeypatch, status_gh):
+    # Nothing promotes from prod, so a GitHub outage does not hold its ship back.
     status_gh.failing = ("api",)
     ssm = FakeSsm()
     r = _ship_in_actions(invoke, project, monkeypatch, ssm)
-    assert r.exit_code == 5, r.stdout
-    assert "statuses" in doc(r)["error"]
-    assert ssm.sent == []
+    assert r.exit_code == 0, r.stdout
+    assert ssm.kinds() == [("i-0mcp", "ship"), ("i-0platform", "ship")]
+    warnings = doc(r)["warnings"]
+    assert any("vecten/ship/prod" in w and "pending" in w for w in warnings), warnings
+    assert any("success" in w for w in warnings), warnings
+
+
+def test_a_transient_status_error_is_retried(invoke, project, monkeypatch, status_gh):
+    monkeypatch.setattr(github_env, "sleep", lambda seconds: None)
+    status_gh.transient["statuses"] = 2
+    r = _ship_in_actions(invoke, project, monkeypatch, FakeSsm())
+    assert r.exit_code == 0, r.stdout
+    assert "warnings" not in doc(r)
+    assert status_gh.posted_statuses().count((COMMIT, "vecten/ship/prod", "pending")) == 3
+    assert status_gh.latest_status(COMMIT, "vecten/ship/prod") == "success"
+
+
+def test_the_status_retries_are_bounded(invoke, project, monkeypatch, status_gh):
+    monkeypatch.setattr(github_env, "sleep", lambda seconds: None)
+    status_gh.transient["statuses"] = 100
+    r = _ship_in_actions(invoke, project, monkeypatch, FakeSsm())
+    assert r.exit_code == 0, r.stdout
+    posts = status_gh.posted_statuses()
+    assert len(posts) == 2 * github_env.STATUS_ATTEMPTS
+
+
+def test_a_push_ship_needs_no_gh_login(invoke, project, monkeypatch, status_gh):
+    # Inside Actions GH_TOKEN authenticates gh; `gh auth status` is a laptop check.
+    status_gh.logged_in = False
+    r = _ship_in_actions(invoke, project, monkeypatch, FakeSsm(), "--commit", COMMIT)
+    assert r.exit_code == 0, r.stdout
+    assert status_gh.named("auth") == []
+    assert status_gh.latest_status(COMMIT, "vecten/ship/prod") == "success"
+
+
+def test_check_with_commit_is_usage(invoke, no_cloud):
+    r = invoke("ship", "--env", "prod", "--check", "--commit", COMMIT, "--json")
+    assert r.exit_code == 2, r.stdout
+    assert "--commit" in doc(r)["error"]
 
 
 def test_a_failure_status_that_cannot_be_set_is_named_beside_the_ship_failure(

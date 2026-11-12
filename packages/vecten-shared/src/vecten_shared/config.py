@@ -126,7 +126,8 @@ DEFAULT_PROMOTION: tuple[str, ...] = (PROD_ENV,)
 PROMOTION_SINCE = "0.1.1"
 
 
-def _promotion_problem(order: list[str]) -> str | None:
+def promotion_problem(order: list[str]) -> str | None:
+    """Why `order` is no valid `[deploy] promotion`, or None."""
     for env in order:
         problem = env_name_problem(env)
         if problem:
@@ -162,7 +163,7 @@ class DeploySection(Strict):
     @field_validator("promotion")
     @classmethod
     def _promotion(cls, value: list[str] | None) -> list[str] | None:
-        return value if value is None else _checked(_promotion_problem(value), value)
+        return value if value is None else _checked(promotion_problem(value), value)
 
 
 def promotion_scaffold_problem(config: VectenConfig) -> str | None:
