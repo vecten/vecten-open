@@ -79,7 +79,7 @@ def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> 
 def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
     app, group = (str(entry.get(k, "?")) for k in ("app", "group"))
     where = f"`[apps.{app}]` groups in vecten.toml"
-    if "dataset" in entry:
+    if "source" in entry:
         dataset, source = str(entry.get("dataset", "?")), str(entry.get("source", "?"))
         title = f"App {app} does not admit group {group}"
         resolution = (
@@ -87,6 +87,14 @@ def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issu
             "the app shows, so the gate does not let its members open the app. Grant it with "
             f"`vecten grant {dataset} --group {group} --env {ctx.env}` if they should see that "
             f"data; otherwise remove {group} from the {where} and ship."
+        )
+    elif "dataset" in entry:
+        dataset = str(entry.get("dataset", "?"))
+        title = f"App {app} declares dataset {dataset}, which the MCP's model lacks"
+        resolution = (
+            f"{app} declares the dataset {dataset}, which the MCP's semantic model does not hold, "
+            "so no group may open the app. Add the dataset to the osi/ model or remove it from "
+            "the app's declaration, then ship."
         )
     else:
         title = f"App {app} is bound to group {group}"

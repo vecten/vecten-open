@@ -134,10 +134,20 @@ def test_a_bound_group_that_does_not_exist_is_listed():
     ]
 
 
-def test_a_dataset_the_model_lacks_blocks_no_group_and_is_a_model_warning():
+def test_a_dataset_the_model_lacks_admits_no_group_and_is_a_model_warning():
+    # The grants cannot be checked against a source the model does not name, so no group is
+    # admitted until it does.
     app = BoundApp("acme-sales", "overview", "", "container", ("orders", "gone"), ("default",))
     _, _, access, scopes = setup(app)
     access.model_changed(SOURCES)
+    assert scopes.admitted("overview") == frozenset()
+    [entry] = access.health()["apps"]
+    assert (entry["group"], entry["dataset"], entry["reason"]) == (
+        "default",
+        "gone",
+        "not in the model",
+    )
+    access.model_changed({**SOURCES, "gone": "marts.gone"})
     assert scopes.admitted("overview") == {"default"}
     model = type("Model", (), {"datasets": {"orders": {}}})()
     assert [(w["code"], w["app"], w["dataset"]) for w in scopes.missing(model)] == [

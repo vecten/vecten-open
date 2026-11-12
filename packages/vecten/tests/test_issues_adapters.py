@@ -559,3 +559,19 @@ def test_a_bound_group_that_does_not_exist_is_an_issue():
         if i.source == "mcp"
     ]
     assert "sales" in issue.title and "does not exist" in issue.resolution
+
+
+def test_an_app_dataset_the_model_lacks_is_an_issue():
+    entry = {
+        "app": "acme-sales.finance",
+        "group": "finance",
+        "dataset": "revenue",
+        "reason": "not in the model",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "revenue" in issue.resolution and "osi/" in issue.resolution

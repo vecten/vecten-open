@@ -219,19 +219,25 @@ class AppScopes:
                     excluded.append({"group": group, "reason": "no such group"})
                     continue
                 grants = [row for row in held if row["group"] == group]
+                # A dataset the model does not name has no source to check grants against,
+                # so it admits no one until the model holds it.
                 blocked = next(
                     (
                         name
                         for name in app.datasets
-                        if name in datasets and not self._covers(grants, name, datasets[name])
+                        if name not in datasets or not self._covers(grants, name, datasets[name])
                     ),
                     None,
                 )
                 if blocked is None:
                     admitted.append(group)
-                else:
+                elif blocked in datasets:
                     excluded.append(
                         {"group": group, "dataset": blocked, "source": datasets[blocked]}
+                    )
+                else:
+                    excluded.append(
+                        {"group": group, "dataset": blocked, "reason": "not in the model"}
                     )
             self.state.put(
                 ADMISSION,
@@ -259,9 +265,14 @@ class AppScopes:
             record = self.state.get(ADMISSION, app.key) or {}
             for item in record.get("excluded", []):
                 entry = {"app": app.key, **copy.deepcopy(item)}
-                if "dataset" in item:
+                if "source" in item:
                     entry["message"] = (
                         f"group {item['group']} may open {app.key} but cannot read {item['source']}"
+                    )
+                elif "dataset" in item:
+                    entry["message"] = (
+                        f"{app.key} declares {item['dataset']}, which the model does not hold, "
+                        f"so it admits no group"
                     )
                 else:
                     entry["message"] = (
