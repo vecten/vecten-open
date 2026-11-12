@@ -30,13 +30,23 @@ def postgres_access_helpers():
     )[0]
 
 
+# The version of the administrator-installed access procedures this release installs.
+# `READ_GRANT` called with every argument NULL reports it, and `READ_GRANTS` returns it; an
+# install from before either reported one is version 1. The MCP refuses drift revocation
+# while the installed version is older than this.
+ACCESS_VERSION = 2
+
+
 def snowflake_access_helper(database, warehouse=None):
     database = database.upper()
     warehouse = warehouse.upper() if warehouse else None
     namespace = f'{_ident(database)}."VECTEN_ACCESS"'
     signature = f"{namespace}.READ_GRANT(VARCHAR,VARCHAR,VARCHAR,BOOLEAN)"
+    report = f"{namespace}.READ_GRANTS(VARCHAR)"
     handler = resources.files("vecten_shared.sql").joinpath("snowflake_access.js").read_text()
     values = [json.dumps(value).replace("$", "\\u0024") for value in (database, warehouse)]
+    constants = f"var database = {values[0]};\nvar warehouse = {values[1]};\n"
+    constants += f"var version = {ACCESS_VERSION};\n"
     metadata_query = json.dumps(
         f"SELECT COUNT(*) FROM {_ident(database)}.INFORMATION_SCHEMA.TABLES "
         "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"
@@ -47,8 +57,7 @@ GRANT USAGE ON SCHEMA {namespace} TO ROLE PROVISIONER;
 CREATE OR REPLACE PROCEDURE {namespace}.READ_GRANT(
   TARGET VARCHAR, SCHEMA_NAME VARCHAR, RELATION_NAME VARCHAR, ENABLED BOOLEAN)
 RETURNS VARCHAR LANGUAGE JAVASCRIPT EXECUTE AS OWNER AS $$
-var database = {values[0]};
-var warehouse = {values[1]};
+{constants}var mode = 'grant';
 {handler}
 $$;
 GRANT USAGE ON PROCEDURE {signature} TO ROLE PROVISIONER;
@@ -64,6 +73,12 @@ result.next();
 return result.getColumnValue(1) > 0;
 $$;
 GRANT USAGE ON PROCEDURE {namespace}.SOURCE_EXISTS(VARCHAR,VARCHAR) TO ROLE PROVISIONER;
+CREATE OR REPLACE PROCEDURE {namespace}.READ_GRANTS(TARGET VARCHAR)
+RETURNS VARIANT LANGUAGE JAVASCRIPT EXECUTE AS OWNER AS $$
+{constants}var mode = 'report';
+{handler}
+$$;
+GRANT USAGE ON PROCEDURE {report} TO ROLE PROVISIONER;
 """
 
 
