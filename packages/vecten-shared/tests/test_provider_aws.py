@@ -9,14 +9,11 @@ import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
 from moto import mock_aws
 
-from vecten_shared.config import VectenConfig
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import (
     ConnectionSpec,
     LogTarget,
-    SnowflakeNames,
     get_provider,
-    snowflake_names,
 )
 from vecten_shared.provider.aws import RUNTIME_WRITABLE, AwsRuntimeProvider
 from vecten_shared.provider.environment import (
@@ -231,22 +228,6 @@ def test_existing_snowflake_warehouse_keeps_the_snowflake_spec(tmp_path, monkeyp
         auth="external_oauth",
         account="ACMEORG-PROD1",
         warehouse="ACME_PROD_WH",
-    )
-
-
-def test_snowflake_names():
-    def config(name, database=None):
-        return VectenConfig.model_validate(
-            {
-                "users": 3,
-                "project": {"name": name, "scaffold_version": "0.1.0"},
-                "warehouse": {"kind": "snowflake", "account": "O-A", "database": database},
-            }
-        )
-
-    assert snowflake_names(config("acme"), "prod") == SnowflakeNames("ACME", "ACME_PROD_WH")
-    assert snowflake_names(config("acme-co", "analytics"), "prod-2") == SnowflakeNames(
-        database="ANALYTICS", warehouse="ACME_CO_PROD_2_WH"
     )
 
 

@@ -119,13 +119,80 @@ def check_db_name(db: str) -> None:
 
 @dataclass(frozen=True)
 class SnowflakeNames:
+    """Every name Vecten gives an object in an environment's Snowflake account.
+
+    `access_schema` sits inside `database`, and `authentication_policy` inside that schema;
+    the fixed layout has no policy.
+    """
+
+    account: str | None
+    suffix: str
     database: str
     warehouse: str
+    analyst_role: str
+    loader_role: str
+    loader_user: str
+    provisioner_role: str
+    provisioner_user: str
+    integration: str
+    access_schema: str
+    authentication_policy: str | None
+
+    @property
+    def audience(self) -> str:
+        """The audience the account's External OAuth integration accepts in a token."""
+        if not self.account:
+            raise ValueError("the Snowflake audience needs the account")
+        return f"https://{self.account}.snowflakecomputing.com"
 
 
-def snowflake_names(config: VectenConfig, env: str) -> SnowflakeNames:
+ACCESS_SCHEMA = "VECTEN_ACCESS"
+AUTHENTICATION_POLICY = "MCP_SIGN_IN"
+
+
+def _identifier(value: str) -> str:
     # A project or environment name may hold a hyphen, which an unquoted identifier cannot.
+    return value.replace("-", "_").upper()
+
+
+def snowflake_names(
+    config: VectenConfig, env: str, *, shared_account: bool = False
+) -> SnowflakeNames:
+    """The names for `env`. The fixed layout is the one every environment deployed before
+    shared accounts carries, so each of its names must stay exactly as it is; a shared
+    account ends every account-level name in the environment's suffix `_<BASE>_<ENV>`."""
     project = config.project.name.replace("-", "_")
-    database = (config.warehouse.database or project).upper()
-    warehouse = f"{project}_{env}_WH".upper().replace("-", "_")
-    return SnowflakeNames(database=database, warehouse=warehouse)
+    if not shared_account:
+        loader = "LOADER"
+        return SnowflakeNames(
+            account=config.warehouse.account,
+            suffix="",
+            database=(config.warehouse.database or project).upper(),
+            warehouse=_identifier(f"{project}_{env}_WH"),
+            analyst_role="ANALYST",
+            loader_role=loader,
+            loader_user=loader,
+            provisioner_role="PROVISIONER",
+            provisioner_user="VECTEN_PROVISIONER",
+            integration="VECTEN_EXTERNAL_OAUTH",
+            access_schema=ACCESS_SCHEMA,
+            authentication_policy=None,
+        )
+    base = _identifier(f"{config.warehouse.database or project}_{env}")
+    suffix = f"_{base}"
+    # dlt and dbt pass one name as both the loader's user and its role.
+    loader = f"LOADER{suffix}"
+    return SnowflakeNames(
+        account=config.warehouse.account,
+        suffix=suffix,
+        database=base,
+        warehouse=f"{base}_WH",
+        analyst_role=f"ANALYST{suffix}",
+        loader_role=loader,
+        loader_user=loader,
+        provisioner_role=f"PROVISIONER{suffix}",
+        provisioner_user=f"PROVISIONER{suffix}",
+        integration=f"EXTERNAL_OAUTH{suffix}",
+        access_schema=ACCESS_SCHEMA,
+        authentication_policy=AUTHENTICATION_POLICY,
+    )
