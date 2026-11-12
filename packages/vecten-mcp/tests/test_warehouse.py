@@ -729,3 +729,23 @@ def test_the_fixed_scope_check_refuses_any_policy_grant(monkeypatch):
     )
     with pytest.raises(ValueError, match="APPLY"):
         SnowflakeAdapter(GrantsConnection, None, None, names=names()).check_scope({})
+
+
+class PolicyRefused(UsersConnection):
+    def execute(self, query, parameters=None):
+        if "AUTHENTICATION POLICY" in query:
+            GrantsConnection.seen.append((query, parameters))
+            raise RuntimeError("policy refused")
+        return super().execute(query, parameters)
+
+
+def test_a_user_whose_policy_cannot_be_set_is_dropped_again(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    adapter = SnowflakeAdapter(PolicyRefused, None, None, names=_shared_names())
+    with pytest.raises(RuntimeError, match="policy refused"):
+        adapter.create_account("jane", "human")
+    assert [query for query, _ in GrantsConnection.seen] == [
+        'CREATE USER "JANE_ACME_DEV" TYPE = PERSON',
+        f'ALTER USER "JANE_ACME_DEV" SET AUTHENTICATION POLICY {POLICY}',
+        'DROP USER "JANE_ACME_DEV"',
+    ]

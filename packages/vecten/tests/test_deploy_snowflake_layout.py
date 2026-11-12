@@ -182,3 +182,36 @@ def test_the_cli_takes_the_environments_account_from_its_tfvars(root):
     assert names.account == "ACME-DEV"
     assert names.analyst_role == "ANALYST_ACME_DEV"
     assert environment_names(root, config, "nosuch").account == "ACME-PROD"
+
+
+def test_a_shared_environment_refuses_a_changed_base(root):
+    config = configure(
+        root, shared=True, prod={"snowflake_shared_account": True, "snowflake_base": "ACME"}
+    )
+    check_layout(root, config, "prod")
+    config.warehouse.database = "lake"
+    failure = refused(lambda: check_layout(root, config, "prod"))
+    assert failure.code == ExitCode.REFUSED
+    assert "'ACME'" in failure.message and "'LAKE'" in failure.message
+    assert "[warehouse] database" in failure.message
+
+
+def test_a_deployed_fixed_environment_keeps_deploying_beside_a_copied_tfvars(root):
+    # Before per-environment accounts every tfvars had to name prod's account.
+    add_env(root, "dev", "ACME-PROD")
+    config = configure(root, prod={"deployed_commit": "a" * 40})
+    assert check_tfvars(root, config, "prod")["snowflake_account"] == "ACME-PROD"
+    failure = refused(lambda: check_tfvars(root, config, "dev"))
+    assert "deploy/envs/prod.tfvars" in failure.message and "shared_account" in failure.message
+
+
+def test_a_deployed_fixed_environment_refuses_a_shared_one_in_its_account(root):
+    add_env(root, "dev", "ACME-PROD")
+    config = configure(
+        root,
+        prod={"snowflake_shared_account": False},
+        dev={"snowflake_shared_account": True, "snowflake_base": "ACME"},
+    )
+    failure = refused(lambda: check_tfvars(root, config, "prod"))
+    assert failure.code == ExitCode.CONFIG
+    assert "deploy/envs/dev.tfvars" in failure.message and "shared" in failure.message

@@ -51,6 +51,7 @@ from vecten.deploy.snowflake import (
     has_snowflake_root,
     identity_pending,
     identity_pending_note,
+    record_layout,
 )
 from vecten.deploy.terraform import PlannedRoot, TerraformRunner, require_terraform
 from vecten.deploy.tfvars import check_tfvars
@@ -299,7 +300,15 @@ def _deploy(
         # The run read this checkout's vecten.toml from GitHub, so it named the objects as
         # this layout does.
         layout = shared_layout(config, env) if has_snowflake_root(config) else None
-        followed = dispatch_and_follow(project_root, APPLY_WORKFLOW, env, gh, git)
+        try:
+            followed = dispatch_and_follow(project_root, APPLY_WORKFLOW, env, gh, git)
+        except Failure:
+            # A failed run may already have created Snowflake objects under these names.
+            if layout is not None:
+                recorded = load_config(project_root)
+                if record_layout(recorded, env, layout):
+                    save_config(project_root, recorded)
+            raise
         try:
             deployed = check_commit(followed["head_sha"])
         except Failure:
@@ -313,8 +322,8 @@ def _deploy(
         recorded = load_config(project_root)
         facts = recorded.environments[env]
         facts.deployed_commit = deployed
-        if layout is not None and facts.snowflake_shared_account is None:
-            facts.snowflake_shared_account = layout
+        if layout is not None:
+            record_layout(recorded, env, layout)
         # A deploy hands every VM its current key and waits for the acknowledgement, so no VM
         # key is waiting any more; bootstrap deletes the old keys on its next run.
         facts.cloud_ids = {
@@ -483,11 +492,17 @@ def destroy_env(
 
         # The run took minutes, so the file is read again and edits made meanwhile survive.
         recorded = load_config(project_root)
-        recorded.environments[env].deployed_commit = None
+        facts = recorded.environments[env]
         if delete_data is not None:
-            # The Snowflake objects the layout named are gone, so a new deploy of the
-            # environment takes the project's setting afresh.
-            recorded.environments[env].snowflake_shared_account = None
+            # The database and every object Terraform named are gone, so a new deploy of
+            # the environment takes the project's setting afresh.
+            facts.snowflake_shared_account = None
+            facts.snowflake_base = None
+        elif has_snowflake_root(recorded):
+            # The kept database carries the layout's names, and without a deployed commit an
+            # unrecorded environment would read as never deployed and take the setting.
+            record_layout(recorded, env, shared_layout(recorded, env))
+        facts.deployed_commit = None
         cleared = _clear_state_facts(recorded, env)
         save_config(project_root, recorded)
         # Both records name what the destroyed `state` database held: the session it issued

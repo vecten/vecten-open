@@ -193,6 +193,11 @@ def shared_layout(config: VectenConfig, env: str) -> bool:
     return config.warehouse.shared_account if recorded is None else recorded
 
 
+def shared_base(config: VectenConfig) -> str:
+    """`BASE` of a shared account's names: `[warehouse] database`, else the project name."""
+    return _identifier(config.warehouse.database or config.project.name)
+
+
 def _shared_suffix(config: VectenConfig, env: str) -> str:
     if "-" in env:
         raise Failure(

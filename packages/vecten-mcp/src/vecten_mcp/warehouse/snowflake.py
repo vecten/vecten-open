@@ -91,13 +91,17 @@ class SnowflakeAdapter:
         check_account(name, kind)
         user_type = "SERVICE" if kind == "service" else "PERSON"
         with self.control() as cursor:
-            cursor.execute(f"CREATE USER {quote(self._user(name))} TYPE = {user_type}")
-            if self.names.authentication_policy:
-                # The user signs in only through this environment's own integration.
-                cursor.execute(
-                    f"ALTER USER {quote(self._user(name))} SET AUTHENTICATION POLICY "
-                    + self._policy()
-                )
+            user = quote(self._user(name))
+            cursor.execute(f"CREATE USER {user} TYPE = {user_type}")
+            if not self.names.authentication_policy:
+                return
+            # The user signs in only through this environment's own integration; without the
+            # policy any integration in the account would accept a token naming it.
+            try:
+                cursor.execute(f"ALTER USER {user} SET AUTHENTICATION POLICY {self._policy()}")
+            except BaseException:
+                cursor.execute(f"DROP USER {user}")
+                raise
 
     def source_exists(self, table):
         def name(part, default):

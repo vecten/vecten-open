@@ -652,6 +652,23 @@ def test_only_data_deletion_forgets_the_snowflake_layout(
     assert load_config(snowflake).environments["prod"].snowflake_shared_account is kept
 
 
+def test_a_kept_environment_deployed_without_a_record_keeps_its_fixed_names(
+    invoke, snowflake, monkeypatch
+):
+    # Deployed before layouts were recorded, so its objects carry the fixed names.
+    config = load_config(snowflake)
+    config.warehouse.shared_account = True
+    save_config(snowflake, config)
+    set_facts(snowflake, provisioner_script_run=True)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        r = invoke("destroy", "--env", "prod", "--confirm", "prod")
+    assert r.exit_code == 0, r.stderr
+    facts = load_config(snowflake).environments["prod"]
+    assert facts.deployed_commit is None and facts.snowflake_shared_account is False
+    assert "PROVISIONER created stay in Snowflake" in r.stdout
+    assert "PROVISIONER_ACME_PROD" not in r.stdout
+
+
 def test_postgres_project_reports_no_snowflake_database(invoke, project, monkeypatch):
     with cloud(project, monkeypatch):
         r = invoke("destroy", "--env", "prod", "--confirm", "prod", "--json")

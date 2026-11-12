@@ -18,7 +18,13 @@ from vecten.deploy.tfvars import (
 )
 from vecten_shared.config import SNOWFLAKE_ACCOUNT, EnvironmentFacts, VectenConfig
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import Provider, SnowflakeNames, recorded_layout, snowflake_names
+from vecten_shared.provider import (
+    Provider,
+    SnowflakeNames,
+    recorded_layout,
+    shared_base,
+    snowflake_names,
+)
 
 __all__ = ["has_snowflake_root"]
 
@@ -51,6 +57,18 @@ def _layout(shared: bool) -> str:
     return f"snowflake_shared_account = {'true' if shared else 'false'}"
 
 
+def record_layout(config: VectenConfig, env: str, shared: bool) -> bool:
+    """Record the layout, and a shared layout's base, an environment's first deploy used;
+    whether anything was unrecorded."""
+    facts = config.environments[env]
+    if facts.snowflake_shared_account is not None:
+        return False
+    facts.snowflake_shared_account = shared
+    if shared:
+        facts.snowflake_base = shared_base(config)
+    return True
+
+
 def check_layout(project_root: Path, config: VectenConfig, env: str) -> None:
     """Refuse an environment whose recorded Snowflake layout differs from the setting, unless
     the setting is shared and the environment's fixed names hold an account of their own.
@@ -62,6 +80,16 @@ def check_layout(project_root: Path, config: VectenConfig, env: str) -> None:
         return
     recorded = recorded_layout(config, env)
     setting = config.warehouse.shared_account
+    base = config.environments[env].snowflake_base if env in config.environments else None
+    if recorded and base and base != shared_base(config):
+        raise Failure(
+            ExitCode.REFUSED,
+            f"environment {env!r} was first deployed with the Snowflake names based on "
+            f"{base!r}, and [warehouse] database (or the project name) now gives "
+            f"{shared_base(config)!r}, which would rename every object it has; set "
+            "[warehouse] database back, or destroy the environment with --delete-data and "
+            "deploy it again",
+        )
     if recorded is None or recorded == setting:
         return
     accounts = environment_accounts(project_root)

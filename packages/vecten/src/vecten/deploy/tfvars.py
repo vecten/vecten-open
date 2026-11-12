@@ -11,7 +11,7 @@ from vecten.deploy.sizing import TIERS
 from vecten_shared.config import APEX, VectenConfig
 from vecten_shared.names import check_env_name, env_name_problem
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import shared_layout, snowflake_names
+from vecten_shared.provider import recorded_layout, shared_layout, snowflake_names
 
 REQUIRED = (
     "environment",
@@ -247,7 +247,7 @@ def _check_account_layout(project_root: Path, config: VectenConfig, env: str, ac
         for other, named in environment_accounts(project_root).items()
         if other != env and named.upper() == account.upper()
     )
-    if not shared and others:
+    if not shared and recorded_layout(config, env) is None and others:
         raise Failure(
             ExitCode.CONFIG,
             f"{rel} names Snowflake account {account!r}, which {_files(others)} also "
@@ -255,13 +255,17 @@ def _check_account_layout(project_root: Path, config: VectenConfig, env: str, ac
             f"project, so give {env} an account of its own, or set [warehouse] "
             "shared_account = true before its first deploy",
         )
-    fixed = [other for other in others if not shared_layout(config, other)]
-    if shared and fixed:
+    # A deployed fixed environment holds its account already; a fixed environment beside it
+    # is refused at its own first deploy, above.
+    beside = [other for other in others if shared_layout(config, other) != shared]
+    if beside:
+        layout = "fixed" if shared else "shared-account"
         raise Failure(
             ExitCode.CONFIG,
-            f"{rel} names Snowflake account {account!r}, which {_files(fixed)} also names "
-            f"for an environment with fixed Snowflake names; a fixed environment holds its "
-            f"account alone, so give {env} another account",
+            f"{rel} names Snowflake account {account!r}, which {_files(beside)} also names "
+            f"for an environment with {layout} Snowflake names; a fixed environment holds "
+            f"its account alone, so give {'this environment' if shared else 'that one'} "
+            "another account",
         )
 
 

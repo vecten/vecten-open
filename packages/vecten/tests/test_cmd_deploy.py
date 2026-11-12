@@ -664,6 +664,25 @@ def test_a_snowflake_deploy_records_the_layout_it_was_first_deployed_with(
     assert facts.deployed_commit == COMMIT
 
 
+def test_a_failed_first_run_records_the_layout_it_tried(invoke, laptop, snowflake, monkeypatch):
+    _share_account(snowflake)
+    laptop.watch_code = 1
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code != 0, r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    # The run may have created Snowflake objects under these names before it failed.
+    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME"
+    assert facts.deployed_commit is None
+
+
+def test_a_shared_deploy_records_the_base_of_its_names(invoke, laptop, snowflake, monkeypatch):
+    _share_account(snowflake)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    assert invoke("deploy", "--env", "prod", "--json").exit_code == 0
+    assert load_config(snowflake).environments["prod"].snowflake_base == "ACME"
+
+
 def test_a_changed_layout_is_refused_before_any_dispatch(invoke, laptop, snowflake, monkeypatch):
     dev = env_tfvars_path(snowflake, "prod").read_text().replace('"prod"', '"dev"', 1)
     env_tfvars_path(snowflake, "dev").write_text(dev)

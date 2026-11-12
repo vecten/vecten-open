@@ -339,6 +339,9 @@ class EnvironmentFacts(Strict):
     # The `[warehouse] shared_account` value the environment's first deploy used; its
     # Snowflake objects carry the names that value gives for the environment's life.
     snowflake_shared_account: bool | None = None
+    # The base of a shared account's names when the environment first deployed; another base
+    # would rename every object it has.
+    snowflake_base: str | None = Field(default=None, pattern=r"^[A-Z0-9_]+$")
 
     @field_validator("cloud_ids")
     @classmethod
