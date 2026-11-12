@@ -27,6 +27,7 @@ from vecten.deploy.expiry import (
 )
 from vecten.deploy.github_env import (
     canonical_repository,
+    configured_names,
     dispatch_and_follow,
     ensure_environment,
     oidc_subject_prefixes,
@@ -64,6 +65,42 @@ APPLY_WORKFLOW = "terraform-apply.yml"
 RUNBOOK = "docs/runbook.md"
 RUNBOOK_PROTECT_SECTION = '"Protect the deploy environment"'
 GITHUB_OUTPUT_VAR = "GITHUB_OUTPUT"
+
+
+GIT_SECRET = "VECTEN_GIT_CREDENTIALS"
+GIT_APP_VARIABLE = "VECTEN_GIT_APP_ID"
+
+
+def require_ci_git_credential(
+    project_root: Path, config: VectenConfig, env: str, gh: ToolRunner
+) -> None:
+    """Refuse to dispatch a ship of a private git source that CI holds no credential for.
+
+    Only names are compared: a secret's value cannot be read, and a wrong one fails the ship in
+    CI before any host changes."""
+    from vecten.git_extensions import registered_sources
+
+    record = read_extension_record(project_root) or {}
+    private = [
+        name
+        for name, (_, entry) in registered_sources(config, record).items()
+        if not entry.git.public
+    ]
+    if not private:
+        return
+    repository = require_deploy_cloud(config).github_repository
+    names = configured_names(gh, project_root, repository, env)
+    if GIT_SECRET in names or GIT_APP_VARIABLE in names:
+        return
+    raise Failure(
+        ExitCode.PREREQUISITE,
+        f"{', '.join(private)} comes from a private git repository, and CI fetches it on every "
+        f"ship, but {repository} and its environment {env} have neither the secret "
+        f"{GIT_SECRET} nor the variable {GIT_APP_VARIABLE}; set {GIT_SECRET} "
+        f"(`gh secret set {GIT_SECRET} --env {env}`), or {GIT_APP_VARIABLE} with "
+        "VECTEN_GIT_APP_PRIVATE_KEY and VECTEN_GIT_APP_OWNER, as "
+        "docs/extensions-private-git.md describes",
+    )
 
 
 def check_facts(config: VectenConfig, env: str) -> dict[str, bool]:
@@ -288,6 +325,7 @@ def _deploy(
         if gh is None:
             raise Failure(ExitCode.INTERNAL, "dispatching the apply workflow needs the gh runner")
         require_on_default_branch(project_root, deploy.github_repository, gh, git)
+        require_ci_git_credential(project_root, config, env, gh)
         followed = dispatch_and_follow(project_root, APPLY_WORKFLOW, env, gh, git)
         try:
             deployed = check_commit(followed["head_sha"])
@@ -372,6 +410,7 @@ def ship_env(
     if not in_actions():
         if gh is None:
             raise Failure(ExitCode.INTERNAL, "dispatching the ship workflow needs the gh runner")
+        require_ci_git_credential(project_root, config, env, gh)
         followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git)
         return {"env": env, "dispatched": True, **followed}
     require_bootstrapped(config, env)

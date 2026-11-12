@@ -251,6 +251,48 @@ def set_repository_secrets(
         )
 
 
+def configured_names(gh: ToolRunner, project_root: Path, repository: str, env: str) -> set[str]:
+    """The names of the Actions secrets and variables a job of `env` can read: the
+    repository's, the environment's, and the organisation's shared with the repository.
+
+    Only names are listed; GitHub never returns a secret's value."""
+    names: set[str] = set()
+    for kind in ("secret", "variable"):
+        for scope in ((), ("--env", env)):
+            result = _gh(
+                gh,
+                project_root,
+                kind,
+                "list",
+                *scope,
+                "--repo",
+                repository,
+                "--json",
+                "name",
+                what=f"{kind} list {' '.join(scope)}".strip(),
+                tolerate=(404,),
+            )
+            if result.returncode == 0:
+                names |= {row["name"] for row in _json(result, f"{kind} list") or []}
+    # A person who may not read the organisation's lists still ships; its names are then
+    # left out rather than refused.
+    for kind in ("secrets", "variables"):
+        result = _gh(
+            gh,
+            project_root,
+            "api",
+            f"repos/{repository}/actions/organization-{kind}",
+            "--paginate",
+            "--jq",
+            f".{kind}[].name",
+            what=f"api organization-{kind}",
+            tolerate=(403, 404),
+        )
+        if result.returncode == 0:
+            names |= set(result.stdout.split())
+    return names
+
+
 def repository_facts(gh: ToolRunner, project_root: Path, repository: str) -> tuple[str, str]:
     """The repository's `owner/name` as GitHub spells it, and its default branch."""
     result = _gh(
