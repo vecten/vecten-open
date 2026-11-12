@@ -91,6 +91,8 @@ def test_the_three_failures_end_in_three_skills_and_an_empty_list():
         "Only on the human's explicit yes, run: ``` vecten promote --env <next env> --json ```",
         "Never promote, ship or deploy on your own.",
         "until it is promoted and runs green there",
+        "Exit 0 with an empty `issues` list: nothing is broken in `<env>`. Say so and go on to "
+        "the next environment of the order; stop after the last",
     ],
 )
 def test_the_skill_states_the_loop_and_its_rules(phrase):

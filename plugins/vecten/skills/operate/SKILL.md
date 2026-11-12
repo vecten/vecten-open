@@ -49,7 +49,8 @@ For `prod`, the only environment of a project without an order, that is
 `vecten issues --env prod --json`. Without `--env` the command reads the laptop's stack
 instead, which needs `vecten up` running.
 
-- Exit 0 with an empty `issues` list: nothing is broken. Say so and stop.
+- Exit 0 with an empty `issues` list: nothing is broken in `<env>`. Say so and go on to the
+  next environment of the order; stop after the last (step 8).
 - Exit 0 with items: work through them in the order listed, one at a time.
 - Exit 5: a source could not be read; `sources` names it and the reason, for example
   `"gaps": "unavailable: run vecten login before administering the MCP"`. Tell the human what
