@@ -431,6 +431,24 @@ def test_guide_evals_sign_in_with_a_password_link():
     assert human.count("eval-ada-sign-in-0b7e") == 2
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        'Copy `deploy/envs/prod.tfvars` to `deploy/envs/dev.tfvars`, set `environment = "dev"`',
+        "Record the order with `vecten answer deploy.promotion dev,prod`",
+        "`vecten answer deploy.promotion none` removes the order",
+        "Exit 4 naming `vecten update` means the project's workflows predate promotion",
+        "it now walks `dev` first",
+        "It ships the commit dev shipped last.",
+        "run `vecten promote --env <next env>` only on their explicit yes",
+        "`vecten promote` without their yes to promoting",
+        "`next` never asks about an order",
+    ],
+)
+def test_guide_walks_the_promotion_order(phrase):
+    assert phrase in flat("guide")
+
+
 def test_guide_tells_how_a_password_user_gets_a_link():
     body = skill_body("guide")
     assert "vecten user password-link" in body and "vecten mcp admin-link --env prod" in body
