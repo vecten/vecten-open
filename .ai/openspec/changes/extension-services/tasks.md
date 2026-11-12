@@ -9,7 +9,7 @@ template can run on; B must land in the same release, before any public route re
 ## 1. Spikes (before A)
 
 - [x] 1.1 Resolve a Streamlit app's dependencies (`streamlit`, `tornado`, `pyarrow`, `protobuf`) as the `platform` extra against the Airflow base image's installed set with #50's `vecten lock`; record the result in design.md (Decision 5 fallback if it conflicts)
-- [ ] 1.2 Confirm the pinned Compose plugin honours `mem_limit`, `cpus` and a network's `com.docker.network.bridge.name` outside swarm
+- [x] 1.2 Confirm the pinned Compose plugin honours `mem_limit`, `cpus` and a network's `com.docker.network.bridge.name` outside swarm
 - [ ] 1.3 Confirm `iptables -I DOCKER-USER -i <bridge> -d 169.254.169.254 -j DROP` blocks a container on that bridge and only it, on Amazon Linux 2023 and on the Scaleway Ubuntu image, and survives a Docker restart
 
 ## 2. Services core (PR A)
