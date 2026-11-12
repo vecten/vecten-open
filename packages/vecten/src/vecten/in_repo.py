@@ -33,8 +33,8 @@ class InRepo:
 
 
 def is_path(arg: str) -> bool:
-    """Whether `arg` names a directory rather than a package; package names hold no `/`."""
-    return "/" in arg or arg.startswith(".")
+    """Whether `arg` names a directory rather than a package specifier."""
+    return arg.startswith(("./", "../", "/", f"{EXTENSIONS_DIR}/")) or arg in (".", "..")
 
 
 def _refuse(problem: str) -> Failure:
