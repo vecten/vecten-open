@@ -41,10 +41,10 @@
 
 - [x] 7.1 `operate` skill: the order from `promote --status`, issues per environment, the promotion `ask`; re-render the plugin and `docs/agent-guide.md` with `uv run vecten dev render-plugin --repo .`
 - [x] 7.2 `guide` skill: the promotion order in the deploy walk-through
-- [ ] 7.3 `docs/operations.md`: the order, `promote`, statuses, rollback by `--commit`, required reviewers as an option where the plan offers them
-- [ ] 7.4 Runbook template: adopting an order, and what a promoted run reads from where
-- [ ] 7.5 `docs/GLOSSARY.md`: "Promotion order" and "Promote"
-- [ ] 7.6 `CHANGELOG.md` under `[Unreleased]`
+- [x] 7.3 `docs/operations.md`: the order, `promote`, statuses, rollback by `--commit`, required reviewers as an option where the plan offers them
+- [x] 7.4 Runbook template: adopting an order, and what a promoted run reads from where
+- [x] 7.5 `docs/GLOSSARY.md`: "Promotion order" and "Promote"
+- [x] 7.6 `CHANGELOG.md` under `[Unreleased]`
 
 ## 8. Proven only on a real repository and two deployed environments
 

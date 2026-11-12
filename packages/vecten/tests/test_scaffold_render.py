@@ -93,6 +93,10 @@ def test_render_layout(tmp_path, params):
     assert served is (params.render_deploy and "platform" not in params.components)
     snowflake_root = params.warehouse == "snowflake" and "platform" in params.components
     assert ("### Snowflake" in runbook) is (params.render_deploy and snowflake_root)
+    assert ("## Promotion order" in runbook) is params.render_deploy
+    assert ("### What a promoted run reads from where" in runbook) is params.render_deploy
+    own_account = "Set `snowflake_account` to `dev`'s own Snowflake account" in runbook
+    assert own_account is (params.render_deploy and snowflake_root)
     assert (DEPLOY_ROLE_PRIVILEGES in runbook) is (params.render_deploy and snowflake_root)
     identity = "`vecten mcp provisioner-script --env <env>`, which stores" in runbook
     assert identity is (params.render_deploy and snowflake_root and "mcp" in params.components)

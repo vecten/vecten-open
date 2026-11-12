@@ -63,6 +63,24 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   and `test` and `source freshness` are refused while the project declares on-run hooks or a
   test stores its failures. Every command runs on other environments. A Postgres project is
   refused, because its deployed warehouse is on a private network.
+- Promotion between environments ([#37](https://github.com/vecten/vecten-open/issues/37)).
+  `[deploy] promotion = ["dev", "prod"]` in `vecten.toml`, recorded with
+  `vecten answer deploy.promotion dev,prod` and removed with `none`, makes a merge ship the
+  first environment only; each later one ships only through
+  `vecten promote --env <env> [--commit <sha>]`, which ships a commit the environment before it
+  shipped, the one it shipped last by default. `--commit` with an older commit rolls an
+  environment back, and `vecten promote --status` lists what each environment shipped last.
+  Every ship in GitHub Actions sets the commit status `vecten/ship/<env>` (`pending`, then
+  `success` or `failure`), and CI refuses, before any host or Terraform changes, a commit off
+  the default branch or one the environment before did not ship. A promoted run takes its
+  bundle, tfvars, Terraform roots and `vecten` version from the promoted commit and the
+  environment's facts from the default branch. `vecten deploy --env <later env>` applies and
+  ships the same promoted commit. `vecten next` walks the environments in order, the deploy
+  gate of a later one saying it ships what the one before it shipped, and renews keys for every
+  environment; `vecten github push` names the promotion after the first environment's ship;
+  the `operate` skill reads issues per environment and asks before it promotes a fix. The CLI
+  refuses an order while the project's workflows predate it, naming `vecten update`. Without
+  an order a merge ships `prod`, as before.
 
 ### Changed
 
@@ -73,6 +91,15 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   next midnight.
 - `vecten dbt` on a Snowflake project without `--env` now names `--env` alongside
   `vecten dbt-build-local` in its refusal.
+- The rendered `ship.yml`, `deploy-platform.yml` and `terraform-apply.yml` read the promotion
+  order when they run: the push gate is `vecten ship --check` without `--env`, the apply and
+  ship workflows take a `commit` input (the run's own commit by default) and grant
+  `statuses: write`, and each job installs the `vecten` version the commit's `scaffold_version`
+  names. `vecten update` brings them to existing projects; without an order they ship `prod` on
+  every push as before, and also set `vecten/ship/prod`.
+- `vecten ship --env <env>` from the laptop refuses an environment after the first of the
+  promotion order, naming `vecten promote`, and `vecten github push` waits for the ship only
+  once the order's first environment (`prod` without an order) is deployed.
 
 ### Fixed
 

@@ -179,7 +179,9 @@ and needs no Terraform change.
 
 After the first deploy, every push to the project's default branch ships the DAGs, the
 connectors, the dbt project, `osi/` and `evals/` to every host without Terraform. `vecten ship
---env <env>` does the same from the laptop. A ship switches the host to the new release, polls
+--env <env>` does the same from the laptop. Under a
+[promotion order](operations.md#promotion-order) a push ships the first environment of the
+order, and `vecten promote --env <env>` ships each later one. A ship switches the host to the new release, polls
 each component's health URL and rolls the host back when it does not answer healthy; the VM
 agent rolls back by itself when it fails after switching. Airflow's running tasks are retried by
 Airflow on the new release, which is why `deps` runs again before `build` when a ship lands
