@@ -114,16 +114,8 @@ run "grants_follow_the_convention" {
     error_message = "ANALYST and PROVISIONER use the database"
   }
   assert {
-    condition     = toset(keys(snowflake_grant_privileges_to_account_role.analyst_schema)) == toset(["CORE", "MARTS"])
-    error_message = "ANALYST uses core and marts only"
-  }
-  assert {
-    condition     = toset([for g in snowflake_grant_privileges_to_account_role.analyst_future : "${g.on_schema_object[0].future[0].object_type_plural} ${g.on_schema_object[0].future[0].in_schema}"]) == toset(["TABLES \"ACME\".\"CORE\"", "TABLES \"ACME\".\"MARTS\"", "VIEWS \"ACME\".\"CORE\"", "VIEWS \"ACME\".\"MARTS\""])
-    error_message = "ANALYST selects every future table and view in core and marts"
-  }
-  assert {
-    condition     = alltrue([for g in snowflake_grant_privileges_to_account_role.analyst_future : g.account_role_name == "ANALYST" && toset(g.privileges) == toset(["SELECT"])])
-    error_message = "future grants are SELECT to ANALYST"
+    condition     = length(snowflake_grant_privileges_to_account_role.analyst_default_schema) == 0 && length(snowflake_grant_privileges_to_account_role.analyst_default_future) == 0
+    error_message = "with the MCP the module grants ANALYST nothing on a schema: the MCP's state owns its reads"
   }
 }
 
@@ -160,6 +152,31 @@ run "the_whole_graph_applies" {
   assert {
     condition     = length(snowflake_grant_ownership.schema) == 4 && output.database == "ACME"
     error_message = "every resource applies against the mocked provider"
+  }
+}
+
+run "without_the_mcp_analyst_reads_core_and_marts" {
+  command = plan
+
+  variables {
+    components = ["platform"]
+  }
+
+  assert {
+    condition     = toset(keys(snowflake_grant_privileges_to_account_role.analyst_default_schema)) == toset(["CORE", "MARTS"])
+    error_message = "ANALYST uses core and marts only"
+  }
+  assert {
+    condition     = alltrue([for g in snowflake_grant_privileges_to_account_role.analyst_default_schema : g.account_role_name == "ANALYST" && toset(g.privileges) == toset(["USAGE"])])
+    error_message = "schema grants are USAGE to ANALYST"
+  }
+  assert {
+    condition     = toset([for g in snowflake_grant_privileges_to_account_role.analyst_default_future : "${g.on_schema_object[0].future[0].object_type_plural} ${g.on_schema_object[0].future[0].in_schema}"]) == toset(["TABLES \"ACME\".\"CORE\"", "TABLES \"ACME\".\"MARTS\"", "VIEWS \"ACME\".\"CORE\"", "VIEWS \"ACME\".\"MARTS\""])
+    error_message = "ANALYST selects every future table and view in core and marts"
+  }
+  assert {
+    condition     = alltrue([for g in snowflake_grant_privileges_to_account_role.analyst_default_future : g.account_role_name == "ANALYST" && toset(g.privileges) == toset(["SELECT"])])
+    error_message = "future grants are SELECT to ANALYST"
   }
 }
 

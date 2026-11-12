@@ -5,16 +5,16 @@ ship before areas.
 
 ## 0. Settle what the design could not verify (before section 1)
 
-- [ ] 0.1 terraform: whether a `removed` block with `destroy = false` works in the fetched child module, or must sit in the thin root with a `module.` address; otherwise use the `terraform state rm` fallback of Decision 4
+- [x] 0.1 terraform: whether a `removed` block with `destroy = false` works in the fetched child module, or must sit in the thin root with a `module.` address; otherwise use the `terraform state rm` fallback of Decision 4
 - [ ] 0.2 live: which `SHOW TERSE OBJECTS` or `INFORMATION_SCHEMA.TABLES` value names a materialized view, a dynamic table, an external table and an Iceberg table
 - [ ] 0.3 live: `CREATE OR REPLACE … COPY GRANTS` keeps a per-object grant and skips the schema's future grants for a table, a view and a dynamic table; and whether dbt-snowflake 1.12 adds `COPY GRANTS` on `--full-refresh` of an incremental model
-- [ ] 0.4 unit: whether fakesnow 0.11 accepts `COPY GRANTS`
+- [x] 0.4 unit: whether fakesnow 0.11 accepts `COPY GRANTS`
 - [ ] 0.5 live: an owner's-rights JavaScript procedure can run `SHOW GRANTS TO ROLE` and `SHOW FUTURE GRANTS IN SCHEMA` for a role it does not own
 
 ## 1. One owner for the default grants; reconciliation converges
 
-- [ ] 1.1 `terraform/snowflake/main.tf`: `removed` blocks for `analyst_schema` and `analyst_future`; `analyst_default_schema` and `analyst_default_future` only when `mcp` is not a component; ownership transfer ordering unchanged
-- [ ] 1.2 terraform: `terraform test` cases: with the MCP, no `ANALYST` grant resource; without it, the same grants as before; a state holding the old addresses plans no destroy
+- [x] 1.1 `terraform/snowflake/main.tf`: `removed` blocks for `analyst_schema` and `analyst_future`; `analyst_default_schema` and `analyst_default_future` only when `mcp` is not a component; ownership transfer ordering unchanged
+- [x] 1.2 terraform: `terraform test` cases: with the MCP, no `ANALYST` grant resource; without it, the same grants as before; a state holding the old addresses plans no destroy
 - [ ] 1.3 `identity_setup.provisioner_script`: Snowflake grants `ANALYST` only database and warehouse `USAGE`; Postgres grants `analyst` only `CONNECT`
 - [ ] 1.4 `warehouse_setup.sql`: the `analyst` `USAGE` and default privileges run only when `with_mcp` is false; `vm/apply.py` and its byte-identical copy unchanged
 - [ ] 1.5 `snowflake_access.js`: a version constant; new `READ_GRANTS(TARGET)` returning the target's read grants and schema-level future grants in the database, with the same target bounds as `READ_GRANT`; `READER` added to the refused targets

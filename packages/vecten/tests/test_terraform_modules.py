@@ -121,6 +121,44 @@ def test_terraform_test_passes(root):
     _init_and_test(TERRAFORM / root)
 
 
+@pytest.mark.terraform
+def test_snowflake_upgrade_forgets_the_analyst_grants_without_revoking(tmp_path):
+    """`terraform test` cannot assert on planned actions, so the upgrade file's verbose plan is
+    read here: every earlier ANALYST grant leaves state, and nothing is destroyed."""
+    if shutil.which("terraform") is None:
+        pytest.skip("terraform is not installed")
+    module = tmp_path / "snowflake"
+    shutil.copytree(SNOWFLAKE, module, ignore=shutil.ignore_patterns(".terraform*"))
+    env = _terraform_env()
+    steps = [
+        ["init", "-backend=false", "-input=false"],
+        ["test", "-filter=tests/upgrade.tftest.hcl", "-verbose"],
+    ]
+    for args in steps:
+        done = subprocess.run(
+            ["terraform", f"-chdir={module}", *args, "-no-color"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+    plan = done.stdout.split('run "the_upgrade_forgets_them_without_revoking"', 1)[1]
+    kept = r"# (\S+) will no longer be managed by Terraform, but will not be destroyed"
+    forgotten = set(re.findall(kept, plan))
+    assert forgotten == {
+        'snowflake_grant_privileges_to_account_role.analyst_schema["CORE"]',
+        'snowflake_grant_privileges_to_account_role.analyst_schema["MARTS"]',
+        *(
+            f'snowflake_grant_privileges_to_account_role.analyst_future["{schema}/{kind}"]'
+            for schema in ("CORE", "MARTS")
+            for kind in ("TABLES", "VIEWS")
+        ),
+    }
+    assert re.search(r"Plan: \d+ to add, 0 to change, 0 to destroy\.", plan), plan
+    assert "will be destroyed" not in plan
+
+
 ROOT_TEST = """
 mock_provider "aws" {
   override_data {
