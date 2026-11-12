@@ -34,8 +34,8 @@
 
 ## 5. The semantic model's database
 
-- [ ] 5.1 The model loader reads a source naming the project's database as the environment's database, for source checks, compiled SQL, dataset grants and `describe`
-- [ ] 5.2 Tests: one `osi/` loaded for two environments of a shared account; fixed names read as written; a source naming another database untouched
+- [x] 5.1 The model loader reads a source naming the project's database as the environment's database, for source checks, compiled SQL, dataset grants and `describe`
+- [x] 5.2 Tests: one `osi/` loaded for two environments of a shared account; fixed names read as written; a source naming another database untouched
 
 ## 6. Destroy
 
