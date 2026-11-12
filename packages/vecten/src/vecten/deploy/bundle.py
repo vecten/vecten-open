@@ -55,6 +55,7 @@ CONTENT: tuple[str, ...] = (
     "requirements-airflow.lock",
     "requirements-mcp.lock",
     "extensions.lock.json",
+    "extensions",
     "orchestration/dags",
     "orchestration/docker-compose.override.yml",
     "connectors",
@@ -119,6 +120,10 @@ def compose_project(config: VectenConfig, env: str) -> str:
     return name_prefix(config.project.name, env)
 
 
+# A package's local build output is rebuilt on the host from its source.
+SKIPPED_BUILD_OUTPUT = frozenset({"dist", "build"})
+
+
 def _skipped(rel: str, name: str) -> bool:
     return (
         name in SKIPPED_NAMES
@@ -126,6 +131,10 @@ def _skipped(rel: str, name: str) -> bool:
         or name.startswith(".env.")
         or name.endswith(SKIPPED_SUFFIXES)
         or rel in SKIPPED_PATHS
+        or (
+            rel.startswith("extensions/")
+            and (name in SKIPPED_BUILD_OUTPUT or name.endswith(".egg-info"))
+        )
     )
 
 

@@ -98,6 +98,22 @@ def lock_lines(path: Path, wanted: list[Requirement]) -> list[str]:
 
 
 STALE = "project dependency records are stale; run `vecten lock`"
+BUILD_CONSTRAINTS = "build-constraints.txt"
+
+
+def _in_repo_extensions(root: Path) -> list:
+    """The recorded in-repo extensions, each checked again against the folder rules."""
+    from pathlib import PurePosixPath
+
+    from vecten import in_repo
+    from vecten_shared.extension_record import read_record
+
+    local = [e for e in (read_record(root) or {}).values() if e.source_path]
+    for entry in local:
+        in_repo.read(root, PurePosixPath(entry.source_path))
+    return sorted(local, key=lambda e: e.source_path)
+
+
 RUNTIME = (("platform", "airflow"), ("mcp", "mcp"))
 
 
@@ -169,15 +185,16 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     reqs = project_requirements(config)
     root = stack_dir.parent.parent
     runtime = {}
+    legacy = None
     records = [locking.PINS_FILE, locking.RECORD_FILE, *locking.LOCK_FILES.values()]
-    if not any((root / name).exists() for name in records):
+    records_exist = any((root / name).exists() for name in records)
+    if not records_exist:
         if any(config.dependencies.python(c) for c in locking.LOCK_FILES):
             raise Failure(
                 ExitCode.REFUSED,
                 "[dependencies] Python requirements install only from locks; run `vecten lock`",
             )
     else:
-        legacy = None
         for component, kind in RUNTIME:
             if component not in config.components:
                 continue
@@ -195,7 +212,17 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
                     f"{locking.RECORD_FILE}; run `vecten lock`",
                 )
         reqs = legacy[0] if legacy is not None else []
+    # A stamped lock is the full third-party closure, so it installs without resolving and an
+    # in-repo extension's name is never looked up on an index.
+    closure = bool(runtime) and legacy is None
+    local = _in_repo_extensions(root) if closure else []
     build_dir.mkdir(parents=True, exist_ok=True)
+    constraints = build_dir / BUILD_CONSTRAINTS
+    if local:
+        build = sorted({line for entry in local for line in entry.build_requires})
+        write_text_atomic(constraints, "".join(f"{line}\n" for line in build))
+    else:
+        constraints.unlink(missing_ok=True)
     write_text_atomic(build_dir / "requirements.txt", "".join(f"{r}\n" for r in reqs))
     pins = {"airflow": f'"apache-airflow=={VERSIONS.airflow_version}" ', "mcp": ""}
     for kind, pin in pins.items():
@@ -218,15 +245,25 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
             if config.packages.private_index
             else "cat /tmp/vecten-pip.log; "
         )
+        no_deps = "--no-deps " if closure else ""
+        copies = f"COPY {source} /tmp/requirements.txt\n"
+        extra = ""
+        if local:
+            copies += f"COPY {BUILD_CONSTRAINTS} /tmp/{BUILD_CONSTRAINTS}\n"
+            mount += "--mount=type=bind,from=extensions,target=/tmp/extensions,rw "
+            paths = " ".join(f"/tmp/extensions/{e.source_path.split('/', 1)[1]}" for e in local)
+            extra = (
+                f" && {secret}pip install --no-cache-dir --no-deps "
+                f"--build-constraint /tmp/{BUILD_CONSTRAINTS} {paths} && pip check"
+            )
         # Keep every package supplied by the base image; a changed base must never be silently
         # downgraded to satisfy a lock generated against a different environment.
         install = (
-            f"COPY {source} /tmp/requirements.txt\n"
-            f"RUN {mount}python -c {shlex.quote(BASE_CONSTRAINTS_SCRIPT)} "
+            copies + f"RUN {mount}python -c {shlex.quote(BASE_CONSTRAINTS_SCRIPT)} "
             "> /tmp/vecten-base-constraints.txt "
-            f"&& {{ {secret}pip install --no-cache-dir {pin}"
+            f"&& {{ {secret}pip install --no-cache-dir {no_deps}{pin}"
             "--constraint /tmp/vecten-base-constraints.txt "
-            "-r /tmp/requirements.txt; } > /tmp/vecten-pip.log 2>&1 "
+            f"-r /tmp/requirements.txt{extra}; }} > /tmp/vecten-pip.log 2>&1 "
             f"|| {{ {diagnostic}rm -f /tmp/vecten-pip.log "
             "/tmp/vecten-base-constraints.txt; exit 1; }; "
             "rm -f /tmp/vecten-pip.log /tmp/vecten-base-constraints.txt\n"
@@ -234,5 +271,5 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         write_text_atomic(
             build_dir / f"{kind}.Dockerfile",
             f"FROM {base_image(kind, registry)}\n"
-            f"{_system_step(config, kind)}{install if lines else ''}",
+            f"{_system_step(config, kind)}{install if lines or local else ''}",
         )

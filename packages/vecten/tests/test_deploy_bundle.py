@@ -494,3 +494,21 @@ def test_the_bundle_build_checks_the_environments_settings(project, tmp_path):
     with_settings(project, {"env": {"prod": {"daily_cap": "500"}}})
     with pytest.raises(Failure, match="settings.acme.daily_cap in prod"):
         build(project, tmp_path / "out")
+
+
+def test_the_bundle_carries_in_repo_extensions_without_build_output(project, tmp_path):
+    ext = project / "extensions" / "acme-portal"
+    (ext / "src" / "acme_portal").mkdir(parents=True)
+    (ext / "pyproject.toml").write_text("[project]\nname = 'acme-portal'\n")
+    (ext / "src" / "acme_portal" / "__init__.py").write_text("")
+    for junk in ("dist/acme.whl", "build/lib/x.py", "src/acme_portal.egg-info/PKG-INFO"):
+        (ext / junk).parent.mkdir(parents=True, exist_ok=True)
+        (ext / junk).write_text("x")
+    names = members(build(project, tmp_path / "out"))
+    assert "extensions/acme-portal/pyproject.toml" in names
+    assert "extensions/acme-portal/src/acme_portal/__init__.py" in names
+    assert not any(
+        "dist/" in n or "/build/" in n or "egg-info" in n
+        for n in names
+        if n.startswith("extensions")
+    )
