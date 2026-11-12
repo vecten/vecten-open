@@ -151,6 +151,7 @@ def test_copier_data_has_only_scaffold_parameters_and_derived():
         "dns_zone",
         "github_repository",
         "snowflake_account",
+        "snowflake_shared_account",
         "users",
         "sources",
         "size",

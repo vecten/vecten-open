@@ -70,6 +70,8 @@ class ScaffoldParams(BaseModel):
     dns_zone: str | None = None
     github_repository: str | None = None
     snowflake_account: str | None = None
+    # `[warehouse] shared_account` in vecten.toml; the runbook's Snowflake section follows it.
+    snowflake_shared_account: bool = False
 
     @field_validator("region", "domain", "dns_zone", "github_repository", "snowflake_account")
     @classmethod
@@ -207,6 +209,7 @@ class ScaffoldParams(BaseModel):
             "dns_zone": merged.get("dns_zone"),
             "github_repository": merged.get("github_repository"),
             "snowflake_account": merged.get("snowflake_account"),
+            "snowflake_shared_account": bool(merged.get("snowflake_shared_account", False)),
         }
         try:
             return cls.model_validate(data)

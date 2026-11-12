@@ -7,6 +7,23 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
+- Several environments of a Snowflake project in one account: `shared_account = true` under
+  `[warehouse]` (asked by `next` after the Snowflake account, `vecten answer
+  snowflake_shared_account yes|no`, written by `init --deploy`) gives each environment its own
+  database `<BASE>_<ENV>`, warehouse, roles, loader, provisioner, External OAuth integration and
+  users, every account-level name ending in `_<BASE>_<ENV>`. Each environment records the layout
+  of its first deploy and keeps it; `deploy` refuses a changed layout or base, a hyphen in a
+  shared environment's name and a suffix over 64 characters. The MCP's users are bound to their
+  environment's integration by an authentication policy, the service users sign in by key pair
+  only, the administrator's script runs as one block that stops at a name another project or
+  environment holds, `osi/` sources naming the project's database are read as the environment's,
+  and `destroy --delete-data` refuses while the provisioner's users and roles stay, printing the
+  statements that drop them. Several guarantees await live checks on a Snowflake account
+  ([#34](https://github.com/vecten/vecten-open/issues/34)).
+- Each environment of a Snowflake project names its own account in its tfvars; `[warehouse]
+  account` names `prod`'s, and `ship` hands the environment's account to its hosts
+  (`VECTEN_SNOWFLAKE_ACCOUNT`). With fixed names an account still holds one environment
+  ([#34](https://github.com/vecten/vecten-open/issues/34)).
 - In-repo extensions: an extension package kept in the project under `extensions/<name>/`,
   registered with `vecten extension add ./extensions/<name>`, locked with its third-party
   dependencies only, installed editable in the CLI's environment and built from the bundle on

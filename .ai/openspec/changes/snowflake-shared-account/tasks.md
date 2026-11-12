@@ -49,10 +49,10 @@
 
 ## 8. Docs
 
-- [ ] 8.1 Runbook template: the Snowflake section per layout, the authentication policy, per-environment deploy users, data deletion's cleanup, and moving an environment into a shared account
-- [ ] 8.2 `docs/mcp-identity.md`: per-environment users in a shared account, role-keyed policies, no adoption
-- [ ] 8.3 `docs/GLOSSARY.md`: "Shared account" and "Environment suffix"
-- [ ] 8.4 `CHANGELOG.md` under `[Unreleased]`
+- [x] 8.1 Runbook template: the Snowflake section per layout, the authentication policy, per-environment deploy users, data deletion's cleanup, and moving an environment into a shared account
+- [x] 8.2 `docs/mcp-identity.md`: per-environment users in a shared account, role-keyed policies, no adoption
+- [x] 8.3 `docs/GLOSSARY.md`: "Shared account" and "Environment suffix"
+- [x] 8.4 `CHANGELOG.md` under `[Unreleased]`
 
 ## 9. Proven only on a live Snowflake account (the `snowflake_live` tier and a sandbox deploy)
 

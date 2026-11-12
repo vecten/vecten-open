@@ -66,4 +66,8 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Admin panel**: the server-rendered pages under `/admin` on the MCP host where people with the admin flag manage identities, grants, gaps and settings and read usage analytics; see [the admin panel guide](admin-panel.md).
 
+**Shared account**: a Snowflake account that may hold several environments of a project and other teams' data, chosen with `shared_account = true` under `[warehouse]` before an environment's first deploy and recorded per environment; every account-level name then ends in the environment suffix. Without it, an environment's account holds that environment alone, with fixed names; see [MCP identity](mcp-identity.md#several-environments-in-one-snowflake-account).
+
+**Environment suffix**: `_<BASE>_<ENV>`, the ending of every account-level Snowflake name in a shared account, where `<BASE>` is `[warehouse] database` or the project name and `<ENV>` the environment, in upper case with hyphens as underscores, at most 64 characters (`ANALYST_ACME_DEV`, `JANE_DOE_ACME_DEV`); the environment's database is `<BASE>_<ENV>`.
+
 Back to the [docs index](README.md).

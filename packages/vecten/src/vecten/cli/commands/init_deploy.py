@@ -159,9 +159,17 @@ def run_init_deploy(
         or None
     }
     # vecten.toml is the editable configuration, so its sizing wins over the rendered answers.
+    shared = _shared_account(config, recorded)
     params = ScaffoldParams.from_answers(
         {**answers, **deploy, **account},
-        {"size": config.size, "profile": config.profile, "components": config.components},
+        {
+            "size": config.size,
+            "profile": config.profile,
+            "components": config.components,
+            "snowflake_shared_account": config.warehouse.shared_account
+            if shared is None
+            else shared,
+        },
     )
     section = DeploySection(**deploy)
     changed: list[str] = []
@@ -198,7 +206,6 @@ def run_init_deploy(
         params.snowflake_account is not None
         and config.warehouse.account != params.snowflake_account
     )
-    shared = _shared_account(config, recorded)
     shared_changed = shared is not None and config.warehouse.shared_account != shared
     if config.deploy != section or account_changed or shared_changed:
         config.deploy = section

@@ -269,3 +269,33 @@ def test_update_keeps_a_project_whose_sources_are_free_text(invoke, tmp_path, mo
     monkeypatch.chdir(tmp_path)
     result = invoke("update", "--json")
     assert result.exit_code == 0, result.stdout
+
+
+def test_update_renders_the_runbook_for_the_snowflake_layout_vecten_toml_names(
+    invoke, tmp_path, monkeypatch
+):
+    old = replace(VERSIONS, vecten="0.0.9", terraform_module_ref="v0.0.9")
+    monkeypatch.setattr(params_module, "VERSIONS", old)
+    answers = {
+        "name": "demo",
+        "users": 3,
+        "sources": ["demo"],
+        "warehouse": "snowflake",
+        "cloud": "aws",
+        "domain": "data.example.com",
+        "dns_zone": "example.com",
+        "github_repository": "example/demo",
+        "snowflake_account": "ACME-PROD",
+    }
+    render_project(tmp_path, ScaffoldParams.from_answers(answers, {}))
+    monkeypatch.setattr(params_module, "VERSIONS", VERSIONS)
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "vecten.toml"
+    cfg.write_text(
+        cfg.read_text().replace('kind = "snowflake"', 'kind = "snowflake"\nshared_account = true')
+    )
+    result = invoke("update", "--json")
+    assert result.exit_code == 0, result.stdout
+    runbook = (tmp_path / "docs" / "runbook.md").read_text()
+    assert "`PROVISIONER_<BASE>_<ENV>`" in runbook
+    assert "One environment per Snowflake account" not in runbook
