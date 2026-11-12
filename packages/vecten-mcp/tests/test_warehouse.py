@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 
@@ -6,6 +7,22 @@ from vecten_mcp.failures import NoWarehouseAccess
 from vecten_mcp.warehouse.pool import PrincipalPools
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
+from vecten_shared.config import VectenConfig
+from vecten_shared.provider import snowflake_names
+
+
+def names(account="a", database="D", warehouse="W"):
+    """The fixed layout's names, over a test account's database and warehouse."""
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "acme", "scaffold_version": "0.1.1"},
+            "warehouse": {"kind": "snowflake", "account": account},
+        }
+    )
+    return replace(
+        snowflake_names(config, "prod"), account=account, database=database, warehouse=warehouse
+    )
 
 
 class Connection:
@@ -41,7 +58,7 @@ def test_snowflake_source_check_calls_bounded_metadata_helper():
     conn = MagicMock()
     cursor = conn.cursor.return_value
     cursor.execute.return_value.fetchone.return_value = (True,)
-    adapter = SnowflakeAdapter(lambda: conn, None, None, account="a", database="D", warehouse="W")
+    adapter = SnowflakeAdapter(lambda: conn, None, None, names=names())
     assert adapter.source_exists(parse_one('SELECT * FROM raw_app."Orders"').find(exp.Table))
     assert cursor.execute.call_args.args == (
         'CALL "D"."VECTEN_ACCESS".SOURCE_EXISTS(%s,%s)',
@@ -237,9 +254,7 @@ def test_snowflake_person_service_and_oauth_connection(principal):
         lambda: SFConnection(),
         connect,
         lambda **kw: minted.append(kw) or "temporary",
-        account="org-account",
-        database="WAREHOUSE",
-        warehouse="COMPUTE",
+        names=names("org-account", "WAREHOUSE", "COMPUTE"),
     )
     adapter.create_account("jane", "human")
     adapter.create_account("svc_reporting", "service")
@@ -301,7 +316,7 @@ def test_snowflake_owned_user_allowed_only_for_principal_registry_entry():
         def close(self):
             pass
 
-    adapter = SnowflakeAdapter(Connection, None, None, account="a", database="D", warehouse="W")
+    adapter = SnowflakeAdapter(Connection, None, None, names=names())
     adapter.check_scope({"jane": {"kind": "human"}})
     with pytest.raises(ValueError):
         adapter.check_scope({"jane": {"kind": "group"}})
@@ -326,7 +341,7 @@ def test_snowflake_role_ownership_requires_group_registry_kind():
         def close(self):
             pass
 
-    adapter = SnowflakeAdapter(Connection, None, None, account="a", database="D", warehouse="W")
+    adapter = SnowflakeAdapter(Connection, None, None, names=names())
     with pytest.raises(ValueError):
         adapter.check_scope({"jane": {"kind": "human"}})
     adapter.check_scope({"jane": {"kind": "group"}})
@@ -358,7 +373,7 @@ def test_snowflake_grants_call_bounded_owner_procedure(grant):
         def close(self):
             pass
 
-    adapter = SnowflakeAdapter(Connection, None, None, account="a", database="D", warehouse="W")
+    adapter = SnowflakeAdapter(Connection, None, None, names=names())
     adapter.schema_grant("finance", "staging", grant)
     adapter.dataset_grant("finance", "D.CORE.orders", grant)
     assert statements == [
@@ -392,9 +407,7 @@ def test_snowflake_secondary_roles_are_explicit_and_fail_closed(principal, rejec
         None,
         lambda **kwargs: connection,
         lambda **kwargs: "token",
-        account="a",
-        database="D",
-        warehouse="W",
+        names=names(),
     )
     if reject:
         with pytest.raises(RuntimeError, match="secondary"):
@@ -423,9 +436,7 @@ def test_snowflake_single_role_session_runs_no_secondary_roles_statement(princip
         None,
         lambda **kwargs: logins.append(kwargs) or Connection(),
         lambda **kwargs: "token",
-        account="a",
-        database="D",
-        warehouse="W",
+        names=names(),
     )
     adapter.connect_principal(principal, {"analyst"}, 100)
     assert logins[0]["role"] == "ANALYST" and statements == []
@@ -463,7 +474,7 @@ def test_snowflake_future_grants_are_checked(schema, privilege, grantable, valid
         def close(self):
             pass
 
-    adapter = SnowflakeAdapter(Connection, None, None, account="a", database="D", warehouse="W")
+    adapter = SnowflakeAdapter(Connection, None, None, names=names())
     if valid:
         adapter.check_scope({})
     else:

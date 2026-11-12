@@ -10,12 +10,11 @@ def quote(name):
 
 
 class SnowflakeAdapter:
-    def __init__(
-        self, provisioner_connect, query_connect, mint_token, *, account, database, warehouse
-    ):
+    def __init__(self, provisioner_connect, query_connect, mint_token, *, names):
         self.provisioner_connect, self.query_connect = provisioner_connect, query_connect
         self.mint_token = mint_token
-        self.account, self.database, self.warehouse = account, database, warehouse
+        self.names = names
+        self.account, self.database, self.warehouse = names.account, names.database, names.warehouse
 
     @contextmanager
     def control(self):
