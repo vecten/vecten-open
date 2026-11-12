@@ -319,3 +319,33 @@ def test_without_an_order_next_reports_what_it_reported_before(
     expected = _items_before_the_order(project)
     assert expected
     assert next_items(project) == expected
+
+
+def _mcp_only_with_prods_script_run(tmp_path, url):
+    from .test_next_deploy import render_mcp_only_deploy
+
+    root = ordered(render_mcp_only_deploy(tmp_path, url))
+    facts(root, "prod", provisioner_script_run=True)
+    return root
+
+
+def test_a_postgres_setup_script_run_for_prod_serves_dev(tmp_path):
+    from vecten.next.existing_warehouse import existing_warehouse_items
+
+    from .test_next_project import POSTGRES_URL
+
+    root = _mcp_only_with_prods_script_run(tmp_path, POSTGRES_URL)
+    (root / ".env").write_text("x=1\n")
+    items = existing_warehouse_items(root, load_config(root), "dev")
+    assert not [i for i in items if "provisioner-script" in i.resolution]
+
+
+def test_a_snowflake_setup_script_names_each_environments_issuer(tmp_path):
+    from vecten.next.existing_warehouse import existing_warehouse_items
+
+    from .test_next_project import SNOWFLAKE_URL
+
+    root = _mcp_only_with_prods_script_run(tmp_path, SNOWFLAKE_URL)
+    items = existing_warehouse_items(root, load_config(root), "dev")
+    assert [i.resolution for i in items] == ["vecten mcp provisioner-script --env dev"]
+    assert existing_warehouse_items(root, load_config(root), "prod") == []

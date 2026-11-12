@@ -68,7 +68,8 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
             *ingestion_items(root, config),
             *modelling_items(root, config),
             *semantic_items(root, config),
-            # One run of the setup SQL serves every environment over the one warehouse.
+            # The setup SQL is asked for the first environment of the order; which earlier run
+            # counts for it depends on the warehouse (`_script_confirmed`).
             *existing_warehouse_items(root, config, config.promotion_order()[0]),
             *stack_items(root, config),
         ]
