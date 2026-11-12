@@ -12,7 +12,7 @@ import yaml
 from vecten.stack.images import BUILD_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
 from vecten_shared.config import VectenConfig, stack_project_name
-from vecten_shared.declarations import component_for
+from vecten_shared.declarations import component_for, secret_problem
 from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
@@ -304,9 +304,18 @@ SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
 
 
 def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str]:
-    """Only the extension's own names its host may read: no cloud key, no stack variable."""
+    """Only the extension's own names its host may read: no cloud key, no stack variable.
+
+    The record is a committed file, so a name `vecten lock` would refuse is refused here too:
+    the agent holds the stack's own secrets and would hand them over under that name.
+    """
     entry = record.get(bound.extension)
-    return sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+    names = sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+    for name in names:
+        problem = secret_problem(name)
+        if problem:
+            raise Failure(ExitCode.CONFIG, f"{RECORD_FILE}: {bound.extension}: {problem}")
+    return names
 
 
 def host_services(

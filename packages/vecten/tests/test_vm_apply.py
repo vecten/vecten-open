@@ -193,8 +193,9 @@ class FakeRun:
         return ok
 
     def _iptables(self, args):
-        rule = tuple(args[3:])
-        if args[2] == "-C":
+        assert args[1:3] == ["-w", "30"], args
+        rule = tuple(args[4:])
+        if args[3] == "-C":
             return subprocess.CompletedProcess(args, 0 if rule in self.rules else 1, "", "")
         if self.iptables_fails:
             return subprocess.CompletedProcess(args, 4, "", "can't initialize iptables table")
@@ -1748,7 +1749,7 @@ def kinds(run):
     for call in run.calls:
         args = call["args"]
         if args[0] == "iptables":
-            found.append(f"iptables {args[2]}")
+            found.append(f"iptables {args[3]}")
         elif call in compose_calls(run):
             found.append("compose up")
     return found
@@ -1760,8 +1761,8 @@ def test_ship_drops_the_services_bridge_to_the_metadata_address_before_compose(a
     run = FakeRun(store=seeded(out))
     ship(agent, release, run, tmp_path)
     assert kinds(run) == ["iptables -C", "iptables -I", "compose up"]
-    (insert,) = [c["args"] for c in run.calls if c["args"][:3] == ["iptables", "-w", "-I"]]
-    assert tuple(insert[3:]) == AWS_DROP
+    (insert,) = [c["args"] for c in run.calls if c["args"][:4] == ["iptables", "-w", "30", "-I"]]
+    assert tuple(insert[4:]) == AWS_DROP
 
 
 def test_a_rule_already_in_place_is_not_inserted_twice(agent, tmp_path):
@@ -1838,16 +1839,58 @@ def test_boot_restores_the_rule_before_it_starts_the_stack(agent, tmp_path):
     assert kinds(run) == ["iptables -C", "iptables -I", "compose up"]
 
 
-def test_a_failed_rule_at_boot_starts_nothing(agent, tmp_path):
+def test_a_failed_rule_at_boot_stops_the_services_docker_restarted(agent, tmp_path):
     out = outputs("standard")
     releases = tmp_path / "releases"
     release = stage(releases, out, "platform", **with_services())
     ship(agent, release, FakeRun(store=seeded(out)), tmp_path)
-    run = FakeRun(store=seeded(out))
+    rows = [
+        ("s1", "svc-acme-bot", "running", "Up 3 seconds"),
+        ("n1", "nginx", "running", "Up 3 seconds"),
+        ("a1", "airflow-scheduler", "running", "Up 3 seconds"),
+    ]
+    run = FakeRun(store=seeded(out), containers=rows)
     run.iptables_fails = True
     with pytest.raises(agent.AgentError, match="^service isolation: "):
         agent.boot(releases, run)
     assert compose_calls(run) == []
+    assert run.argv("docker", "stop") == [["docker", "stop", "s1"]]
+
+
+def test_boot_isolates_before_it_reads_a_secret(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    ship(
+        agent,
+        stage(releases, out, "platform", **with_services()),
+        FakeRun(store=seeded(out)),
+        tmp_path,
+    )
+    run = FakeRun(store=seeded(out))
+    agent.boot(releases, run)
+    order = [c["args"][0] for c in run.calls if c["args"][0] in ("iptables", "aws")]
+    assert order[0] == "iptables" and "aws" in order
+
+
+def test_a_failed_secret_read_at_boot_still_isolates_the_services(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    ship(
+        agent,
+        stage(releases, out, "platform", **with_services()),
+        FakeRun(store=seeded(out)),
+        tmp_path,
+    )
+    fake = FakeRun(store=seeded(out))
+    with pytest.raises(agent.AgentError, match="read secrets"):
+        agent.boot(releases, flaky(fake, 3), sleep=lambda s: None)
+    assert fake.rules == {AWS_DROP}
+
+
+def test_the_agents_service_prefix_is_the_compose_one(agent):
+    from vecten_shared.services import compose_service_name
+
+    assert compose_service_name("acme", "bot").startswith(agent.SERVICE_PREFIX)
 
 
 def test_rollback_isolates_a_previous_release_that_runs_services(agent, tmp_path):

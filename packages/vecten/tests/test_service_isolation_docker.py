@@ -162,7 +162,11 @@ def dropped(vm: str, container: str) -> bool:
     return result.returncode != 0 and "timed out" in result.stdout + result.stderr
 
 
-def start(vm: str, name: str, *network: str) -> None:
+PROJECT = "vecten-acme-prod"
+
+
+def start(vm: str, name: str, service: str, *network: str) -> None:
+    """A container labelled as Compose labels the stack's, restarted with the daemon."""
     docker(
         "exec",
         vm,
@@ -171,6 +175,10 @@ def start(vm: str, name: str, *network: str) -> None:
         "-d",
         "--name",
         name,
+        "--label",
+        f"com.docker.compose.project={PROJECT}",
+        "--label",
+        f"com.docker.compose.service={service}",
         "--restart",
         "unless-stopped",
         *network,
@@ -193,15 +201,15 @@ def running(vm: str, name: str) -> None:
 
 
 def test_the_agents_rule_drops_the_services_bridge_and_survives_a_dockerd_restart(vm):
-    start(vm, "svc", "--network", "vecten-services")
-    start(vm, "dag")
+    start(vm, "svc", "svc-acme-bot", "--network", "vecten-services")
+    start(vm, "dag", "airflow-scheduler")
     # Without the rule a service reaches the metadata address like any container.
     assert reads_metadata(vm, "svc") and reads_metadata(vm, "dag")
 
     calls = []
     host = {"cloud": "aws", "service_network": SERVICES_BRIDGE}
     agent.isolate_services(host, in_vm(vm, calls))
-    assert [c[2] for c in calls] == ["-C", "-I"]
+    assert [c[3] for c in calls] == ["-C", "-I"]
     assert dropped(vm, "svc")
     assert reads_metadata(vm, "dag")
 
@@ -215,4 +223,16 @@ def test_the_agents_rule_drops_the_services_bridge_and_survives_a_dockerd_restar
     # The rule is still in place, so the next ship or boot inserts no second one.
     calls.clear()
     agent.isolate_services(host, in_vm(vm, calls))
-    assert [c[2] for c in calls] == ["-C"]
+    assert [c[3] for c in calls] == ["-C"]
+
+
+def state(vm: str, name: str) -> str:
+    return docker("exec", vm, "docker", "inspect", "-f", "{{.State.Running}}", name).stdout.strip()
+
+
+def test_services_the_rule_cannot_cover_are_stopped_and_the_stack_kept(vm):
+    start(vm, "svc", "svc-acme-bot", "--network", "vecten-services")
+    start(vm, "dag", "airflow-scheduler")
+    agent.stop_services({"compose_project": PROJECT}, in_vm(vm, []))
+    assert state(vm, "svc") == "false"
+    assert state(vm, "dag") == "true"

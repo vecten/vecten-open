@@ -113,6 +113,10 @@ WATCH_KEYS = ("host", "components", "bucket", "region", "project_id", "secret_pr
 METADATA_ADDRESSES = {"aws": "169.254.169.254", "scaleway": "169.254.42.42"}
 # A Linux interface name; it is an iptables argument, so it may not start with `-`.
 _INTERFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}")
+# Bounded, so a stuck holder of the xtables lock fails the step by name instead of hanging it.
+XTABLES_WAIT_SECONDS = "30"
+# Every Compose service a binding generates is named with this prefix.
+SERVICE_PREFIX = "svc-"
 
 # The metadata server answers user data only to a request from a source port below 1024.
 METADATA_KEY_URL = "http://169.254.42.42/user_data/vecten-key"
@@ -889,14 +893,29 @@ def isolate_services(host: dict, run: Run) -> None:
     if address is None:
         raise AgentError(f"no metadata address known for cloud {host['cloud']!r}")
     rule = ["DOCKER-USER", "-i", bridge, "-d", address, "-j", "DROP"]
-    # `-w` waits for the xtables lock dockerd may hold instead of failing at once.
-    if run(["iptables", "-w", "-C", *rule]).returncode == 0:
+    iptables = ["iptables", "-w", XTABLES_WAIT_SECONDS]
+    if run([*iptables, "-C", *rule]).returncode == 0:
         return
-    result = run(["iptables", "-w", "-I", *rule])
+    result = run([*iptables, "-I", *rule])
     if result.returncode != 0:
         raise AgentError(
             f"inserting the DOCKER-USER rule for {bridge} failed (exit {result.returncode})"
         )
+
+
+def stop_services(host: dict, run: Run) -> None:
+    """Stop the project's service containers; never raises, the failure that called it does."""
+    try:
+        listing = run(
+            ["docker", "ps", "--format", '{{.ID}}\t{{.Label "com.docker.compose.service"}}']
+            + ["--filter", f"label=com.docker.compose.project={host['compose_project']}"]
+        )
+        rows = [row.split("\t") for row in listing.stdout.splitlines()]
+        ids = [r[0] for r in rows if len(r) > 1 and r[1].startswith(SERVICE_PREFIX)]
+        if ids:
+            run(["docker", "stop", *ids])
+    except Exception:
+        return
 
 
 def scram_verifier(password: str, salt: bytes | None = None) -> str:
@@ -1254,6 +1273,14 @@ def _start(
     with step("release"):
         host = load_host(release)
         outputs = load_outputs(release, host["env"])
+    # Docker restarts running services with the daemon, before this runs; the rule needs no
+    # secret, so it comes first, and services that cannot have it are stopped.
+    try:
+        with step("service isolation"):
+            isolate_services(host, run)
+    except AgentError:
+        stop_services(host, run)
+        raise
     for attempt in range(1, attempts + 1):
         try:
             with step("read secrets"):
@@ -1268,8 +1295,6 @@ def _start(
             sleep(BOOT_RETRY_SECONDS)
     injected = _injected(env, backend)
     log = container_log_excerpt(host, run, injected) if excerpt else []
-    with step("service isolation"):
-        isolate_services(host, run)
     try:
         with step("compose up"):
             stack = stack_env(host, backend.container_key)
