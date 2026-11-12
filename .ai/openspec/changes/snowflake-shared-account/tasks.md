@@ -39,7 +39,7 @@
 
 ## 6. Destroy
 
-- [ ] 6.1 With a shared account, `destroy` lists by ownership what stays outside Terraform; `--delete-data` refuses while the provisioner owns a user or role and prints the `DROP` statements
+- [ ] 6.1 With a shared account, `destroy` lists by ownership what stays outside Terraform; `--delete-data` refuses while the provisioner owns a user or role and prints the `DROP` statements; the provisioner user is ACCOUNTADMIN-owned and carries `SERVICE_SIGN_IN`, a policy inside the environment's database, so the printed statements unset that policy and drop the user before the database goes (live check 9.4)
 - [ ] 6.2 Tests: the listing from mocked `SHOW GRANTS`, no name-pattern match, the refusal and the printed statements
 
 ## 7. dbt and #53
@@ -64,5 +64,5 @@
 - [ ] 9.6 Two environments in one account: `dev`'s loader key, provisioner key and MCP signing key each fail to read `prod`'s marts; `destroy --env dev --delete-data dev` leaves every `prod` object in place
 - [ ] 9.7 External OAuth is refused for a `TYPE = SERVICE` user carrying a key-pair-only authentication policy (`AUTHENTICATION_METHODS = ('KEYPAIR')`), so another environment's integration cannot sign in as `PROVISIONER_<BASE>_<ENV>` or `LOADER_<BASE>_<ENV>`
 - [ ] 9.8 `SHOW GRANTS TO ROLE` names the provisioner's grant on the sign-in policy with `granted_on = AUTHENTICATION_POLICY` and the name `<DB>.VECTEN_ACCESS.MCP_SIGN_IN`, as `SnowflakeAdapter.check_scope` expects
-- [ ] 9.9 The shared provisioner script runs as one `EXECUTE IMMEDIATE` block: `SHOW` with `RESULT_SCAN`, `CREATE SECURITY INTEGRATION`, single-quoted procedure bodies, `UNSET RSA_PUBLIC_KEY_2` and `UNSET PASSWORD` on a service user, and the `UNSET`/`SET AUTHENTICATION POLICY` pair on a rerun; a squatted role, user or integration (another owner or comment) stops it before any change
+- [ ] 9.9 The shared provisioner script runs as one `EXECUTE IMMEDIATE` block: `SHOW` with `RESULT_SCAN`, `CREATE SECURITY INTEGRATION`, single-quoted procedure bodies, `UNSET RSA_PUBLIC_KEY_2` and `UNSET PASSWORD` on a service user, and the `UNSET`/`SET AUTHENTICATION POLICY` pair on a rerun; a squatted role, user or integration (another owner or comment) stops it before any change; so do a stranger holding the provisioner or analyst role (`SHOW GRANTS OF ROLE`, the correlated `RESULT_SCAN` over the provisioner's ownerships) and an access schema or sign-in policy another role owns; `EXECUTE IMMEDIATE :blocked` sets `EXTERNAL_OAUTH_BLOCKED_ROLES_LIST` to SYSADMIN and the deploy role while the privileged roles stay blocked
 - [ ] 9.10 The deploy role can create the loader's authentication policy and set it on the loader user it owns (the Snowflake root's `snowflake_user_authentication_policy_attachment`)

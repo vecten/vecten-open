@@ -99,8 +99,16 @@ class SnowflakeAdapter:
             # policy any integration in the account would accept a token naming it.
             try:
                 cursor.execute(f"ALTER USER {user} SET AUTHENTICATION POLICY {self._policy()}")
-            except BaseException:
-                cursor.execute(f"DROP USER {user}")
+            except BaseException as refused:
+                try:
+                    cursor.execute(f"DROP USER {user}")
+                except Exception as kept:
+                    raise RuntimeError(
+                        f"Snowflake user {user} was created but its authentication policy "
+                        f"could not be set ({refused}) and it could not be dropped ({kept}); "
+                        f"any integration in the account accepts a token naming it, so have "
+                        f"an ACCOUNTADMIN run DROP USER {user}"
+                    ) from refused
                 raise
 
     def source_exists(self, table):
@@ -214,11 +222,14 @@ class SnowflakeAdapter:
             key = self._registry_name(name)
             return key is not None and registry.get(key, {}).get("kind") in kinds
 
+        owned = set()
         with self.control() as cursor:
             rows = cursor.execute(f"SHOW GRANTS TO ROLE {provisioner}").fetchall()
             columns = [c[0].lower() for c in cursor.description]
             for row in rows:
                 grant = dict(zip(columns, row, strict=True))
+                if grant["privilege"] == "OWNERSHIP":
+                    owned.add((grant["granted_on"], grant["name"].upper()))
                 privilege, kind, name = grant["privilege"], grant["granted_on"], grant["name"]
                 valid = (
                     (kind == "ACCOUNT" and privilege in {"CREATE USER", "CREATE ROLE"})
@@ -292,6 +303,38 @@ class SnowflakeAdapter:
                     or parts[1] not in {"CORE", "MARTS"}
                 ):
                     raise ValueError(f"provisioner has unexpected future grant on {name}")
+            if self.names.suffix:
+                self._check_holders(cursor, owned)
+
+    def _check_holders(self, cursor, owned):
+        """Refuse when the environment's provisioner or analyst role is held by anyone but
+        the provisioner's user, the provisioner's role and what it owns, SYSADMIN and the
+        deploy role: in a shared account another environment could otherwise hold them, since
+        a role's owner and comment can be handed over after the grant."""
+        names = self.names
+        rows = cursor.execute(f"SHOW DATABASES LIKE '{self.database.upper()}'").fetchall()
+        columns = [c[0].lower() for c in cursor.description]
+        keepers = {
+            str(row[columns.index("owner")]).upper()
+            for row in rows
+            if str(row[columns.index("name")]).upper() == self.database.upper()
+        }
+        trusted = {("ROLE", "SYSADMIN"), *(("ROLE", keeper) for keeper in keepers)}
+        allowed = {
+            names.provisioner_role: trusted | {("USER", names.provisioner_user.upper())},
+            names.analyst_role: trusted | owned | {("ROLE", names.provisioner_role.upper())},
+        }
+        for role, holders in allowed.items():
+            rows = cursor.execute(f"SHOW GRANTS OF ROLE {quote(role)}").fetchall()
+            columns = [c[0].lower() for c in cursor.description]
+            for row in rows:
+                grant = dict(zip(columns, row, strict=True))
+                holder = (grant["granted_to"], str(grant["grantee_name"]).upper())
+                if holder not in holders:
+                    raise ValueError(
+                        f"{role} is held by {holder[0].lower()} {holder[1]}, outside this "
+                        "environment"
+                    )
 
     def drop_group(self, role):
         check_account(role)

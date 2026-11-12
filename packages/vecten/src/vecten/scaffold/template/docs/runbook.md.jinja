@@ -1034,6 +1034,16 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
   `vecten secret set DEPLOY_SNOWFLAKE_USER --env <env>` and
   `vecten secret set DEPLOY_SNOWFLAKE_PRIVATE_KEY --env <env> < <private key file>`.
   `vecten deploy` refuses while either is missing.
+- With `shared_account = true` under `[warehouse]`, every External OAuth integration in the
+  account accepts a token for a user that no authentication policy binds, and each
+  environment's MCP holds a signing key for its own integration. The loader and the MCP's
+  provisioner sign in by key pair only, and each integration refuses `SYSADMIN` and the role
+  that created the environment's database. Give each environment's deploy user the same
+  protection before its first deploy, as ACCOUNTADMIN, in a schema of your own:
+  `CREATE AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN AUTHENTICATION_METHODS = ('KEYPAIR');`
+  then `ALTER USER <deploy user> SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN;`
+  for each deploy user. Give each environment its own deploy user and role, too: the root
+  grants every role it creates to the role it runs as.
 - The first plan generates the `LOADER` user's key pair and stores the private key as
   `SNOWFLAKE_LOADER_PRIVATE_KEY`; only the public key reaches Terraform.
 - Pull-request plans cover the [% if cloud == 'aws' %]AWS root only, because the plan role reads no `deploy` secret[% else %]Scaleway root only, because the plan key reads no secret[% endif %];

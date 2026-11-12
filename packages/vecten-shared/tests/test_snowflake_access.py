@@ -257,7 +257,7 @@ def test_the_shared_script_stops_at_an_object_another_project_owns_or_comments()
         assert f"{name} exists" in block
     assert f"COUNT_IF(COALESCE(\"comment\", '') <> {COMMENT})" in block
     assert '"grantee_name" IN (CURRENT_ROLE(), :keeper)' in block
-    assert "IF (foreign > 0 OR owned = 0) THEN RAISE" in block
+    assert "IF (foreign > 0 OR owners = 0) THEN RAISE" in block
 
 
 def test_the_shared_provisioner_user_signs_in_by_its_key_alone():
@@ -351,3 +351,48 @@ def test_read_grant_bounds_a_fixed_target_as_before(length, refused):
     sql = provisioner_script("snowflake", issuer="https://mcp.example", names=names())
     output = _read_grant(sql, "F" * length, owner="PROVISIONER")
     assert (output["error"] is not None) is refused, output
+
+
+def test_the_shared_script_stops_at_an_environment_role_held_by_a_stranger():
+    _, block, _ = _block_and_reports(shared_script())
+    checks = block[: block.index("CREATE ROLE")]
+    # The provisioner's role: its own user, and the roles the Snowflake root grants it to.
+    assert 'SHOW GRANTS OF ROLE "PROVISIONER_ACME_DEV";' in checks
+    assert "\"granted_to\" = 'USER' AND \"grantee_name\" = 'PROVISIONER_ACME_DEV'" in checks
+    assert "\"granted_to\" = 'ROLE' AND \"grantee_name\" IN ('SYSADMIN', :keeper)" in checks
+    # The analyst role: also the provisioner's role and whatever the provisioner owns.
+    assert 'SHOW GRANTS OF ROLE "ANALYST_ACME_DEV";' in checks
+    assert "IN ('PROVISIONER_ACME_DEV', 'SYSADMIN', :keeper)" in checks
+    assert 'SHOW GRANTS TO ROLE "PROVISIONER_ACME_DEV";' in checks
+    assert "owned := LAST_QUERY_ID();" in checks
+    assert "TABLE(RESULT_SCAN(:owned))" in checks
+    assert "PROVISIONER_ACME_DEV is held by" in checks and "ANALYST_ACME_DEV is held by" in checks
+
+
+def test_the_shared_script_stops_at_an_access_schema_or_policy_it_does_not_own():
+    _, block, _ = _block_and_reports(shared_script())
+    checks = block[: block.index("CREATE ROLE")]
+    assert "SHOW SCHEMAS LIKE 'VECTEN_ACCESS' IN DATABASE \"ACME_DEV\";" in checks
+    for policy in ("MCP_SIGN_IN", "SERVICE_SIGN_IN"):
+        assert (
+            f'SHOW AUTHENTICATION POLICIES LIKE \'{policy}\' IN SCHEMA "ACME_DEV"."VECTEN_ACCESS";'
+            in checks
+        ), policy
+        assert f"{policy} is owned by another role" in checks
+    assert '"owner" <> CURRENT_ROLE()' in checks
+
+
+def test_each_shared_integration_refuses_the_deploy_role_and_sysadmin():
+    _, block, _ = _block_and_reports(shared_script())
+    assert "SET EXTERNAL_OAUTH_BLOCKED_ROLES_LIST = '" in block
+    assert "(''SYSADMIN'', ''' || REPLACE(COALESCE(keeper, 'SYSADMIN')" in block
+    assert "EXECUTE IMMEDIATE :blocked;" in block
+    assert block.index("CREATE SECURITY INTEGRATION") < block.index("EXECUTE IMMEDIATE :blocked;")
+
+
+def test_a_dollar_quote_inside_the_block_refuses_the_script(monkeypatch):
+    import vecten_shared.identity_setup as setup
+
+    monkeypatch.setattr(setup, "_single_quoted_bodies", lambda text: text)
+    with pytest.raises(ValueError, match=r"\$\$"):
+        shared_script()

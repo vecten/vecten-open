@@ -73,8 +73,12 @@ def _checked_block(names, changes):
     declarations = [
         "  found INTEGER DEFAULT 0;",
         "  foreign INTEGER DEFAULT 0;",
-        "  owned INTEGER DEFAULT 0;",
+        "  owners INTEGER DEFAULT 0;",
+        "  strangers INTEGER DEFAULT 0;",
         "  keeper VARCHAR;",
+        "  owned VARCHAR;",
+        "  held VARCHAR;",
+        "  blocked VARCHAR;",
     ]
     body = [
         f"  SHOW DATABASES LIKE {_literal(database)};",
@@ -96,15 +100,22 @@ def _checked_block(names, changes):
             f'    FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" = {_literal(name)};',
             "  IF (found > 0) THEN",
             f"    SHOW GRANTS ON {kind.upper()} {_ident(name)};",
-            "    SELECT COUNT(*) INTO :owned FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
+            "    SELECT COUNT(*) INTO :owners FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
             "      WHERE \"privilege\" = 'OWNERSHIP'",
             '        AND "grantee_name" IN (CURRENT_ROLE(), :keeper);',
-            f"    IF (foreign > 0 OR owned = 0) THEN RAISE taken_{number}; END IF;",
+            f"    IF (foreign > 0 OR owners = 0) THEN RAISE taken_{number}; END IF;",
             "  END IF;",
         ]
-    statements = "\n".join(
-        "  " + line if line else line for line in _single_quoted_bodies(changes).splitlines()
-    )
+    holders = _holder_checks(names)
+    owners = _owner_checks(names)
+    declarations += holders[0] + owners[0]
+    body += holders[1] + owners[1]
+    quoted = _single_quoted_bodies(changes)
+    # The block is itself `$$`-quoted, so a `$$` inside it would end it early and run the
+    # rest outside it.
+    if "$$" in quoted:
+        raise ValueError("a statement of the shared script holds $$, which would end its block")
+    statements = "\n".join("  " + line if line else line for line in quoted.splitlines())
     return (
         "-- One block: it changes nothing when a name it creates is another's, and stops at\n"
         "-- the first statement that fails.\n"
@@ -116,6 +127,88 @@ def _checked_block(names, changes):
         + statements
         + "\n  RETURN 'done';\nEND;\n$$;\n"
     )
+
+
+def _holder_checks(names):
+    """Declarations and statements that stop the block when the environment's provisioner or
+    analyst role is held by anyone but the provisioner's user, the provisioner's role and
+    what it owns, SYSADMIN and the deploy role (the database's owner, `keeper`): the
+    Snowflake root grants every role it creates to SYSADMIN and to the role it runs as. A
+    squatter could otherwise hold the role, then hand its ownership to either of them."""
+    analyst, provisioner = _name(names.analyst_role), _name(names.provisioner_role)
+    user = _name(names.provisioner_user)
+    outside = "is held by a user or role outside this environment, and this script changed nothing"
+    declarations = [
+        f"  held_1 EXCEPTION (-20011, {_literal(f'role {provisioner} {outside}')});",
+        f"  held_2 EXCEPTION (-20012, {_literal(f'role {analyst} {outside}')});",
+    ]
+    stranger = (
+        'NOT (g."granted_to" = \'ROLE\' AND g."grantee_name" IN '
+        f"({_literal(provisioner)}, 'SYSADMIN', :keeper))"
+    )
+    body = [
+        f"  SHOW ROLES LIKE {_literal(provisioner)};",
+        "  SELECT COUNT(*) INTO :found FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
+        f'    WHERE "name" = {_literal(provisioner)};',
+        "  IF (found > 0) THEN",
+        f"    SHOW GRANTS TO ROLE {_ident(provisioner)};",
+        "    owned := LAST_QUERY_ID();",
+        f"    SHOW GRANTS OF ROLE {_ident(provisioner)};",
+        "    SELECT COUNT(*) INTO :strangers FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
+        f'      WHERE NOT (("granted_to" = \'USER\' AND "grantee_name" = {_literal(user)})',
+        "        OR (\"granted_to\" = 'ROLE' AND \"grantee_name\" IN ('SYSADMIN', :keeper)));",
+        "    IF (strangers > 0) THEN RAISE held_1; END IF;",
+        "  END IF;",
+        f"  SHOW ROLES LIKE {_literal(analyst)};",
+        "  SELECT COUNT(*) INTO :found FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
+        f'    WHERE "name" = {_literal(analyst)};',
+        "  IF (found > 0) THEN",
+        f"    SHOW GRANTS OF ROLE {_ident(analyst)};",
+        "    held := LAST_QUERY_ID();",
+        "    IF (owned IS NULL) THEN",
+        "      SELECT COUNT(*) INTO :strangers FROM TABLE(RESULT_SCAN(:held)) g",
+        f"        WHERE {stranger};",
+        "    ELSE",
+        "      SELECT COUNT(*) INTO :strangers FROM TABLE(RESULT_SCAN(:held)) g",
+        f"        WHERE {stranger}",
+        "          AND NOT EXISTS (SELECT 1 FROM TABLE(RESULT_SCAN(:owned)) o",
+        '            WHERE o."privilege" = \'OWNERSHIP\' AND o."granted_on" = g."granted_to"',
+        '              AND o."name" = g."grantee_name");',
+        "    END IF;",
+        "    IF (strangers > 0) THEN RAISE held_2; END IF;",
+        "  END IF;",
+    ]
+    return declarations, body
+
+
+def _owner_checks(names):
+    """Declarations and statements that stop the block when the access schema or a sign-in
+    policy in it exists under another owner than the role running the script: the loader
+    may create schemas in the database, and CREATE ... IF NOT EXISTS would use its own."""
+    database, schema = _ident(names.database.upper()), names.access_schema
+    policies = (names.authentication_policy, names.service_policy)
+    declarations = [
+        f"  owner_{n} EXCEPTION (-{20020 + n}, "
+        f"{_literal(f'{name} is owned by another role, and this script changed nothing')});"
+        for n, name in enumerate((schema, *policies), start=1)
+    ]
+    body = [
+        f"  SHOW SCHEMAS LIKE {_literal(schema)} IN DATABASE {database};",
+        '  SELECT COUNT(*), COUNT_IF("owner" <> CURRENT_ROLE()) INTO :found, :foreign',
+        f'    FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" = {_literal(schema)};',
+        "  IF (foreign > 0) THEN RAISE owner_1; END IF;",
+        "  IF (found > 0) THEN",
+    ]
+    for n, policy in enumerate(policies, start=2):
+        body += [
+            f"    SHOW AUTHENTICATION POLICIES LIKE {_literal(policy)} IN SCHEMA "
+            f"{database}.{_ident(schema)};",
+            '    SELECT COUNT_IF("owner" <> CURRENT_ROLE()) INTO :foreign',
+            f'      FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" = {_literal(policy)};',
+            f"    IF (foreign > 0) THEN RAISE owner_{n}; END IF;",
+        ]
+    body.append("  END IF;")
+    return declarations, body
 
 
 def _single_quoted_bodies(text):
@@ -146,6 +239,11 @@ def _sign_in_policies(names):
   SECURITY_INTEGRATIONS = ('{integration}')
   COMMENT = {comment};
 ALTER AUTHENTICATION POLICY {policy} SET SECURITY_INTEGRATIONS = ('{integration}');
+-- No token of this integration acts as SYSADMIN or the deploy role, which hold every role of
+-- the environment; another environment's deploy user may carry no sign-in policy.
+blocked := 'ALTER SECURITY INTEGRATION {integration} SET EXTERNAL_OAUTH_BLOCKED_ROLES_LIST = '
+  || '(''SYSADMIN'', ''' || REPLACE(COALESCE(keeper, 'SYSADMIN'), '''', '''''') || ''')';
+EXECUTE IMMEDIATE :blocked;
 GRANT APPLY ON AUTHENTICATION POLICY {policy} TO ROLE {_name(names.provisioner_role)};
 CREATE AUTHENTICATION POLICY IF NOT EXISTS {service}
   AUTHENTICATION_METHODS = ('KEYPAIR')

@@ -94,6 +94,10 @@ def test_render_layout(tmp_path, params):
     snowflake_root = params.warehouse == "snowflake" and "platform" in params.components
     assert ("### Snowflake" in runbook) is (params.render_deploy and snowflake_root)
     assert (DEPLOY_ROLE_PRIVILEGES in runbook) is (params.render_deploy and snowflake_root)
+    # In a shared account another environment's integration reaches a deploy user without
+    # a key-pair-only policy.
+    deploy_policy = "SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN" in runbook
+    assert deploy_policy is (params.render_deploy and snowflake_root)
     identity = "`vecten mcp provisioner-script --env <env>`, which stores" in runbook
     assert identity is (params.render_deploy and snowflake_root and "mcp" in params.components)
     managed_warehouse = params.warehouse == "postgres" and "platform" in params.components
