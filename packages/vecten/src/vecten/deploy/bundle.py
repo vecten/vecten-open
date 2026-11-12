@@ -34,6 +34,7 @@ from vecten.stack.compose import (
     generate_compose,
     host_services,
     platform_secrets,
+    served_services,
     vm_hostnames,
     write_extension_dag_loader,
 )
@@ -267,6 +268,13 @@ def host_document(
     sizing = _host_tier(host, cloud, tfvars)
     components = list(outputs.hosts[host].components)
     service_secrets, service_network = host_services(config, record or {}, components)
+    served = served_services(
+        config,
+        record or {},
+        components,
+        vm_hostnames(outputs),
+        outputs.hosts[host].service_hostnames,
+    )
     doc = {
         "host": host,
         "cloud": cloud,
@@ -278,7 +286,8 @@ def host_document(
         "bucket": outputs.bucket,
         "commit": commit,
         "setup_host": outputs.setup_host == host,
-        "hostnames": list(outputs.hosts[host].hostnames),
+        # The agent issues and renews a certificate for every name listed here.
+        "hostnames": [*outputs.hosts[host].hostnames, *sorted(name for _, name in served)],
         "secret_prefix": outputs.secret_prefix,
         "compose_project": compose_project(config, env),
         # Every platform name the project and its extensions declare, not connectors' alone.

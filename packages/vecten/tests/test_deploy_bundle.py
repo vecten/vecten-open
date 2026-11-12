@@ -607,3 +607,58 @@ def test_one_vm_under_minimal_reads_each_service_secret_from_its_hosts_scope(tmp
     host = host_json(build(locked(root), tmp_path / "out", host="main", outputs=minimal_outputs()))
     assert host["service_network"] == "vecten-services"
     assert host["service_secrets"] == ["ACME_BOT_TOKEN", "MCP_ACME_TOKEN"]
+
+
+def _outputs_with(names: dict[str, list[str]]) -> dict:
+    import copy
+
+    outputs = copy.deepcopy(STANDARD_OUTPUTS)
+    for host, listed in names.items():
+        outputs["hosts"][host]["service_hostnames"] = listed
+    return outputs
+
+
+def _portal_and_bot(root):
+    from .services_fixtures import BOT, with_services
+
+    portal = {**BOT, "components": ["platform", "mcp"]}
+    with_services(
+        root,
+        {
+            "bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}},
+            "portal": {
+                "hostname": "portal",
+                "host": "mcp",
+                "routes": {"admin": {"access": "public"}},
+            },
+        },
+        declared={"bot": BOT, "portal": portal},
+    )
+    return locked(root)
+
+
+def test_host_json_appends_the_service_hostnames_the_outputs_list_for_the_host(project, tmp_path):
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com"], "mcp": ["portal.data.acme.com"]})
+    platform = host_json(build(project, tmp_path / "p", outputs=outputs))
+    assert platform["hostnames"] == ["airflow.data.acme.com", "bot.data.acme.com"]
+    mcp = host_json(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert mcp["hostnames"] == ["mcp.data.acme.com", "portal.data.acme.com"]
+
+
+def test_a_bound_hostname_missing_from_the_outputs_is_not_handed_to_the_agent(project, tmp_path):
+    _portal_and_bot(project)
+    platform = host_json(build(project, tmp_path / "p"))
+    assert platform["hostnames"] == ["airflow.data.acme.com"]
+
+
+def test_a_listed_hostname_no_longer_bound_on_the_host_is_not_handed_to_the_agent(
+    project, tmp_path
+):
+    # The record still points at the platform VM while the binding moved the portal to mcp.
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com", "portal.data.acme.com"]})
+    platform = host_json(build(project, tmp_path / "p", outputs=outputs))
+    assert platform["hostnames"] == ["airflow.data.acme.com", "bot.data.acme.com"]
+    mcp = host_json(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert mcp["hostnames"] == ["mcp.data.acme.com"]

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from vecten_shared.output import ExitCode, Failure
 
@@ -18,6 +18,9 @@ class HostOutput(BaseModel):
     public_ip: str
     components: list[str]
     hostnames: list[str]
+    # The service hostnames whose records point at this host. Left out of the dump when
+    # empty, so the outputs of a project without services keep their bytes in the bundle.
+    service_hostnames: list[str] = Field(default_factory=list, exclude_if=lambda names: not names)
 
 
 class PostgresOutput(BaseModel):
