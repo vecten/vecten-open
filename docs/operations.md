@@ -146,6 +146,33 @@ made and the failure is still listed by `vecten issues`. After the first deploy,
 asks once whether to set the webhook; on yes, run `vecten secret set ALERT_WEBHOOK_URL --env
 <env>` and then `vecten answer alert_webhook.<env> yes`.
 
+## Services in the ship output
+
+`vecten issues` does not read [extension services](services.md), the long-running processes
+an extension contributes, such as a bot or a portal. Their state shows in each ship's output,
+after the hosts are shipped, one line per service the project binds, and under `services` with
+`--json`:
+
+```text
+shipped 3f9a1c2e to platform, mcp
+service acme-bot.bot: healthy
+service acme-portal.portal: waiting for deploy
+routes waiting for `vecten deploy --env prod`: acme-portal.portal.home
+```
+
+| State | Meaning | What to do |
+|---|---|---|
+| `healthy` | Its health address answered with a status from 200 to 399. | Nothing. |
+| `unhealthy` | It did not, within 60 seconds. | Reproduce it with `vecten up`, which starts the service the same way on the laptop. On a VM its output stays in Docker's log on that host; nothing copies it to the bucket. |
+| `waiting for deploy` | Its hostname has no DNS record yet, so its routes are not served. | `vecten deploy --env <env>`, which `vecten next` also offers. |
+| `not routed` | The project binds no hostname for it; only Docker checks its health. | Nothing, unless it should have routes. |
+| `served` | Its hostname is served, and it declares a health command, which only Docker runs. | Nothing. |
+
+A service's state never fails the ship or restores the previous release, so a broken service
+does not undo the rest of a merge. A ship also names the volumes of services a host no longer
+runs (`orphaned_volumes` with `--json`), which keep their data until someone removes them; see
+[volumes](services.md#volumes-and-what-replaces-a-vm).
+
 ## The `operate` skill
 
 `skills/operate/SKILL.md`, which `vecten init` vendors into every project, does the following:

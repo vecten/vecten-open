@@ -38,6 +38,14 @@ These terms describe the files and components used to build and operate a Vecten
 
 **In-repo extension**: an extension package kept in the project under `extensions/<name>/` and registered with `vecten extension add ./extensions/<name>`; the hosts build it from the bundle, so it is never published to or fetched from an index, while its third-party dependencies and build backend still come from one; see [extensions in the project](extensions.md#extensions-in-the-project).
 
+**Service**: a long-running process that an extension declares in its `vecten.services` entry point and the project binds in `[services.<extension>.<service>]` of `vecten.toml`, such as a chat bot or a portal; it runs in its own container on a deployed host and on the laptop, on a hostname of its own when it has routes; see [extension services](services.md). Not the same as a service principal (`vecten service add`), which is an MCP identity for a program.
+
+**Binding**: a service's table in `vecten.toml`, where the project chooses its hostname, the host that runs it, its limits and each route's access; `vecten extension add` writes it from the extension's suggestions, and a service or route without one does not run; see [binding a service](extensions.md#services).
+
+**Route**: a path a service serves on its hostname, declared by the extension and bound by the project as `public` (anyone) or `login` (people signed in to the MCP who belong to one of the route's groups), optionally narrowed to listed networks by `allow`; see [access](services.md#access-public-login-and-allow).
+
+**Gate**: the MCP's sign-in in front of `login` routes: NGINX asks the MCP server on every request whether the person may use the route, and passes the service who they are in `X-Vecten-*` headers; see [the gate](services.md#the-gate-signing-in-for-login-routes).
+
 **Ship**: deliver a project's code and semantic files to existing hosts, without changing infrastructure through Terraform.
 
 **Provisioner**: the privileged warehouse identity that creates and manages the roles used by MCP principals.

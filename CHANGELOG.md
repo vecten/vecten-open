@@ -30,6 +30,25 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `[settings.<extension>]` with `env.<env>` overrides, are checked against the schema by
   `vecten lock`, `up`, `ship` and the MCP server's startup, and are read, with declared secrets,
   through `vecten_shared.context` ([#49](https://github.com/vecten/vecten-open/issues/49)).
+- Extension services: an extension declares a long-running process and its HTTP routes in a
+  `vecten.services` entry point, `vecten lock` records it in `extensions.lock.json`, and the
+  project binds it in `[services.<extension>.<service>]` of `vecten.toml` (hostname, host,
+  limits, and each route's `public` or `login` access, `groups` and `allow`); `extension add`
+  writes the binding from the extension's suggestions and names every public route. A bound
+  service runs from its host component's project image on the deployed host and under
+  `vecten up` (at `https://<label>.localhost:8443`, unless `local = false`), on its own Docker
+  network that only NGINX joins, with memory and CPU limits, an optional host-local volume, no
+  cloud credentials (the VM agent blocks the metadata address, at boot too, through
+  `vecten-services-guard.service`) and only the secrets its extension declares. Each routed
+  service gets its own hostname: `vecten deploy` creates the DNS record on AWS and Scaleway, the
+  next ship its certificate, and NGINX serves only the bound paths, clearing the `X-Vecten-*`
+  identity headers clients send. `login` routes sign people in through the MCP's gate and pass
+  the service who they are in those headers. `ship` reports each service's health, the routes
+  waiting for a deploy and the volumes of services a host no longer runs, and never rolls back
+  for a service; `next` notes unbound services and offers the deploy a new hostname needs. A
+  project without services renders and deploys exactly as before; one that binds a hostname
+  runs `vecten update` first. See [extension services](docs/services.md)
+  ([#38](https://github.com/vecten/vecten-open/issues/38)).
 - Deployed hosts: `dags_paused_at_creation = true` in `deploy/envs/<env>.tfvars` makes that
   environment's new DAGs start paused, `[airflow] allow` in `vecten.toml` limits which networks
   reach `airflow.<domain>` (Airflow's health path stays open for `vecten ship`), and
