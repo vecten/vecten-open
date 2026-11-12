@@ -20,6 +20,7 @@ def test_keys_cover_the_intake():
         "dns_zone",
         "github_repository",
         "snowflake_account",
+        "snowflake_shared_account",
     }
     assert ANSWER_KEYS["has_warehouse"].question == "Do you already have a data warehouse?"
     assert ANSWER_KEYS["cloud"].scope == "deploy" and ANSWER_KEYS["users"].scope == "local"
@@ -198,6 +199,18 @@ def test_snowflake_account_must_be_organization_account(raw):
         validate_answer("snowflake_account", raw)
     assert caught.value.code == ExitCode.USAGE
     assert "ORGANIZATION-ACCOUNT" in caught.value.message
+
+
+def test_the_shared_account_answer_is_yes_or_no():
+    spec = ANSWER_KEYS["snowflake_shared_account"]
+    assert spec.scope == "deploy" and spec.choices == ("yes", "no")
+    assert spec.question == (
+        "Does this Snowflake account hold anything besides this one environment, such as "
+        "another environment of this project or another team's data?"
+    )
+    assert validate_answer("snowflake_shared_account", " YES ") == "yes"
+    with pytest.raises(Failure):
+        validate_answer("snowflake_shared_account", "maybe")
 
 
 def test_snowflake_account_is_a_deploy_answer():

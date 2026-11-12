@@ -17,12 +17,12 @@
 
 ## 3. The layout setting and the account per environment
 
-- [ ] 3.1 `[warehouse] shared_account` in `vecten.toml` (default `false`), refused without the `platform` component; `[environments.<env>] snowflake_shared_account` recorded by `deploy`
-- [ ] 3.2 `deploy` refuses an environment whose recorded layout differs from the setting, except a fixed environment alone in its account
-- [ ] 3.3 `check_tfvars`: the account comparison applies to `prod` only; fixed environments refuse a shared account; shared environments refuse a hyphen in the environment name, a suffix over 64 characters, and an account a fixed environment names
-- [ ] 3.4 `generate_compose` writes the environment's account into every deployed host's Compose environment; the runtime reads it; the laptop is unchanged
-- [ ] 3.5 `next` asks `snowflake_shared_account` after the Snowflake account; `answer` accepts it; `init --deploy` writes it
-- [ ] 3.6 Tests: config validation, the record and its refusal, each `check_tfvars` rule, the Compose environment per host, the `next` item and its order
+- [x] 3.1 `[warehouse] shared_account` in `vecten.toml` (default `false`), refused without the `platform` component; `[environments.<env>] snowflake_shared_account` recorded by `deploy`
+- [x] 3.2 `deploy` refuses an environment whose recorded layout differs from the setting, except a fixed environment alone in its account
+- [x] 3.3 `check_tfvars`: the account comparison applies to `prod` only; fixed environments refuse a shared account; shared environments refuse a hyphen in the environment name, a suffix over 64 characters, and an account a fixed environment names
+- [x] 3.4 `generate_compose` writes the environment's account into every deployed host's Compose environment; the runtime reads it; the laptop is unchanged
+- [x] 3.5 `next` asks `snowflake_shared_account` after the Snowflake account; `answer` accepts it; `init --deploy` writes it
+- [x] 3.6 Tests: config validation, the record and its refusal, each `check_tfvars` rule, the Compose environment per host, the `next` item and its order
 
 ## 4. Identities in a shared account
 
@@ -45,7 +45,7 @@
 ## 7. dbt and #53
 
 - [x] 7.1 `vecten dbt --env` (#53, merged in #60) takes every connection name from `snowflake_names`
-- [ ] 7.2 Test: `profile_env` for a shared-account environment carries the suffixed user and role, the database and the warehouse
+- [x] 7.2 Test: `profile_env` for a shared-account environment carries the suffixed user and role, the database and the warehouse
 
 ## 8. Docs
 

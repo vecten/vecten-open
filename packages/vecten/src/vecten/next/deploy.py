@@ -13,7 +13,7 @@ from vecten.deploy.snowflake import (
     has_snowflake_root,
     secret_set_command,
 )
-from vecten.intake.answers import ANSWER_KEYS, DECLINED, read_answers
+from vecten.intake.answers import ANSWER_KEYS, DECLINED, SHARED_ACCOUNT_KEY, read_answers
 from vecten.next.declared import declared_secret_items
 from vecten.next.existing_warehouse import provisioner_secrets_item
 from vecten.next.gitstate import GitState
@@ -21,6 +21,7 @@ from vecten.next.items import Item
 from vecten.secrets import LAPTOP_ONLY, provisioner_secret_names, recorded_secret_names
 from vecten_shared.config import EnvironmentFacts, VectenConfig
 from vecten_shared.envfile import read_env_values
+from vecten_shared.provider import recorded_layout
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.stack_secrets import STACK_MANAGED
 
@@ -48,6 +49,8 @@ def _questions(
     )
     if _needs_account(config):
         questions += (((ACCOUNT_KEY,), (), (), ""),)
+    if has_snowflake_root(config):
+        questions += (((SHARED_ACCOUNT_KEY,), ANSWER_KEYS[SHARED_ACCOUNT_KEY].choices, (), ""),)
     return questions
 
 
@@ -82,6 +85,18 @@ def deploy_question_items(root: Path, config: VectenConfig, answers: dict[str, A
                 )
             ]
     return [RENDER_DEPLOY]
+
+
+def _any_deployed(config: VectenConfig) -> bool:
+    """Whether an environment of the project has deployed, which fixes its Snowflake layout."""
+    return any(recorded_layout(config, env) is not None for env in config.environments)
+
+
+def _shared_question() -> Item:
+    spec = ANSWER_KEYS[SHARED_ACCOUNT_KEY]
+    return Item(
+        "ask", spec.question, spec.question, answer_keys=(SHARED_ACCOUNT_KEY,), allowed=spec.choices
+    )
 
 
 def _undeployed(config: VectenConfig, env: str) -> EnvironmentFacts | None:
@@ -133,11 +148,14 @@ def deploy_prerequisite_items(
     # `init --deploy` writes the answered account to the tfvars and vecten.toml, which
     # deploy refuses to run without.
     if _needs_account(config):
-        if read_answers(root).get(ACCOUNT_KEY):
-            items.append(RENDER_DEPLOY)
-        else:
+        answers = read_answers(root)
+        if not answers.get(ACCOUNT_KEY):
             question = ANSWER_KEYS[ACCOUNT_KEY].question
             items.append(Item("ask", question, question, answer_keys=(ACCOUNT_KEY,)))
+        elif answers.get(SHARED_ACCOUNT_KEY) is None and not _any_deployed(config):
+            items.append(_shared_question())
+        else:
+            items.append(RENDER_DEPLOY)
     if not git.has_origin:
         items.append(Item("command", "Put the project on GitHub", "vecten github init"))
     if not facts.bootstrapped:

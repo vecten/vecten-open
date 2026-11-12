@@ -26,6 +26,7 @@ ANSWERS_FILE = "vecten-answers.yml"
 EMPTY_SOURCES = ("none", "start empty")
 DECLINED = "none"
 DECLINABLE = ("domain", "github_repository")
+SHARED_ACCOUNT_KEY = "snowflake_shared_account"
 SOURCES_NEED_PLATFORM = (
     "sources belong to the platform component; an existing warehouse deploys mcp only"
 )
@@ -89,6 +90,14 @@ ANSWER_KEYS: dict[str, AnswerKey] = {
             "Which Snowflake account should the platform build in? Give its "
             "ORGANIZATION-ACCOUNT identifier, for example ACME-PROD.",
             "deploy",
+        ),
+        AnswerKey(
+            SHARED_ACCOUNT_KEY,
+            "choice",
+            "Does this Snowflake account hold anything besides this one environment, such as "
+            "another environment of this project or another team's data?",
+            "deploy",
+            ("yes", "no"),
         ),
     )
 }
