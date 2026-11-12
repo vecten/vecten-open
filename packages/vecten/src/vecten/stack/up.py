@@ -26,6 +26,8 @@ from vecten.stack.env import ensure_local_env
 from vecten.stack.images import base_image, write_project_layer
 from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, HOST_KEYS, write_nginx
 from vecten_shared.config import load_config
+from vecten_shared.declarations import check_settings
+from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import read_record, remove_record, write_record, write_text_atomic
 
@@ -115,6 +117,7 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
             "then run `vecten up` again",
         )
     config = load_config(project_root)
+    check_settings(config, read_extension_record(project_root) or {}, "local")
     components = local_components(config)
     if not components:
         raise Failure(

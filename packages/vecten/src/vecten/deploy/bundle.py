@@ -40,6 +40,7 @@ from vecten.stack.images import write_project_layer
 from vecten.stack.nginx import write_nginx
 from vecten.stack.up import PUBLISHED_REGISTRY
 from vecten_shared.config import VectenConfig
+from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import Extension, read_record
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
@@ -348,6 +349,7 @@ def build_host_bundle(
             f"host {host!r} is not in the outputs of {env!r}; hosts: {', '.join(outputs.hosts)}",
         )
     tfvars = check_tfvars(project_root, config, env)
+    check_settings(config, read_record(project_root) or {}, env)
     host_doc = host_document(
         config, env, outputs, host, commit, tfvars, read_record(project_root) or {}
     )

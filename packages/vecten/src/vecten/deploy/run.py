@@ -50,6 +50,8 @@ from vecten.deploy.terraform import PlannedRoot, TerraformRunner, require_terraf
 from vecten.deploy.tfvars import check_tfvars
 from vecten.github.gh import ToolRunner, require_gh
 from vecten_shared.config import DeploySection, VectenConfig, load_config, save_config
+from vecten_shared.declarations import check_settings
+from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
@@ -338,6 +340,8 @@ def ship_env(
 ) -> dict:
     check_env_name(env)
     config = load_config(project_root)
+    # The settings this commit would ship are checked before any host or cloud is touched.
+    check_settings(config, read_extension_record(project_root) or {}, env)
     if check:
         found = check_facts(config, env)
         export_facts(found)

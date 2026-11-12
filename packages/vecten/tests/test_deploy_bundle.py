@@ -486,3 +486,11 @@ def test_host_json_carries_every_declared_platform_secret(project, tmp_path):
     assert "ACME_API_KEY" in doc["connector_secrets"]
     assert "HUBSPOT_API_KEY" in doc["connector_secrets"]
     assert "MCP_ACME_TOKEN" not in doc["connector_secrets"]
+
+
+def test_the_bundle_build_checks_the_environments_settings(project, tmp_path):
+    from .settings_fixtures import with_settings
+
+    with_settings(project, {"env": {"prod": {"daily_cap": "500"}}})
+    with pytest.raises(Failure, match="settings.acme.daily_cap in prod"):
+        build(project, tmp_path / "out")
