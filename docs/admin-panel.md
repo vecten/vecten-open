@@ -138,7 +138,7 @@ turned on.
 | `session_idle_seconds` | 900 | 30–3600 | Seconds an idle per-person warehouse connection stays open |
 | `row_cap` | 1000 | 1–10000 | Rows a query tool returns at most |
 | `statement_timeout_seconds` | 30 | 1–3600 | Seconds a warehouse statement may run |
-| `reconcile_drift` | revoke | revoke, report | What reconciliation does with a read grant a managed role holds and the state does not: revoke it, or only list it in access health |
+| `reconcile_drift` | revoke (report on a state an earlier release created) | revoke, report | What reconciliation does with a read grant a managed role holds and the state does not: revoke it, or only list it in access health |
 
 ## Restricting who reaches the panel
 

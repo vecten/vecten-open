@@ -151,7 +151,8 @@ Reconciliation also reads the read grants `analyst` and every group role hold in
 convention and `raw_<source>` schemas (on Snowflake through the owner-rights
 `VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and revokes those the
 state does not hold. The `reconcile_drift` setting, `revoke` by default, can be set to
-`report` to list them in access health without revoking. A grant in any other schema, or to a
+`report` to list them in access health without revoking; an MCP state created by an earlier
+release starts at `report`. A grant in any other schema, or to a
 role the MCP does not manage, is left alone. While the installed procedures are older than the
 MCP, this step is skipped and access health names `vecten mcp provisioner-script`. Memberships combine the permissions of all
 assigned groups. Removing a grant from one group does not remove access provided by another.

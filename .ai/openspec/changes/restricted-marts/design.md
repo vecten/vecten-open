@@ -349,15 +349,24 @@ Snowflake with the MCP:
 2. The admin reruns `vecten mcp provisioner-script --env <env>` as ACCOUNTADMIN and confirms
    with `--confirm-run`. This installs the new `READ_GRANT` and `READ_GRANTS` and no longer
    grants `analyst` data. `next` reports the step until the version check passes.
-3. The MCP's first reconciliation converges. Where `mcp_state` holds the default group's
-   `core` and `marts`, nothing changes. Where an admin revoked `marts`, the `USAGE` and future
-   `SELECT` that Terraform restored are revoked and listed in access health.
+3. The MCP's state, created by an earlier release, starts with `reconcile_drift = report`, so
+   the first reconciliation revokes nothing. Where an admin revoked `marts`, the `USAGE` and
+   future `SELECT` that Terraform restored are listed as drift in access health and
+   `vecten issues`, beside any hand-made grants.
+4. The admin records every listed grant that should stay (a schema grant, or a dataset grant
+   for a relation the model has as a dataset), removes dbt `grants:` configs and granting
+   post-hooks, which would be revoked on every pass and granted again by every build, then
+   sets `reconcile_drift` to `revoke`. The next reconciliation revokes the rest, including any
+   `SELECT` on a relation that is not a dataset, which cannot be recorded.
+
+New deployments start with `revoke`, as the spec states.
 
 Snowflake without the MCP: the module creates the platform-only grant resources over grants
 that already exist, and nothing else changes.
 
 Postgres: the next ship runs setup SQL that grants `analyst` nothing when `with_mcp` is true,
-and installs helpers for declared areas. The MCP converges as above.
+and installs helpers for declared areas. The MCP reads the catalogs directly, so the drift
+report of steps 3 and 4 starts with the first reconciliation; no script rerun is needed.
 
 ### The client: off the post-hook workaround
 
@@ -395,7 +404,10 @@ grants for the restriction, no post-deploy check.
   grants live on group roles, and no old resource or script touches schemas outside `core` and
   `marts`. The old naming test fails area models, so dbt stops building them, which fails
   closed. The installed procedures stay until an admin reruns the old script. The old
-  `READ_GRANT` refuses area schemas.
+  `READ_GRANT` refuses area schemas. The old MCP's startup check refuses `USAGE` on
+  `READ_GRANTS(VARCHAR)`, so before starting it an ACCOUNTADMIN runs `REVOKE USAGE ON
+  PROCEDURE <DATABASE>.VECTEN_ACCESS.READ_GRANTS(VARCHAR) FROM ROLE PROVISIONER` (or drops
+  the procedure).
 - `copy_grants` can be turned off in `dbt_project.yml` at any time, which brings back problem 2.
 - `reconcile_drift = report` stops revocations without a release.
 - A binding is undone with `REVOKE ROLE <existing> FROM ROLE <group role>` and an unbind in

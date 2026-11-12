@@ -1101,6 +1101,15 @@ Run `vecten dbt-build-local --check` after the update. It tests the model conven
 checks that the generated semantic datasets agree with the models. If model definitions
 changed, run without `--check` first, review the regenerated datasets, then check again.
 [% endif %]
+[% if 'mcp' in components %]
+Read the release notes for steps an upgrade needs beyond the update, such as an administrator's
+rerun of `vecten mcp provisioner-script`. The MCP revokes read grants its state does not hold
+from `analyst` and the group roles, in the convention and `raw_` schemas. A deployment whose
+MCP state an earlier release created starts with the setting `reconcile_drift` at `report`:
+read the drift in `vecten issues`, record the grants to keep with `vecten grant`, remove dbt
+`grants:` configs and granting post-hooks, then set it to `revoke` in the admin panel. A
+`SELECT` on a relation that is not a dataset cannot be recorded and is revoked from then on.
+[% endif %]
 Run `vecten mcp validate`, review and commit the changed files. The next local `vecten up`
 uses the installed release's images. A deployed project ships content when changes reach its
 default branch after the first deployment; infrastructure changes require a separate reviewed
