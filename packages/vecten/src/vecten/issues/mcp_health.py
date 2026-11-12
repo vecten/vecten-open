@@ -79,7 +79,17 @@ def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> 
 def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
     app, group = (str(entry.get(k, "?")) for k in ("app", "group"))
     where = f"`[apps.{app}]` groups in vecten.toml"
-    if "source" in entry:
+    if "principal_id" in entry:
+        name = str(entry.get("warehouse_name", "?"))
+        group = name
+        title = f"Service principal {name} is not marked as {app}'s principal"
+        resolution = (
+            f"{name} is named as the principal of {app} but the MCP does not hold it to the "
+            "app's datasets, so it reads everything its groups can. Run "
+            f"`vecten app connect {app} --env {ctx.env}` to make it the app's principal, or "
+            "delete it if nothing uses it."
+        )
+    elif "source" in entry:
         dataset, source = str(entry.get("dataset", "?")), str(entry.get("source", "?"))
         title = f"App {app} does not admit group {group}"
         resolution = (

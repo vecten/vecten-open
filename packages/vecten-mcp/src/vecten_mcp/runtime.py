@@ -52,7 +52,8 @@ class Runtime:
         if self.apps and self.access:
             # A ship restarts the server with the new bundle, so admission follows its binding
             # from the first request, before the first reconciliation.
-            self.apps.admit(self.access.datasets)
+            with self.access.lock:
+                self.apps.admit(self.access.datasets)
         if self.feedback_resolution:
             try:
                 self.feedback_resolution.reconcile()

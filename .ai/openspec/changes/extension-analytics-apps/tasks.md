@@ -50,3 +50,4 @@ publishing is a later change with #40 (section 5).
 
 - [ ] 6.1 Task 4.3: end-to-end Streamlit template on both clouds
 - [ ] 6.2 Task 4.4: restricted area and admission
+- [ ] 6.3 The `snowflake_live` run of `packages/vecten-mcp/tests/test_app_sql_snowflake_live.py`: whether Snowflake's grammar itself refuses `LATERAL TABLE('<relation>')`, which the app SQL check refuses (written, not run: it needs the snowflake-live workflow's account)

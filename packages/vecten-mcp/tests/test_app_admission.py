@@ -284,3 +284,34 @@ def test_bound_apps_come_from_the_bundles_vecten_toml_and_record(tmp_path):
     )
     # A binding the record does not declare reads nothing.
     assert apps["retired"].datasets == ()
+
+
+def test_a_dataset_grant_still_applied_to_the_old_table_admits_no_one_after_a_move():
+    _, adapter, access, scopes = setup(FINANCE)
+    access.model_changed(SOURCES)
+    access.grant("finance", "dataset", "revenue")
+    assert scopes.admitted("finance") == {"finance"}
+    # The model moves revenue; the warehouse refuses both the old revoke and the new grant.
+    adapter.fail = True
+    access.model_changed({**SOURCES, "revenue": "marts_finance.revenue_v2"})
+    assert scopes.admitted("finance") == frozenset()
+
+
+def test_an_unmarked_service_named_as_a_bound_apps_principal_is_listed():
+    state, _, access, scopes = setup(OVERVIEW)
+    access.model_changed(SOURCES)
+    service = state.create_principal(
+        Identity("service", "svc_app_overview", "x@service.invalid", "app_overview"),
+        "svc_app_overview",
+        kind="service",
+        provisioned=True,
+    )
+    [entry] = access.health()["apps"]
+    assert (entry["app"], entry["principal_id"], entry["reason"]) == (
+        "acme-sales.overview",
+        service["id"],
+        "not marked as the app's principal",
+    )
+    assert "svc_app_overview" in entry["message"]
+    scopes.mark(service["id"], "acme-sales", "overview")
+    assert access.health()["apps"] == []

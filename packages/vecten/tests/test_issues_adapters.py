@@ -575,3 +575,20 @@ def test_an_app_dataset_the_model_lacks_is_an_issue():
         if i.source == "mcp"
     ]
     assert "revenue" in issue.resolution and "osi/" in issue.resolution
+
+
+def test_an_unmarked_app_principal_is_an_issue():
+    entry = {
+        "app": "acme-sales.overview",
+        "principal_id": "p1",
+        "warehouse_name": "svc_app_overview",
+        "reason": "not marked as the app's principal",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "svc_app_overview" in issue.title
+    assert "vecten app connect acme-sales.overview --env prod" in issue.resolution

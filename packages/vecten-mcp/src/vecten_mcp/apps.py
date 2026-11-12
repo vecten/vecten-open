@@ -10,6 +10,7 @@ query_metrics see a model holding only those, and sql-exec reads only their tabl
 
 import copy
 import dataclasses
+import re
 import time
 from dataclasses import dataclass
 from urllib.parse import unquote
@@ -69,6 +70,11 @@ def read_bound_apps(root, config):
                 groups=tuple(binding.groups),
             )
     return found
+
+
+def principal_name(app):
+    """The warehouse name `vecten app connect` gives app `app`'s principal."""
+    return "svc_app_" + re.sub(r"[^a-z0-9]+", "_", app.lower()).strip("_")
 
 
 def scoped_model(model, datasets):
@@ -177,7 +183,12 @@ class AppScopes:
         return normalize_identifiers(exp.to_identifier(name), dialect=self.kind).name
 
     def _covers(self, grants, dataset, source):
-        if any(g["kind"] == "dataset" and g["target"] == dataset for g in grants):
+        # A dataset grant counts only on the table the dataset reads now: after a move whose
+        # revoke failed, the warehouse may still hold it on the old one alone.
+        if any(
+            g["kind"] == "dataset" and g["target"] == dataset and g.get("source") == source
+            for g in grants
+        ):
             return True
         schemas = set()
         for grant in grants:
@@ -205,10 +216,11 @@ class AppScopes:
     def admit(self, datasets):
         """Recomputes every bound app's admitted groups from the grants the warehouse holds
         and the model's dataset sources (`datasets`: name -> source). A grant counts once it
-        is both desired and applied, so a revocation or a failed grant admits no one."""
+        is both desired and applied (as applied, with the table it was applied to), so a
+        revocation or a failed grant admits no one."""
         desired = dict(self.state.scan("grants"))
         applied = dict(self.state.scan("applied_grants"))
-        held = [row for key, row in desired.items() if key in applied]
+        held = [row for key, row in applied.items() if key in desired]
         known = {group for app in self.apps.values() for group in app.groups}
         existing = {group for group in known if self.state.group(group)}
         now = time.time()
@@ -279,4 +291,26 @@ class AppScopes:
                         f"{app.key} is bound to {item['group']}, which does not exist"
                     )
                 entries.append(entry)
+        entries.extend(self._unmarked())
         return entries
+
+    def _unmarked(self):
+        """A service principal named as a bound app's principal but not marked as one reads
+        everything its groups can; each is listed so an admin marks or removes it."""
+        marked = {key for key, _ in self.state.scan(APP_PRINCIPALS)}
+        names = {principal_name(app.name): app for app in self.apps.values()}
+        return [
+            {
+                "app": names[p["warehouse_name"]].key,
+                "principal_id": p["id"],
+                "warehouse_name": p["warehouse_name"],
+                "reason": "not marked as the app's principal",
+                "message": (
+                    f"service principal {p['warehouse_name']} is named as "
+                    f"{names[p['warehouse_name']].key}'s principal but is not marked as it, so "
+                    "it is not held to the app's datasets"
+                ),
+            }
+            for p in self.state.principals()
+            if p["kind"] == "service" and p["warehouse_name"] in names and p["id"] not in marked
+        ]
