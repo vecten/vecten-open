@@ -97,7 +97,7 @@ corresponding environment lock to install the recorded package versions.
 
 | Group | Exported object and consumer |
 |---|---|
-| `vecten.connectors` | A dictionary, or zero-argument factory returning one, with `kind`, optional `secrets`/`dependencies` lists and `write(target: Path)`. `connector add` uses the writer to create the project's connector adapter. |
+| `vecten.connectors` | A dictionary, or zero-argument factory returning one, with `kind`, optional `secrets`/`dependencies` lists, optional `groups` (below) and `write(target: Path)`. `connector add` uses the writer to create the project's connector adapter, and renders one sync DAG per group. |
 | `vecten.dbt_packages` | Installed dbt directory. Added as a `local:` dependency before dbt runs. |
 | `vecten.dags` | Installed directory of Python DAG files. The Airflow loader imports actual DAG objects, including DAGs created by calling `@dag` functions at module level; task objects are excluded and duplicate DAG IDs are refused. Use absolute package imports in DAG files. |
 | `vecten.osi` | Installed directory of JSON semantic documents. Shared discovery and validation merge these with project `osi/` files and reject duplicate definitions. |
@@ -125,6 +125,40 @@ concurrent submission, and await the query before returning from the handler so 
 is present when the invocation is recorded.
 
 No CLI-command or HTTP-route extension hooks are offered yet.
+
+### Connector groups and schedules
+
+A connector declared without `groups` gets one group, `default`, whose sync DAG runs every
+object `@daily` in UTC. `groups` splits the objects into groups, each with its own DAG
+(`orchestration/dags/sync_<connector>_<group>.py`) and schedule:
+
+```python
+def write_connector(target):
+    (target / "connector.py").write_text("from acme_attio.connector import source\n")
+
+
+connector = {
+    "kind": "custom",
+    "secrets": ["ATTIO_API_KEY"],
+    "write": write_connector,
+    "groups": {
+        "daily": {"objects": ["companies", "people"], "schedule": "0 6 * * *"},
+        "hourly": {"objects": ["deals"], "schedule": "@hourly", "timezone": "Europe/Warsaw"},
+        "weekly": ["notes"],
+    },
+}
+```
+
+Each group maps to its `objects` (an empty list syncs every object the source yields), a cron
+`schedule` (default `@daily`) and an IANA `timezone` (default UTC), or to a list of objects
+alone. A group name is lowercase letters, digits and underscores, starting with a letter, at
+most 63 characters. `connector add` records the
+groups and their objects in the project's `vecten.toml` and writes the schedules into the DAG
+files, which the project then owns; rendering a declared connector again reads the schedules
+from the installed extension. A group that cannot render a DAG (a bad name, objects that are not
+strings, an unknown timezone or key) is refused before anything is written. Airflow checks the
+cron syntax when it parses the DAG file. The DAG files' other options, such as ordered stages
+and run parameters, are in [orchestration](orchestration.md#changing-a-sync-dag).
 
 ## Private package indexes
 

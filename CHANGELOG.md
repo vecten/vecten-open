@@ -12,6 +12,25 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   reach `airflow.<domain>` (Airflow's health path stays open for `vecten ship`), and
   `root_volume_size_gb` in the tfvars sizes every VM's root volume on AWS and Scaleway. Every
   default is the current behaviour.
+- `build_sync_dag` takes `stages` (objects that run in a declared order, each stage once the
+  one before it synced), `params` (run parameters passed to the connector's `source()`),
+  `pool`, `guard` (a function whose falsy return skips the run without failing it),
+  `timezone` (the zone a cron schedule is read in) and `paused_at_creation`. A DAG file that
+  passes none of them behaves as before.
+- An extension connector's declaration takes `groups`: each group's objects, cron `schedule`
+  and `timezone`. `connector add` renders one sync DAG per group on its own schedule; an
+  extension that declares no groups still gets the one `default` group on `@daily`.
+- `dbt_build` has run parameters `select`, `exclude` and `full_refresh` for a manual run, and
+  `build_dbt_dag` takes their defaults, `trigger="any"` (build when any awaited group updated
+  rather than all of them) and `paused_at_creation`; `dbt_assets(config, groups)` narrows the
+  awaited groups. A green build emits the `dbt_build` asset (`vecten://dbt/build`). A
+  narrowed build skips `mark_built`, so the built commit still means the whole bundle built.
+
+### Changed
+
+- The `connector` skill names the `build_sync_dag` option for each scheduling request, and says
+  that a new sync DAG syncs the latest whole day as soon as it is unpaused rather than at the
+  next midnight.
 
 ### Fixed
 
@@ -19,6 +38,9 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `issues`, `mcp admin-link`, `mcp connection`, `mcp provisioner-script` and the sign-in items
   of `next`) use the environment's own domain from `deploy/envs/<env>.tfvars`, not prod's
   `[deploy] domain` ([#36](https://github.com/vecten/vecten-open/issues/36)).
+- A sync DAG no longer publishes its asset when an object failed, so `dbt_build` no longer
+  builds on a partial sync. The asset now follows the `check` task, and existing DAG files
+  pick this up unchanged.
 
 ## [0.1.0] - 2026-11-09
 

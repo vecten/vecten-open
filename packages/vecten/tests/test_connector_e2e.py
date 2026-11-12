@@ -233,7 +233,9 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
             for ti in instances.json()["task_instances"]:
                 by_task.setdefault(ti["task_id"], []).append(ti["state"])
             assert Counter(by_task["sync"]) == {"failed": 1, "success": 2}, by_task
-            assert by_task["publish"] == ["success"] and by_task["check"] == ["failed"], by_task
+            assert by_task["check"] == ["failed"], by_task
+            # dbt_build schedules on the asset, which a failed object leaves unpublished.
+            assert by_task["publish"] == ["upstream_failed"], by_task
 
         # `vecten issues` reads the same failure through the local Airflow API: the object's
         # task, keyed by the rendered map index, with the log the API serves.

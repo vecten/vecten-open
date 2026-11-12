@@ -62,9 +62,11 @@ bucket under `platform/` with the same keys. `vecten issues` reads them from eit
 lists each failing test, model and stale source; see `docs/operations.md` in the Vecten
 repository.
 
-`mark_built` writes the commit of the shipped bundle to `dbt/built_commit` after a green build and
-convention run. It reads the commit from `VECTEN_BUNDLE_COMMIT`, which only a shipped bundle sets,
-so on the laptop stack it writes nothing.
+`mark_built` writes the commit of the shipped bundle to `dbt/built_commit` after a green full
+build and convention run. It reads the commit from `VECTEN_BUNDLE_COMMIT`, which only a shipped
+bundle sets, so on the laptop stack it writes nothing. A run triggered with `select` or `exclude`
+skips it, because the MCP serves a newly shipped semantic model only once the whole bundle is
+built; after such a run, trigger `dbt_build` with no parameters to let the MCP switch.
 
 `freshness` runs `dbt source freshness` on the sources `vecten connector add` declares in
 `dbt/models/staging/sources.yml`, timed by dlt's load id: a source last loaded more than 36 hours
