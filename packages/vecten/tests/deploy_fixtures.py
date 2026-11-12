@@ -245,8 +245,23 @@ REPOSITORY_ID = 4242
 BRANCH_POLICIES_SUFFIX = "/deployment-branch-policies"
 
 
+def gh_fields(args: list[str]) -> dict[str, str]:
+    """The `-f`/`-F` fields of a `gh api` call."""
+    found = {}
+    for flag, value in zip(args, args[1:], strict=False):
+        if flag in ("-f", "-F"):
+            key, _, val = value.partition("=")
+            found[key] = val
+    return found
+
+
 class FakeGh:
-    """Answers the calls `dispatch_and_follow` makes; `watch_code` is the watched run's exit."""
+    """Answers the calls `dispatch_and_follow` makes; `watch_code` is the watched run's exit.
+
+    `history` is the default branch newest first, as the GraphQL history search pages it;
+    `statuses` maps a commit to its `(context, state)` statuses oldest first, and every
+    `api -X POST .../statuses/<sha>` appends to it.
+    """
 
     def __init__(
         self,
@@ -259,7 +274,13 @@ class FakeGh:
         branch_policies: bool = True,
         branch_policy_status: int | None = None,
         environment_policies: dict[str, tuple[dict | None, list[str]]] | None = None,
+        history: tuple[str, ...] | list[str] = (),
+        statuses: dict[str, list[tuple[str, str]]] | None = None,
     ):
+        self.history = list(history)
+        self.statuses: dict[str, list[tuple[str, str]]] = {
+            sha: list(found) for sha, found in (statuses or {}).items()
+        }
         self.watch_code = watch_code
         self.created_at = created_at
         self.logged_in = logged_in
@@ -289,8 +310,42 @@ class FakeGh:
     def _fail(self, args, status: int, text: str):
         return subprocess.CompletedProcess(args, 1, "", f"gh: {text} (HTTP {status})")
 
+    def latest_status(self, sha: str, context: str) -> str | None:
+        states = [state for ctx, state in self.statuses.get(sha, []) if ctx == context]
+        return states[-1] if states else None
+
+    def posted_statuses(self) -> list[tuple[str, str, str]]:
+        """(commit, context, state) of every status set, in order."""
+        return [
+            (c[3].rsplit("/", 1)[-1], gh_fields(c)["context"], gh_fields(c)["state"])
+            for c in self.calls
+            if c[:3] == ["api", "-X", "POST"] and "/statuses/" in c[3]
+        ]
+
+    def _graphql(self, args):
+        fields = gh_fields(args)
+        start = int(fields["cursor"]) if fields.get("cursor") else 0
+        size = int(fields["first"])
+        nodes = []
+        for sha in self.history[start : start + size]:
+            state = self.latest_status(sha, fields["context"])
+            status = None if state is None else {"context": {"state": state.upper()}}
+            nodes.append({"oid": sha, "status": status})
+        more = start + size < len(self.history)
+        history = {
+            "pageInfo": {"hasNextPage": more, "endCursor": str(start + size)},
+            "nodes": nodes,
+        }
+        body = {"data": {"repository": {"ref": {"target": {"history": history}}}}}
+        return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
+
     def _get(self, args):
         path = args[1]
+        if path.endswith("/status") and "/commits/" in path:
+            sha = path.split("/")[-2]
+            latest = {ctx: state for ctx, state in self.statuses.get(sha, [])}
+            body = {"sha": sha, "statuses": [{"context": c, "state": s} for c, s in latest.items()]}
+            return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
         if path.lower() == f"repos/{self.canonical}".lower():
             body = {"full_name": self.canonical, "id": REPOSITORY_ID, "owner": {"id": OWNER_ID}}
             return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
@@ -310,9 +365,16 @@ class FakeGh:
         return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
 
     def _api(self, args):
+        if args[:2] == ["api", "graphql"]:
+            return self._graphql(args)
         if "-X" not in args:
             return self._get(args)
         method, path = args[args.index("-X") + 1], args[args.index("-X") + 2]
+        if method == "POST" and "/statuses/" in path:
+            fields = gh_fields(args)
+            sha = path.rsplit("/", 1)[-1]
+            self.statuses.setdefault(sha, []).append((fields["context"], fields["state"]))
+            return subprocess.CompletedProcess(args, 0, "{}", "")
         if method == "PUT":
             restricting = any("deployment_branch_policy[" in a for a in args)
             if not self.branch_policies and restricting:

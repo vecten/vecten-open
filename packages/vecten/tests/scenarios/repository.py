@@ -24,6 +24,8 @@ class ScenarioGh:
         self.pulls: dict[int, dict] = {}
         self.reviews: dict[int, list[dict]] = {}
         self.calls: list[list[str]] = []
+        # (commit, `-f` fields) of every commit status a ship set.
+        self.statuses: list[tuple[str, list[str]]] = []
 
     def which(self) -> str:
         return "/usr/bin/gh"
@@ -35,8 +37,11 @@ class ScenarioGh:
         self.calls.append(list(args))
         if args[:1] != ["api"]:
             return subprocess.CompletedProcess(args, 1, "", "gh: not answered by the scenario")
-        endpoint = args[1]
         prefix = f"repos/{self.repository}"
+        if args[1:3] == ["-X", "POST"] and args[3].startswith(prefix + "/statuses/"):
+            self.statuses.append((args[3].rsplit("/", 1)[-1], args[4:]))
+            return self._answer(args, {})
+        endpoint = args[1]
         if endpoint == prefix:
             return self._answer(args, {"full_name": self.repository})
         if endpoint.startswith("search/issues?"):

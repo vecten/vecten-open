@@ -1,14 +1,14 @@
 ## 1. The order
 
-- [ ] 1.1 `[deploy] promotion` in `vecten_shared.config`: at least two names, no repeats, `prod` last, each with a tfvars file; absent means `["prod"]`; one helper returns the order and the environment before a given one
-- [ ] 1.2 The CLI refuses to write the key while `[project] scaffold_version` predates this release, naming `vecten update`
-- [ ] 1.3 Tests: validation, the default, the helper, the refusal
+- [x] 1.1 `[deploy] promotion` in `vecten_shared.config`: at least two names, no repeats, `prod` last, each with a tfvars file; absent means `["prod"]`; one helper returns the order and the environment before a given one
+- [x] 1.2 The CLI refuses to write the key while `[project] scaffold_version` predates this release, naming `vecten update`
+- [x] 1.3 Tests: validation, the default, the helper, the refusal
 
 ## 2. Commit statuses and the shipped commit
 
-- [ ] 2.1 `vecten.deploy.github_env`: set a commit status, read one commit's status for a context, and find the newest commit among the default branch's last 200 with `vecten/ship/<env>` `success`
-- [ ] 2.2 `ship_env` inside Actions sets `pending`, then `success` once every host answered or `failure` otherwise, on the commit it ships
-- [ ] 2.3 Tests against a mocked `gh`: each state, the rollback case, the 200-commit bound and its message
+- [x] 2.1 `vecten.deploy.github_env`: set a commit status, read one commit's status for a context, and find the newest commit among the default branch's last 200 with `vecten/ship/<env>` `success`
+- [x] 2.2 `ship_env` inside Actions sets `pending`, then `success` once every host answered or `failure` otherwise, on the commit it ships
+- [x] 2.3 Tests against a mocked `gh`: each state, the rollback case, the 200-commit bound and its message
 
 ## 3. Shipping a given commit
 

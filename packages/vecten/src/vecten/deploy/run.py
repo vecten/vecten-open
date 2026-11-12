@@ -36,6 +36,8 @@ from vecten.deploy.github_env import (
     set_environment_variables,
     set_repository_secrets,
     set_repository_variables,
+    set_ship_status,
+    ship_context,
 )
 from vecten.deploy.guards import (
     in_actions,
@@ -349,6 +351,46 @@ def _services_after_ship(
     return {**report, "orphaned_volumes": orphaned} if orphaned else report
 
 
+def _run_url() -> str | None:
+    """The Actions run this process belongs to, from the variables every job carries."""
+    parts = [os.environ.get(k) for k in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID")]
+    return "{}/{}/actions/runs/{}".format(*parts) if all(parts) else None
+
+
+def recorded_ship[Shipped](
+    gh: ToolRunner | None,
+    project_root: Path,
+    config: VectenConfig,
+    env: str,
+    commit: str,
+    ship: Callable[[], Shipped],
+) -> Shipped:
+    """Run `ship` between a `pending` and a final `vecten/ship/<env>` status on `commit`.
+
+    A promotion trusts only `success`, so a status that cannot be set to `pending` stops the
+    ship before any host changes, and one left `pending` never counts as shipped.
+    """
+    if gh is None:
+        raise Failure(ExitCode.INTERNAL, "recording a ship's commit status needs the gh runner")
+    repository = require_deploy_cloud(config).github_repository
+    url = _run_url()
+    set_ship_status(gh, project_root, repository, commit, env, "pending", target_url=url)
+    try:
+        shipped = ship()
+    except Exception as exc:
+        try:
+            set_ship_status(gh, project_root, repository, commit, env, "failure", target_url=url)
+        except Failure as status:
+            if isinstance(exc, Failure):
+                exc.message += (
+                    f"; the {ship_context(env)} status of {commit[:8]} stays pending: "
+                    f"{status.message}"
+                )
+        raise
+    set_ship_status(gh, project_root, repository, commit, env, "success", target_url=url)
+    return shipped
+
+
 def ship_env(
     project_root: Path, env: str, *, gh: ToolRunner | None, git: ToolRunner, check: bool
 ) -> dict:
@@ -380,7 +422,14 @@ def ship_env(
         data = {"env": env, "dispatched": False, "commit": commit, "hosts": []}
         return {**data, "ship_skipped": identity_pending_note(env)}
     outputs = fetch_outputs(plane)
-    hosts = plane.ship_hosts(project_root, config, env, outputs, commit)
+    hosts = recorded_ship(
+        gh,
+        project_root,
+        config,
+        env,
+        commit,
+        lambda: plane.ship_hosts(project_root, config, env, outputs, commit),
+    )
     report = _services_after_ship(plane, project_root, config, outputs)
     return {"env": env, "dispatched": False, "commit": commit, "hosts": hosts, **report}
 

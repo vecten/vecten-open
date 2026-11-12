@@ -321,6 +321,140 @@ def default_branch(gh: ToolRunner, project_root: Path, repository: str) -> str:
     return repository_facts(gh, project_root, repository)[1]
 
 
+SHIP_CONTEXT_PREFIX = "vecten/ship/"
+SHIP_STATES = ("pending", "success", "failure")
+SHIP_STATUS_DESCRIPTIONS = {
+    "pending": "vecten is shipping this commit",
+    "success": "every host answered its health poll",
+    "failure": "the ship failed; the hosts kept or restored their previous bundle",
+}
+# How far back the default branch's history is searched for an environment's last ship.
+SHIPPED_SEARCH_LIMIT = 200
+_HISTORY_PAGE = 100
+_SHIPPED_QUERY = """
+query($owner: String!, $name: String!, $branch: String!, $context: String!, $first: Int!,
+      $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    ref(qualifiedName: $branch) {
+      target {
+        ... on Commit {
+          history(first: $first, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { oid status { context(name: $context) { state } } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def ship_context(env: str) -> str:
+    return f"{SHIP_CONTEXT_PREFIX}{env}"
+
+
+def set_ship_status(
+    gh: ToolRunner,
+    project_root: Path,
+    repository: str,
+    commit: str,
+    env: str,
+    state: str,
+    *,
+    target_url: str | None = None,
+) -> None:
+    """Set `vecten/ship/<env>` on `commit`; the job's token needs `statuses: write`."""
+    if state not in SHIP_STATES:
+        raise Failure(ExitCode.INTERNAL, f"{state!r} is not a ship status")
+    path = f"repos/{repository}/statuses/{commit}"
+    args = [
+        "api",
+        "-X",
+        "POST",
+        path,
+        "-f",
+        f"state={state}",
+        "-f",
+        f"context={ship_context(env)}",
+        "-f",
+        f"description={SHIP_STATUS_DESCRIPTIONS[state]}",
+    ]
+    if target_url:
+        args += ["-f", f"target_url={target_url}"]
+    _gh(
+        gh,
+        project_root,
+        *args,
+        what=f"api POST {path}",
+        hint="; the job that ships needs the `statuses: write` permission",
+    )
+
+
+def ship_status(
+    gh: ToolRunner, project_root: Path, repository: str, commit: str, env: str
+) -> str | None:
+    """The latest `vecten/ship/<env>` state on `commit`, or None when it carries none."""
+    path = f"repos/{repository}/commits/{commit}/status"
+    body = _json(_gh(gh, project_root, "api", path, what=f"api GET {path}"), f"api GET {path}")
+    statuses = body.get("statuses") if isinstance(body, dict) else None
+    # The combined status holds the latest status of each context only.
+    for status in statuses or []:
+        if isinstance(status, dict) and status.get("context") == ship_context(env):
+            return str(status.get("state"))
+    return None
+
+
+def last_shipped(
+    gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
+) -> str | None:
+    """The newest of `branch`'s last `SHIPPED_SEARCH_LIMIT` commits whose `vecten/ship/<env>`
+    is `success`, or None.
+
+    A ship that rolled back leaves `failure` on its commit, so the answer is then the commit
+    the hosts went back to.
+    """
+    owner, name = repository.split("/", 1)
+    cursor: str | None = None
+    for start in range(0, SHIPPED_SEARCH_LIMIT, _HISTORY_PAGE):
+        args = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={_SHIPPED_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-f",
+            f"branch=refs/heads/{branch}",
+            "-f",
+            f"context={ship_context(env)}",
+            "-F",
+            f"first={min(_HISTORY_PAGE, SHIPPED_SEARCH_LIMIT - start)}",
+        ]
+        if cursor:
+            args += ["-f", f"cursor={cursor}"]
+        body = _json(_gh(gh, project_root, *args, what="api graphql"), "api graphql")
+        try:
+            history = body["data"]["repository"]["ref"]["target"]["history"]
+            nodes = history["nodes"]
+            page = history["pageInfo"]
+        except KeyError, TypeError:
+            raise Failure(
+                ExitCode.TOOL_FAILED,
+                f"gh api graphql named no history for {branch} of {repository}",
+            ) from None
+        for node in nodes:
+            state = ((node.get("status") or {}).get("context") or {}).get("state")
+            if str(state).lower() == "success":
+                return str(node["oid"])
+        if not page.get("hasNextPage"):
+            return None
+        cursor = page.get("endCursor")
+    return None
+
+
 def _created(run: dict) -> datetime:
     return datetime.fromisoformat(str(run["createdAt"]).replace("Z", "+00:00"))
 

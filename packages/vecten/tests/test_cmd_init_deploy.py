@@ -308,3 +308,21 @@ def test_init_deploy_keeps_a_project_whose_sources_are_free_text(invoke, workdir
     monkeypatch.chdir(proj)
     r = invoke("init", "--deploy", *DEPLOY, "--json")
     assert r.exit_code == 0, r.stdout
+
+
+def test_a_rerun_keeps_the_promotion_order(invoke, workdir, monkeypatch):
+    invoke("init", "p", *LOCAL, *DEPLOY, "--json")
+    proj = workdir / "p"
+    monkeypatch.chdir(proj)
+    (proj / "deploy" / "envs" / "dev.tfvars").write_text(
+        (proj / "deploy" / "envs" / "prod.tfvars").read_text()
+    )
+    text = (proj / "vecten.toml").read_text()
+    text = text.replace("scaffold_version = ", 'scaffold_version = "0.1.1"\n# ', 1)
+    text = text.replace("[deploy]\n", '[deploy]\npromotion = ["dev", "prod"]\n', 1)
+    (proj / "vecten.toml").write_text(text)
+    r = invoke("init", "--deploy", "--domain", "data2.acme.com", "--json")
+    assert r.exit_code == 0, r.stdout
+    config = load_config(proj)
+    assert config.deploy.domain == "data2.acme.com"
+    assert config.deploy.promotion == ["dev", "prod"]

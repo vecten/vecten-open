@@ -12,6 +12,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import tomli_w
+from packaging.version import InvalidVersion, Version
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -118,17 +119,71 @@ def check_deploy_value(key: str, value: str | None) -> str | None:
     return value
 
 
+PROD_ENV = "prod"
+DEFAULT_PROMOTION: tuple[str, ...] = (PROD_ENV,)
+# The first release whose rendered workflows read `[deploy] promotion`; workflows rendered
+# earlier ship prod on every push whatever the order says.
+PROMOTION_SINCE = "0.1.1"
+
+
+def _promotion_problem(order: list[str]) -> str | None:
+    for env in order:
+        problem = env_name_problem(env)
+        if problem:
+            return problem
+    if len(order) < 2:
+        return (
+            f"lists at least two environments ending with {PROD_ENV}; leave it out to ship "
+            f"{PROD_ENV} on every push"
+        )
+    repeated = sorted({env for env in order if order.count(env) > 1})
+    if repeated:
+        return f"names {', '.join(repeated)} more than once"
+    if order[-1] != PROD_ENV or order.count(PROD_ENV) != 1:
+        return f"must end with {PROD_ENV}, so that no environment promotes from it; got {order}"
+    return None
+
+
 class DeploySection(Strict):
     cloud: Cloud
     region: str
     domain: str
     dns_zone: str
     github_repository: str
+    # The order code reaches environments in: a push ships the first, each later one ships
+    # only what the one before it shipped. None means prod alone.
+    promotion: list[str] | None = None
 
     @field_validator("region", "domain", "dns_zone", "github_repository")
     @classmethod
     def _deploy_value(cls, value: str, info: ValidationInfo) -> str:
         return check_deploy_value(info.field_name, value)
+
+    @field_validator("promotion")
+    @classmethod
+    def _promotion(cls, value: list[str] | None) -> list[str] | None:
+        return value if value is None else _checked(_promotion_problem(value), value)
+
+
+def promotion_scaffold_problem(config: VectenConfig) -> str | None:
+    """Why the project may not carry a promotion order yet, or None.
+
+    The workflows pin the release they were rendered with, and one older than
+    `PROMOTION_SINCE` ships prod on every push whatever the order says.
+    """
+    if config.deploy is None or config.deploy.promotion is None:
+        return None
+    rendered = config.project.scaffold_version
+    try:
+        current = Version(rendered) >= Version(PROMOTION_SINCE)
+    except InvalidVersion:
+        current = False
+    if current:
+        return None
+    return (
+        f"[deploy] promotion needs workflows rendered by vecten {PROMOTION_SINCE} or later, "
+        f"and this project's were rendered by {rendered}; run `vecten update` first"
+    )
 
 
 McpAuth = Literal["oidc", "password"]
@@ -565,6 +620,18 @@ class VectenConfig(Strict):
     def connector(self, name: str) -> ConnectorDecl | None:
         return next((c for c in self.connectors if c.name == name), None)
 
+    def promotion_order(self) -> tuple[str, ...]:
+        declared = self.deploy.promotion if self.deploy is not None else None
+        return tuple(declared) if declared else DEFAULT_PROMOTION
+
+    def promoted_from(self, env: str) -> str | None:
+        """The environment `env` promotes from; None for the first one or one outside the order."""
+        order = self.promotion_order()
+        if env not in order:
+            return None
+        index = order.index(env)
+        return order[index - 1] if index else None
+
 
 def load_config(project_root: Path) -> VectenConfig:
     path = project_root / CONFIG_FILE
@@ -616,6 +683,9 @@ def _plain(item: Any) -> Any:
 def save_config(project_root: Path, config: VectenConfig) -> None:
     import tomlkit
 
+    problem = promotion_scaffold_problem(config)
+    if problem:
+        raise Failure(ExitCode.REFUSED, problem)
     data = config.model_dump(mode="json", exclude_none=True)
     for optional in ("dependencies", "secrets", "settings", "services"):
         if not data.get(optional):
@@ -629,7 +699,7 @@ def save_config(project_root: Path, config: VectenConfig) -> None:
     _merge(doc, data, changed)
     text = tomlkit.dumps(doc)
     # tomlkit can emit a table twice when a file declares one table's parts apart; such a file
-    # no longer loads, so the whole configuration is written afresh instead, without comments.
+    # does not load, so the whole configuration is written afresh instead, without comments.
     try:
         if VectenConfig.model_validate(tomllib.loads(text)) != config:
             raise ValueError("the edited file reads back differently")
