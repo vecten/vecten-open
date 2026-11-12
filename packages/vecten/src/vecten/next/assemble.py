@@ -78,3 +78,21 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
             return gate
     # Only a deployed project has changes to push, so git is read for it alone.
     return post_deploy_items(root, config, ENV, read_git_state(root)) if deployed else []
+
+
+def next_notes(cwd: Path) -> list[str]:
+    """Facts worth knowing that ask for no action, so they never hold back a later stage.
+
+    A declared service or route stays unbound when the project chooses not to run it.
+    """
+    from vecten_shared.extension_record import read_record
+    from vecten_shared.services import unbound_parts
+
+    root = CliContext(cwd, json=False).project_root()
+    if root is None:
+        return []
+    config = load_config(root)
+    return [
+        f"{part} is declared but not bound in vecten.toml"
+        for part in unbound_parts(config, read_record(root) or {})
+    ]
