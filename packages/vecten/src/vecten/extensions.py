@@ -4,8 +4,10 @@ import importlib
 import os
 import re
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import tomllib
 from dataclasses import dataclass, replace
@@ -173,6 +175,10 @@ def base_constraints(kind: str) -> str:
     return result.stdout
 
 
+def site_packages() -> Path:
+    return Path(sysconfig.get_paths()["purelib"])
+
+
 def install_lock(lock: str, root: Path, editable: tuple[str, ...] | list[str] = ()) -> None:
     """Install the CLI lock, then each in-repo extension editable, all without resolving.
 
@@ -187,6 +193,10 @@ def install_lock(lock: str, root: Path, editable: tuple[str, ...] | list[str] = 
         _uv([*install, "--constraint", str(constraints), "-r", str(path)], root)
         for relative in editable:
             _uv([*install, "--editable", str(root / relative)], root)
+    # An editable install is a path file, which Python reads only at start; the manifests and
+    # services this process loads next import from those paths.
+    if editable:
+        site.addsitedir(str(site_packages()))
     importlib.invalidate_caches()
 
 
