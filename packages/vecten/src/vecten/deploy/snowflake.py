@@ -38,7 +38,7 @@ def has_snowflake_root(config: VectenConfig) -> bool:
 def identity_pending(config: VectenConfig, env: str) -> bool:
     """Whether the MCP of a platform-built Snowflake still lacks its Snowflake identity.
 
-    The MCP checks its scope as VECTEN_PROVISIONER when it starts and refuses to serve
+    The MCP checks its scope as the provisioner user when it starts and refuses to serve
     without it, and only an ACCOUNTADMIN running `vecten mcp provisioner-script` creates it,
     after the first deploy has created the database the script grants on.
     """
@@ -46,9 +46,10 @@ def identity_pending(config: VectenConfig, env: str) -> bool:
     return has_snowflake_root(config) and config.has("mcp") and not facts.provisioner_script_run
 
 
-def identity_pending_note(env: str) -> str:
+def identity_pending_note(config: VectenConfig, env: str) -> str:
+    user = snowflake_names(config, env).provisioner_user
     return (
-        "the MCP signs in to Snowflake as VECTEN_PROVISIONER, which "
+        f"the MCP signs in to Snowflake as {user}, which "
         f"`vecten mcp provisioner-script --env {env}` sets up, so no host was shipped: run it, "
         "have an ACCOUNTADMIN run its SQL, confirm with `--confirm-run`, then "
         "`vecten github push`, which ships"
@@ -106,7 +107,7 @@ def deploy_credentials(provider: Provider, env: str, account: str) -> dict[str, 
 
 
 def ensure_loader_key(provider: Provider, *, store: bool = True) -> str:
-    """The PEM public key of the LOADER user.
+    """The PEM public key of the loader user.
 
     With `store` false nothing is written: an absent key is replaced by a throwaway one whose
     public half satisfies the root's variable, which a destroy reads but never applies.

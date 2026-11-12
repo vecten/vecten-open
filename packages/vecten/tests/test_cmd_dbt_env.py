@@ -180,6 +180,23 @@ def test_other_environments_run_every_command(invoke, snowflake, args):
     assert snowflake["parses"] == []
 
 
+def test_the_connection_takes_every_name_from_the_snowflake_names(invoke, snowflake, monkeypatch):
+    from functools import partial
+
+    from vecten_shared.provider import snowflake_names
+
+    monkeypatch.setattr(dbt_env, "snowflake_names", partial(snowflake_names, shared_account=True))
+    result = invoke("dbt", "--env", "staging", "run")
+    assert result.exit_code == 3, result.stderr
+    env = snowflake["runs"][0]["env"]
+    assert env["SNOWFLAKE_USER"] == env["SNOWFLAKE_ROLE"] == "LOADER_ACME_STAGING"
+    assert (env["SNOWFLAKE_DATABASE"], env["SNOWFLAKE_WAREHOUSE"]) == (
+        "ACME_STAGING",
+        "ACME_STAGING_WH",
+    )
+    assert env["SNOWFLAKE_ACCOUNT"] == "ACME-PROD"
+
+
 def test_other_environments_run_hooks_and_store_failures(invoke, snowflake):
     snowflake["manifest"]["doc"] = _manifest(HOOK, _storing(store_failures=True))
     result = invoke("dbt", "--env", "staging", "test", "--store-failures")

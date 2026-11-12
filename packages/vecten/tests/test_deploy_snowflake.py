@@ -263,3 +263,42 @@ def test_a_provisioner_key_pair_is_kept_under_its_own_name():
     assert public.startswith("-----BEGIN PUBLIC KEY-----\n")
     assert ensure_key_pair(store, PROVISIONER_PRIVATE_KEY) == public
     assert store.written == [PROVISIONER_PRIVATE_KEY]
+
+
+def _shared_names(monkeypatch, module):
+    from functools import partial
+
+    from vecten_shared.provider import snowflake_names
+
+    monkeypatch.setattr(module, "snowflake_names", partial(snowflake_names, shared_account=True))
+
+
+def test_the_pending_identity_note_names_the_environments_provisioner(tmp_path, monkeypatch):
+    from vecten.deploy import snowflake
+    from vecten.deploy.snowflake import identity_pending_note
+
+    config = load_config(render_snowflake(tmp_path / "snow"))
+    assert "as VECTEN_PROVISIONER," in identity_pending_note(config, "prod")
+    _shared_names(monkeypatch, snowflake)
+    note = identity_pending_note(config, "dev")
+    assert "as PROVISIONER_ACME_DEV," in note and "VECTEN_PROVISIONER" not in note
+
+
+def test_the_destroy_message_names_the_environments_provisioner_role():
+    from vecten.cli.commands.deploy import _destroy_message
+
+    data = {
+        "env": "dev",
+        "data_deleted": False,
+        "snapshots": [],
+        "snapshot_expiry": {},
+        "destroyed": [],
+        "already_destroyed": [],
+        "state_bucket": "b",
+        "snowflake": "kept",
+        "facts_cleared": ["provisioner_script_run"],
+        "outputs_left": [],
+        "deployed_commit_cleared": False,
+    }
+    message = _destroy_message(data, provisioner_role="PROVISIONER_ACME_DEV")
+    assert "the users and roles PROVISIONER_ACME_DEV created stay in Snowflake" in message

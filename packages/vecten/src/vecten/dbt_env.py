@@ -1,6 +1,6 @@
 """`vecten dbt --env <env>`: dbt against a deployed environment's Snowflake warehouse.
 
-dbt runs as the environment's LOADER, the identity the dbt DAG builds with, because the
+dbt runs as the environment's loader, the identity the dbt DAG builds with, because the
 Snowflake module creates no identity that reads raw, staging and marts without write grants.
 On prod the run is held to commands that build nothing: an allow-list of dbt commands, and a
 refusal of anything in the project that makes an allowed command write.
@@ -26,8 +26,6 @@ from vecten_shared.provider import ConnectionSpec, snowflake_names
 
 ENV_FLAG = "--env"
 PROD_ENV = "prod"
-# The Snowflake module names the loader's service user and its role the same.
-LOADER = "LOADER"
 # dbt replaces the value of every variable with this prefix in all it logs and prints.
 SCRUBBED_VAR = "DBT_ENV_SECRET_VECTEN_WAREHOUSE_KEY"
 
@@ -237,12 +235,13 @@ def _loader_spec(config: VectenConfig, env: str) -> ConnectionSpec:
     if not config.warehouse.account:
         raise Failure(ExitCode.CONFIG, "vecten.toml: warehouse.account is required on Snowflake")
     names = snowflake_names(config, env)
+    # `profile_env` signs in with the role as the user: the loader's user and role share a name.
     return ConnectionSpec(
         kind="snowflake",
         database=names.database,
-        role=LOADER,
+        role=names.loader_role,
         auth="key_pair",
-        account=config.warehouse.account,
+        account=names.account,
         warehouse=names.warehouse,
     )
 

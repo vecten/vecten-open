@@ -498,3 +498,83 @@ def test_the_session_check_tells_a_principal_without_access_from_a_revoked_sessi
     with pytest.raises(ValueError, match="revoked") as revoked:
         validate(person, "gone", set())
     assert not isinstance(revoked.value, NoWarehouseAccess)
+
+
+def _shared_names():
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "acme", "scaffold_version": "0.1.1"},
+            "warehouse": {"kind": "snowflake", "account": "a"},
+        }
+    )
+    return snowflake_names(config, "dev", shared_account=True)
+
+
+class GrantsConnection:
+    """The provisioner's connection, answering SHOW GRANTS with `grants` and no future grant."""
+
+    description = [("privilege",), ("granted_on",), ("name",), ("grant_option",)]
+    grants: list = []
+    seen: list = []
+
+    def cursor(self):
+        return self
+
+    def execute(self, query, parameters=None):
+        GrantsConnection.seen.append((query, parameters))
+        self.query = query
+        return self
+
+    def fetchall(self):
+        return [] if "FUTURE" in self.query else self.grants
+
+    def fetchone(self):
+        return (True,)
+
+    def close(self):
+        pass
+
+
+def test_the_scope_check_reads_and_compares_with_the_snowflake_names(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    monkeypatch.setattr(
+        GrantsConnection,
+        "grants",
+        [
+            ("USAGE", "ROLE", "ANALYST_ACME_DEV", "false"),
+            ("USAGE", "DATABASE", "ACME_DEV", "false"),
+            ("USAGE", "WAREHOUSE", "ACME_DEV_WH", "false"),
+            ("USAGE", "SCHEMA", "ACME_DEV.VECTEN_ACCESS", "false"),
+            (
+                "USAGE",
+                "PROCEDURE",
+                "ACME_DEV.VECTEN_ACCESS.SOURCE_EXISTS(VARCHAR, VARCHAR)",
+                "false",
+            ),
+        ],
+    )
+    adapter = SnowflakeAdapter(GrantsConnection, None, None, names=_shared_names())
+    adapter.check_scope({})
+    assert [query for query, _ in GrantsConnection.seen] == [
+        'SHOW GRANTS TO ROLE "PROVISIONER_ACME_DEV"',
+        'SHOW FUTURE GRANTS TO ROLE "PROVISIONER_ACME_DEV"',
+    ]
+    # The fixed layout's analyst role belongs to another project in a shared account.
+    monkeypatch.setattr(GrantsConnection, "grants", [("USAGE", "ROLE", "ANALYST", "false")])
+    with pytest.raises(ValueError, match="ANALYST"):
+        adapter.check_scope({})
+
+
+def test_the_access_procedures_live_in_the_names_access_schema(monkeypatch):
+    from sqlglot import exp, parse_one
+
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    names = replace(_shared_names(), access_schema="ACCESS_HELPERS")
+    adapter = SnowflakeAdapter(GrantsConnection, None, None, names=names)
+    adapter.schema_grant("analyst", "core")
+    adapter.source_exists(parse_one("SELECT * FROM core.orders").find(exp.Table))
+    assert [query for query, _ in GrantsConnection.seen] == [
+        'CALL "ACME_DEV"."ACCESS_HELPERS".READ_GRANT(%s,%s,%s,%s)',
+        'CALL "ACME_DEV"."ACCESS_HELPERS".SOURCE_EXISTS(%s,%s)',
+    ]
