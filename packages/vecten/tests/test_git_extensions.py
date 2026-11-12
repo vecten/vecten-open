@@ -663,8 +663,9 @@ def test_lock_adopts_an_edited_commit_named_without_a_tag(invoke, served):
         "{name} @ git+{url}@{short}#subdirectory={sub}",
         "{name} @ git+http://{host}/{repo}@{commit}#subdirectory={sub}",
         "{name} @ git+https://x:tok@{host}/{repo}@{commit}#subdirectory={sub}",
+        "{name} @ https://{host}/{repo}/{name}-1.2.0.whl",
     ],
-    ids=["tag", "short-commit", "http", "user-information"],
+    ids=["tag", "short-commit", "http", "user-information", "plain-url"],
 )
 def test_lock_refuses_a_requirements_line_that_is_not_a_pinned_git_source(invoke, served, line):
     assert _add(invoke, served, "acme-resolution/v1.2.0").exit_code == 0
@@ -766,11 +767,37 @@ def test_inputs_lines_change_with_the_commit(invoke, served):
         assert (root / name).read_text().split("\n", 1)[0] != stamp
 
 
-def test_uv_gets_the_environment_unchanged_in_a_project_without_git_sources(project, monkeypatch):
+def test_no_git_credential_reaches_uv_in_a_project_without_git_sources(project, monkeypatch):
     monkeypatch.setenv("GIT_CREDENTIALS", "https://u:t@example.com")
+    monkeypatch.setenv("MCP_GIT_CREDENTIALS", "https://u:t@example.com")
     monkeypatch.setenv("NETRC", "/somewhere/.netrc")
     monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i key")
-    assert extensions.uv_environment(project) == extensions.package_environment(project)
+    base = extensions.package_environment(project)
+    env = extensions.uv_environment(project)
+    assert "GIT_CREDENTIALS" not in env and "MCP_GIT_CREDENTIALS" not in env
+    # Only the credentials go: the wider isolation is for projects with git sources.
+    assert env == {
+        k: v for k, v in base.items() if k not in {"GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"}
+    }
+
+
+def test_no_git_credential_reaches_a_uv_call_of_a_project_without_git_sources(
+    invoke, project, uv, monkeypatch
+):
+    for variable in ("GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"):
+        monkeypatch.setenv(variable, "https://u:t@example.com")
+    monkeypatch.setattr(
+        extensions,
+        "inspect_package",
+        lambda package, root: extensions.PackageMetadata(
+            "acme-demo", "1.0.0", (SimpleNamespace(group="vecten.dags"),), ()
+        ),
+    )
+    assert invoke("extension", "add", "acme-demo==1.0.0").exit_code == 0
+    assert invoke("lock").exit_code == 0
+    assert uv()
+    for call in uv():
+        assert not {"GIT_CREDENTIALS", "MCP_GIT_CREDENTIALS"} & set(call["env"]), call["args"]
 
 
 def test_every_uv_call_in_a_project_with_git_sources_runs_without_the_credential(
@@ -803,6 +830,9 @@ def test_every_uv_call_in_a_project_with_git_sources_runs_without_the_credential
         ("acme @ git+http://github.com/acme/x@v1", True),
         ("acme @ https://example.com/acme-1.0.whl", True),
         ("acme@git+https://github.com/acme/x@v1", True),
+        ("not a requirement git+https://github.com/acme/x", True),
+        ("acme @ ssh://git@github.com/acme/x", True),
+        ("acme @ git+ssh://git@github.com/acme/x@v1  # tag v1", True),
         ("httpx==0.27.0  # mirrored from https://example.com/httpx", False),
         ("# see https://example.com", False),
         ("./extensions/acme  # https://example.com", False),

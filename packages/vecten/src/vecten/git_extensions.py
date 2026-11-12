@@ -46,11 +46,14 @@ URL_REQUIREMENT = re.compile(r"\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*(?:\[[^\]]*\])?\s
 
 
 def is_source(text: str) -> bool:
-    """Whether a requirement or record line names its package by URL; a comment, which starts
-    at a `#` after whitespace, is not read."""
-    requirement = re.split(r"\s#", text, maxsplit=1)[0].strip()
-    if not requirement or requirement.startswith("#"):
+    """Whether a requirement or record line names its package by URL, read toward yes: any
+    `git+` or `://` in the requirement counts. A comment, which starts at a `#` at the start
+    or after whitespace, is not read."""
+    requirement = re.split(r"(?:^|\s)#", text, maxsplit=1)[0].strip()
+    if not requirement:
         return False
+    if "git+" in requirement or "://" in requirement:
+        return True
     try:
         return Requirement(requirement).url is not None
     except InvalidRequirement:
@@ -214,17 +217,17 @@ def serve_copies(copies: Iterable[Copy], workdir: Path) -> dict[str, Path]:
 def uv_settings(
     base: Mapping[str, str], served: Mapping[str, Path], git_project: bool = False
 ) -> dict[str, str]:
-    """`base` for uv in a project with git sources: no git credential, git isolated from the
-    user's configuration, and while sources are locked, a git that reads each source URL from
-    the repository `served` names for it and reaches nothing else, with GitHub's API left
-    unasked. In any other project, `base` as it is."""
+    """`base` for uv and the build backends it runs: never a git credential, in any project.
+    In a project with git sources, also git isolated from the user's configuration, and while
+    sources are locked, a git that reads each source URL from the repository `served` names
+    for it and reaches nothing else, with GitHub's API left unasked."""
+    env = {name: value for name, value in base.items() if name not in CREDENTIAL_VARIABLES}
     if not served and not git_project:
-        return dict(base)
+        return env
     env = {
         name: value
-        for name, value in base.items()
-        if name not in CREDENTIAL_VARIABLES
-        and (not name.startswith("GIT_") or name in git_sources.KEPT_GIT_VARIABLES)
+        for name, value in env.items()
+        if (not name.startswith("GIT_") or name in git_sources.KEPT_GIT_VARIABLES)
         and name not in git_sources.DROPPED_VARIABLES
     }
     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")

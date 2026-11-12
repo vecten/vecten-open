@@ -62,7 +62,7 @@ def package_environment(root: Path) -> dict[str, str]:
 
 
 # Set while `extension add` or `vecten lock` works on a project with git sources: every uv
-# call then runs, with the build backends it starts, without the git credential.
+# call then runs, with the build backends it starts, with git isolated from the user's setup.
 _GIT_PROJECT: ContextVar[bool] = ContextVar("git_project", default=False)
 
 
@@ -84,8 +84,8 @@ def has_git_sources(root: Path) -> bool:
 
 
 def uv_environment(root: Path, served: Mapping[str, Path] | None = None) -> dict[str, str]:
-    """The environment uv and the build backends it runs get: in a project with git sources,
-    no git credential, and a git that reads each source from the repository serving its URL."""
+    """The environment uv and the build backends it runs get: never a git credential, and in a
+    project with git sources, a git that reads each source from the repository serving it."""
     return git_extensions.uv_settings(
         package_environment(root), served or {}, git_project=_GIT_PROJECT.get()
     )
