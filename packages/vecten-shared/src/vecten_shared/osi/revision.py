@@ -32,10 +32,19 @@ def build_covers(marker, commit):
 
 
 def read_built_commit(environ):
+    return _read_dbt_record(environ, "dbt/built_commit")
+
+
+def read_build_finished(environ):
+    """When the dbt DAG's last build finished, or None before the first."""
+    return _read_dbt_record(environ, "dbt/build_finished_at")
+
+
+def _read_dbt_record(environ, name):
     url = environ.get("VECTEN_ARTIFACT_URL", "")
     if not url:
         path = Path(environ.get("VECTEN_ARTIFACT_DIR", "/opt/airflow/artifacts"))
-        marker = path / "dbt/built_commit"
+        marker = path / name
         return marker.read_text() if marker.is_file() else None
     if not url.startswith("s3://"):
         raise ValueError("unsupported artifact location")
@@ -43,7 +52,7 @@ def read_built_commit(environ):
     from botocore.exceptions import ClientError
 
     bucket, _, prefix = url[5:].partition("/")
-    key = "/".join(part for part in (prefix.strip("/"), "dbt/built_commit") if part)
+    key = "/".join(part for part in (prefix.strip("/"), name) if part)
     try:
         response = boto3.client("s3").get_object(Bucket=bucket, Key=key)
     except ClientError as exc:

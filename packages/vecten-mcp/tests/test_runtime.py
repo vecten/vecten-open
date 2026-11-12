@@ -54,6 +54,92 @@ def test_maintenance_reconciles_every_fifteen_minutes_and_maintains_keys():
     assert calls.count("keys") == 3
 
 
+def _reconciling_runtime(now, calls, finished):
+    from vecten_mcp.runtime import Runtime
+
+    auth = SimpleNamespace(
+        maintain=lambda: None, clock=lambda: now[0], keys=SimpleNamespace(maintain=lambda: None)
+    )
+    runtime = Runtime(None, auth, None, None, None)
+    runtime.access = SimpleNamespace(reconcile=lambda: calls.append(now[0]))
+    runtime.build_finished = finished
+    return runtime
+
+
+def test_a_recorded_build_reconciles_before_the_fifteen_minutes():
+    now, calls, finished = [1000], [], ["2026-11-12T10:00:00+00:00\n"]
+    runtime = _reconciling_runtime(now, calls, lambda: finished[0])
+    runtime.tick()
+    now[0] += 30
+    runtime.tick()
+    assert calls == [1000]
+    finished[0] = "2026-11-12T10:05:00+00:00\n"
+    now[0] += 30
+    runtime.tick()
+    now[0] += 30
+    runtime.tick()
+    assert calls == [1000, 1060]
+    # The fifteen minutes count from the last reconciliation, whatever caused it.
+    now[0] = 1060 + 899
+    runtime.tick()
+    now[0] += 1
+    runtime.tick()
+    assert calls == [1000, 1060, 1960]
+
+
+def test_a_failed_reconciliation_after_a_build_is_retried_on_the_next_tick():
+    now, calls, finished = [1000], [], ["one"]
+    runtime = _reconciling_runtime(now, calls, lambda: finished[0])
+    runtime.tick()
+    finished[0] = "two"
+
+    def unavailable():
+        raise ValueError("warehouse unavailable")
+
+    runtime.access.reconcile = unavailable
+    now[0] += 30
+    runtime.tick()
+    runtime.access.reconcile = lambda: calls.append(now[0])
+    now[0] += 30
+    runtime.tick()
+    assert calls == [1000, 1060]
+
+
+def test_an_unreadable_build_record_leaves_the_schedule_alone(caplog):
+    now, calls = [1000], []
+
+    def unreadable():
+        raise OSError("artifact store unavailable")
+
+    runtime = _reconciling_runtime(now, calls, unreadable)
+    runtime.tick()
+    now[0] += 30
+    runtime.tick()
+    now[0] += 900
+    runtime.tick()
+    assert calls == [1000, 1930]
+    assert "artifact store unavailable" in caplog.text
+
+
+def test_only_a_postgres_platform_watches_the_build_record():
+    from vecten_mcp.runtime_setup import build_watch
+    from vecten_shared.config import VectenConfig
+
+    def config(kind, components):
+        return VectenConfig.model_validate(
+            {
+                "project": {"name": "acme", "scaffold_version": "0.1.0"},
+                "users": 3,
+                "components": components,
+                "warehouse": {"kind": kind},
+            }
+        )
+
+    assert build_watch(config("postgres", ["platform", "mcp"])) is not None
+    assert build_watch(config("snowflake", ["platform", "mcp"])) is None
+    assert build_watch(config("postgres", ["mcp"])) is None
+
+
 def test_local_backend_default_survives_config_serialization():
     from vecten_mcp.runtime_setup import backend_name
     from vecten_shared.config import McpSection

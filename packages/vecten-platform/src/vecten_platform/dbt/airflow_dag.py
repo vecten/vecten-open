@@ -17,11 +17,12 @@ import json
 import logging
 import os
 from collections.abc import Collection, Sequence
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from vecten_platform.dbt.artifacts import (
+    BUILD_FINISHED_KEY,
     BUILT_COMMIT_KEY,
     artifact_root,
     run_keys,
@@ -182,7 +183,24 @@ def build_step(
     *,
     full_refresh: bool = False,
 ) -> None:
-    _raise_for_nodes("build", build_args(select, exclude, full_refresh=full_refresh), run_id)
+    try:
+        _raise_for_nodes("build", build_args(select, exclude, full_refresh=full_refresh), run_id)
+    finally:
+        _record_finished()
+
+
+def _finished_at() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _record_finished() -> None:
+    # On Postgres a replaced relation loses its per-relation grants, whether the build that
+    # replaced it was narrowed or failed later; the MCP reconciles when this time changes.
+    # Without it the MCP's schedule still restores them, so a failed write fails no build.
+    try:
+        sink_from_environ(os.environ).put_text(BUILD_FINISHED_KEY, f"{_finished_at()}\n")
+    except Exception as exc:
+        log.warning("build finish time not recorded in %s: %s", artifact_root(os.environ), exc)
 
 
 def convention_step(run_id: str) -> None:

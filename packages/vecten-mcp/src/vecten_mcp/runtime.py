@@ -23,8 +23,11 @@ class Runtime:
     audit: object = None
     queries: object = None
     feedback_resolution: object = None
+    # Reads when the dbt DAG last finished a build; None where rebuilds keep their grants.
+    build_finished: object = None
     maintenance_task: object = field(default=None, init=False)
     last_reconcile: float = field(default=0, init=False)
+    last_build_finished: object = field(default=None, init=False)
     last_model_check: float = field(default=0, init=False)
     last_audit_maintenance: float = field(default=0, init=False)
 
@@ -94,9 +97,18 @@ class Runtime:
                 self.last_model_check = now
         if self.feedback_resolution:
             attempt(self.feedback_resolution.reconcile)
-        if self.access and now - self.last_reconcile >= 900:
-            if attempt(self.access.reconcile):
+        if self.access:
+            finished = None
+            if self.build_finished:
+                try:
+                    finished = self.build_finished()
+                except Exception as exc:
+                    logger.error("MCP build record unreadable: %s", describe_error(exc))
+            rebuilt = finished is not None and finished != self.last_build_finished
+            if (rebuilt or now - self.last_reconcile >= 900) and attempt(self.access.reconcile):
                 self.last_reconcile = now
+                if finished is not None:
+                    self.last_build_finished = finished
         if self.password_rotation:
             attempt(self.password_rotation.tick)
         attempt(self.oauth.keys.maintain)
