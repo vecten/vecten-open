@@ -154,7 +154,10 @@ def _system_step(config: VectenConfig, kind: str) -> str:
     return (
         "USER root\n"
         "RUN apt-get update && apt-get install -y --no-install-recommends "
-        f"{' '.join(packages)} && rm -rf /var/lib/apt/lists/*\n"
+        f"{' '.join(packages)} && rm -rf /var/lib/apt/lists/* "
+        # apt falls back to reading an unknown name as a pattern; each listed name must be the
+        # package that was installed.
+        f"&& dpkg -s {' '.join(p.split('=')[0] for p in packages)} >/dev/null\n"
         f"USER {IMAGE_USERS[kind]}\n"
     )
 

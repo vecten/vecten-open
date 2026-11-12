@@ -277,7 +277,8 @@ def test_system_packages_install_as_root_before_python_then_return_to_the_image_
         assert text.splitlines()[1:4] == [
             "USER root",
             "RUN apt-get update && apt-get install -y --no-install-recommends "
-            f"{package} && rm -rf /var/lib/apt/lists/*",
+            f"{package} && rm -rf /var/lib/apt/lists/* "
+            f"&& dpkg -s {package.split('=')[0]} >/dev/null",
             f"USER {user}",
         ]
 

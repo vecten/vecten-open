@@ -111,6 +111,11 @@ def test_system_packages_are_kept_per_image(tmp_path):
         "libgomp1\nrm",
         "",
         "a",
+        "curl-",
+        "curl=1.0-",
+        "libpq5=1:~",
+        "libpq5=a",
+        "libpq5=x:1.0",
     ],
 )
 def test_a_system_entry_that_is_not_a_debian_package_name_is_refused(tmp_path, entry):
@@ -118,6 +123,15 @@ def test_a_system_entry_that_is_not_a_debian_package_name_is_refused(tmp_path, e
         _load(tmp_path, dependencies={"platform": {"system": [entry]}})
     assert caught.value.code == ExitCode.CONFIG
     assert "dependencies.platform" in caught.value.message
+    assert repr(entry) in caught.value.message or entry == ""
+
+
+@pytest.mark.parametrize(
+    "entry", ["libgomp1", "g++", "libstdc++6", "libpq5=15.8-0+deb12u1", "tzdata=1:2024a-0+deb12u1"]
+)
+def test_real_debian_names_and_versions_are_accepted(tmp_path, entry):
+    config = _load(tmp_path, dependencies={"platform": {"system": [entry]}})
+    assert config.dependencies.system("platform") == [entry]
 
 
 def test_system_packages_for_the_cli_are_refused(tmp_path):

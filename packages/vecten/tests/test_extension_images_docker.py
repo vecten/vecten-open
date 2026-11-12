@@ -15,7 +15,7 @@ from vecten.stack.images import write_project_layer
 from vecten_shared.config import VectenConfig, save_config
 from vecten_shared.versions import VERSIONS
 
-from .docker_util import docker_available
+from .docker_util import require_base_image
 
 pytestmark = pytest.mark.docker
 REPO = Path(__file__).resolve().parents[3]
@@ -23,11 +23,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 @pytest.mark.parametrize("kind", ["airflow", "mcp"])
 def test_extension_install_uses_ephemeral_build_secret(tmp_path, kind, monkeypatch):
-    if not docker_available():
-        pytest.skip("Docker is not available")
-    base = f"vecten-{kind}:0.1.0"
-    if subprocess.run(["docker", "image", "inspect", base], capture_output=True).returncode:
-        pytest.skip(f"build {base} with vecten dev build-images first")
+    base = require_base_image(kind)
     config = VectenConfig.model_validate(
         {
             "project": {"name": "extension-test", "scaffold_version": "0.1.0"},
