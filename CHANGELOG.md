@@ -7,6 +7,16 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
+- Extensions from a git repository: `vecten extension add '<name> @ git+https://<host>/<repo>@<tag
+  or commit>[#subdirectory=<dir>]'` records the extension at a full commit, with prefixed tags
+  such as `acme-resolution/v1.2.0` for a repository holding several, and a `source_sha256` of its
+  files. The git credential lives only in `.env` (`GIT_CREDENTIALS`) and in CI (the
+  `VECTEN_GIT_CREDENTIALS` secret or a GitHub App token minted per job, handed only to the step
+  that runs `vecten`); `vecten ship` fetches the recorded commit in CI, checks its hash and
+  ships the source in the bundle, and each host checks the hash again and builds it like an
+  in-repo extension. `vecten extension sync` installs the committed CLI lock on another laptop
+  or in CI. A laptop's ship or deploy refuses to dispatch when CI holds no credential for a
+  private source ([#35](https://github.com/vecten/vecten-open/issues/35)).
 - In-repo extensions: an extension package kept in the project under `extensions/<name>/`,
   registered with `vecten extension add ./extensions/<name>`, locked with its third-party
   dependencies only, installed editable in the CLI's environment and built from the bundle on
