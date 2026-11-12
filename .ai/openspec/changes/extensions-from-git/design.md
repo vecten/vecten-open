@@ -230,8 +230,9 @@ authentication. Decision 2 stands as written; the laptop fallback is not needed.
 - **0.3, fetch by commit.** `git fetch --depth 1 <url> <commit>` fetches a commit that is not at a
   ref tip, alone, from GitHub and from `git http-backend` over protocol version 2, git's default;
   the server needs no `uploadpack.allow*SHA1InWant` setting. A server that speaks only version 0
-  makes git refuse a commit no ref advertises (`Server does not allow request for unadvertised
-  object`): that is the host Decision 15's tag fallback serves. An unknown commit fails with
+  makes git refuse a commit no ref advertises, the commit an annotated tag peels to included
+  (`Server does not allow request for unadvertised object`): that is the host Decision 15's tag
+  fallback serves, and fetching the tag there gives the commit. An unknown commit fails with
   `upload-pack: not our ref <commit>`. `git ls-remote <url> refs/tags/<tag>` does not list the
   peeled commit of an annotated tag; asking for `refs/tags/<tag>^{}` as well does.
 - **Error texts used to classify failures** (with `LC_ALL=C`): no credential, or a helper with no

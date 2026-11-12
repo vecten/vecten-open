@@ -13,14 +13,14 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 
 ## 1. `vecten_shared.git_sources`
 
-- [ ] 1.1 Parse and validate a git source (scheme, no user information, query or foreign fragment, relative subdirectory, extras, no markers); refusals never echo the URL.
-- [ ] 1.2 Parse `GIT_CREDENTIALS` entries; write a mode-0600 credential-store file; `credential.useHttpPath` when an entry has a path.
-- [ ] 1.3 The isolated git environment (Decision 2).
-- [ ] 1.4 Ref resolution with prefixed tags (Decision 7).
-- [ ] 1.5 Fetch a commit into a throwaway bare repository; tag fallback; "commit not reachable".
-- [ ] 1.6 Classified failures and masking (Decision 11); `::add-mask::` per token under `GITHUB_ACTIONS=true`.
-- [ ] 1.7 Tests, unit tier, against a local `git http-backend` with basic authentication: tag, commit, prefixed tag, branch, ambiguous ref, wrong token (no substring of length ≥ 4 in output), missing commit, public repository, a user helper in a fake global config left unused, `GIT_TRACE_CURL` in the parent environment leaking nothing.
-- [ ] 1.8 Test, `network` tier: a public GitHub repository by tag, by commit and with a subdirectory.
+- [x] 1.1 Parse and validate a git source (scheme, no user information, query or foreign fragment, relative subdirectory, extras, no markers); refusals never echo the URL.
+- [x] 1.2 Parse `GIT_CREDENTIALS` entries; write a mode-0600 credential-store file; `credential.useHttpPath` when an entry has a path.
+- [x] 1.3 The isolated git environment (Decision 2).
+- [x] 1.4 Ref resolution with prefixed tags (Decision 7).
+- [x] 1.5 Fetch a commit into a throwaway bare repository; tag fallback; "commit not reachable".
+- [x] 1.6 Classified failures and masking (Decision 11); `::add-mask::` per token under `GITHUB_ACTIONS=true`.
+- [x] 1.7 Tests, unit tier, against a local `git http-backend` with basic authentication: tag, commit, prefixed tag, branch, ambiguous ref, wrong token (no substring of length ≥ 4 in output), missing commit, public repository, a user helper in a fake global config left unused, `GIT_TRACE_CURL` in the parent environment leaking nothing.
+- [x] 1.8 Test, `network` tier: a public GitHub repository by tag, by commit and with a subdirectory.
 - [ ] 1.9 Test, **[private repo]**: fine-grained token; revoked token; GitHub App installation token.
 
 ## 2. Source identity
