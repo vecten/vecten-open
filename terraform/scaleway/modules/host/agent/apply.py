@@ -106,6 +106,9 @@ LEGACY_HOST_DEFAULTS = {
     "service_network": "",
 }
 LEGACY_OUTPUT_KEYS = ("bucket", "secret_prefix")
+# Present only when the project declares an area, so a project without one ships unchanged.
+OPTIONAL_HOST_KEYS = {"areas": []}
+_AREA = re.compile(r"[a-z][a-z0-9]{0,56}")
 # What the watcher needs before any release exists on the host; user data writes it.
 WATCH_KEYS = ("host", "components", "bucket", "region", "project_id", "secret_prefix")
 
@@ -438,6 +441,13 @@ def load_host(release: Path) -> dict:
     missing = [k for k in HOST_KEYS if k not in host]
     if missing:
         raise AgentError(f"{path} lacks {', '.join(missing)}")
+    for key, value in OPTIONAL_HOST_KEYS.items():
+        host.setdefault(key, value)
+    areas = host["areas"]
+    if not isinstance(areas, list) or not all(
+        isinstance(a, str) and _AREA.fullmatch(a) for a in areas
+    ):
+        raise AgentError(f"{path} names areas outside [a-z][a-z0-9]*")
     host["release"] = str(release)
     return host
 
@@ -1031,6 +1041,8 @@ def run_setup(host: dict, outputs: dict, run: Run, backend: Backend | None = Non
         args += ["-v", "ON_ERROR_STOP=1"]
         for flag, value in flags.items():
             args += ["-v", f"{flag}={value}"]
+        if host["areas"]:
+            args += ["-v", "areas=" + ",".join(host["areas"])]
         args += ["-f", "/sql/warehouse_setup.sql"]
         # psql's output can quote the statements it ran, so only the exit code is reported.
         result = run(args, env=env)

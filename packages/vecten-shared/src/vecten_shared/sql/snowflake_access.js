@@ -41,9 +41,12 @@ function readGrant() {
     var relation = RELATION_NAME === undefined ? null : RELATION_NAME;
     if (enabled === null) throw new Error('target is not a bounded reader role');
     bounded(TARGET);
+    // An area's schemas match a pattern rather than a list, so declaring an area needs no
+    // rerun of this script.
     if (typeof SCHEMA_NAME !== 'string' ||
         (['CORE','MARTS','STAGING','SNAPSHOTS'].indexOf(SCHEMA_NAME) === -1 &&
-         !/^RAW_[A-Z0-9_]+$/.test(SCHEMA_NAME))) {
+         !/^RAW_[A-Z0-9_]+$/.test(SCHEMA_NAME) &&
+         !/^(CORE|MARTS)_[A-Z][A-Z0-9]*$/.test(SCHEMA_NAME))) {
         throw new Error('schema is outside the approved convention');
     }
     owned(TARGET);

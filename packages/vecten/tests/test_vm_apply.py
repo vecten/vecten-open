@@ -606,6 +606,30 @@ def test_agent_scram_verifier_matches_add_admin(agent):
     assert agent.scram_verifier("p") != fresh
 
 
+def area_args(args):
+    return [a for i, a in enumerate(args) if i and args[i - 1] == "-v" and a.startswith("areas")]
+
+
+def test_setup_passes_the_declared_areas_and_nothing_without_them(agent, tmp_path):
+    out = outputs("standard")
+    with_areas = agent.load_host(stage(tmp_path / "a", out, "mcp", areas=["finance", "payroll"]))
+    run = FakeRun(store=seeded(out))
+    agent.run_setup(with_areas, out, run)
+    assert [area_args(c["args"]) for c in psql_runs(run)] == [["areas=finance,payroll"]] * 2
+    plain = agent.load_host(stage(tmp_path / "b", out, "mcp"))
+    assert plain["areas"] == []
+    run = FakeRun(store=seeded(out))
+    agent.run_setup(plain, out, run)
+    assert [area_args(c["args"]) for c in psql_runs(run)] == [[], []]
+
+
+@pytest.mark.parametrize("areas", [["Finance"], ["fin_ops"], ["x;drop"], "finance", [1]])
+def test_load_host_refuses_an_area_outside_the_name_rule(agent, tmp_path, areas):
+    release = stage(tmp_path / "releases", outputs("standard"), "mcp", areas=areas)
+    with pytest.raises(agent.AgentError, match="areas"):
+        agent.load_host(release)
+
+
 def test_setup_under_minimal_is_one_run_with_every_flag(agent, tmp_path):
     out = outputs("minimal")
     host = agent.load_host(stage(tmp_path / "releases", out, "main"))

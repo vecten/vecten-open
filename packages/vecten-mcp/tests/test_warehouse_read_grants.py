@@ -46,6 +46,13 @@ def test_snowflake_version_is_what_read_grant_reports_with_every_argument_null()
     assert connection.calls == [('CALL "D"."VECTEN_ACCESS".READ_GRANT(NULL,NULL,NULL,NULL)', None)]
 
 
+def test_a_snowflake_install_of_the_previous_release_is_older_than_this_server():
+    # The release that added READ_GRANTS installed version 2, whose READ_GRANT refuses area
+    # schemas and grants tables and views only.
+    adapter, _ = snowflake(lambda sql, params: "vecten-access 2")
+    assert adapter.access_version() == 2 < ACCESS_VERSION
+
+
 @pytest.mark.parametrize(
     "message",
     [

@@ -450,6 +450,8 @@ def _postgres(config: VectenConfig) -> dict:
         "LOADER_PASSWORD": "${LOADER_PASSWORD}",
         "VECTEN_WITH_MCP": "true" if with_mcp else "false",
     }
+    if config.areas:
+        environment["VECTEN_AREAS"] = ",".join(sorted(config.areas))
     if with_mcp:
         environment |= {
             "MCP_STATE_DB_PASSWORD": "${MCP_STATE_DB_PASSWORD}",

@@ -206,6 +206,29 @@ def test_host_json_satisfies_the_agent_contract(project, tmp_path):
     assert host["mcp_pool_cap"] == 3
 
 
+def test_host_json_carries_the_declared_areas_only_when_there_are_some(project, tmp_path):
+    from vecten_shared.config import AreaDecl
+
+    before = build(project, tmp_path / "plain")
+    config = load_config(project)
+    config.areas = {"payroll": AreaDecl(), "finance": AreaDecl()}
+    save_config(project, config)
+    host = json.loads(read(build(project, tmp_path / "areas"), ".vecten/ship/host.json"))
+    assert host["areas"] == ["finance", "payroll"]
+    assert set(host) == set(agent.HOST_KEYS) | {"areas"}
+    config.areas = {}
+    save_config(project, config)
+    again = build(project, tmp_path / "again")
+    with tarfile.open(before, "r:gz") as first, tarfile.open(again, "r:gz") as second:
+        # vecten.toml itself is rewritten by the save, comments and layout aside.
+        names = [m.name for m in first.getmembers() if m.isfile() and m.name != "vecten.toml"]
+        assert names == [
+            m.name for m in second.getmembers() if m.isfile() and m.name != "vecten.toml"
+        ]
+        for name in names:
+            assert first.extractfile(name).read() == second.extractfile(name).read(), name
+
+
 def test_setup_host_is_flagged(project, tmp_path):
     host = json.loads(read(build(project, tmp_path / "out", host="mcp"), ".vecten/ship/host.json"))
     assert host["setup_host"] is True

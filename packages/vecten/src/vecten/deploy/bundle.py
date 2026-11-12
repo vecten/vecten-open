@@ -26,7 +26,7 @@ from vecten.deploy.names import name_prefix
 from vecten.deploy.outputs import outputs_text
 from vecten.deploy.sizing import tier
 from vecten.deploy.tfvars import DAGS_PAUSED_AT_CREATION, check_tfvars
-from vecten.deploy.vm.apply import HOST_KEYS, PLUGIN_DIRS
+from vecten.deploy.vm.apply import HOST_KEYS, OPTIONAL_HOST_KEYS, PLUGIN_DIRS
 from vecten.github.gh import ToolRunner, get_git
 from vecten.stack.compose import (
     PROJECT_MOUNTS,
@@ -311,7 +311,9 @@ def host_document(
         "service_secrets": service_secrets,
         "service_network": service_network,
     }
-    if set(doc) != set(HOST_KEYS):
+    if config.areas:
+        doc["areas"] = sorted(config.areas)
+    if set(doc) - set(OPTIONAL_HOST_KEYS) != set(HOST_KEYS):
         raise Failure(ExitCode.INTERNAL, "host.json keys differ from the agent's HOST_KEYS")
     return doc
 

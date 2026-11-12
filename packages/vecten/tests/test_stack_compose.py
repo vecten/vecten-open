@@ -204,6 +204,19 @@ def test_postgres_init_and_log_prefix(tmp_path, monkeypatch):
     assert not list(init.glob("*.sql"))
 
 
+def test_the_laptops_postgres_creates_the_declared_areas_on_first_start(tmp_path):
+    from vecten_shared.config import AreaDecl
+
+    plain = generate_compose(cfg(["platform", "mcp"]), "local", ["platform", "mcp"], tmp_path)
+    config = cfg(["platform", "mcp"])
+    config.areas = {"payroll": AreaDecl(), "finance": AreaDecl()}
+    doc = generate_compose(config, "local", ["platform", "mcp"], tmp_path)
+    environment = doc["services"]["postgres"]["environment"]
+    assert environment.pop("VECTEN_AREAS") == "finance,payroll"
+    assert doc == plain
+    assert "VECTEN_AREAS" not in plain["services"]["postgres"]["environment"]
+
+
 def test_postgres_publishes_the_port_the_environment_names(tmp_path, monkeypatch):
     monkeypatch.setenv(LOCAL_PG_PORT_ENV, "23456")
     doc = generate_compose(cfg(["platform"]), "local", ["platform"], tmp_path)

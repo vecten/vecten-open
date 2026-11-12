@@ -386,3 +386,53 @@ def test_missing_variable_is_refused(instance):
     assert result.returncode != 0
     assert "with_airflow must be exactly true or false" in result.stderr
     assert databases(connect) == {"postgres"}
+
+
+def area_schemas(connect):
+    with superuser(connect, "warehouse") as c:
+        owners = dict(
+            c.execute(
+                "select nspname, pg_get_userbyid(nspowner) from pg_namespace"
+                " where nspname ~ '^(core|marts)_'"
+            ).fetchall()
+        )
+        helpers = {r[0] for r in c.execute("select schema_name from vecten_access.helpers")}
+    return owners, helpers
+
+
+@pytest.mark.docker
+@needs_docker
+def test_declared_areas_get_their_schemas_as_loader_and_a_helper_each(instance):
+    connect, name = instance
+    setup_ok(name, ALL | {"areas": "finance,payroll"})
+    owners, helpers = area_schemas(connect)
+    expected = {"core_finance", "marts_finance", "core_payroll", "marts_payroll"}
+    assert owners == dict.fromkeys(expected, "loader")
+    assert expected <= helpers
+    # A rerun without the list keeps the schemas and their helpers.
+    setup_ok(name, ALL)
+    assert area_schemas(connect) == (owners, helpers)
+
+
+@pytest.mark.docker
+@needs_docker
+def test_a_schema_dbt_created_in_an_area_gets_a_helper_on_the_next_setup(instance):
+    connect, name = instance
+    setup_ok(name, ALL)
+    with connect("loader", "l1", "warehouse") as c:
+        c.execute("create schema marts_finance")
+        c.execute("create schema marts_fin_ops")
+    setup_ok(name, ALL)
+    _, helpers = area_schemas(connect)
+    assert "marts_finance" in helpers and "marts_fin_ops" not in helpers
+
+
+@pytest.mark.docker
+@needs_docker
+@pytest.mark.parametrize("value", ["Finance", "fin_ops", "finance;drop", "finance,", ","])
+def test_an_area_list_outside_the_name_rule_is_refused(instance, value):
+    connect, name = instance
+    result = run_setup(name, ALL | {"areas": value})
+    assert result.returncode != 0
+    assert "areas must be" in result.stderr
+    assert databases(connect) == {"postgres"}

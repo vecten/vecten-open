@@ -54,6 +54,13 @@ process.stdout.write(JSON.stringify({value,statement}));
         ("FINANCE", "RAW_CRM", None, True, False, True),
         ("FINANCE", "RAW_CRM", 'x";DROP DATABASE D;--', True, True, False),
         ("FINANCE", "CORE", None, None, True, True),
+        ("FINANCE", "MARTS_FINANCE", None, True, True, False),
+        ("FINANCE", "CORE_FINANCE", "INVOICE", True, True, False),
+        ("FINANCE", "CORE_FINANCE", None, False, True, False),
+        ("FINANCE", "MARTS_FIN_OPS", None, True, True, True),
+        ("FINANCE", "MARTS_", None, True, True, True),
+        ("FINANCE", "CORE_2024", None, True, True, True),
+        ("FINANCE", "STAGING_FINANCE", None, True, True, True),
     ],
 )
 def test_owner_procedure_enforces_boundaries(target, schema, relation, enabled, owned, error):
