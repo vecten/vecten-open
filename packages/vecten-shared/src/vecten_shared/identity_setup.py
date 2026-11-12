@@ -30,10 +30,7 @@ def postgres_access_helpers():
     )[0]
 
 
-# The version of the administrator-installed access procedures this release installs.
-# `READ_GRANT` called with every argument NULL reports it, and `READ_GRANTS` returns it; an
-# install from before either reported one is version 1. The MCP refuses drift revocation
-# while the installed version is older than this.
+# An install from before the procedures reported a version is version 1.
 ACCESS_VERSION = 2
 
 
