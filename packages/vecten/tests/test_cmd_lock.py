@@ -831,3 +831,91 @@ def test_a_service_named_as_an_apps_service_is_refused(invoke, project, fakes, m
     r = invoke("lock")
     assert r.exit_code == ExitCode.CONFIG
     assert "service app-overview" in r.output and "app overview" in r.output
+
+
+FINANCE = {
+    "title": "Finance",
+    "description": "",
+    "kind": "snowflake",
+    "entry": "acme_demo/finance.py",
+    "datasets": ["revenue"],
+    "groups": ["finance", "default"],
+}
+
+
+def test_extension_add_binds_each_app_from_its_suggestions(invoke, project, fakes, monkeypatch):
+    _apps(monkeypatch, {"overview": OVERVIEW, "finance": FINANCE})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    text = (project / "vecten.toml").read_text()
+    assert "[apps.acme-demo.overview]" in text and "[apps.acme-demo.finance]" in text
+    apps = load_config(project).apps["acme-demo"]
+    assert apps["overview"].groups == ["default"] and apps["overview"].hostname == "overview"
+    assert "local" not in apps["overview"].model_fields_set
+    assert apps["finance"].groups == ["finance", "default"]
+    assert apps["finance"].model_fields_set == {"groups"}
+    assert json.loads(r.stdout)["binding_notes"] == []
+
+
+def test_extension_add_keeps_an_existing_app_binding(invoke, project, fakes, monkeypatch):
+    _apps(monkeypatch, {"overview": OVERVIEW})
+    assert invoke("extension", "add", "acme-demo").exit_code == 0
+
+    def narrow(doc):
+        doc["apps"]["acme-demo"]["overview"] = {"groups": ["sales"], "hostname": "sales"}
+
+    _edit_config(project, narrow)
+    _apps(monkeypatch, {"overview": {**OVERVIEW, "groups": ["default", "finance"]}})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    binding = load_config(project).apps["acme-demo"]["overview"]
+    assert (binding.groups, binding.hostname) == (["sales"], "sales")
+
+
+def test_an_app_is_left_unbound_without_the_mcp(invoke, project, fakes, monkeypatch):
+    _edit_config(project, lambda doc: doc.__setitem__("components", ["platform"]))
+    _apps(monkeypatch, {"overview": OVERVIEW})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    assert load_config(project).apps == {}
+    assert (
+        "acme-demo app overview: an app needs the mcp component; not bound"
+        in json.loads(r.stdout)["binding_notes"]
+    )
+
+
+def test_an_app_for_a_component_the_project_lacks_is_not_bound(invoke, project, fakes, monkeypatch):
+    _edit_config(project, lambda doc: doc.__setitem__("components", ["mcp"]))
+    _apps(monkeypatch, {"overview": OVERVIEW})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    assert load_config(project).apps == {}
+    assert (
+        "acme-demo app overview: runs from platform, which the project does not enable; not bound"
+        in json.loads(r.stdout)["binding_notes"]
+    )
+
+
+def test_an_apps_hostname_avoids_a_service_label(invoke, project, fakes, monkeypatch):
+    _declared(monkeypatch, {"overview": PORTAL})
+    _apps(monkeypatch, {"overview": OVERVIEW})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    config = load_config(project)
+    assert config.services["acme-demo"]["overview"].hostname == "overview"
+    assert config.apps["acme-demo"]["overview"].hostname == "acme-demo-overview"
+
+
+def test_a_new_app_hostname_is_named_for_deploy(invoke, project, fakes, monkeypatch):
+    deploy = {
+        "cloud": "aws",
+        "region": "eu-west-1",
+        "domain": "data.acme.com",
+        "dns_zone": "acme.com",
+        "github_repository": "acme/data",
+    }
+    _edit_config(project, lambda doc: doc.__setitem__("deploy", deploy))
+    _apps(monkeypatch, {"overview": OVERVIEW})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["hostnames"] == ["overview.data.acme.com"]

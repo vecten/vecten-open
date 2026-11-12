@@ -10,11 +10,22 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vecten_shared.names import group_name_problem
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.services import Service, name_problem, service_body, service_to_json
+from vecten_shared.services import (
+    COMPONENTS,
+    Bound,
+    Service,
+    name_problem,
+    service_body,
+    service_to_json,
+)
+
+if TYPE_CHECKING:
+    from vecten_shared.config import VectenConfig
+    from vecten_shared.extension_record import Extension
 
 GROUP = "vecten.apps"
 KINDS = ("container", "snowflake")
@@ -230,3 +241,62 @@ def credential_names(app: str, host: str) -> tuple[str, str]:
     """The client id and secret names an app's principal is stored under, in its host's scope."""
     stem = ("MCP_" if host == "mcp" else "") + "APP_" + app.upper().replace("-", "_")
     return f"{stem}_CLIENT_ID", f"{stem}_CLIENT_SECRET"
+
+
+def _fail(where: str, problem: str) -> Failure:
+    return Failure(ExitCode.CONFIG, f"{where}: {problem}")
+
+
+def bound_apps(config: VectenConfig, record: dict[str, Extension], taken: set[str]) -> list[Bound]:
+    """The service each bound container app runs as; `taken` holds the hostname labels bound
+    services use, and gains each app's."""
+    from vecten_shared.config import RouteBinding, ServiceBinding, label_problem
+
+    found: list[Bound] = []
+    for extension, bindings in sorted(config.apps.items()):
+        entry = record.get(extension)
+        if entry is None:
+            raise _fail(
+                f"apps.{extension}",
+                f"{extension} is not in extensions.lock.json yet; run `vecten lock`",
+            )
+        for name, binding in sorted(bindings.items()):
+            where = f"apps.{extension}.{name}"
+            app = entry.apps.get(name)
+            if app is None:
+                raise _fail(where, f"{extension} declares no app {name}")
+            service = app.service
+            if service is None:
+                for key in ("hostname", "local"):
+                    if key in binding.model_fields_set:
+                        raise _fail(f"{where}.{key}", "only a container app runs on a host")
+                continue
+            label = binding.hostname or name
+            problem = label_problem(label)
+            if problem:
+                raise _fail(f"{where}.hostname", f"{problem}; it defaults to the app's name")
+            if label in taken:
+                raise _fail(f"{where}.hostname", f"hostname {label} is bound twice")
+            taken.add(label)
+            host = next((c for c in COMPONENTS if c in service.components and config.has(c)), None)
+            if host is None:
+                raise _fail(
+                    where,
+                    f"runs from {', '.join(service.components)}, which the project does not enable",
+                )
+            routes = {ROUTE: RouteBinding(access="login", groups=list(binding.groups))}
+            found.append(
+                Bound(
+                    extension=extension,
+                    name=app_service_name(name),
+                    service=service,
+                    binding=ServiceBinding(hostname=label, local=binding.local, routes=routes),
+                    host=host,
+                    memory_mb=service.memory_mb,
+                    cpus=service.cpus,
+                    routes=dict(service.routes),
+                    route_bindings=routes,
+                    app=name,
+                )
+            )
+    return found

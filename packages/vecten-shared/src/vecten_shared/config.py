@@ -245,6 +245,28 @@ class ServiceBinding(Strict):
         return self
 
 
+class AppBinding(Strict):
+    # The MCP groups that may open the app; the MCP also restricts what it reads to them.
+    groups: list[str]
+    # A container app's DNS label below the environment's domain; the app's name when unset.
+    hostname: str | None = None
+    local: bool = True
+
+    @field_validator("groups")
+    @classmethod
+    def _groups(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("one or more MCP groups may open the app")
+        for group in value:
+            _checked(group_name_problem(group), group)
+        return value
+
+    @field_validator("hostname")
+    @classmethod
+    def _label(cls, value: str | None) -> str | None:
+        return value if value is None else _checked(label_problem(value), value)
+
+
 def _checked(problem: str | None, value: Any) -> Any:
     if problem:
         raise ValueError(problem)
@@ -446,6 +468,8 @@ class VectenConfig(Strict):
     settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # `[services.<extension>.<service>]`: where and how each declared service runs.
     services: dict[str, dict[str, ServiceBinding]] = Field(default_factory=dict)
+    # `[apps.<extension>.<app>]`: who may open each declared analytics app, and where it runs.
+    apps: dict[str, dict[str, AppBinding]] = Field(default_factory=dict)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -546,6 +570,53 @@ class VectenConfig(Strict):
         return self
 
     @model_validator(mode="after")
+    def _app_bindings(self) -> VectenConfig:
+        listed = {
+            normalize_name(req.name)
+            for req in map(parse_requirement, self.extensions)
+            if req is not None
+        }
+        labels = {b.hostname for bindings in self.services.values() for b in bindings.values()} - {
+            None
+        }
+        named: dict[str, str] = {}
+        for extension, bindings in self.apps.items():
+            if extension not in listed:
+                raise ValueError(
+                    f"apps.{extension}: no extension of that name is listed in extensions"
+                )
+            for name, binding in bindings.items():
+                where = f"apps.{extension}.{name}"
+                problem = service_name_problem("app", name)
+                if problem:
+                    raise ValueError(f"{where}: {problem}")
+                if not self.has("mcp"):
+                    raise ValueError(
+                        f"{where}: an app needs the mcp component, which decides who may open "
+                        "it and what it reads"
+                    )
+                # The app's principal, svc_app_<app>, and its credential names carry the
+                # app's name alone.
+                other = named.setdefault(name, extension)
+                if other != extension:
+                    raise ValueError(
+                        f"{where}: {other} binds an app {name} too; both would run as "
+                        f"svc_app_{name.replace('-', '_')}"
+                    )
+                label = binding.hostname
+                if label is None:
+                    continue
+                if label in labels:
+                    raise ValueError(f"{where}.hostname: {label} is bound twice")
+                labels.add(label)
+                if label == APEX and self.deploy and self.deploy.domain == self.deploy.dns_zone:
+                    raise ValueError(
+                        f"{where}.hostname: @ is {self.deploy.domain}, the DNS zone itself, "
+                        "whose apex records the zone keeps; choose a label"
+                    )
+        return self
+
+    @model_validator(mode="after")
     def _dependencies_need_their_component(self) -> VectenConfig:
         # No image would install them, so the requirements would be silently ignored.
         for component in ("platform", "mcp"):
@@ -617,7 +688,7 @@ def save_config(project_root: Path, config: VectenConfig) -> None:
     import tomlkit
 
     data = config.model_dump(mode="json", exclude_none=True)
-    for optional in ("dependencies", "secrets", "settings", "services"):
+    for optional in ("dependencies", "secrets", "settings", "services", "apps"):
         if not data.get(optional):
             data.pop(optional, None)
     path = project_root / CONFIG_FILE

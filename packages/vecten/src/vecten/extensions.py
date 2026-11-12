@@ -722,6 +722,9 @@ def add_extension(root: Path, package: str) -> dict:
     doc["extensions"] = config.extensions
     name = normalize_name(dist.name)
     services = _bind_services(doc, config, name, record.get(name))
+    apps = _bind_apps(doc, config, name, record.get(name))
+    services["hostnames"] += apps["hostnames"]
+    services["binding_notes"] += apps["binding_notes"]
     text = tomlkit.dumps(doc)
     try:
         bound = VectenConfig.model_validate(tomllib.loads(text))
@@ -764,7 +767,7 @@ def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
     if entry is None or not entry.services:
         return out
     existing = config.services.get(extension, {})
-    taken = {b.hostname for t in config.services.values() for b in t.values() if b.hostname}
+    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)))
     for name, service in sorted(entry.services.items()):
         key = f"{extension}.{name}"
         if name in existing:
@@ -814,6 +817,56 @@ def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
         if extension not in doc["services"]:
             doc["services"][extension] = tomlkit.table(is_super_table=True)
         doc["services"][extension][name] = table
+    return out
+
+
+def _taken_labels(data: dict) -> set[str]:
+    """Hostname labels the file binds; an app without one is served at its own name."""
+    taken = {
+        b["hostname"]
+        for tables in data.get("services", {}).values()
+        for b in tables.values()
+        if "hostname" in b
+    }
+    for tables in data.get("apps", {}).values():
+        taken |= {b.get("hostname", name) for name, b in tables.items()}
+    return taken
+
+
+def _bind_apps(doc, config: VectenConfig, extension: str, entry) -> dict:
+    """Bind each declared app the project does not bind yet, from its suggestions; a bound app
+    keeps its binding as the person left it."""
+    out: dict[str, list[str]] = {"hostnames": [], "binding_notes": []}
+    if entry is None or not entry.apps:
+        return out
+    existing = config.apps.get(extension, {})
+    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)))
+    for name, app in sorted(entry.apps.items()):
+        key = f"{extension} app {name}"
+        if name in existing:
+            continue
+        if not config.has("mcp"):
+            out["binding_notes"].append(f"{key}: an app needs the mcp component; not bound")
+            continue
+        table = tomlkit.table()
+        table["groups"] = list(app.groups)
+        if app.service is not None:
+            if not any(config.has(c) for c in app.service.components):
+                out["binding_notes"].append(
+                    f"{key}: runs from {', '.join(app.service.components)}, which the project "
+                    "does not enable; not bound"
+                )
+                continue
+            label = _free_label(extension, name, taken)
+            taken.add(label)
+            table["hostname"] = label
+            if config.deploy is not None:
+                out["hostnames"].append(service_hostname(label, config.deploy.domain))
+        if "apps" not in doc:
+            doc["apps"] = tomlkit.table(is_super_table=True)
+        if extension not in doc["apps"]:
+            doc["apps"][extension] = tomlkit.table(is_super_table=True)
+        doc["apps"][extension][name] = table
     return out
 
 

@@ -292,6 +292,8 @@ class Bound:
     # Only the routes the project binds, as declared.
     routes: dict[str, Route] = field(hash=False)
     route_bindings: dict[str, RouteBinding] = field(hash=False)
+    # The analytics app this service runs, for the service a container app generates.
+    app: str | None = None
 
     @property
     def compose_name(self) -> str:
@@ -300,6 +302,10 @@ class Bound:
     @property
     def key(self) -> str:
         return f"{self.extension}.{self.name}"
+
+    @property
+    def described(self) -> str:
+        return f"app {self.extension}.{self.app}" if self.app else self.key
 
 
 def _host(config: VectenConfig, binding: ServiceBinding, service: Service) -> str | None:
@@ -357,16 +363,19 @@ def bound_services(config: VectenConfig, record: dict[str, Extension]) -> list[B
                     route_bindings=dict(sorted(binding.routes.items())),
                 )
             )
+    from vecten_shared.apps import bound_apps
+
+    found += bound_apps(config, record, {b.binding.hostname for b in found} - {None})
     # Compose keeps one service, and one volume, per name.
     named: dict[str, str] = {}
     for bound in found:
-        other = named.setdefault(bound.compose_name, bound.key)
-        if other != bound.key:
+        if bound.compose_name in named:
             raise Failure(
                 ExitCode.CONFIG,
-                f"services: {other} and {bound.key} share the Compose name "
-                f"{bound.compose_name}; rename one service",
+                f"services: {named[bound.compose_name]} and {bound.described} share the Compose "
+                f"name {bound.compose_name}; rename one service",
             )
+        named[bound.compose_name] = bound.described
     return found
 
 
