@@ -273,6 +273,7 @@ def test_access_health_reads_the_last_reconciliation(admin):
             "revoked": [],
             "drift": [],
             "database_future": [],
+            "missing_bindings": [],
         }
         service.access.reconcile()
         data = client.get("/api/admin/access-health", headers=headers).json()["data"]
@@ -315,3 +316,36 @@ def test_a_grant_naming_no_string_target_is_a_bad_request(admin):
                 json={"group": "default", "kind": kind, "target": 123},
             )
             assert response.status_code == 400, (kind, response.text)
+
+
+def test_a_group_role_is_named_and_an_existing_role_bound_over_the_admin_api(admin):
+    service, adapter = admin
+    statements = {}
+    adapter.bind_statement = lambda bound, role, grant=True: statements.setdefault(
+        grant, f"{'GRANT' if grant else 'REVOKE'} {bound} {role}"
+    )
+    adapter.review_statement = lambda bound: f"SHOW {bound}"
+    held = set()
+    adapter.holds_role = lambda role, bound: (role, bound) in held
+    client, headers = http_admin(service)
+
+    def call(operation, data):
+        return client.post(f"/api/admin/{operation}", headers=headers, json=data)
+
+    with client:
+        created = call("groups/create", {"name": "finance", "role": "fin_readers"})
+        bound = call("groups/bind", {"group": "finance", "role": "finance_analyst"})
+        early = call("groups/confirm", {"group": "finance"})
+        held.add(("fin_readers", "finance_analyst"))
+        confirmed = call("groups/confirm", {"group": "finance"})
+        listed = client.get("/api/admin/groups", headers=headers)
+        unbound = call("groups/unbind", {"group": "finance"})
+        operations = client.get("/api/admin/operations", headers=headers).json()["data"]
+    assert created.json()["data"]["warehouse_role"] == "fin_readers"
+    assert bound.json()["data"]["statement"] == "GRANT finance_analyst fin_readers"
+    assert early.status_code == 400 and "GRANT finance_analyst" in early.json()["error"]
+    assert confirmed.json()["data"]["confirmed"] is True
+    [finance] = [g for g in listed.json()["data"] if g["name"] == "finance"]
+    assert finance["bound_role"] == "finance_analyst" and finance["binding"] == "confirmed"
+    assert unbound.json()["data"]["statement"] == "REVOKE finance_analyst fin_readers"
+    assert {"groups/bind", "groups/confirm", "groups/unbind"} <= set(operations["write"])

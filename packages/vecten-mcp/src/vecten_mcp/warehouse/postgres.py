@@ -2,9 +2,10 @@
 
 from contextlib import contextmanager
 
+import psycopg
 from psycopg import sql
 
-from vecten_mcp.warehouse.base import Account, check_account
+from vecten_mcp.warehouse.base import Account, RoleExists, check_account
 from vecten_shared.identity_setup import ACCESS_VERSION
 
 READ_GRANTS = """
@@ -112,7 +113,37 @@ class PostgresAdapter:
     def create_group(self, role):
         check_account(role)
         with self.control() as conn:
-            conn.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(identifier(role)))
+            try:
+                conn.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(identifier(role)))
+            except psycopg.errors.DuplicateObject:
+                raise RoleExists(role) from None
+
+    def bind_statement(self, bound, role, grant=True):
+        """What an administrator runs to make the group's role inherit `bound`; the
+        provisioner holds no ADMIN on `bound`, so it cannot grant it."""
+        statement = "GRANT {} TO {} WITH INHERIT TRUE;" if grant else "REVOKE {} FROM {};"
+        return sql.SQL(statement).format(identifier(bound), identifier(role)).as_string()
+
+    def review_statement(self, bound):
+        return (
+            sql.SQL(
+                "SELECT d.datname FROM pg_database d "
+                "WHERE has_database_privilege({}, d.datname, 'CONNECT');"
+            )
+            .format(sql.Literal(bound))
+            .as_string()
+        )
+
+    def holds_role(self, role, bound):
+        check_account(role)
+        with self.control() as conn:
+            row = conn.execute(
+                "SELECT EXISTS (SELECT FROM pg_auth_members m "
+                "JOIN pg_roles g ON g.oid=m.member JOIN pg_roles r ON r.oid=m.roleid "
+                "WHERE g.rolname=%s AND r.rolname=%s AND m.inherit_option)",
+                (role, bound),
+            ).fetchone()
+        return bool(row and row[0])
 
     def drop_account(self, name):
         check_account(name)

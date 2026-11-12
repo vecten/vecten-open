@@ -4,7 +4,7 @@ import json
 import re
 from contextlib import contextmanager
 
-from vecten_mcp.warehouse.base import Account, check_account
+from vecten_mcp.warehouse.base import Account, RoleExists, check_account
 
 
 def quote(name):
@@ -95,9 +95,37 @@ class SnowflakeAdapter:
             )
 
     def create_group(self, role):
+        from snowflake.connector.errors import ProgrammingError
+
         check_account(role)
         with self.control() as cursor:
-            cursor.execute(f"CREATE ROLE {quote(role)}")
+            try:
+                cursor.execute(f"CREATE ROLE {quote(role)}")
+            except ProgrammingError as exc:
+                if "already exists" in str(exc.msg):
+                    raise RoleExists(role) from None
+                raise
+
+    def bind_statement(self, bound, role, grant=True):
+        """What an administrator runs to nest `bound` under the group's role: PROVISIONER
+        neither owns nor holds `bound`, so it cannot grant it."""
+        if grant:
+            return f"GRANT ROLE {quote(bound)} TO ROLE {quote(role)};"
+        return f"REVOKE ROLE {quote(bound)} FROM ROLE {quote(role)};"
+
+    def review_statement(self, bound):
+        return f"SHOW GRANTS TO ROLE {quote(bound)};"
+
+    def holds_role(self, role, bound):
+        check_account(role)
+        with self.control() as cursor:
+            rows = cursor.execute(f"SHOW GRANTS TO ROLE {quote(role)}").fetchall()
+            columns = [c[0].lower() for c in cursor.description]
+        for row in rows:
+            grant = dict(zip(columns, row, strict=True))
+            if grant["granted_on"] == "ROLE" and grant["name"].upper() == bound.upper():
+                return True
+        return False
 
     def drop_account(self, name):
         check_account(name)

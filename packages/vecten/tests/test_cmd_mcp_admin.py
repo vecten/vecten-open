@@ -162,3 +162,46 @@ def test_a_grant_the_warehouse_applied_only_in_part_names_the_refusals_and_fails
     assert refusal in doc["error"] and doc["refused"] == [refusal]
     result = invoke("grant", "--area", "finance", "--group", "finance")
     assert result.exit_code == 5 and "ICEBERG" in result.output
+
+
+def test_group_add_names_the_role_and_bind_prints_then_confirms(invoke, workdir, monkeypatch):
+    assert (
+        invoke("init", ".", "--name", "demo", "--users", "5", "--source", "hubspot").exit_code == 0
+    )
+    calls = []
+    statement = 'GRANT ROLE "FINANCE_ANALYST" TO ROLE "FIN_READERS";'
+
+    class Client:
+        def __init__(self, root, env):
+            pass
+
+        def call(self, operation, data=None):
+            calls.append((operation, data))
+            if operation == "groups":
+                return []
+            if operation in {"groups/bind", "groups/confirm"}:
+                return {
+                    "group": "finance",
+                    "bound_role": "finance_analyst",
+                    "confirmed": operation == "groups/confirm",
+                    "statement": statement,
+                    "review": 'SHOW GRANTS TO ROLE "FINANCE_ANALYST";',
+                }
+            if operation == "groups/unbind":
+                return {"group": "finance", "statement": "REVOKE ROLE x FROM ROLE y;"}
+            return dict(data or {})
+
+    monkeypatch.setattr("vecten.mcp_client.AdminClient", Client)
+    result = invoke("group", "add", "finance", "--role", "fin_readers", "--json")
+    assert result.exit_code == 0, result.output
+    assert ("groups/create", {"name": "finance", "role": "fin_readers"}) in calls
+    result = invoke("group", "bind", "finance", "finance_analyst")
+    assert result.exit_code == 0, result.output
+    assert statement in result.output and "--confirm" in result.output
+    assert calls[-1] == ("groups/bind", {"group": "finance", "role": "finance_analyst"})
+    result = invoke("group", "bind", "finance", "finance_analyst", "--confirm", "--json")
+    assert result.exit_code == 0, result.output
+    assert calls[-1] == ("groups/confirm", {"group": "finance"})
+    result = invoke("group", "unbind", "finance")
+    assert result.exit_code == 0 and "REVOKE ROLE x FROM ROLE y;" in result.output
+    assert calls[-1] == ("groups/unbind", {"group": "finance"})

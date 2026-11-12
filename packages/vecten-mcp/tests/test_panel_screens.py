@@ -177,6 +177,44 @@ def test_an_area_is_granted_from_the_access_screen(panel):
     assert re.search(r"default\s+area\s+finance", text(panel.http.get("/admin/access")))
 
 
+def test_a_group_is_created_with_a_role_and_binds_an_existing_one(panel):
+    adapter = panel.adapter
+    adapter.bind_statement = lambda bound, role, grant=True: (
+        f"{'GRANT' if grant else 'REVOKE'} {bound} {role}"
+    )
+    adapter.review_statement = lambda bound: f"SHOW {bound}"
+    held = set()
+    adapter.holds_role = lambda role, bound: (role, bound) in held
+    response = post(
+        panel,
+        "/admin/groups/create",
+        {"name": "finance", "role": "fin_readers"},
+        origin="/admin/users",
+    )
+    assert response.status_code == 303
+    assert panel.runtime.state.group("finance")["warehouse_role"] == "fin_readers"
+    response = post(
+        panel,
+        "/admin/groups/bind",
+        {"group": "finance", "role": "finance_analyst"},
+        origin="/admin/users",
+    )
+    assert response.status_code == 200
+    page = text(response)
+    assert "GRANT finance_analyst fin_readers" in page and "SHOW finance_analyst" in page
+    assert re.search(
+        r"finance\s+fin_readers\s+finance_analyst \(pending\)", text(panel.http.get("/admin/users"))
+    )
+    held.add(("fin_readers", "finance_analyst"))
+    response = post(panel, "/admin/groups/finance/confirm", {}, origin="/admin/users")
+    assert response.status_code == 303
+    assert "finance_analyst (confirmed)" in text(panel.http.get("/admin/users"))
+    response = post(panel, "/admin/groups/finance/unbind", {}, origin="/admin/users")
+    assert response.status_code == 200
+    assert "REVOKE finance_analyst fin_readers" in text(response)
+    assert panel.runtime.state.get("bindings", "finance") is None
+
+
 def test_denying_a_column_hides_it_from_the_next_describe(panel):
     response = post(
         panel, "/admin/access/denied", {"group": "default", "columns": "orders.email\r\n"}

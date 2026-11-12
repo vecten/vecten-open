@@ -44,6 +44,9 @@ WRITES = frozenset(
         "groups/create",
         "groups/delete",
         "groups/member",
+        "groups/bind",
+        "groups/confirm",
+        "groups/unbind",
         "grant",
         "revoke",
         "denied/set",
@@ -246,7 +249,13 @@ class AdminService:
             with state.transaction() as conn:
                 return [dict(row) for row in conn.execute(select(memberships)).mappings()]
         if operation == "groups/create":
-            return access.create_group(data["name"])
+            return access.create_group(data["name"], role=data.get("role") or None)
+        if operation == "groups/bind":
+            return access.bind(data["group"], data["role"])
+        if operation == "groups/confirm":
+            return access.confirm_binding(data["group"])
+        if operation == "groups/unbind":
+            return access.unbind(data["group"])
         if operation == "groups/delete":
             return access.delete_group(data["name"])
         if operation == "groups/member":
@@ -273,6 +282,7 @@ class AdminService:
                     "revoked": [],
                     "drift": [],
                     "database_future": [],
+                    "missing_bindings": [],
                 }
             return access.health()
         if operation == "settings":

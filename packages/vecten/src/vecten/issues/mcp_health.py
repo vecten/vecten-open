@@ -130,6 +130,28 @@ def outdated_issue(ctx: IssueContext, outdated: dict[str, Any], checked_at: Any)
     )
 
 
+def binding_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
+    group, bound = (str(entry.get(k, "?")) for k in ("group", "bound_role"))
+    return Issue(
+        id=mcp_issue_id("binding", group, bound),
+        source="mcp",
+        kind="ask",
+        title=cap(f"{group}'s role no longer holds its bound role {bound}", TITLE_LIMIT),
+        resolution=(
+            "The grant nesting the bound role under the group's role is gone, so the group's "
+            "members no longer read through it. To restore it, a warehouse administrator runs "
+            f"the statement `vecten group bind {group} {bound} --env {ctx.env}` prints; to end "
+            f"the binding, run `vecten group unbind {group} --env {ctx.env}`."
+        ),
+        occurrences=1,
+        first_seen=None,
+        last_seen=iso(checked_at),
+        evidence=untrusted(
+            {k: sanitized(ctx, entry.get(k)) for k in ("group", "role", "bound_role")}
+        ),
+    )
+
+
 def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     if ctx.admin is None:
         raise SourceUnavailable("the admin API is not reachable from here")
@@ -145,6 +167,9 @@ def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     for entry in access.get("drift") or []:
         if isinstance(entry, dict):
             issues.append(drift_issue(ctx, entry, checked_at))
+    for entry in access.get("missing_bindings") or []:
+        if isinstance(entry, dict):
+            issues.append(binding_issue(ctx, entry, checked_at))
     if isinstance(access.get("outdated"), dict):
         issues.append(outdated_issue(ctx, access["outdated"], checked_at))
     return issues

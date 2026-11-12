@@ -581,3 +581,13 @@ def test_a_not_ready_model_is_found_by_its_id():
     ctx = context([], admin=admin_with(model_health=NOT_READY))
     shown = find(ctx, "iss_mcp_model")
     assert shown is not None and shown.evidence["status"] == "error"
+
+
+def test_a_missing_binding_is_an_issue_printing_the_statement_to_rerun():
+    missing = {"group": "finance", "role": "finance", "bound_role": "finance_analyst"}
+    health = {"checked_at": 1792627200, "failures": [], "missing_bindings": [missing]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_binding_finance_finance_analyst"
+    assert issue.title == "finance's role no longer holds its bound role finance_analyst"
+    assert "vecten group bind finance finance_analyst --env prod" in issue.resolution
+    assert "vecten group unbind finance --env prod" in issue.resolution

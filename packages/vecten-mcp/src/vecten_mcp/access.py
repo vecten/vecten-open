@@ -11,8 +11,9 @@ from threading import RLock
 from sqlalchemy import delete, insert, select
 
 from vecten_mcp.failures import describe_error
-from vecten_mcp.identity import warehouse_name
+from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
+from vecten_mcp.warehouse.base import RoleExists
 from vecten_shared.identity_setup import ACCESS_VERSION
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,13 @@ OUTDATED_FIX = (
 )
 
 
+# `p_` is kept for one reader role per person; the others name administrators, services and
+# Postgres's predefined roles.
+RESERVED_ROLE_PREFIXES = ("admin_", "svc_", "pg_", "p_")
+SYSTEM_ROLES = frozenset(
+    {"accountadmin", "securityadmin", "sysadmin", "useradmin", "orgadmin", "public"}
+)
+BOUND_ROLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
 AREA_SCHEMA = re.compile(r"(core|marts)_([a-z][a-z0-9]*)")
 KINDS = ("dataset", "schema", "area")
 
@@ -81,17 +89,112 @@ class AccessService:
 
     def list_groups(self):
         with self.state.transaction() as conn:
-            return [dict(row) for row in conn.execute(select(groups)).mappings()]
+            rows = [dict(row) for row in conn.execute(select(groups)).mappings()]
+        bindings = dict(self.state.scan("bindings"))
+        for row in rows:
+            binding = bindings.get(row["name"])
+            if binding:
+                row["bound_role"] = binding["bound_role"]
+                row["binding"] = "confirmed" if binding["confirmed"] else "pending"
+        return rows
 
-    def create_group(self, name):
-        role = warehouse_name(name, set(), override=name)
+    def create_group(self, name, role=None):
+        warehouse_name(name, set(), override=name)
+        role = self._group_role(name, name if role is None else role)
         with self.lock, self.state.transaction() as conn:
             if self.state.group(name):
                 raise ValueError("group already exists")
             conn.execute(insert(groups).values(name=name, warehouse_role=role))
-            self.adapter.create_group(role)
+            try:
+                self.adapter.create_group(role)
+            except RoleExists:
+                raise ValueError(
+                    f"a warehouse role {role} already exists: create the group with another "
+                    f"role name (vecten group add {name} --role <role>), or with another role "
+                    f"name and then bind {role} to it (vecten group bind {name} {role})"
+                ) from None
             self.state.put("provisioner_registry", role, {"kind": "group"}, conn=conn)
         return {"name": name, "warehouse_role": role}
+
+    def _group_role(self, name, role):
+        if not isinstance(role, str):
+            raise ValueError("a group's role is a name")
+        warehouse_name(role, set(), override=role)
+        if role.startswith(RESERVED_ROLE_PREFIXES):
+            raise ValueError(
+                f"role {role} starts with a reserved prefix ({', '.join(RESERVED_ROLE_PREFIXES)});"
+                f" name another with vecten group add {name} --role <role>"
+            )
+        owner = next((g["name"] for g in self.list_groups() if g["warehouse_role"] == role), None)
+        if owner:
+            raise ValueError(f"role {role} already belongs to group {owner}")
+        if self.state.get("provisioner_registry", role):
+            raise ValueError(f"role {role} already belongs to a principal")
+        return role
+
+    def bind(self, group, bound):
+        """Record a role the client already has as bound to the group, pending until the
+        statement it returns has been run; the server never grants, alters or drops it."""
+        if group == "default":
+            raise ValueError("the default group binds no role: bind one to another group")
+        role = self.require_group(group)["warehouse_role"]
+        if not isinstance(bound, str) or not BOUND_ROLE.fullmatch(bound):
+            raise ValueError("a bound role is an unquoted warehouse identifier")
+        lower = bound.lower()
+        managed = {g["warehouse_role"].lower() for g in self.list_groups()}
+        if (
+            lower in RESERVED
+            or lower in SYSTEM_ROLES
+            or lower.startswith(RESERVED_ROLE_PREFIXES)
+            or lower in managed
+            or self.state.get("provisioner_registry", lower)
+        ):
+            raise ValueError(f"{bound} is a role the server manages or a system role")
+        with self.lock:
+            held = self.state.get("bindings", group)
+            if held and held["bound_role"] != bound:
+                raise ValueError(
+                    f"group {group} already binds {held['bound_role']}: unbind it first"
+                )
+            self.state.put("bindings", group, {"bound_role": bound, "confirmed": False})
+        return self._binding(group, role, bound, confirmed=False)
+
+    def _binding(self, group, role, bound, *, confirmed):
+        return {
+            "group": group,
+            "role": role,
+            "bound_role": bound,
+            "confirmed": confirmed,
+            "statement": self.adapter.bind_statement(bound, role),
+            "review": self.adapter.review_statement(bound),
+        }
+
+    def _bound(self, group):
+        binding = self.state.get("bindings", group)
+        if not binding:
+            raise ValueError(f"group {group} has no bound role")
+        return binding
+
+    def confirm_binding(self, group):
+        role = self.require_group(group)["warehouse_role"]
+        with self.lock:
+            bound = self._bound(group)["bound_role"]
+            if not self.adapter.holds_role(role, bound):
+                statement = self.adapter.bind_statement(bound, role)
+                raise ValueError(
+                    f"{role} does not hold {bound} yet: an administrator runs {statement}"
+                )
+            self.state.put("bindings", group, {"bound_role": bound, "confirmed": True})
+        return self._binding(group, role, bound, confirmed=True)
+
+    def unbind(self, group):
+        """Forget the binding; the returned statement, run by an administrator, revokes it."""
+        role = self.require_group(group)["warehouse_role"]
+        with self.lock:
+            bound = self._bound(group)["bound_role"]
+            self.state.remove("bindings", group)
+        statement = self.adapter.bind_statement(bound, role, grant=False)
+        return {"group": group, "bound_role": bound, "statement": statement}
 
     def delete_group(self, name):
         if name == "default":
@@ -112,6 +215,7 @@ class AccessService:
             self.adapter.drop_group(group["warehouse_role"])
             with self.state.transaction() as conn:
                 conn.execute(delete(groups).where(groups.c.name == name))
+                self.state.remove("bindings", name, conn=conn)
                 self.state.remove("provisioner_registry", group["warehouse_role"], conn=conn)
                 self.state.remove("denied", name, conn=conn)
         return {"deleted": name}
@@ -285,7 +389,13 @@ class AccessService:
 
     def reconcile(self):
         failures, blocked, reconciled = [], set(), 0
-        report = {"added": [], "revoked": [], "drift": [], "database_future": []}
+        report = {
+            "added": [],
+            "revoked": [],
+            "drift": [],
+            "database_future": [],
+            "missing_bindings": [],
+        }
 
         def failed(key, row, operation, exc):
             blocked.add(key)
@@ -344,11 +454,40 @@ class AccessService:
                     if done and key not in applied:
                         # The schemas granted before the failure stay revocable.
                         self.state.put("applied_grants", key, dict(row, source=done))
+            report["missing_bindings"] = self._missing_bindings(failures)
         health = {"checked_at": time.time(), "failures": failures, **report}
         if outdated:
             health["outdated"] = outdated
         self.state.put("access_health", "reconciliation", health)
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
+
+    def _missing_bindings(self, failures):
+        """Confirmed bindings whose grant the group's role no longer holds."""
+        missing = []
+        for group, binding in sorted(self.state.scan("bindings")):
+            row = self.state.group(group)
+            if row is None or not binding["confirmed"]:
+                continue
+            role, bound = row["warehouse_role"], binding["bound_role"]
+            try:
+                held = self.adapter.holds_role(role, bound)
+            except Exception as exc:
+                error = describe_error(exc)
+                failures.append(
+                    {
+                        "group": group,
+                        "kind": "binding",
+                        "target": bound,
+                        "operation": "read",
+                        "error": error,
+                    }
+                )
+                logger.warning("Reading the binding of %s to %s failed: %s", bound, role, error)
+                continue
+            if not held:
+                missing.append({"group": group, "role": role, "bound_role": bound})
+                logger.warning("%s no longer holds its bound role %s", role, bound)
+        return missing
 
     def _undeclared(self, row):
         try:
@@ -520,6 +659,7 @@ class AccessService:
             "revoked": [],
             "drift": [],
             "database_future": [],
+            "missing_bindings": [],
         }
 
     def model_changed(self, datasets):

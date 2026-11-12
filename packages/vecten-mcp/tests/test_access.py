@@ -205,4 +205,5 @@ def test_health_before_any_reconciliation_is_empty():
         "revoked": [],
         "drift": [],
         "database_future": [],
+        "missing_bindings": [],
     }
