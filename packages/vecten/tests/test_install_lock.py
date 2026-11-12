@@ -26,3 +26,35 @@ def test_an_editable_extension_imports_in_the_process_that_installed_it(tmp_path
 
     assert acme_fresh_pkg.VALUE == 7
     sys.modules.pop("acme_fresh_pkg", None)
+
+
+def _dist(monkeypatch, direct_url):
+    from types import SimpleNamespace
+
+    from vecten import extensions
+
+    def distribution(name):
+        if direct_url is None:
+            raise extensions.metadata.PackageNotFoundError(name)
+        return SimpleNamespace(read_text=lambda f: direct_url)
+
+    monkeypatch.setattr(extensions.metadata, "distribution", distribution)
+
+
+def test_installed_from_needs_an_editable_install_of_that_very_path(tmp_path, monkeypatch):
+    import json
+
+    from vecten import extensions
+
+    here = tmp_path / "extensions" / "acme"
+    here.mkdir(parents=True)
+    editable = {"url": here.as_uri(), "dir_info": {"editable": True}}
+    _dist(monkeypatch, json.dumps(editable))
+    assert extensions.installed_from("acme", here)
+    assert not extensions.installed_from("acme", tmp_path / "elsewhere")
+    _dist(monkeypatch, json.dumps({**editable, "dir_info": {}}))
+    assert not extensions.installed_from("acme", here)
+    _dist(monkeypatch, None)
+    assert not extensions.installed_from("acme", here)
+    _dist(monkeypatch, "not json")
+    assert not extensions.installed_from("acme", here)

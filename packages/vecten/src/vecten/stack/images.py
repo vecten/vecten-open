@@ -214,8 +214,13 @@ def volume_step(config: VectenConfig, root: Path, kind: str) -> str:
     )
     if not paths:
         return ""
+    # A path the image already holds, such as /etc, keeps its owner: handing it to the runtime
+    # user would let every container of this image rewrite it.
     user, quoted = IMAGE_USERS[kind], " ".join(shlex.quote(p) for p in paths)
-    return f"USER root\nRUN mkdir -p {quoted} && chown {user} {quoted}\nUSER {user}\n"
+    return (
+        f'USER root\nRUN for p in {quoted}; do [ -e "$p" ] || '
+        f'{{ mkdir -p "$p" && chown {user} "$p"; }}; done\nUSER {user}\n'
+    )
 
 
 def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | None) -> None:

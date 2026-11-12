@@ -145,7 +145,13 @@ def parse_service(extension: str, name: str, value: object) -> Declaration:
     if problem:
         raise Failure(ExitCode.CONFIG, f"extension {extension}: {problem}")
     if callable(value):
-        value = value()
+        try:
+            value = value()
+        except Exception as exc:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {extension}: service {name}: its factory raised {type(exc).__name__}",
+            ) from exc
     if not isinstance(value, dict):
         raise Failure(
             ExitCode.CONFIG,
@@ -158,7 +164,7 @@ def parse_service(extension: str, name: str, value: object) -> Declaration:
     if port is not None and (not _is_int(port) or not 1 <= port <= 65535):
         raise fail("port", "must be an integer from 1 to 65535")
     health = value.get("health")
-    if not isinstance(health, dict) or len(health) != 1 or set(health) - {"path", "command"}:
+    if not isinstance(health, dict) or len(set(health) & {"path", "command"}) != 1:
         raise fail("health", 'one of {"path": "/..."} or {"command": [...]}')
     health_path = health.get("path")
     if "path" in health:
@@ -174,7 +180,12 @@ def parse_service(extension: str, name: str, value: object) -> Declaration:
         if problem or volume.rstrip("/") == "":
             raise fail("volume", problem or "must not be /")
     components = value.get("components", ["platform"])
-    if not isinstance(components, list) or not components or not set(components) <= set(COMPONENTS):
+    if (
+        not isinstance(components, list)
+        or not components
+        or not all(isinstance(c, str) for c in components)
+        or not set(components) <= set(COMPONENTS)
+    ):
         raise fail("components", f"a non-empty list of {', '.join(COMPONENTS)}")
     memory = value.get("memory_mb", DEFAULT_MEMORY_MB)
     if not _is_int(memory) or not MEMORY_MB[0] <= memory <= MEMORY_MB[1]:
@@ -187,6 +198,7 @@ def parse_service(extension: str, name: str, value: object) -> Declaration:
         raise fail("routes", "must be a mapping of route names")
     routes: dict[str, Route] = {}
     unknown = [k for k in value if k not in SERVICE_KEYS]
+    unknown += [f"health.{k}" for k in health if k not in ("path", "command")]
     seen: set[str] = set()
     for route_name, route_value in raw_routes.items():
         route, extra = _route(fail, route_name, route_value)
@@ -195,8 +207,8 @@ def parse_service(extension: str, name: str, value: object) -> Declaration:
         seen.add(route.path)
         routes[route_name] = route
         unknown += extra
-    if routes and port is None:
-        raise fail("port", "required when the service has routes")
+    if (routes or health_path is not None) and port is None:
+        raise fail("port", "required when the service has routes or a health path")
     service = Service(
         command=command,
         port=port,
@@ -297,7 +309,7 @@ def check_bindings(config: VectenConfig, record: dict[str, Extension]) -> None:
 
 
 def bound_services(config: VectenConfig, record: dict[str, Extension]) -> list[Bound]:
-    found = []
+    found: list[Bound] = []
     for extension, bindings in sorted(config.services.items()):
         entry = record.get(extension)
         if entry is None:
@@ -333,6 +345,16 @@ def bound_services(config: VectenConfig, record: dict[str, Extension]) -> list[B
                     routes={r: service.routes[r] for r in sorted(binding.routes)},
                     route_bindings=dict(sorted(binding.routes.items())),
                 )
+            )
+    # Compose keeps one service, and one volume, per name.
+    named: dict[str, str] = {}
+    for bound in found:
+        other = named.setdefault(bound.compose_name, bound.key)
+        if other != bound.key:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"services: {other} and {bound.key} share the Compose name "
+                f"{bound.compose_name}; rename one service",
             )
     return found
 

@@ -206,3 +206,53 @@ def test_a_record_with_a_malformed_service_is_not_trusted():
     assert parse_record(json.dumps(body)) is None
     body["extensions"]["acme-bot"]["services"] = {"Bad": {}}
     assert parse_record(json.dumps(body)) is None
+
+
+def test_a_health_path_needs_the_port_it_is_served_on():
+    with pytest.raises(Failure, match="service worker: port: required"):
+        parse_service("acme-bot", "worker", {"command": ["run"], "health": {"path": "/healthz"}})
+
+
+def test_unknown_health_keys_are_reported_not_refused():
+    value = {**BOT, "health": {"path": "/healthz", "interval": "5s"}}
+    assert parse_service("acme-bot", "bot", value).unknown == ("health.interval",)
+
+
+@pytest.mark.parametrize("components", [[["platform"]], [{"a": 1}], [3]])
+def test_components_that_are_not_names_are_refused_cleanly(components):
+    with pytest.raises(Failure, match="service bot: components:"):
+        parse_service("acme-bot", "bot", {**BOT, "components": components})
+
+
+def test_a_factory_that_raises_is_named():
+    def broken():
+        raise KeyError("TOKEN")
+
+    with pytest.raises(Failure, match="service bot: its factory raised KeyError"):
+        parse_service("acme-bot", "bot", broken)
+
+
+def test_two_bindings_with_one_compose_name_are_refused():
+    from vecten_shared.config import VectenConfig
+    from vecten_shared.extension_record import Extension
+    from vecten_shared.services import bound_services
+
+    plain = {"command": ["run"], "health": {"command": ["true"]}}
+    record = {
+        "acme": Extension(
+            "1.0", (), services={"bot-admin": parse_service("acme", "bot-admin", plain).service}
+        ),
+        "acme-bot": Extension(
+            "1.0", (), services={"admin": parse_service("acme-bot", "admin", plain).service}
+        ),
+    }
+    config = VectenConfig.model_validate(
+        {
+            "project": {"name": "demo", "scaffold_version": "0.1.0"},
+            "users": 2,
+            "extensions": ["acme", "acme-bot"],
+            "services": {"acme": {"bot-admin": {}}, "acme-bot": {"admin": {}}},
+        }
+    )
+    with pytest.raises(Failure, match="acme.bot-admin and acme-bot.admin"):
+        bound_services(config, record)

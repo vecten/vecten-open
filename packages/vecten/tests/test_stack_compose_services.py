@@ -217,9 +217,10 @@ def test_the_host_image_creates_each_declared_volume_for_its_runtime_user(tmp_pa
 
     declared = {"bot": {**BOT, "volume": "/var/lib/acme-bot"}}
     root = stack(tmp_path, declared).parent.parent
+    # A path the image already has keeps its owner: a volume at /etc must not hand it over.
     assert volume_step(config(BOUND), root, "airflow") == (
-        "USER root\nRUN mkdir -p /var/lib/acme-bot && chown airflow /var/lib/acme-bot\n"
-        "USER airflow\n"
+        'USER root\nRUN for p in /var/lib/acme-bot; do [ -e "$p" ] || '
+        '{ mkdir -p "$p" && chown airflow "$p"; }; done\nUSER airflow\n'
     )
     assert volume_step(config(BOUND), root, "mcp") == ""
     assert volume_step(config(), root, "airflow") == ""

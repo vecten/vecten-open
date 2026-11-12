@@ -469,6 +469,7 @@ def _in_repo_bot(root, monkeypatch, command):
         return {"acme": {"bot": parse_service("acme", "bot", value)}}
 
     monkeypatch.setattr(extensions, "load_services", load)
+    monkeypatch.setattr(extensions, "installed_from", lambda name, path: True)
     return seen
 
 
@@ -589,3 +590,22 @@ def test_services_an_override_file_adds_start_with_the_stack(invoke, workdir, fa
     assert invoke("up", "--json").exit_code == 0
     stack_up = next(c for c in fake.calls if c[:1] == ["up"])
     assert "mailhog" in stack_up
+
+
+def test_up_skips_the_check_when_this_checkout_is_not_installed(invoke, workdir, fake, monkeypatch):
+    from vecten import extensions
+
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    seen = _in_repo_bot(workdir / "p", monkeypatch, ["python", "-m", "acme.bot2"])
+    asked = []
+
+    def installed_from(name, path):
+        asked.append((name, path))
+        return False
+
+    monkeypatch.setattr(extensions, "installed_from", installed_from)
+    r = invoke("up", "--json")
+    assert "differs from extensions.lock.json" not in r.stdout, r.stdout
+    assert asked == [("acme", workdir / "p" / "extensions" / "acme")]
+    assert seen == []

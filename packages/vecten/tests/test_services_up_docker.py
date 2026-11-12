@@ -145,12 +145,17 @@ def test_up_runs_services_isolated_and_keeps_their_volume(tmp_path):
             capture_output=True,
             text=True,
         ).stdout.strip()
-        state = subprocess.run(
-            ["docker", "inspect", "--format", "{{.RestartCount}} {{.State.Status}}", crash],
-            capture_output=True,
-            text=True,
-        ).stdout
-        assert state.split()[1] in ("restarting", "exited", "running"), state
+        deadline = time.monotonic() + 90
+        while True:
+            restarts = subprocess.run(
+                ["docker", "inspect", "--format", "{{.RestartCount}}", crash],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if int(restarts or 0) >= 2:
+                break
+            assert time.monotonic() < deadline, f"crash restarted {restarts} times"
+            time.sleep(3)
 
         # Airflow's network does not hold the service's name; NGINX reaches it on its own.
         scheduler = service_container(project, "airflow-scheduler")

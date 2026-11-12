@@ -1,6 +1,7 @@
 """Install extensions and record portable, credential-free project dependencies."""
 
 import importlib
+import json
 import os
 import re
 import shutil
@@ -14,6 +15,7 @@ from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
+from urllib.parse import unquote, urlsplit
 
 import tomlkit
 from pydantic import ValidationError
@@ -554,13 +556,33 @@ def load_services(
     return found
 
 
-def refuse_stale_services(config: VectenConfig, record: dict[str, locking.Extension]) -> None:
+def installed_from(name: str, path: Path) -> bool:
+    """Whether Vecten's own environment holds `name` as an editable install of `path`."""
+    try:
+        text = metadata.distribution(name).read_text("direct_url.json")
+        info = json.loads(text or "{}")
+    except metadata.PackageNotFoundError, ValueError:
+        return False
+    url = info.get("url", "") if isinstance(info, dict) else ""
+    if not (info.get("dir_info") or {}).get("editable") or not url.startswith("file://"):
+        return False
+    return Path(unquote(urlsplit(url).path)).resolve() == path.resolve()
+
+
+def refuse_stale_services(
+    root: Path, config: VectenConfig, record: dict[str, locking.Extension]
+) -> None:
     """Refuse when an in-repo extension's code declares services other than its record holds.
 
     An in-repo extension is installed editable, so its code can change without a new version
-    or a changed pyproject.toml, which are what make a lock stale.
+    or a changed pyproject.toml, which are what make a lock stale. Only this checkout's own
+    editable install shows that code; without one there is nothing to compare.
     """
-    local = {name for name, entry in record.items() if entry.source_path}
+    local = {
+        name
+        for name, entry in record.items()
+        if entry.source_path and installed_from(name, root / entry.source_path)
+    }
     if not local:
         return
     declared = load_services(config, only=local)

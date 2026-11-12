@@ -531,3 +531,11 @@ def test_the_bundle_build_checks_the_service_bindings(project, tmp_path):
     with_services(project, {"bot": {"host": "mcp"}})
     with pytest.raises(Failure, match="services.acme.bot.host"):
         build(project, tmp_path / "out")
+
+
+def test_a_vm_bundle_refuses_services_while_no_agent_isolates_them(project, tmp_path):
+    from .services_fixtures import with_services
+
+    with_services(project, {"bot": {}})
+    with pytest.raises(Failure, match="acme.bot.*instance"):
+        build(project, tmp_path / "out")

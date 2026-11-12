@@ -159,7 +159,7 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
     check_bindings(config, record)
     from vecten import extensions
 
-    extensions.refuse_stale_services(config, record)
+    extensions.refuse_stale_services(project_root, config, record)
     components = local_components(config)
     if not components:
         raise Failure(
