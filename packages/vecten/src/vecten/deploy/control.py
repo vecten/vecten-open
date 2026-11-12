@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import tempfile
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
@@ -355,11 +356,66 @@ def register_cli_provider(cloud: str) -> None:
         importlib.import_module(module).register()
 
 
+SERVICE_HOSTNAMES_VAR = "service_hostnames"
+_DECLARES_SERVICE_HOSTNAMES = re.compile(rf'^variable\s+"{SERVICE_HOSTNAMES_VAR}"', re.M)
+
+
+def service_hostname_vars(
+    project_root: Path, config: VectenConfig, root_dir: Path, *, read_only: bool = False
+) -> tuple[tuple[str, str], ...]:
+    """The cloud root's `service_hostnames`: each label vecten.toml binds, mapped to the
+    component whose host runs the service; nothing when no label is bound.
+
+    A destroy (`read_only`) of a root that never declared the variable passes nothing, since
+    such a root never created a service record.
+    """
+    from vecten_shared.extension_record import read_record
+    from vecten_shared.services import bound_services
+
+    labels = {
+        bound.binding.hostname: bound.host
+        for bound in bound_services(config, read_record(project_root) or {})
+        if bound.binding.hostname is not None
+    }
+    if not labels:
+        return ()
+    declared = any(
+        _DECLARES_SERVICE_HOSTNAMES.search(path.read_text(encoding="utf-8"))
+        for path in sorted(root_dir.glob("*.tf"))
+    )
+    if not declared:
+        if read_only:
+            return ()
+        rel = root_dir.relative_to(project_root).as_posix()
+        raise Failure(
+            ExitCode.CONFIG,
+            f"vecten.toml binds the service hostname(s) {', '.join(sorted(labels))}, but "
+            f"{rel} does not declare {SERVICE_HOSTNAMES_VAR}; run `vecten update`, then "
+            "deploy again",
+        )
+    value = json.dumps(dict(sorted(labels.items())), separators=(",", ":"))
+    return ((SERVICE_HOSTNAMES_VAR, value),)
+
+
 def environment_roots(
     plane: ControlPlane, env: str, *, cloud_only: bool = False, read_only: bool = False
 ) -> list[TerraformRoot]:
-    """`plane`'s roots with its `terraform_env` added to each root's environment and secrets."""
-    roots = plane.terraform_roots(env, cloud_only=cloud_only, read_only=read_only)
+    """`plane`'s roots with its `terraform_env` added to each root's environment and secrets,
+    and the bound service hostnames added to the cloud root's variables."""
+    roots = [
+        replace(
+            root,
+            extra_vars=(
+                *root.extra_vars,
+                *service_hostname_vars(
+                    plane.project_root, plane.config(), root.root_dir, read_only=read_only
+                ),
+            ),
+        )
+        if root.name == plane.cloud
+        else root
+        for root in plane.terraform_roots(env, cloud_only=cloud_only, read_only=read_only)
+    ]
     extra = plane.terraform_env()
     if not extra:
         return roots

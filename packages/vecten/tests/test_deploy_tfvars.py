@@ -315,3 +315,40 @@ def test_dags_paused_at_creation_refuses_anything_but_true_or_false(project, val
     failure = refusal(project)
     assert failure.code == ExitCode.CONFIG
     assert "dags_paused_at_creation" in failure.message and "true or false" in failure.message
+
+
+def _staging(project, domain):
+    text = env_tfvars_path(project, "prod").read_text()
+    text = text.replace('environment       = "prod"', 'environment       = "staging"')
+    text = text.replace('"data.acme.com"', f'"{domain}"')
+    env_tfvars_path(project, "staging").write_text(text)
+
+
+def _bind_apex(project):
+    from .services_fixtures import with_services
+
+    with_services(project, {"bot": {"hostname": "@", "routes": {"webhook": {"access": "public"}}}})
+
+
+def test_the_apex_is_refused_where_an_environments_domain_is_its_zone(project):
+    # vecten.toml's own domain sits below its zone; staging serves at the zone itself.
+    _bind_apex(project)
+    _staging(project, "acme.com")
+    failure = refusal(project, "staging")
+    assert failure.code == ExitCode.CONFIG
+    assert "deploy/envs/staging.tfvars" in failure.message
+    assert "services.acme.bot.hostname" in failure.message and "@" in failure.message
+
+
+def test_the_apex_is_admitted_where_the_environments_domain_sits_below_its_zone(project):
+    _bind_apex(project)
+    _staging(project, "staging.acme.com")
+    assert check_tfvars(project, load_config(project), "staging")["domain"] == "staging.acme.com"
+
+
+def test_tfvars_may_not_set_service_hostnames(project):
+    path = env_tfvars_path(project, "prod")
+    path.write_text(path.read_text() + 'service_hostnames = {"bot": "platform"}\n')
+    failure = refusal(project)
+    assert failure.code == ExitCode.CONFIG
+    assert "service_hostnames" in failure.message and "vecten.toml" in failure.message

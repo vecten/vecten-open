@@ -1101,3 +1101,69 @@ def test_a_confirmed_snowflake_identity_ships_every_host(invoke, deploy_secrets,
     assert r.exit_code == 0, r.stdout
     assert doc(r)["hosts"] == ["mcp", "platform"]
     assert "ship_skipped" not in doc(r)
+
+
+# Service hostnames: vecten.toml's labels reach the cloud root as one variable.
+
+
+def _bind_hostnames(root: Path) -> None:
+    from .services_fixtures import BOT, with_services
+
+    portal = {
+        "command": ["python", "-m", "acme.portal"],
+        "port": 8501,
+        "health": {"path": "/_stcore/health"},
+        "components": ["platform", "mcp"],
+        "routes": {"app": {"path": "/", "access": "public"}},
+    }
+    with_services(
+        root,
+        {
+            "bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}},
+            "portal": {"hostname": "@", "host": "mcp", "routes": {"app": {"access": "public"}}},
+        },
+        declared={"bot": BOT, "portal": portal},
+    )
+
+
+def test_plan_only_passes_each_bound_hostname_with_its_host_component(invoke, actions, project):
+    _bind_hostnames(project)
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = FakeTerraform.call("plan")
+    assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
+
+
+def test_a_project_without_hostnames_passes_no_service_hostnames(invoke, actions, project):
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert not any("service_hostnames" in a for a in FakeTerraform.call("plan"))
+
+
+def test_a_root_without_the_variable_is_refused_naming_vecten_update(invoke, actions, project):
+    _bind_hostnames(project)
+    variables = project / "deploy" / "terraform" / "aws" / "variables.tf"
+    text = variables.read_text()
+    variables.write_text(text[: text.index('variable "service_hostnames"')])
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code != 0
+    assert "vecten update" in doc(r)["error"]
+    assert FakeTerraform.calls == []
+
+
+def test_a_root_without_the_variable_still_plans_a_project_without_hostnames(
+    invoke, actions, project
+):
+    variables = project / "deploy" / "terraform" / "aws" / "variables.tf"
+    text = variables.read_text()
+    variables.write_text(text[: text.index('variable "service_hostnames"')])
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+
+
+def test_a_scaleway_plan_passes_the_bound_hostnames(invoke, scw):
+    _bind_hostnames(scw.root)
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = FakeTerraform.call("plan")
+    assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
