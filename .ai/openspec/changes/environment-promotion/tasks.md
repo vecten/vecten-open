@@ -20,8 +20,8 @@
 
 ## 4. `vecten promote`
 
-- [ ] 4.1 `promote --env <env> [--commit <sha>]` and `promote --status`, with `--json`, on the documented exit codes
-- [ ] 4.2 Tests: default resolution, `--commit` rollback, first environment refused, environment outside the order refused, status output
+- [x] 4.1 `promote --env <env> [--commit <sha>]` and `promote --status`, with `--json`, on the documented exit codes
+- [x] 4.2 Tests: default resolution, `--commit` rollback, first environment refused, environment outside the order refused, status output
 
 ## 5. Workflows
 

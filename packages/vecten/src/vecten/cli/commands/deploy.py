@@ -86,6 +86,61 @@ def ship(
     run_command(json_output, run)
 
 
+def _promote_message(data: dict) -> str:
+    return (
+        f"promoted {data['commit'][:8]} from {data['promotes_from']} to {data['env']}: "
+        f"run {data['run_id']} {data['url']}"
+    )
+
+
+def _status_message(data: dict) -> str:
+    lines = []
+    for entry in data["environments"]:
+        shipped = entry["commit"][:8] if entry["commit"] else "nothing"
+        line = f"{entry['env']} {shipped}"
+        if entry["behind"]:
+            line += f", behind {entry['promotes_from']}: `vecten promote --env {entry['env']}`"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def promote(
+    env: str | None = typer.Option(None, "--env", help="The environment to promote to."),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="A commit the environment before it shipped, instead of the newest one; how "
+        "an environment rolls back to a commit it ran earlier.",
+    ),
+    status: bool = typer.Option(
+        False,
+        "--status",
+        help="List each environment of the promotion order with the commit it shipped last.",
+    ),
+    json_output: bool = JsonFlag,
+) -> None:
+    """Ship an environment of the promotion order the commit the environment before it
+    shipped: dispatches the ship workflow on the default branch with that commit and follows
+    it."""
+
+    def run(ctx: CliContext) -> Result:
+        # Deferred so that importing the CLI loads no deploy machinery or boto3.
+        from vecten.deploy.run import promote_env, promotion_status
+
+        if status:
+            if env or commit:
+                raise Failure(ExitCode.USAGE, "--status lists every environment; drop --env")
+            data = promotion_status(ctx.require_project(), gh=gh_mod.get_gh())
+            return Result(data=data, message=_status_message(data))
+        if not env:
+            raise Failure(ExitCode.USAGE, "promote needs --env <env>, or --status")
+        root = ctx.require_project()
+        data = promote_env(root, env, gh=gh_mod.get_gh(), git=gh_mod.get_git(), commit=commit)
+        return Result(data=data, message=_promote_message(data))
+
+    run_command(json_output, run)
+
+
 def _identities(data: dict) -> str:
     """The CI identities the cloud's part of bootstrap reported, by the keys it reports."""
     if "role_arn" in data:
@@ -347,4 +402,5 @@ def register(app: typer.Typer) -> None:
     app.command("bootstrap")(bootstrap)
     app.command("deploy")(deploy)
     app.command("ship")(ship)
+    app.command("promote")(promote)
     app.command("destroy")(destroy)

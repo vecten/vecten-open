@@ -414,6 +414,14 @@ def last_shipped(
     A ship that rolled back leaves `failure` on its commit, so the answer is then the commit
     the hosts went back to.
     """
+    found = shipped_at(gh, project_root, repository, branch, env)
+    return found[0] if found else None
+
+
+def shipped_at(
+    gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
+) -> tuple[str, int] | None:
+    """`last_shipped`'s commit with its distance from `branch`'s head, 0 being the head."""
     owner, name = repository.split("/", 1)
     cursor: str | None = None
     for start in range(0, SHIPPED_SEARCH_LIMIT, _HISTORY_PAGE):
@@ -445,10 +453,10 @@ def last_shipped(
                 ExitCode.TOOL_FAILED,
                 f"gh api graphql named no history for {branch} of {repository}",
             ) from None
-        for node in nodes:
+        for offset, node in enumerate(nodes):
             state = ((node.get("status") or {}).get("context") or {}).get("state")
             if str(state).lower() == "success":
-                return str(node["oid"])
+                return str(node["oid"]), start + offset
         if not page.get("hasNextPage"):
             return None
         cursor = page.get("endCursor")

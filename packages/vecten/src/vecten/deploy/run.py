@@ -39,6 +39,7 @@ from vecten.deploy.github_env import (
     set_repository_variables,
     set_ship_status,
     ship_context,
+    shipped_at,
 )
 from vecten.deploy.guards import (
     in_actions,
@@ -50,6 +51,7 @@ from vecten.deploy.guards import (
     require_on_default_branch,
 )
 from vecten.deploy.promotion import (
+    fetch_default_branch,
     given_commit,
     newest_shipped,
     promoted_tree,
@@ -587,6 +589,81 @@ def _promoted_config(tree: Path, env: str) -> VectenConfig:
     check_settings(config, record, env)
     check_bindings(config, record)
     return config
+
+
+def _promoted_from(config: VectenConfig, project_root: Path, env: str) -> str:
+    """The environment `env` promotes from, refusing one first in the order or outside it."""
+    order = promotion_order(project_root, config)
+    if env not in order:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"{env} is not in [deploy] promotion ({', '.join(order)}); deploy.promotion lists "
+            "the environments that promote, and one outside it ships with "
+            f"`vecten ship --env {env}`",
+        )
+    previous = config.promoted_from(env)
+    if previous is None:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"{env} is the first environment of the promotion order; a push to the default "
+            f"branch ships {env}, and nothing promotes to it",
+        )
+    return previous
+
+
+def promote_env(
+    project_root: Path, env: str, *, gh: ToolRunner, git: ToolRunner, commit: str | None
+) -> dict:
+    """Dispatch the ship workflow for `env` with a commit the environment before it shipped:
+    `commit`, else the newest one; follow the run and report it.
+
+    Every refusal comes before the dispatch, and a refused commit dispatches nothing.
+    """
+    check_env_name(env)
+    config = load_config(project_root)
+    deploy = require_deploy_cloud(config)
+    previous = _promoted_from(config, project_root, env)
+    require_deployed(config, env)
+    if identity_pending(config, env):
+        raise Failure(ExitCode.PREREQUISITE, identity_pending_note(env))
+    require_gh(gh, project_root)
+    repository = deploy.github_repository
+    branch = default_branch(gh, project_root, repository)
+    if commit is None:
+        promoted = newest_shipped(gh, project_root, repository, branch, previous)
+    else:
+        fetch_default_branch(git, project_root, branch)
+        promoted = given_commit(git, project_root, commit)
+        require_commit_on_default_branch(project_root, git, branch, promoted)
+        require_shipped_by(gh, project_root, repository, promoted, env, previous)
+    followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git, commit=promoted)
+    return {"env": env, "promotes_from": previous, "dispatched": True, **followed}
+
+
+def promotion_status(project_root: Path, *, gh: ToolRunner) -> dict:
+    """Each environment of the order with the commit it shipped last, and whether the
+    environment before it shipped a newer one."""
+    config = load_config(project_root)
+    repository = require_deploy_cloud(config).github_repository
+    order = promotion_order(project_root, config)
+    require_gh(gh, project_root)
+    branch = default_branch(gh, project_root, repository)
+    found = {env: shipped_at(gh, project_root, repository, branch, env) for env in order}
+    listed = []
+    for env in order:
+        previous = config.promoted_from(env)
+        mine, theirs = found[env], found.get(previous) if previous else None
+        # A smaller distance from the branch's head is a newer commit.
+        behind = theirs is not None and (mine is None or theirs[1] < mine[1])
+        listed.append(
+            {
+                "env": env,
+                "promotes_from": previous,
+                "commit": mine[0] if mine else None,
+                "behind": behind,
+            }
+        )
+    return {"order": list(order), "branch": branch, "environments": listed}
 
 
 def _confirmed(env: str, confirm: str | None, prompt: Callable[[], str] | None) -> None:

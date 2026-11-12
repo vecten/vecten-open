@@ -35,6 +35,7 @@ from vecten_shared.output import ExitCode, Failure
 
 __all__ = [
     "SHIPPED_SEARCH_LIMIT",
+    "fetch_default_branch",
     "given_commit",
     "newest_shipped",
     "promoted_tree",
@@ -80,6 +81,11 @@ def newest_shipped(
             "shipped with --commit",
         )
     return found
+
+
+def fetch_default_branch(git: ToolRunner, project_root: Path, branch: str) -> None:
+    """Fetch the remote default branch, so a commit named on it is in this checkout."""
+    _git(git, project_root, "fetch", "origin", branch)
 
 
 def given_commit(git: ToolRunner, project_root: Path, ref: str) -> str:

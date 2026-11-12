@@ -32,6 +32,7 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 | `bootstrap` | `--env <env>` prepares an environment for CI from the laptop: state bucket, CI identity, GitHub environment. See [bootstrap in detail](#bootstrap). | v0.1 |
 | `deploy` | `--env <env>` creates or updates an environment with Terraform and ships every host; `--plan-only` plans. See [deploy in detail](#deploy). | v0.1 |
 | `ship` | `--env <env>` sends the project's content to every host of a deployed environment and rolls a host back when it does not come up healthy. See [ship in detail](#ship). | v0.1 |
+| `promote` | `--env <env>` ships an environment of `[deploy] promotion` the commit the environment before it shipped; `--status` lists what each one shipped last. See [promote in detail](#promote). | v0.1 |
 | `destroy` | `--env <env>` destroys an environment after a final snapshot of every database; `--confirm <env>` is required without a terminal. See [destroy in detail](#destroy). | v0.1 |
 | `user` | `add-admin <firstname> --env <env>` creates a warehouse administrator login and stores its password in the secrets store. See [user add-admin in detail](#user-add-admin). | v0.1 |
 | `login` | `vecten login` authenticates the CLI using device authorization or `--browser`. | v0.1 |
@@ -95,6 +96,10 @@ commands need an explicit `--env` and the owner's approval.
 ### ship
 
 `--env <env>` sends the project's content to every host of a deployed environment, through SSM on AWS, and on Scaleway by uploading each host's bundle and moving the pointer object its VM's watcher pulls, then waiting for the watcher's status object; it polls each component's health URL and rolls a host back when it does not answer healthy (the VM agent rolls back by itself when it fails after switching releases); inside GitHub Actions it ships, from a laptop it dispatches the ship workflow and follows it. On a platform-built Snowflake with the MCP whose identity script is not yet recorded, it refuses from the laptop and ships nothing inside Actions. Every ship inside Actions sets the commit status `vecten/ship/<env>` on the commit it ships: `pending`, then `success` once every host answered or `failure`. Inside Actions `--commit <sha>` ships that commit of the default branch instead of the checked-out one, its content from that commit and the environment facts from the checkout; an environment after the first in `[deploy] promotion` takes only a commit whose status for the environment before it is `success`. From a laptop such an environment is refused, naming `vecten promote`. `--check` reports `bootstrapped` and `deployed` from `vecten.toml` with no cloud credentials; without `--env` it reports them, with `env`, for the first environment of the promotion order (`prod` when none is declared). Never runs Terraform.
+
+### promote
+
+`--env <env>` ships to an environment after the first in `[deploy] promotion` the newest commit the environment before it shipped: the newest of the default branch's last 200 commits whose `vecten/ship/<env before>` status is `success`. It dispatches the ship workflow on the default branch with that commit, follows the run and reports the commit and the run's URL. `--commit <sha>` ships an older commit the environment before it shipped, which is also how an environment rolls back to a commit it ran earlier. It refuses, dispatching nothing, the first environment of the order (a push to the default branch ships it), an environment outside the order, one never deployed, a commit off the default branch and a commit the environment before it did not ship. `--status` lists each environment of the order with the commit it shipped last, and whether the environment before it shipped a newer one.
 
 ### destroy
 
