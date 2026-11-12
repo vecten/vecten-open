@@ -149,17 +149,24 @@ def github_push(
     _git(git, project_root, "push", "-u", "origin", "HEAD")
     commit = head_commit(git, project_root)
     repo = config.deploy.github_repository if config.deploy else None
-    deployed = any(facts.deployed_commit for facts in config.environments.values())
+    # The ship workflow ships the order's first environment, and only once it is deployed.
+    order = config.promotion_order()
+    first = config.environments.get(order[0])
+    deployed = first is not None and bool(first.deployed_commit)
     ship = None
+    promote = None
     # The ship workflow runs on pushes to main only, and a push that moved nothing starts none.
     if wait and repo and deployed and branch == SHIP_BRANCH and commit and commit != before:
         from vecten.deploy.github_env import follow_push_run
 
         ship = follow_push_run(gh, project_root, repo, SHIP_WORKFLOW, commit)
+        if len(order) > 1:
+            promote = f"vecten promote --env {order[1]}"
     return {
         "repository": repo,
         "pushed": True,
         "committed": committed,
         "commit": commit,
         "ship": ship,
+        "promote": promote,
     }
