@@ -56,16 +56,16 @@ template can run on; B must land in the same release, before any public route re
 
 ## 6. Docs
 
-- [ ] 6.1 `docs/extensions.md`: the `vecten.services` group in the table; the declaration and the binding; package data for static files; trusted extensions only
-- [ ] 6.2 New `docs/services.md`: hostnames and deploy, access modes, the gate and its headers (which to trust and why), webhooks and signature checks, Slack Socket Mode, outbound calls and data through the MCP, limits and sizing, volumes and what replaces a VM, the laptop and tunnels, health reporting
-- [ ] 6.3 `docs/GLOSSARY.md`: Service, Route, Gate; runbook template: adding a hostname and the brief NGINX stop; `docs/operations.md`: service states in `ship` output
-- [ ] 6.4 `CHANGELOG.md` under `[Unreleased]`
+- [x] 6.1 `docs/extensions.md`: the `vecten.services` group in the table; the declaration and the binding; package data for static files; trusted extensions only
+- [x] 6.2 New `docs/services.md`: hostnames and deploy, access modes, the gate and its headers (which to trust and why), webhooks and signature checks, Slack Socket Mode, outbound calls and data through the MCP, limits and sizing, volumes and what replaces a VM, the laptop and tunnels, health reporting
+- [x] 6.3 `docs/GLOSSARY.md`: Service, Route, Gate; runbook template: adding a hostname and the brief NGINX stop; `docs/operations.md`: service states in `ship` output
+- [x] 6.4 `CHANGELOG.md` under `[Unreleased]`
 
 ## 7. Interactions to settle with neighbouring changes
 
-- [ ] 7.1 Rebase the `shared/extension-points` and `cli/cli-lifecycle` deltas onto #50's archived text
-- [ ] 7.2 With the in-repo change: how a service declaration edited in code is caught in CI (see design.md, Decision 1)
-- [ ] 7.3 With #5: confirm the gate covers Airflow's browser sign-in and record the API-client question in #5's change
+- [x] 7.1 Rebase the `shared/extension-points` and `cli/cli-lifecycle` deltas onto #50's archived text
+- [x] 7.2 With the in-repo change: how a service declaration edited in code is caught in CI (see design.md, Decision 1)
+- [x] 7.3 With #5: confirm the gate covers Airflow's browser sign-in and record the API-client question in #5's change
 
 ## 8. Proven only by a real deploy
 
