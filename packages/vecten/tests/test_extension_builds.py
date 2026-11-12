@@ -266,6 +266,34 @@ def test_a_legacy_runtime_lock_must_match_the_pinned_extension(tmp_path):
         write_project_layer(tmp_path / ".vecten/stack", c, None)
 
 
+def test_system_packages_install_as_root_before_python_then_return_to_the_image_user(tmp_path):
+    c = config(
+        extensions=[],
+        dependencies={"platform": {"system": ["libgomp1"]}, "mcp": {"system": ["libpq5=15.8"]}},
+    )
+    write_project_layer(tmp_path, c, None)
+    for kind, package, user in (("airflow", "libgomp1", "airflow"), ("mcp", "libpq5=15.8", "app")):
+        text = (tmp_path / "build" / f"{kind}.Dockerfile").read_text()
+        assert text.splitlines()[1:4] == [
+            "USER root",
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            f"{package} && rm -rf /var/lib/apt/lists/* "
+            f"&& dpkg -s {package.split('=')[0]} >/dev/null",
+            f"USER {user}",
+        ]
+
+
+def test_a_dockerfile_without_system_packages_is_unchanged(tmp_path):
+    with_none = tmp_path / "a"
+    write_project_layer(with_none, config(), None)
+    with_empty = tmp_path / "b"
+    write_project_layer(with_empty, config(dependencies={"platform": {"system": []}}), None)
+    for kind in ("airflow", "mcp"):
+        text = (with_none / "build" / f"{kind}.Dockerfile").read_text()
+        assert "USER root" not in text and "apt-get" not in text
+        assert text == (with_empty / "build" / f"{kind}.Dockerfile").read_text()
+
+
 @pytest.mark.parametrize("body", ["acme-demo==9.0\n", ""])
 def test_a_stamped_lock_whose_body_breaks_its_inputs_is_refused(tmp_path, body):
     c = config(extensions=["acme-demo"])

@@ -143,6 +143,26 @@ def _legacy_lines(
     return lock_lines(lock, wanted), wanted
 
 
+# The user each base image runs as; the operating-system step switches back to it.
+IMAGE_USERS = {"airflow": "airflow", "mcp": "app"}
+
+
+def _system_step(config: VectenConfig, kind: str) -> str:
+    component = "platform" if kind == "airflow" else "mcp"
+    packages = config.dependencies.system(component) if config.has(component) else []
+    if not packages:
+        return ""
+    return (
+        "USER root\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends "
+        f"{' '.join(packages)} && rm -rf /var/lib/apt/lists/* "
+        # apt falls back to reading an unknown name as a pattern; each listed name must be the
+        # package that was installed.
+        f"&& dpkg -s {' '.join(p.split('=')[0] for p in packages)} >/dev/null\n"
+        f"USER {IMAGE_USERS[kind]}\n"
+    )
+
+
 def _wanted(root: Path, config: VectenConfig, component: str) -> list[Requirement]:
     """What a fresh stamped lock must pin: every requirement among its recorded inputs."""
     from vecten import locking
@@ -229,5 +249,6 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         )
         write_text_atomic(
             build_dir / f"{kind}.Dockerfile",
-            f"FROM {base_image(kind, registry)}\n{install if lines else ''}",
+            f"FROM {base_image(kind, registry)}\n"
+            f"{_system_step(config, kind)}{install if lines else ''}",
         )

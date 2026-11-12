@@ -83,3 +83,71 @@ def test_saving_keeps_declared_dependencies(tmp_path):
     config = _load(tmp_path, dependencies={"platform": {"python": ["polars>=1,<2"]}})
     save_config(tmp_path, config)
     assert load_config(tmp_path).dependencies.python("platform") == ["polars>=1,<2"]
+
+
+def test_system_packages_are_kept_per_image(tmp_path):
+    config = _load(
+        tmp_path,
+        dependencies={
+            "platform": {"system": ["libgomp1", "libpq5=15.8-0+deb12u1"]},
+            "mcp": {"system": ["fonts-dejavu-core"]},
+        },
+    )
+    assert config.dependencies.system("platform") == ["libgomp1", "libpq5=15.8-0+deb12u1"]
+    assert config.dependencies.system("mcp") == ["fonts-dejavu-core"]
+    assert config.dependencies.system("cli") == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "libgomp1; curl evil.example",
+        "libgomp1 && rm -rf /",
+        "$(id)",
+        "`id`",
+        "LibGomp1",
+        "-o APT::Get::AllowUnauthenticated=true",
+        "libgomp1=1.0 extra",
+        "libgomp1\nrm",
+        "",
+        "a",
+        "curl-",
+        "curl=1.0-",
+        "libpq5=1:~",
+        "libpq5=a",
+        "libpq5=x:1.0",
+    ],
+)
+def test_a_system_entry_that_is_not_a_debian_package_name_is_refused(tmp_path, entry):
+    with pytest.raises(Failure) as caught:
+        _load(tmp_path, dependencies={"platform": {"system": [entry]}})
+    assert caught.value.code == ExitCode.CONFIG
+    assert "dependencies.platform" in caught.value.message
+    assert repr(entry) in caught.value.message or entry == ""
+
+
+@pytest.mark.parametrize(
+    "entry", ["libgomp1", "g++", "libstdc++6", "libpq5=15.8-0+deb12u1", "tzdata=1:2024a-0+deb12u1"]
+)
+def test_real_debian_names_and_versions_are_accepted(tmp_path, entry):
+    config = _load(tmp_path, dependencies={"platform": {"system": [entry]}})
+    assert config.dependencies.system("platform") == [entry]
+
+
+def test_system_packages_for_the_cli_are_refused(tmp_path):
+    with pytest.raises(Failure) as caught:
+        _load(tmp_path, dependencies={"cli": {"system": ["libgomp1"]}})
+    assert caught.value.code == ExitCode.CONFIG
+    assert "laptop" in caught.value.message
+
+
+@pytest.mark.parametrize("entry", ["example=1", "example=1:1", "example=0:2.0-1"])
+def test_single_digit_debian_versions_with_or_without_an_epoch_are_accepted(tmp_path, entry):
+    config = _load(tmp_path, dependencies={"platform": {"system": [entry]}})
+    assert config.dependencies.system("platform") == [entry]
+
+
+@pytest.mark.parametrize("entry", ["curl=1-", "curl=1:1-", "curl=-"])
+def test_a_version_ending_in_a_hyphen_stays_refused(tmp_path, entry):
+    with pytest.raises(Failure):
+        _load(tmp_path, dependencies={"platform": {"system": [entry]}})
