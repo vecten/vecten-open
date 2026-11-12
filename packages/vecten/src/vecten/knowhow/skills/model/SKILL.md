@@ -279,7 +279,7 @@ The five convention tests fail as nodes of those names, each message reading
 | `convention_descriptions` | A core or mart model or column has no description, or a built column is not declared in `schema.yml`. | Declare and describe it. |
 | `convention_core_primary_key` | A core model has no column tested both `unique` and `not_null`. | Test the key column. |
 | `convention_staging_load_metadata` | A staging model lacks `_loaded_at` or `_source`. | Add both columns. |
-| `convention_no_grants` | A model, snapshot or seed sets dbt's `grants` config, or a Snowflake model sets `copy_grants` to `false`. | Remove the setting. |
+| `convention_no_grants` | A model, snapshot or seed sets dbt's `grants` config, or a Snowflake model sets `copy_grants` to `false`. The same check stops every dbt run before it builds, reading "convention_no_grants failed before the build". | Remove the setting; for a dbt package's node, add the override the message names to `dbt/dbt_project.yml`. |
 
 A failing data test is information about the data: a `unique` failure on a key means the
 staging model or the snapshot key is wrong, or the source really repeats ids, which the human

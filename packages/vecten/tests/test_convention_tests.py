@@ -8,6 +8,7 @@ from vecten_platform.dbt import runner
 from vecten_shared.config import AreaDecl, load_config, save_config
 from vecten_shared.osi.generate import dataset_database, generate_datasets
 
+from .docker_util import docker_available
 from .fixture_project import build_fixture, render_fixture
 
 CONVENTION_TESTS = (
@@ -132,20 +133,6 @@ MUTATIONS = [
         "model company_overview: lands in schema marts_fin_ops; the convention allows staging, "
         "snapshots, core, marts and the core_<area> and marts_<area> schemas of declared areas",
     ),
-    (
-        "grants",
-        "convention_no_grants",
-        # An empty list grants nothing on a first build, which the emulation accepts, and
-        # revokes every SELECT on a rebuild.
-        lambda d: _configure(d / MART, "grants={'select': []}"),
-        "model company_overview: sets dbt grants",
-    ),
-    (
-        "copy_grants_off",
-        "convention_no_grants",
-        lambda d: _configure(d / MART, "copy_grants=false"),
-        "model company_overview: sets copy_grants to false",
-    ),
 ]
 
 
@@ -194,3 +181,81 @@ def test_models_in_declared_areas_pass_every_convention_test(tmp_path):
         "company_overview": "acme.marts_finance.company_overview",
         "sales_pipeline": "acme.marts.sales_pipeline",
     }
+
+
+def _seed_with_grants(root: Path) -> None:
+    seeds = root / "dbt" / "seeds"
+    seeds.mkdir(exist_ok=True)
+    (seeds / "country_names.csv").write_text("code,name\nDE,Germany\n")
+    (seeds / "schema.yml").write_text(
+        "version: 2\nseeds:\n  - name: country_names\n    config:\n      grants: {select: []}\n"
+    )
+
+
+def _package_with_grants(root: Path) -> None:
+    project = root / "dbt" / "dbt_project.yml"
+    project.write_text(
+        project.read_text().replace(
+            "\nmodels:\n", "\nmodels:\n  vecten_convention:\n    +grants: {select: []}\n", 1
+        )
+    )
+
+
+SNAPSHOT = "dbt/snapshots/snapshot_demo_deal.sql"
+
+# (id, mutation, violation line): each fails the run before dbt builds anything.
+# An empty grants list issues no GRANT on a first build, so a slip of the gate would build
+# green on the emulation, which refuses dbt's GRANT statements.
+GATE_MUTATIONS = [
+    (
+        "mart_grants",
+        lambda d: _configure(d / MART, "grants={'select': []}"),
+        "model company_overview: sets dbt grants; read grants belong to the MCP",
+    ),
+    ("seed_grants", _seed_with_grants, "seed country_names: sets dbt grants"),
+    (
+        "snapshot_grants",
+        lambda d: (d / SNAPSHOT).write_text(
+            (d / SNAPSHOT)
+            .read_text()
+            .replace("schema='snapshots',", "schema='snapshots',\n    grants={'select': []},")
+        ),
+        "snapshot snapshot_demo_deal: sets dbt grants",
+    ),
+    (
+        "package_model_grants",
+        _package_with_grants,
+        "model vecten_convention.metricflow_time_spine: sets dbt grants; read grants belong to "
+        "the MCP; override it with +grants: {} under models: vecten_convention: in "
+        "dbt/dbt_project.yml",
+    ),
+    (
+        "copy_grants_off",
+        lambda d: _configure(d / MART, "copy_grants=false"),
+        "model company_overview: sets copy_grants to false",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "violation"),
+    [case[1:] for case in GATE_MUTATIONS],
+    ids=[case[0] for case in GATE_MUTATIONS],
+)
+def test_grants_fail_the_run_before_anything_is_built(tmp_path, mutate, violation):
+    root = render_fixture(tmp_path, "snowflake")
+    mutate(root)
+    runs = build_fixture(root)
+    assert [r.returncode for r in runs] == [1]
+    output = runs[0].stdout + runs[0].stderr
+    assert "convention_no_grants failed before the build" in output and violation in output
+    assert not (root / "dbt" / "target" / "run_results.json").exists()
+
+
+@pytest.mark.docker
+@pytest.mark.skipif(not docker_available(), reason="docker not reachable")
+def test_copy_grants_false_passes_on_postgres(tmp_path):
+    root = render_fixture(tmp_path, "postgres")
+    _configure(root / MART, "copy_grants=false")
+    runs = build_fixture(root)
+    assert [r.returncode for r in runs] == [0, 0], runner.failed_nodes(root / "dbt")

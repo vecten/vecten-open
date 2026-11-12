@@ -74,9 +74,10 @@ var `vecten_areas`; `vecten dbt build` runs what you pass. A violation of
 (`snapshot` or `seed` in place of `model` for those).
 
 The MCP owns every read grant, so the project declares none: `convention_no_grants` fails a model,
-snapshot or seed that sets dbt's `grants` config. On Snowflake `dbt/dbt_project.yml` sets
-`+copy_grants: true`, so a rebuilt relation keeps the grants of the one it replaces, and the test
-fails a model that sets `copy_grants` to `false`.
+snapshot or seed, the project's or a dbt package's, that sets dbt's `grants` config. On Snowflake
+`dbt/dbt_project.yml` sets `+copy_grants: true`, so a rebuilt relation keeps the grants of the
+one it replaces, and the test fails a model that sets `copy_grants` to `false`. The same check
+runs at the start of every dbt run, which stops before anything is built.
 
 ## Identity macros
 

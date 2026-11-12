@@ -9,3 +9,5 @@ models:
   vecten_convention:
     +schema: core
     +materialized: table
+on-run-start:
+  - "{{ vecten_convention.convention_grants_gate() }}"

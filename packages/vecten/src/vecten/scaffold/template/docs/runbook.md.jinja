@@ -1097,6 +1097,11 @@ an update. An internal project without a baseline must initialize it with its or
 release before installing a newer release.
 
 [% if 'platform' in components %]
+Before installing a release whose convention refuses dbt grants (version 2 and later), remove
+every dbt `grants:` config and granting post-hook from the dbt project, and override one a dbt
+package sets with `+grants: {}` under its name in `dbt/dbt_project.yml`. From that release every
+dbt run stops before it builds anything while one remains, naming each model, snapshot or seed.
+
 Run `vecten dbt-build-local --check` after the update. It tests the model conventions and
 checks that the generated semantic datasets agree with the models. If model definitions
 changed, run without `--check` first, review the regenerated datasets, then check again.

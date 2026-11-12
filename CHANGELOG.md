@@ -107,13 +107,18 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `vecten issues` names the step. Postgres deployments need nothing beyond the next ship, and
   an existing Postgres warehouse needs no rerun; there the drift report starts at once.
 
+  **Before upgrading**, remove every dbt `grants:` config and granting post-hook from the
+  dbt project, and override any a dbt package sets with `+grants: {}` under the package's name
+  in `dbt/dbt_project.yml`: from this release every dbt run, local or on a host, stops before
+  it builds anything while one remains.
+
   After the upgrade nothing is revoked: the deployment is in `report` mode. Read the drift in
   access health or `vecten issues`, record every grant you want to keep with `vecten grant`
   (a schema grant, or a dataset grant for a relation the semantic model has as a dataset),
   then set `reconcile_drift` to `revoke`. A grant that cannot be recorded is revoked from then
   on: `SELECT` on a relation that is not a dataset, a grant on a single relation of `staging`,
-  `snapshots` or a `raw_` schema that is not a dataset. A dbt `grants:` config or a post-hook
-  that grants is revoked on every pass and granted again by every build, so remove it first.
+  `snapshots` or a `raw_` schema that is not a dataset. A post-hook that grants is revoked on
+  every pass and granted again by every build, so it must be gone before the switch.
   Grants in other schemas or databases, and grants to roles the MCP does not manage, are never
   touched.
 
@@ -128,7 +133,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   the one it replaces, dataset grants included, in the same statement; `vecten update` adds the
   setting to an existing project and leaves the rest of the file as it is. A new convention
   test, `convention_no_grants`, fails the build when a model, snapshot or seed sets dbt's
-  `grants` config, or a Snowflake model sets `copy_grants` to `false`. On Postgres, which
+  `grants` config, or a Snowflake model sets `copy_grants` to `false`; it runs at the start of
+  every dbt run (an `on-run-start` hook of the convention package), so the run stops before
+  dbt builds or grants anything, and it covers dbt packages' models too, naming the package
+  and the `+grants: {}` override for `dbt/dbt_project.yml`. On Postgres, which
   cannot copy grants, the dbt DAG records when each build finished
   (`dbt/build_finished_at`, beside the built commit) and the MCP reconciles as soon as that
   time changes, so a dataset grant a rebuild dropped returns within a minute.
