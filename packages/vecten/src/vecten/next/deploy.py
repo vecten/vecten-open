@@ -162,6 +162,10 @@ def deploy_gate_items(config: VectenConfig, env: str) -> list[Item]:
     if _undeployed(config, env) is None:
         return []
     title = f"Deploy to {env}? This creates resources your cloud provider bills you for."
+    # The apply workflow of a later environment ships the commit the one before it shipped.
+    previous = config.promoted_from(env)
+    if previous:
+        title += f" It ships the commit {previous} shipped last."
     return [Item("ask", title, f"vecten deploy --env {env}", allowed=("yes", "no"))]
 
 

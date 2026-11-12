@@ -32,9 +32,9 @@
 
 ## 6. `next`
 
-- [ ] 6.1 `vecten.next.assemble` walks the order instead of `ENV = "prod"`; prerequisites, gate and post-deploy items name the walked environment; the gate of a later environment says it ships what the environment before it shipped
-- [ ] 6.2 Key renewal and handover items for every environment with facts
-- [ ] 6.3 Tests: no order gives today's items; `dev` first; `prod` once `dev` is clear; a `dev` key renewal while walking `prod`
+- [x] 6.1 `vecten.next.assemble` walks the order instead of `ENV = "prod"`; prerequisites, gate and post-deploy items name the walked environment; the gate of a later environment says it ships what the environment before it shipped
+- [x] 6.2 Key renewal and handover items for every environment with facts
+- [x] 6.3 Tests: no order gives today's items; `dev` first; `prod` once `dev` is clear; a `dev` key renewal while walking `prod`
 
 ## 7. Skills and docs
 

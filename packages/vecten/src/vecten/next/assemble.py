@@ -24,9 +24,7 @@ from vecten.next.modelling import modelling_items
 from vecten.next.post_deploy import post_deploy_items
 from vecten.next.semantic import semantic_items
 from vecten.next.stack import lock_items, stack_items
-from vecten_shared.config import EnvironmentFacts, VectenConfig, load_config
-
-ENV = "prod"
+from vecten_shared.config import VectenConfig, load_config
 
 
 def next_items(cwd: Path) -> list[Item]:
@@ -35,9 +33,21 @@ def next_items(cwd: Path) -> list[Item]:
         return intake_items(cwd)
     config = load_config(root)
     # A key that expires stops CI or a VM whatever else is outstanding, so its rotation and
-    # the deploy that hands a rotated key to its VM lead.
-    keys = key_renewal_items(config, ENV, datetime.now(UTC)) + key_handover_items(config, ENV)
+    # the deploy that hands a rotated key to its VM lead, for every environment that has one.
+    now = datetime.now(UTC)
+    keys = [
+        item
+        for env in _environments_with_facts(config)
+        for item in key_renewal_items(config, env, now) + key_handover_items(config, env)
+    ]
     return keys + _project_items(root, config)
+
+
+def _environments_with_facts(config: VectenConfig) -> list[str]:
+    """The order's environments first, in order, then the others by name."""
+    order = config.promotion_order()
+    recorded = set(config.environments)
+    return [env for env in order if env in recorded] + sorted(recorded - set(order))
 
 
 def _project_items(root: Path, config: VectenConfig) -> list[Item]:
@@ -58,7 +68,8 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
             *ingestion_items(root, config),
             *modelling_items(root, config),
             *semantic_items(root, config),
-            *existing_warehouse_items(root, config, ENV),
+            # One run of the setup SQL serves every environment over the one warehouse.
+            *existing_warehouse_items(root, config, config.promotion_order()[0]),
             *stack_items(root, config),
         ]
     # No deploy item is reported before the local loop is clear, and each later stage waits
@@ -68,16 +79,25 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
     questions = deploy_question_items(root, config, read_answers(root))
     if questions:
         return questions
-    deployed = bool((config.environments.get(ENV) or EnvironmentFacts()).deployed_commit)
-    if config.deploy is not None and not deployed:
-        prerequisites = deploy_prerequisite_items(root, config, ENV, read_git_state(root))
-        if prerequisites:
-            return prerequisites
-        gate = deploy_gate_items(config, ENV)
-        if gate:
-            return gate
-    # Only a deployed project has changes to push, so git is read for it alone.
-    return post_deploy_items(root, config, ENV, read_git_state(root)) if deployed else []
+    return _walk_order(root, config) if config.deploy is not None else []
+
+
+def _walk_order(root: Path, config: VectenConfig) -> list[Item]:
+    """The first environment of the order whose items are not all clear, with its items.
+
+    A later environment ships what the one before it shipped, so it waits until the one
+    before it is deployed and its first user, access, connection and webhook are settled.
+    """
+    git = read_git_state(root)
+    for env in config.promotion_order():
+        facts = config.environments.get(env)
+        if facts is None or not facts.deployed_commit:
+            prerequisites = deploy_prerequisite_items(root, config, env, git)
+            return prerequisites or deploy_gate_items(config, env)
+        items = post_deploy_items(root, config, env, git)
+        if items:
+            return items
+    return []
 
 
 def next_notes(cwd: Path) -> list[str]:
