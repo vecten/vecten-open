@@ -16,6 +16,13 @@ class SnowflakeAdapter:
         self.names = names
         self.account, self.database, self.warehouse = names.account, names.database, names.warehouse
 
+    # The registry's name of the default group's role, which both warehouses seed.
+    DEFAULT_ROLE = "analyst"
+
+    def _role(self, role):
+        """The Snowflake role a registry role name stands for."""
+        return self.names.analyst_role if role == self.DEFAULT_ROLE else role.upper()
+
     @contextmanager
     def control(self):
         conn = self.provisioner_connect()
@@ -95,7 +102,7 @@ class SnowflakeAdapter:
 
     def connect_principal(self, principal, roles, expires_at):
         check_account(principal["warehouse_name"])
-        roles = {r.upper() for r in roles}
+        roles = {self._role(r) for r in roles}
         if not roles:
             raise ValueError("principal has no warehouse group role")
         token = self.mint_token(
@@ -130,7 +137,7 @@ class SnowflakeAdapter:
         check_account(name)
         verb, direction = ("GRANT", "TO") if grant else ("REVOKE", "FROM")
         with self.control() as cursor:
-            cursor.execute(f"{verb} ROLE {quote(role)} {direction} USER {quote(name)}")
+            cursor.execute(f"{verb} ROLE {quote(self._role(role))} {direction} USER {quote(name)}")
 
     def dataset_grant(self, role, source, grant=True):
         parts = source.split(".")
@@ -146,12 +153,12 @@ class SnowflakeAdapter:
         self._grant(role, schema, None, grant)
 
     def _grant(self, role, schema, relation, grant):
-        if role != "analyst":
+        if role != self.DEFAULT_ROLE:
             check_account(role)
         with self.control() as cursor:
             cursor.execute(
                 f"CALL {self._access()}.READ_GRANT(%s,%s,%s,%s)",
-                (role.upper(), schema.upper(), relation.upper() if relation else None, grant),
+                (self._role(role), schema.upper(), relation.upper() if relation else None, grant),
             )
 
     def _access(self):

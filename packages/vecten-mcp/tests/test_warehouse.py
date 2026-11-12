@@ -578,3 +578,25 @@ def test_the_access_procedures_live_in_the_names_access_schema(monkeypatch):
         'CALL "ACME_DEV"."ACCESS_HELPERS".READ_GRANT(%s,%s,%s,%s)',
         'CALL "ACME_DEV"."ACCESS_HELPERS".SOURCE_EXISTS(%s,%s)',
     ]
+
+
+def test_the_default_groups_role_is_the_names_analyst_role(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    minted = []
+    adapter = SnowflakeAdapter(
+        GrantsConnection,
+        lambda **kwargs: Connection("query"),
+        lambda **kwargs: minted.append(kwargs) or "token",
+        names=_shared_names(),
+    )
+    adapter.membership("analyst", "jane")
+    adapter.schema_grant("analyst", "core")
+    adapter.connect_principal({"warehouse_name": "jane"}, {"analyst"}, 1)
+    assert GrantsConnection.seen == [
+        ('GRANT ROLE "ANALYST_ACME_DEV" TO USER "JANE"', None),
+        (
+            'CALL "ACME_DEV"."VECTEN_ACCESS".READ_GRANT(%s,%s,%s,%s)',
+            ("ANALYST_ACME_DEV", "CORE", None, True),
+        ),
+    ]
+    assert minted[0]["roles"] == {"ANALYST_ACME_DEV"}
