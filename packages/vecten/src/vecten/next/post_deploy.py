@@ -14,6 +14,7 @@ from vecten.next.gitstate import GitState
 from vecten.next.ingestion import access_apply_items
 from vecten.next.items import Item
 from vecten.password_links import owed
+from vecten.secrets import recorded_secret_names
 from vecten_shared.config import EnvironmentFacts, VectenConfig
 from vecten_shared.output import Failure
 from vecten_shared.records import read_record
@@ -116,6 +117,34 @@ def _waiting_hostname_items(root: Path, config: VectenConfig, env: str) -> list[
     ]
 
 
+def app_connect_items(root: Path, config: VectenConfig, env: str) -> list[Item]:
+    """`vecten app connect` for each bound container app whose credentials `env` has not
+    received from this checkout; a binding that does not render yet is reported elsewhere."""
+    if not config.apps:
+        return []
+    # Deferred so that `next` loads the app helpers only for a project that binds an app.
+    from vecten.app_connect import app_secret_names
+
+    recorded = recorded_secret_names(root, env)
+    items = []
+    for extension, bindings in sorted(config.apps.items()):
+        for app in sorted(bindings):
+            try:
+                names = app_secret_names(root, config, extension, app)
+            except Failure:
+                continue
+            if not set(names) <= recorded:
+                key = f"{extension}.{app}"
+                items.append(
+                    Item(
+                        "command",
+                        f"Connect {key} to the MCP in {env}",
+                        f"vecten app connect {key} --env {env}",
+                    )
+                )
+    return items
+
+
 def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState) -> list[Item]:
     facts = config.environments.get(env) or EnvironmentFacts()
     if not facts.deployed_commit:
@@ -153,6 +182,7 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
             for link in owed(root, env)
         ]
     admin_work += access_apply_items(root, config, env)
+    admin_work += app_connect_items(root, config, env)
     if admin_work and mcp.admins:
         items += _sign_in_items(root, config, env, facts)
     items += admin_work
