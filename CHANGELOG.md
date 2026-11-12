@@ -74,6 +74,19 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `--vars` given by hand. `vecten update` moves an existing project's
   `docs/schema-convention.md` and `convention_version` to version 2
   ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- Area grants: `vecten grant --area <area> --group <group>`, the admin panel and the admin API's
+  `grant` with kind `area` grant a group both of an area's schemas, applied and revoked
+  together, each with its own future or default grant, so a mart dbt rebuilds there is readable
+  by the granted groups and no one else before any reconciliation. A grant of an area with no
+  `[areas.<area>]` entry is refused naming it. Schema grants accept a declared area's schemas,
+  and reconciliation's drift pass covers them. `next` asks for an area's `access.groups`
+  (answered with `vecten answer access.<area>`) and, after deploy, reports the command that
+  grants each declared group the area. Snowflake's `READ_GRANT` and the Postgres helpers accept
+  schemas matching `(core|marts)_<area>` by pattern; on Postgres the setup `ship` runs creates
+  every declared area's schemas as `loader` before it installs the helpers. The access
+  procedures are version 3: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, area
+  grants are refused and drift is neither listed nor revoked, while every other grant keeps
+  reconciling ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
 ### Changed
 

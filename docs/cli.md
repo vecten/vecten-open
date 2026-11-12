@@ -38,7 +38,7 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 | `logout` | `vecten logout` revokes the cached CLI session and removes local tokens. | v0.1 |
 | `group` | `vecten group` manages MCP groups and their members. | v0.1 |
 | `service` | `vecten service` manages independent service principals and issues client credentials. | v0.1 |
-| `grant` | `vecten grant` records dataset or schema access for a group; see the current Postgres limitations in the identity guide. | v0.1 |
+| `grant` | `vecten grant` records dataset, schema or area (`--area`) access for a group; see the current Postgres limitations in the identity guide. | v0.1 |
 | `revoke` | `vecten revoke` removes a desired group grant. | v0.1 |
 | `reconcile` | `vecten reconcile` reapplies desired warehouse grants. | v0.1 |
 | `deny` | `vecten deny` stores per-group column metadata exclusions for later semantic discovery tools. | v0.1 |
