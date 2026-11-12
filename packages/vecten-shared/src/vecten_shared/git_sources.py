@@ -11,12 +11,14 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import TextIO
@@ -34,6 +36,8 @@ CREDENTIAL_FORM = "https://<username>:<token>@<host>[/<path>]"
 # The ref a fetched commit is stored under in the throwaway repository.
 SOURCE_REF = "refs/vecten/source"
 GIT_TIMEOUT = 300
+# Memory-backed where the host has it, so the credential file never reaches a disk.
+SHARED_MEMORY = Path("/dev/shm")
 
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 HEX = re.compile(r"[0-9a-fA-F]{4,63}")
@@ -191,7 +195,7 @@ class Credential:
 
 def _entry(position: int, raw: str) -> Credential:
     refused = Failure(
-        ExitCode.CONFIG,
+        ExitCode.PREREQUISITE,
         f"{CREDENTIALS_VARIABLE} entry {position} is not {CREDENTIAL_FORM}; entries are "
         "separated by whitespace",
     )
@@ -263,18 +267,24 @@ class Credentials:
         return AUTHORIZATION.sub(rf"\g<1>{MASK}", text)
 
     def announce(self, environ: Mapping[str, str] | None = None, out: TextIO | None = None) -> None:
-        """Register every token with GitHub's log masking when running in GitHub Actions."""
+        """Register every token with GitHub's log masking when running in GitHub Actions,
+        once per token per process.
+
+        The runner reads workflow commands from stderr as well as stdout; stderr keeps a
+        command's `--json` stdout one document."""
         environ = os.environ if environ is None else environ
         if environ.get("GITHUB_ACTIONS") != "true":
             return
-        out = sys.stdout if out is None else out
-        seen: set[str] = set()
+        out = sys.stderr if out is None else out
         for entry in self.entries:
             for token in (entry.raw_token, entry.token):
-                if token not in seen:
-                    seen.add(token)
+                if token not in _ANNOUNCED:
+                    _ANNOUNCED.add(token)
                     out.write(f"::add-mask::{token}\n")
         out.flush()
+
+
+_ANNOUNCED: set[str] = set()
 
 
 def git_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -300,11 +310,20 @@ def git_environment(base: Mapping[str, str] | None = None) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class GitRun:
-    """The environment for one git command, and the credential file it reads, if any."""
+    """The environment and working directory for one git command, and the credential file
+    it reads, if any.
+
+    The working directory is an empty directory below which git looks for no repository, so
+    no repository's own configuration (a caller's checkout, with its rewrites and extra
+    headers) applies; a command on a repository names it through `GIT_DIR`."""
 
     env: dict[str, str]
     credential_file: Path | None
     credential: Credential | None
+    cwd: Path
+
+    def on(self, repository: Path) -> GitRun:
+        return replace(self, env={**self.env, "GIT_DIR": str(repository)})
 
 
 def _with_config(env: dict[str, str], settings: list[tuple[str, str]]) -> dict[str, str]:
@@ -321,18 +340,58 @@ NO_HELPER = ("credential.helper", "")
 
 
 @contextmanager
+def _terminated_as_exit() -> Iterator[None]:
+    """SIGTERM raises SystemExit inside the block, so its cleanup runs before the process
+    ends; signals reach Python handlers only in the main thread."""
+    previous = signal.getsignal(signal.SIGTERM)
+    if threading.current_thread() is not threading.main_thread() or previous == signal.SIG_IGN:
+        yield
+        return
+
+    def handler(signum, frame):
+        if callable(previous):
+            previous(signum, frame)
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@contextmanager
+def _scratch() -> Iterator[Path]:
+    """A private directory, in memory where the host allows, removed when the block ends,
+    on SIGTERM included."""
+    where = str(SHARED_MEMORY) if SHARED_MEMORY.is_dir() else None
+    with (
+        _terminated_as_exit(),
+        tempfile.TemporaryDirectory(prefix="vecten-git-", dir=where) as directory,
+    ):
+        yield Path(os.path.realpath(directory))
+
+
+def _isolated(directory: Path) -> tuple[dict[str, str], Path]:
+    """The base environment and an empty working directory inside `directory`."""
+    home, work = directory / "home", directory / "work"
+    home.mkdir()
+    work.mkdir()
+    env = {**git_environment(), "HOME": str(home), "GIT_CEILING_DIRECTORIES": str(directory)}
+    return env, work
+
+
+@contextmanager
 def credential_environment(source: GitSource, credentials: Credentials | None) -> Iterator[GitRun]:
     """The isolated environment for git on `source`, with the matching credential, if any,
     in a file that is deleted when the block ends."""
     entry = credentials.for_repository(source.host, source.repository) if credentials else None
-    with tempfile.TemporaryDirectory(prefix="vecten-git-") as directory:
-        home = Path(directory) / "home"
-        home.mkdir()
-        base = {**git_environment(), "HOME": str(home)}
+    with _scratch() as directory:
+        base, work = _isolated(directory)
         if entry is None:
-            yield GitRun(_with_config(base, [NO_HELPER]), None, None)
+            yield GitRun(_with_config(base, [NO_HELPER]), None, None, work)
             return
-        stored = Path(directory) / "credentials"
+        stored = directory / "credentials"
         descriptor = os.open(stored, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w") as handle:
             handle.write(entry.store_line(source.repository))
@@ -346,14 +405,19 @@ def credential_environment(source: GitSource, credentials: Credentials | None) -
         if entry.path:
             settings.append(("credential.useHttpPath", "true"))
         try:
-            yield GitRun(_with_config(base, settings), stored, entry)
+            yield GitRun(_with_config(base, settings), stored, entry, work)
         finally:
             stored.unlink(missing_ok=True)
 
 
-def _local() -> GitRun:
-    """The isolated environment for a git command that reaches no remote."""
-    return GitRun(_with_config(git_environment(), [NO_HELPER]), None, None)
+def _local(repository: Path) -> GitRun:
+    """The isolated environment for a git command on `repository` that reaches no remote."""
+    env = {
+        **git_environment(),
+        "GIT_DIR": str(repository),
+        "GIT_CEILING_DIRECTORIES": os.path.realpath(repository.parent),
+    }
+    return GitRun(_with_config(env, [NO_HELPER]), None, None, repository.parent)
 
 
 class Cause(StrEnum):
@@ -426,15 +490,16 @@ def _classify(stderr: str) -> Cause:
     return Cause.NETWORK
 
 
-def _git(args: list[str], run: GitRun, cwd: Path | None = None) -> subprocess.CompletedProcess:
+def _git(args: list[str], run: GitRun) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
             ["git", *args],
-            cwd=cwd,
+            cwd=run.cwd,
             env=run.env,
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=GIT_TIMEOUT,
             check=False,
         )
@@ -562,24 +627,33 @@ def fetch(
     Where the host refuses to fetch by hash, `tag` is fetched instead and must still point at
     `commit`."""
     if not FULL_COMMIT.fullmatch(commit) or (tag is not None and FORBIDDEN_IN_REF.search(tag)):
-        raise _usage(
+        raise Failure(
+            ExitCode.REFUSED,
             f"{source.where}: the recorded commit or tag is malformed; "
-            "record the source again with `vecten extension add`"
+            "record the source again with `vecten extension add`",
         )
+    into = Path(os.path.abspath(into))
+    if into.exists() and (not into.is_dir() or any(into.iterdir())):
+        raise Failure(ExitCode.REFUSED, f"{into} must be absent or empty to fetch a git source")
     if credentials:
         credentials.announce()
-    into = Path(into)
     into.mkdir(parents=True, exist_ok=True)
-    init = _git(["init", "--quiet", "--bare", "--template=", str(into)], _local())
+    # A 64-character commit belongs to a SHA-256 repository, which only a SHA-256 one can hold.
+    object_format = "sha256" if len(commit) == 64 else "sha1"
+    init = _git(
+        ["init", "--quiet", "--bare", "--template=", f"--object-format={object_format}"],
+        _local(into),
+    )
     if init.returncode != 0:
         raise Failure(ExitCode.TOOL_FAILED, f"git could not create a repository in {into}")
     shown = f"{commit} (tag {tag})" if tag else commit
     fetch_args = ["fetch", "--quiet", "--depth", "1", "--no-tags", source.url]
-    with credential_environment(source, credentials) as run:
-        result = _git([*fetch_args, f"+{commit}:{SOURCE_REF}"], run, cwd=into)
+    with credential_environment(source, credentials) as remote:
+        run = remote.on(into)
+        result = _git([*fetch_args, f"+{commit}:{SOURCE_REF}"], run)
         if result.returncode != 0 and tag and _classify(result.stderr) is Cause.COMMIT:
             tag_ref = f"refs/tags/{tag}"
-            result = _git([*fetch_args, f"+{tag_ref}:{tag_ref}"], run, cwd=into)
+            result = _git([*fetch_args, f"+{tag_ref}:{tag_ref}"], run)
             if result.returncode == 0:
                 _adopt_tag(source, commit, tag, into, shown)
         if result.returncode != 0:
@@ -590,7 +664,7 @@ def fetch(
 
 
 def _peel(into: Path, ref: str) -> str:
-    result = _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], _local(), cwd=into)
+    result = _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], _local(into))
     return result.stdout.strip()
 
 
@@ -603,8 +677,11 @@ def _adopt_tag(source: GitSource, commit: str, tag: str, into: Path, shown: str)
             source,
             shown,
             Cause.COMMIT,
-            f"the host refuses to fetch by commit and the tag {tag} now points at {found}; "
+            f"the host does not serve this commit, and the tag {tag} now points at {found}; "
             "record a reachable commit with `vecten extension add`",
         )
-    _git(["update-ref", SOURCE_REF, commit], _local(), cwd=into)
-    _git(["update-ref", "-d", tag_ref], _local(), cwd=into)
+    for args in (["update-ref", SOURCE_REF, commit], ["update-ref", "-d", tag_ref]):
+        if _git(args, _local(into)).returncode != 0:
+            raise Failure(
+                ExitCode.TOOL_FAILED, f"git could not record the fetched commit in {into}"
+            )

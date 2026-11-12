@@ -3,6 +3,7 @@ resolution, fetch and the failures they raise, against a local `git http-backend
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import io
 import os
@@ -185,7 +186,7 @@ def test_malformed_entries_are_refused_by_position_never_by_value(entry):
     token = _token()
     with pytest.raises(Failure) as caught:
         Credentials.parse(f"https://ok:{_token()}@example.com {entry.format(t=token)}")
-    assert caught.value.code == ExitCode.CONFIG
+    assert caught.value.code == ExitCode.PREREQUISITE
     assert "GIT_CREDENTIALS" in caught.value.message
     assert "entry 2" in caught.value.message
     assert _leaks(token, caught.value.message) == []
@@ -318,10 +319,76 @@ def test_tokens_are_registered_with_github_masking_in_actions(monkeypatch):
     out = io.StringIO()
     credentials.announce({"GITHUB_ACTIONS": "true"}, out)
     assert out.getvalue().splitlines() == [f"::add-mask::{token}", f"::add-mask::{other}"]
+    again = io.StringIO()
+    credentials.announce({"GITHUB_ACTIONS": "true"}, again)
+    assert again.getvalue() == ""
     quiet = io.StringIO()
-    credentials.announce({}, quiet)
-    credentials.announce({"GITHUB_ACTIONS": "false"}, quiet)
+    Credentials.parse(f"https://z:{_token()}@github.com").announce({}, quiet)
+    Credentials.parse(f"https://z:{_token()}@github.com").announce(
+        {"GITHUB_ACTIONS": "false"}, quiet
+    )
     assert quiet.getvalue() == ""
+
+
+def test_announcements_go_to_stderr_so_stdout_stays_one_json_document(capsys):
+    token = _token()
+    Credentials.parse(f"https://x:{token}@github.com").announce({"GITHUB_ACTIONS": "true"})
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"::add-mask::{token}\n"
+
+
+def test_the_credential_file_lives_in_shared_memory_when_the_host_has_it(tmp_path, monkeypatch):
+    shm = tmp_path / "shm"
+    shm.mkdir()
+    monkeypatch.setattr(git_sources, "SHARED_MEMORY", shm)
+    source = parse_source("acme @ git+https://github.com/acme/extensions@v1")
+    with git_sources.credential_environment(
+        source, Credentials.parse("https://h:t0k@github.com")
+    ) as run:
+        assert run.credential_file.is_relative_to(shm)
+    assert list(shm.iterdir()) == []
+    monkeypatch.setattr(git_sources, "SHARED_MEMORY", tmp_path / "absent")
+    with git_sources.credential_environment(
+        source, Credentials.parse("https://h:t0k@github.com")
+    ) as run:
+        assert run.credential_file.is_relative_to(Path(tempfile.gettempdir()).resolve()) or (
+            run.credential_file.is_relative_to(Path(tempfile.gettempdir()))
+        )
+
+
+SIGTERM_CHILD = """
+import sys, time
+from vecten_shared import git_sources
+source = git_sources.parse_source("acme @ git+https://github.com/acme/extensions@v1")
+credentials = git_sources.Credentials.parse("https://h:t0k@github.com")
+with git_sources.credential_environment(source, credentials) as run:
+    print(run.credential_file, flush=True)
+    time.sleep(60)
+"""
+
+
+def test_the_credential_file_is_deleted_when_the_process_is_terminated(tmp_path):
+    with subprocess.Popen(
+        [sys.executable, "-c", SIGTERM_CHILD], stdout=subprocess.PIPE, text=True
+    ) as child:
+        try:
+            stored = Path(child.stdout.readline().strip())
+            assert stored.is_file()
+            child.terminate()
+            assert child.wait(timeout=30) != 0
+        finally:
+            child.kill()
+    assert not stored.exists()
+    assert not stored.parent.exists()
+
+
+def test_git_output_that_is_not_utf8_is_decoded_with_replacement(tmp_path):
+    result = git_sources._git(
+        ["check-ref-format", "--print", "refs/heads/a\udcffb"], git_sources._local(tmp_path)
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "refs/heads/a\ufffdb"
 
 
 @pytest.mark.parametrize(("commit", "tag"), [(COMMIT[:12], None), (COMMIT, "-v1"), (COMMIT, "a:b")])
@@ -329,9 +396,22 @@ def test_fetch_refuses_a_malformed_recorded_commit_or_tag(tmp_path, commit, tag)
     source = parse_source(f"acme @ git+https://git.invalid/acme/extensions@{COMMIT}")
     with pytest.raises(Failure) as caught:
         fetch(source, commit, tmp_path / "r", None, tag=tag)
-    assert caught.value.code == ExitCode.USAGE
+    assert caught.value.code == ExitCode.REFUSED
     assert "vecten extension add" in caught.value.message
     assert not (tmp_path / "r").exists()
+
+
+def test_fetch_refuses_a_destination_that_is_not_empty(tmp_path):
+    source = parse_source(f"acme @ git+https://git.invalid/acme/extensions@{COMMIT}")
+    into = tmp_path / "r"
+    into.mkdir()
+    (into / "config").write_text(
+        '[url "https://127.0.0.1:9/"]\n\tinsteadOf = https://git.invalid/\n'
+    )
+    with pytest.raises(Failure) as caught:
+        fetch(source, COMMIT, into, None)
+    assert caught.value.code == ExitCode.REFUSED
+    assert "empty" in caught.value.message
 
 
 # --- 1.4, 1.5, 1.7 against a local git http-backend ---------------------------------------
@@ -381,6 +461,18 @@ class Remote:
             _git("clone", "-q", "--mirror", str(work), str(bare), cwd=root)
         # `middle` was recorded through the tag `moved`, which has since moved to `tip`; no ref
         # advertises `middle` in any repository.
+        sha = base_sha = work.parent / "sha256"
+        sha.mkdir()
+        _git("init", "-q", "--object-format=sha256", "-b", "main", cwd=sha)
+        (sha / "pyproject.toml").write_text('[project]\nname = "acme"\nversion = "1.0.0"\n')
+        _git("add", "-A", cwd=sha)
+        _git("commit", "-qm", "one", cwd=base_sha)
+        self.sha256 = _git("rev-parse", "HEAD", cwd=sha)
+        _git("tag", "-a", "v1.0.0", "-m", "release", cwd=sha)
+        (sha / "two").write_text("2")
+        _git("add", "-A", cwd=sha)
+        _git("commit", "-qm", "two", cwd=sha)
+        _git("clone", "-q", "--mirror", str(sha), str(root / "acme/sha256.git"), cwd=root)
         legacy = root / "legacy/old.git"
         _git("tag", "moved", self.tip, cwd=legacy)
         # Only the annotated tag points at `tagged` there, so no ref advertises it but the
@@ -402,6 +494,7 @@ def remote(tmp_path_factory):
         users={"x-access-token": token},
         public={"public/tools.git"},
         version_0={"legacy/old.git"},
+        errors={"acme/broken.git": f"internal error for token {token}"},
     ).start(base / "tls")
     yield commits, server, token
     server.stop()
@@ -654,6 +747,7 @@ def test_the_credential_file_is_gone_after_resolve_and_fetch(served, tmp_path, m
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    monkeypatch.setattr(git_sources, "SHARED_MEMORY", tmp_path / "absent")
     resolve(source("acme/extensions.git", "acme/v1.2.0"), good)
     fetch(source("acme/extensions.git", commits.tip), commits.tip, tmp_path / "r", good)
     with pytest.raises(GitSourceFailure):
@@ -661,13 +755,124 @@ def test_the_credential_file_is_gone_after_resolve_and_fetch(served, tmp_path, m
     assert list(scratch.iterdir()) == []
 
 
-def test_tokens_are_announced_before_git_runs_in_actions(served, tmp_path, monkeypatch, capfd):
-    commits, _, token, good, source, _ = served
+def test_tokens_are_announced_on_stderr_before_git_runs_in_actions(
+    served, tmp_path, monkeypatch, capfd
+):
+    commits, server, _, _, source, host = served
+    token = _token()
+    server.users["announced"] = token
+    credentials = Credentials.parse(f"https://announced:{token}@{host}/acme")
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    real = git_sources._git
+
+    def marked(args, run):
+        sys.stderr.write("GIT RUNS\n")
+        sys.stderr.flush()
+        return real(args, run)
+
+    monkeypatch.setattr(git_sources, "_git", marked)
+    fetch(source("acme/extensions.git", commits.tip), commits.tip, tmp_path / "r", credentials)
+    fetch(source("acme/extensions.git", commits.tip), commits.tip, tmp_path / "s", credentials)
+    captured = capfd.readouterr()
+    assert captured.out == ""
+    assert captured.err.index(f"::add-mask::{token}") < captured.err.index("GIT RUNS")
+    assert captured.err.count(token) == captured.err.count("::add-mask::") == 1
+
+
+def test_a_sha256_repository_by_tag_and_by_commit(served, tmp_path):
+    commits, _, _, good, source, _ = served
+    resolution = resolve(source("acme/sha256.git", "v1.0.0"), good)
+    assert resolution.commit == commits.sha256
+    assert len(resolution.commit) == 64
+    bare = fetch(source("acme/sha256.git", commits.sha256), commits.sha256, tmp_path / "r", good)
+    assert _git("rev-parse", "refs/vecten/source", cwd=bare) == commits.sha256
+
+
+def test_the_callers_repository_configuration_is_left_unused(served, tmp_path, monkeypatch):
+    commits, server, token, good, source, _ = served
+    marker = tmp_path / "helper-ran"
+    project = tmp_path / "project"
+    project.mkdir()
+    _git("init", "-q", cwd=project)
+    header = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    with (project / ".git" / "config").open("a") as config:
+        config.write(
+            # A rewrite to a closed port, as a caller's checkout might carry: honouring it
+            # fails every command.
+            f'[url "https://127.0.0.1:9/"]\n\tinsteadOf = {server.url}/\n'
+            # actions/checkout leaves a header like this in the checkout's configuration.
+            f'[http "{server.url}/"]\n\textraheader = Authorization: Basic {header}\n'
+            f'[credential]\n\thelper = "!f() {{ touch {marker}; }}; f"\n'
+        )
+    (project / "sub").mkdir()
+    monkeypatch.chdir(project / "sub")
+    public = resolve(source("public/tools.git", "acme/v1.2.0"), Credentials.parse(None))
+    assert (public.commit, public.public) == (commits.tagged, True)
+    assert set(server.authorizations) == {None}
+    assert resolve(source("acme/extensions.git", "acme/v1.2.0"), good).public is False
     fetch(source("acme/extensions.git", commits.tip), commits.tip, tmp_path / "r", good)
-    out = capfd.readouterr().out
-    assert f"::add-mask::{token}" in out
-    assert out.count(token) == out.count("::add-mask::")
+    assert not marker.exists()
+
+
+def test_git_output_holding_a_token_is_shown_masked(served, tmp_path):
+    _, _, token, good, source, _ = served
+    with pytest.raises(GitSourceFailure) as caught:
+        fetch(source("acme/broken.git", COMMIT), COMMIT, tmp_path / "r", good)
+    failure = caught.value
+    assert "remote error: internal error for token ***" in failure.message
+    assert _leaks(token, failure.message) == []
+
+
+def test_the_empty_helper_clears_one_configured_where_vecten_cannot_switch_it_off(
+    served, tmp_path, monkeypatch
+):
+    # A helper in configuration git reads regardless, such as the one Apple's git builds in.
+    commits, _, _, good, source, _ = served
+    marker = tmp_path / "helper-ran"
+    config = tmp_path / "builtin.gitconfig"
+    config.write_text(f'[credential]\n\thelper = "!f() {{ touch {marker}; }}; f"\n')
+    isolated = git_sources.git_environment
+
+    def with_builtin(base=None):
+        return {**isolated(base), "GIT_CONFIG_GLOBAL": str(config)}
+
+    monkeypatch.setattr(git_sources, "git_environment", with_builtin)
+    with pytest.raises(GitSourceFailure):
+        resolve(source("acme/extensions.git", "acme/v1.2.0"), Credentials.parse(None))
+    resolve(source("acme/extensions.git", "acme/v1.2.0"), good)
+    assert not marker.exists()
+
+
+def test_a_commit_gone_from_a_host_that_fetches_by_hash_is_not_reachable(served, tmp_path):
+    _, _, _, good, source, _ = served
+    missing = "0123456789abcdef0123456789abcdef01234567"
+    with pytest.raises(GitSourceFailure) as caught:
+        fetch(source("acme/extensions.git", missing), missing, tmp_path / "r", good, tag="light")
+    assert caught.value.cause == Cause.COMMIT
+    assert "refuses to fetch by commit" not in caught.value.message
+    assert "light" in caught.value.message
+
+
+def test_a_failed_update_of_the_fetched_tag_is_reported(served, tmp_path, monkeypatch):
+    commits, _, _, good, source, _ = served
+    legacy = Credentials.parse(f"{good.entries[0].entry.rsplit('/', 1)[0]}/legacy")
+    real = git_sources._git
+
+    def failing_update(args, run):
+        if args[0] == "update-ref":
+            return subprocess.CompletedProcess(args, 1, "", "fatal: cannot lock ref")
+        return real(args, run)
+
+    monkeypatch.setattr(git_sources, "_git", failing_update)
+    with pytest.raises(Failure) as caught:
+        fetch(
+            source("legacy/old.git", commits.tagged),
+            commits.tagged,
+            tmp_path / "r",
+            legacy,
+            tag="acme/v1.2.0",
+        )
+    assert caught.value.code == ExitCode.TOOL_FAILED
 
 
 # --- 1.8 a public GitHub repository -------------------------------------------------------

@@ -4,7 +4,8 @@
 answers anyone; every other path, including one that does not exist, asks for credentials
 first, as GitHub does, so a missing repository and a private one look alike to a client
 without a token. A repository named in `version_0` answers in protocol version 0, where git
-refuses to fetch a commit no ref advertises.
+refuses to fetch a commit no ref advertises. A repository named in `errors` answers its
+advertisement with that error message, which git prints as `remote error: <message>`.
 """
 
 from __future__ import annotations
@@ -95,6 +96,7 @@ class GitServer:
     users: dict[str, str]
     public: set[str] = field(default_factory=set)
     version_0: set[str] = field(default_factory=set)
+    errors: dict[str, str] = field(default_factory=dict)
     url: str = ""
     ca_path: Path | None = None
     authorizations: list[str | None] = field(default_factory=list)
@@ -152,6 +154,18 @@ class GitServer:
                         self.rfile.readline()
                 return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
+            def _refuse(self, message: str):
+                def line(text: str) -> bytes:
+                    data = text.encode()
+                    return f"{len(data) + 4:04x}".encode() + data
+
+                payload = line("# service=git-upload-pack\n") + b"0000" + line(f"ERR {message}\n")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-git-upload-pack-advertisement")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
             def _serve(self):
                 path_info, _, query = self.path.partition("?")
                 repository = _repository(path_info)
@@ -162,6 +176,9 @@ class GitServer:
                     self.send_header("WWW-Authenticate", 'Basic realm="git"')
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                    return
+                if repository in server.errors:
+                    self._refuse(server.errors[repository])
                     return
                 body = self._body() if self.command == "POST" else b""
                 env = {
