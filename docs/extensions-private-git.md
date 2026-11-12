@@ -141,7 +141,8 @@ machine needs it.
 ### The credential in CI
 
 `vecten ship` in CI fetches every git-sourced extension again on every ship, a promotion of an
-already-shipped commit included, so CI needs read access to the repository. Give it one of these:
+already-shipped commit included, so CI needs read access to the repository. Give it one of
+these, or both:
 
 - **A secret.** Set `VECTEN_GIT_CREDENTIALS` to the same entry format, as a repository secret or
   an environment secret; an environment secret overrides the repository's for that
@@ -156,7 +157,13 @@ already-shipped commit included, so CI needs read access to the repository. Give
   ID), `VECTEN_GIT_APP_OWNER` (the organisation it is installed in) and
   `VECTEN_GIT_APP_REPOSITORIES` (`extensions`, or a comma-separated list), and the secret
   `VECTEN_GIT_APP_PRIVATE_KEY` (the App's private key). Each ship then mints a token that lasts
-  for that job only.
+  for that job only and reads only the repositories named. The token is minted only when all
+  four are set, so it never reaches every repository the App is installed on.
+
+With both, the step that runs `vecten` gets the App's token as an entry for `github.com` and the
+secret's entries beside it, so an App on GitHub and a token for another host can serve one
+project. For a repository that two entries cover, the entry with the longer path wins, as on a
+laptop.
 
 The rendered `deploy-platform.yml` and `terraform-apply.yml` pass the credential, as
 `GIT_CREDENTIALS`, to the step that runs `vecten ship` or `vecten deploy` and to no other step;
@@ -166,10 +173,12 @@ logs, and Vecten registers every token inside a multi-entry value with GitHub's 
 running git.
 
 Before `vecten ship --env <env>` or `vecten deploy --env <env>` on a laptop dispatches CI, it
-checks by name that `VECTEN_GIT_CREDENTIALS` or `VECTEN_GIT_APP_ID` is set for the repository,
-the environment or the organisation, when any extension's repository needed a credential at
-`extension add`. Otherwise it refuses and names both. It cannot read a secret's value: a wrong
-or expired token fails the ship in CI, before any host changes.
+checks by name that `VECTEN_GIT_CREDENTIALS`, or all four names of the GitHub App, are set for
+the repository, the environment or the organisation, when any extension's repository needed a
+credential at `extension add`. Otherwise it refuses and names what is missing. Listing secrets
+and variables needs admin rights on the repository: for a person without them, the check skips
+the lists it may not read, says so in a warning, and dispatches. It cannot read a secret's
+value: a missing, wrong or expired token fails the ship in CI, before any host changes.
 
 ### Rotating the credential
 
@@ -204,8 +213,9 @@ vecten extension sync
 
 It installs the committed `requirements.lock` into the environment running Vecten, each
 git-sourced extension from a fetched copy whose `source_sha256` matches the record, and each
-in-repo extension from its folder, then refreshes the skill links. It changes no record, and it
-refuses records that disagree, naming `vecten lock`. The rendered `ci.yml` does not run it,
+in-repo extension from its folder, then refreshes the skill links. It changes no record. It
+refuses a stale lock, naming `vecten lock`, and a git source whose lines disagree with
+`extensions.lock.json` or whose fetched source has another hash, naming `vecten extension add`. The rendered `ci.yml` does not run it,
 since that would put the credential in every pull request's job.
 
 ## Reviewing an upgrade

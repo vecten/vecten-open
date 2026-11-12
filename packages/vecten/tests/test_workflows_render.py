@@ -418,10 +418,16 @@ def test_ship_jobs_can_read_review_verification(render, params):
 
 GIT_SECRETS = ("VECTEN_GIT_CREDENTIALS", "VECTEN_GIT_APP_PRIVATE_KEY")
 APP_TOKEN_STEP = "git-app-token"
+# Both the minted token and the secret's entries, so a GitHub App and a token for another
+# host can serve one project together.
 GIT_CREDENTIALS_VALUE = (
-    "${{ steps.git-app-token.outputs.token && "
+    "${{ format('{0} {1}', steps.git-app-token.outputs.token && "
     "format('https://x-access-token:{0}@github.com', steps.git-app-token.outputs.token) "
-    "|| secrets.VECTEN_GIT_CREDENTIALS }}"
+    "|| '', secrets.VECTEN_GIT_CREDENTIALS) }}"
+)
+APP_TOKEN_CONDITION = (
+    "vars.VECTEN_GIT_APP_ID != '' && vars.VECTEN_GIT_APP_OWNER != '' && "
+    "vars.VECTEN_GIT_APP_REPOSITORIES != '' && env.VECTEN_GIT_APP_KEY_SET == 'true'"
 )
 SHIPPING_JOBS = (
     ("terraform-apply.yml", "apply", "vecten deploy --env ${{ inputs.environment }} --json"),
@@ -460,7 +466,13 @@ def test_a_github_app_token_is_minted_for_the_shipping_job_only_when_configured(
         job = docs[name]["jobs"][job_name]
         ids = [step.get("id") for step in steps(job)]
         [mint] = [step for step in steps(job) if step.get("id") == APP_TOKEN_STEP]
-        assert mint["if"] == "vars.VECTEN_GIT_APP_ID != ''", name
+        # Without an owner and repositories the App would reach every repository it is
+        # installed on, so the token is minted only when all four names are set.
+        assert mint["if"] == APP_TOKEN_CONDITION, name
+        # A step's condition cannot read a secret; the job says only whether the key is set.
+        assert job["env"] == {
+            "VECTEN_GIT_APP_KEY_SET": "${{ secrets.VECTEN_GIT_APP_PRIVATE_KEY != '' }}"
+        }, name
         assert mint["uses"] == VERSIONS.github_actions["create_github_app_token"].split(" #")[0]
         assert mint["with"] == {
             "client-id": "${{ vars.VECTEN_GIT_APP_ID }}",

@@ -69,12 +69,21 @@ GITHUB_OUTPUT_VAR = "GITHUB_OUTPUT"
 
 GIT_SECRET = "VECTEN_GIT_CREDENTIALS"
 GIT_APP_VARIABLE = "VECTEN_GIT_APP_ID"
+# The rendered workflows mint an App token only when all of these are set, so the App reaches
+# only the repositories named, never every repository it is installed on.
+GIT_APP_NAMES = (
+    GIT_APP_VARIABLE,
+    "VECTEN_GIT_APP_PRIVATE_KEY",
+    "VECTEN_GIT_APP_OWNER",
+    "VECTEN_GIT_APP_REPOSITORIES",
+)
 
 
 def require_ci_git_credential(
     project_root: Path, config: VectenConfig, env: str, gh: ToolRunner
-) -> None:
-    """Refuse to dispatch a ship of a private git source that CI holds no credential for.
+) -> list[str]:
+    """Refuse to dispatch a ship of a private git source that CI holds no credential for; the
+    warnings to show when GitHub would not list every name.
 
     Only names are compared: a secret's value cannot be read, and a wrong one fails the ship in
     CI before any host changes."""
@@ -87,19 +96,39 @@ def require_ci_git_credential(
         if not entry.git.public
     ]
     if not private:
-        return
+        return []
     repository = require_deploy_cloud(config).github_repository
-    names = configured_names(gh, project_root, repository, env)
-    if GIT_SECRET in names or GIT_APP_VARIABLE in names:
-        return
+    names, unread = configured_names(gh, project_root, repository, env)
+    app_missing = [name for name in GIT_APP_NAMES if name not in names]
+    if GIT_SECRET in names:
+        if GIT_APP_VARIABLE in names and app_missing:
+            return [
+                f"the GitHub App for git sources lacks {', '.join(app_missing)}, so CI "
+                f"fetches with {GIT_SECRET} alone"
+            ]
+        return []
+    if GIT_APP_VARIABLE in names and not app_missing:
+        return []
+    if unread:
+        # CI refuses a missing credential itself, before any host changes.
+        return [
+            f"{', '.join(unread)} needs admin rights on {repository}, so whether CI holds "
+            f"{GIT_SECRET} or a GitHub App for {', '.join(private)} was not checked"
+        ]
+    if GIT_APP_VARIABLE in names:
+        raise Failure(
+            ExitCode.PREREQUISITE,
+            f"{', '.join(private)} comes from a private git repository, and {repository} sets "
+            f"{GIT_APP_VARIABLE} for it but lacks {', '.join(app_missing)}; set them, as "
+            "docs/extensions-private-git.md describes",
+        )
     raise Failure(
         ExitCode.PREREQUISITE,
         f"{', '.join(private)} comes from a private git repository, and CI fetches it on every "
         f"ship, but {repository} and its environment {env} have neither the secret "
         f"{GIT_SECRET} nor the variable {GIT_APP_VARIABLE}; set {GIT_SECRET} "
-        f"(`gh secret set {GIT_SECRET} --env {env}`), or {GIT_APP_VARIABLE} with "
-        "VECTEN_GIT_APP_PRIVATE_KEY and VECTEN_GIT_APP_OWNER, as "
-        "docs/extensions-private-git.md describes",
+        f"(`gh secret set {GIT_SECRET} --env {env}`), or a GitHub App with "
+        f"{', '.join(GIT_APP_NAMES)}, as docs/extensions-private-git.md describes",
     )
 
 
@@ -302,7 +331,7 @@ def deploy_env(
     # An expiring key is warned of, never refused: the deploy that warns still works.
     expiring = expiring_keys(config.environments.get(env), datetime.now(UTC))
     if expiring:
-        data["warnings"] = [renewal_warning(env, expiring)]
+        data["warnings"] = [*data.get("warnings", []), renewal_warning(env, expiring)]
     return data
 
 
@@ -325,7 +354,7 @@ def _deploy(
         if gh is None:
             raise Failure(ExitCode.INTERNAL, "dispatching the apply workflow needs the gh runner")
         require_on_default_branch(project_root, deploy.github_repository, gh, git)
-        require_ci_git_credential(project_root, config, env, gh)
+        warnings = require_ci_git_credential(project_root, config, env, gh)
         followed = dispatch_and_follow(project_root, APPLY_WORKFLOW, env, gh, git)
         try:
             deployed = check_commit(followed["head_sha"])
@@ -357,6 +386,8 @@ def _deploy(
         }
         if identity_pending(recorded, env):
             result["ship_skipped"] = identity_pending_note(env)
+        if warnings:
+            result["warnings"] = warnings
         return result
     require_terraform(terraform)
     commit = head_commit(git, project_root)
@@ -410,9 +441,10 @@ def ship_env(
     if not in_actions():
         if gh is None:
             raise Failure(ExitCode.INTERNAL, "dispatching the ship workflow needs the gh runner")
-        require_ci_git_credential(project_root, config, env, gh)
+        warnings = require_ci_git_credential(project_root, config, env, gh)
         followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git)
-        return {"env": env, "dispatched": True, **followed}
+        result = {"env": env, "dispatched": True, **followed}
+        return {**result, "warnings": warnings} if warnings else result
     require_bootstrapped(config, env)
     commit = head_commit(git, project_root)
     if pending:

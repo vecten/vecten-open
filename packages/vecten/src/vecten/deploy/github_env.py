@@ -251,14 +251,20 @@ def set_repository_secrets(
         )
 
 
-def configured_names(gh: ToolRunner, project_root: Path, repository: str, env: str) -> set[str]:
+def configured_names(
+    gh: ToolRunner, project_root: Path, repository: str, env: str
+) -> tuple[set[str], list[str]]:
     """The names of the Actions secrets and variables a job of `env` can read: the
-    repository's, the environment's, and the organisation's shared with the repository.
+    repository's, the environment's, and the organisation's shared with the repository; and
+    the lists GitHub would not show this person.
 
-    Only names are listed; GitHub never returns a secret's value."""
+    Only names are listed; GitHub never returns a secret's value. Listing secrets and
+    variables needs admin rights, which a person allowed to dispatch may lack."""
     names: set[str] = set()
+    unread: list[str] = []
     for kind in ("secret", "variable"):
         for scope in ((), ("--env", env)):
+            what = f"{kind} list {' '.join(scope)}".strip()
             result = _gh(
                 gh,
                 project_root,
@@ -269,13 +275,13 @@ def configured_names(gh: ToolRunner, project_root: Path, repository: str, env: s
                 repository,
                 "--json",
                 "name",
-                what=f"{kind} list {' '.join(scope)}".strip(),
-                tolerate=(404,),
+                what=what,
+                tolerate=(403, 404),
             )
             if result.returncode == 0:
                 names |= {row["name"] for row in _json(result, f"{kind} list") or []}
-    # A person who may not read the organisation's lists still ships; its names are then
-    # left out rather than refused.
+            elif _http_status(result) == 403:
+                unread.append(f"`gh {what}`")
     for kind in ("secrets", "variables"):
         result = _gh(
             gh,
@@ -290,7 +296,7 @@ def configured_names(gh: ToolRunner, project_root: Path, repository: str, env: s
         )
         if result.returncode == 0:
             names |= set(result.stdout.split())
-    return names
+    return names, unread
 
 
 def repository_facts(gh: ToolRunner, project_root: Path, repository: str) -> tuple[str, str]:

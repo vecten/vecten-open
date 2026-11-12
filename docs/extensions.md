@@ -62,7 +62,8 @@ Vecten, with the project's in-repo and git-sourced extensions and their skill li
 vecten extension sync
 ```
 
-It changes no record, and refuses records that disagree, naming `vecten lock`.
+It changes no record. It refuses a stale lock, naming `vecten lock`, and a git source whose
+records disagree, naming `vecten extension add`.
 
 Machine-local skill links point into that environment's installed packages. Re-run the same
 `extension add` after moving/recreating the environment to rebuild the links. Do not commit

@@ -260,11 +260,14 @@ class FakeGh:
         branch_policy_status: int | None = None,
         environment_policies: dict[str, tuple[dict | None, list[str]]] | None = None,
         listed: dict[str, list[str]] | None = None,
+        forbidden: tuple[str, ...] = (),
     ):
         self.watch_code = watch_code
         # The names `secret list` and `variable list` answer, by `secret`, `variable`,
         # `secret --env <env>` or `variable --env <env>`; values are never listed.
         self.listed = listed or {}
+        # The keys of `listed` whose list answers HTTP 403, as for a writer who is no admin.
+        self.forbidden = forbidden
         self.created_at = created_at
         self.logged_in = logged_in
         # The repository as GitHub spells it, answered by `repo view`.
@@ -344,6 +347,8 @@ class FakeGh:
             return self._api(args)
         if args[1:2] == ["list"] and args[:1] in (["secret"], ["variable"]):
             scope = f" --env {args[args.index('--env') + 1]}" if "--env" in args else ""
+            if f"{args[0]}{scope}" in self.forbidden:
+                return self._fail(args, 403, "Resource not accessible by integration")
             names = self.listed.get(f"{args[0]}{scope}", [])
             return subprocess.CompletedProcess(
                 args, 0, json.dumps([{"name": n} for n in names]), ""
