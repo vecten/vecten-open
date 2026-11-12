@@ -55,6 +55,7 @@ def test_fixed_names_are_the_released_literals(project, database, env, db_name, 
     assert names.integration == "VECTEN_EXTERNAL_OAUTH"
     assert names.access_schema == "VECTEN_ACCESS"
     assert names.authentication_policy is None
+    assert names.comment == f"vecten {project} {env} in ACME-PROD"
     assert names.audience == "https://ACME-PROD.snowflakecomputing.com"
 
 
@@ -79,6 +80,7 @@ def test_names_in_a_shared_account_carry_the_environment_suffix():
         integration="EXTERNAL_OAUTH_ACME_DEV",
         access_schema="VECTEN_ACCESS",
         authentication_policy="MCP_SIGN_IN",
+        comment="vecten acme dev in ACME-PROD",
     )
 
 

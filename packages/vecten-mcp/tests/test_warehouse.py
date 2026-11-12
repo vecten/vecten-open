@@ -593,10 +593,139 @@ def test_the_default_groups_role_is_the_names_analyst_role(monkeypatch):
     adapter.schema_grant("analyst", "core")
     adapter.connect_principal({"warehouse_name": "jane"}, {"analyst"}, 1)
     assert GrantsConnection.seen == [
-        ('GRANT ROLE "ANALYST_ACME_DEV" TO USER "JANE"', None),
+        ('GRANT ROLE "ANALYST_ACME_DEV" TO USER "JANE_ACME_DEV"', None),
         (
             'CALL "ACME_DEV"."VECTEN_ACCESS".READ_GRANT(%s,%s,%s,%s)',
             ("ANALYST_ACME_DEV", "CORE", None, True),
         ),
     ]
     assert minted[0]["roles"] == {"ANALYST_ACME_DEV"}
+
+
+class UsersConnection(GrantsConnection):
+    """The provisioner's connection, answering SHOW USERS with `users`."""
+
+    users: list = []
+
+    @property
+    def description(self):
+        if self.query == "SHOW USERS":
+            return [("name",), ("last_success_login",)]
+        return GrantsConnection.description
+
+    def fetchall(self):
+        if self.query == "SHOW USERS":
+            return self.users
+        return super().fetchall()
+
+
+def _shared_adapter(monkeypatch, minted=None, logins=None):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    monkeypatch.setattr(GrantsConnection, "grants", [])
+    monkeypatch.setattr(UsersConnection, "users", [])
+
+    def connect(**kwargs):
+        if logins is not None:
+            logins.append(kwargs)
+        return Connection("query")
+
+    def mint(**kwargs):
+        if minted is not None:
+            minted.append(kwargs)
+        return "token"
+
+    return SnowflakeAdapter(UsersConnection, connect, mint, names=_shared_names())
+
+
+POLICY = '"ACME_DEV"."VECTEN_ACCESS"."MCP_SIGN_IN"'
+
+
+def test_a_shared_account_suffixes_every_user_and_role_the_adapter_names(monkeypatch):
+    minted, logins = [], []
+    adapter = _shared_adapter(monkeypatch, minted, logins)
+    adapter.create_account("jane", "human")
+    adapter.create_account("svc_reporting", "service")
+    adapter.create_group("finance")
+    adapter.membership("finance", "jane")
+    adapter.membership("finance", "jane", grant=False)
+    adapter.schema_grant("finance", "marts")
+    adapter.drop_group("finance")
+    adapter.drop_account("jane")
+    assert [query for query, _ in GrantsConnection.seen] == [
+        'CREATE USER "JANE_ACME_DEV" TYPE = PERSON',
+        f'ALTER USER "JANE_ACME_DEV" SET AUTHENTICATION POLICY {POLICY}',
+        'CREATE USER "SVC_REPORTING_ACME_DEV" TYPE = SERVICE',
+        f'ALTER USER "SVC_REPORTING_ACME_DEV" SET AUTHENTICATION POLICY {POLICY}',
+        'CREATE ROLE "FINANCE_ACME_DEV"',
+        'GRANT ROLE "FINANCE_ACME_DEV" TO USER "JANE_ACME_DEV"',
+        'REVOKE ROLE "FINANCE_ACME_DEV" FROM USER "JANE_ACME_DEV"',
+        'CALL "ACME_DEV"."VECTEN_ACCESS".READ_GRANT(%s,%s,%s,%s)',
+        'DROP ROLE "FINANCE_ACME_DEV"',
+        'DROP USER "JANE_ACME_DEV"',
+    ]
+    assert GrantsConnection.seen[7][1] == ("FINANCE_ACME_DEV", "MARTS", None, True)
+    adapter.connect_principal({"warehouse_name": "jane"}, {"finance"}, 1)
+    assert minted == [{"subject": "JANE_ACME_DEV", "roles": {"FINANCE_ACME_DEV"}, "expires_at": 1}]
+    assert (logins[0]["user"], logins[0]["role"]) == ("JANE_ACME_DEV", "FINANCE_ACME_DEV")
+
+
+def test_a_fixed_account_sets_no_authentication_policy(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    adapter = SnowflakeAdapter(GrantsConnection, None, None, names=names())
+    adapter.create_account("jane", "human")
+    assert [query for query, _ in GrantsConnection.seen] == ['CREATE USER "JANE" TYPE = PERSON']
+
+
+def test_a_shared_account_adopts_no_existing_user(monkeypatch):
+    adapter = _shared_adapter(monkeypatch)
+    assert adapter.inspect_account("jane") is None
+    monkeypatch.setattr(UsersConnection, "users", [("JANE", None)])
+    assert adapter.inspect_account("jane") is None
+    monkeypatch.setattr(UsersConnection, "users", [("JANE_ACME_DEV", "2026-11-01")])
+    with pytest.raises(ValueError, match="JANE_ACME_DEV") as refused:
+        adapter.inspect_account("jane")
+    assert "adopt" in str(refused.value)
+    assert not any(q.startswith(("ALTER", "CREATE", "GRANT")) for q, _ in GrantsConnection.seen)
+
+
+def test_a_fixed_account_still_offers_adoption(monkeypatch):
+    monkeypatch.setattr(UsersConnection, "users", [("JANE", "2026-11-01")])
+    adapter = SnowflakeAdapter(UsersConnection, None, None, names=names())
+    account = adapter.inspect_account("jane")
+    assert account.can_adopt and account.name == "jane"
+
+
+@pytest.mark.parametrize(
+    ("grant", "valid"),
+    [
+        (("OWNERSHIP", "USER", "JANE_ACME_DEV", "true"), True),
+        (("OWNERSHIP", "USER", "JANE", "true"), False),
+        (("OWNERSHIP", "USER", "JANE_ACME_PROD", "true"), False),
+        (("OWNERSHIP", "ROLE", "FINANCE_ACME_DEV", "true"), True),
+        (("OWNERSHIP", "ROLE", "FINANCE_ACME_PROD", "true"), False),
+        (("OWNERSHIP", "ROLE", "FINANCE", "true"), False),
+        (("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.MCP_SIGN_IN", "false"), True),
+        (("APPLY", "AUTHENTICATION_POLICY", "ACME_PROD.VECTEN_ACCESS.MCP_SIGN_IN", "false"), False),
+        (("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.OTHER", "false"), False),
+        (("USAGE", "DATABASE", "ACME_PROD", "false"), False),
+    ],
+)
+def test_the_shared_scope_check_reads_the_registry_without_the_suffix(monkeypatch, grant, valid):
+    adapter = _shared_adapter(monkeypatch)
+    monkeypatch.setattr(GrantsConnection, "grants", [grant])
+    registry = {"jane": {"kind": "human"}, "finance": {"kind": "group"}}
+    if valid:
+        adapter.check_scope(registry)
+    else:
+        with pytest.raises(ValueError, match=grant[2]):
+            adapter.check_scope(registry)
+
+
+def test_the_fixed_scope_check_refuses_any_policy_grant(monkeypatch):
+    monkeypatch.setattr(
+        GrantsConnection,
+        "grants",
+        [("APPLY", "AUTHENTICATION_POLICY", "D.VECTEN_ACCESS.MCP_SIGN_IN", "false")],
+    )
+    with pytest.raises(ValueError, match="APPLY"):
+        SnowflakeAdapter(GrantsConnection, None, None, names=names()).check_scope({})

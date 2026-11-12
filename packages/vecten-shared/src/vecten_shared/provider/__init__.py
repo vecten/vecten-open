@@ -124,7 +124,8 @@ class SnowflakeNames:
     """Every name Vecten gives an object in an environment's Snowflake account.
 
     `access_schema` sits inside `database`, and `authentication_policy` inside that schema;
-    the fixed layout has no policy.
+    the fixed layout has no policy. `comment` is the one the Snowflake root gives every
+    object it creates, unknown without the account.
     """
 
     account: str | None
@@ -139,6 +140,7 @@ class SnowflakeNames:
     integration: str
     access_schema: str
     authentication_policy: str | None
+    comment: str | None
 
     @property
     def audience(self) -> str:
@@ -233,6 +235,8 @@ def snowflake_names(
     if shared_account is None:
         shared_account = shared_layout(config, env)
     account = account or config.warehouse.account
+    # The Snowflake root's `local.comment`, from the same tfvars values.
+    comment = f"vecten {config.project.name} {env} in {account}" if account else None
     project = config.project.name.replace("-", "_")
     if not shared_account:
         loader = "LOADER"
@@ -249,6 +253,7 @@ def snowflake_names(
             integration="VECTEN_EXTERNAL_OAUTH",
             access_schema=ACCESS_SCHEMA,
             authentication_policy=None,
+            comment=comment,
         )
     suffix = _shared_suffix(config, env)
     base = suffix[1:]
@@ -267,4 +272,5 @@ def snowflake_names(
         integration=f"EXTERNAL_OAUTH{suffix}",
         access_schema=ACCESS_SCHEMA,
         authentication_policy=AUTHENTICATION_POLICY,
+        comment=comment,
     )

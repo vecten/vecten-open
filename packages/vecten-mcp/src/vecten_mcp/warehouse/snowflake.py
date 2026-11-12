@@ -20,8 +20,30 @@ class SnowflakeAdapter:
     DEFAULT_ROLE = "analyst"
 
     def _role(self, role):
-        """The Snowflake role a registry role name stands for."""
-        return self.names.analyst_role if role == self.DEFAULT_ROLE else role.upper()
+        """The Snowflake role a registry role name stands for; in a shared account it ends in
+        the environment's suffix, which the registry never holds."""
+        if role == self.DEFAULT_ROLE:
+            return self.names.analyst_role
+        return role.upper() + self.names.suffix
+
+    def _user(self, name):
+        """The Snowflake user a registry warehouse name stands for."""
+        return name.upper() + self.names.suffix
+
+    def _registry_name(self, name):
+        """The registry's name for a Snowflake user or role of this environment; None for one
+        without the environment's suffix, which belongs to no principal or group here."""
+        suffix = self.names.suffix
+        if not name.upper().endswith(suffix) or len(name) <= len(suffix):
+            return None
+        return name[: len(name) - len(suffix)].lower()
+
+    def _policy(self):
+        names = self.names
+        return ".".join(
+            quote(part)
+            for part in (names.database, names.access_schema, names.authentication_policy)
+        )
 
     @contextmanager
     def control(self):
@@ -42,12 +64,19 @@ class SnowflakeAdapter:
                 (
                     dict(zip(columns, row, strict=True))
                     for row in rows
-                    if str(row[columns.index("name")]).upper() == name.upper()
+                    if str(row[columns.index("name")]).upper() == self._user(name)
                 ),
                 None,
             )
             if user is None:
                 return None
+            if self.names.suffix:
+                # Setting the environment's authentication policy on an existing user would
+                # change how its owner signs in.
+                raise ValueError(
+                    f"Snowflake user {self._user(name)} already exists; in a shared account "
+                    "the MCP does not adopt a user, so drop it or choose another warehouse name"
+                )
             rows = cursor.execute(f"SHOW GRANTS TO USER {quote(name)}").fetchall()
             columns = [column[0].lower() for column in cursor.description]
             roles = tuple(str(row[columns.index("role")]) for row in rows)
@@ -62,7 +91,13 @@ class SnowflakeAdapter:
         check_account(name, kind)
         user_type = "SERVICE" if kind == "service" else "PERSON"
         with self.control() as cursor:
-            cursor.execute(f"CREATE USER {quote(name)} TYPE = {user_type}")
+            cursor.execute(f"CREATE USER {quote(self._user(name))} TYPE = {user_type}")
+            if self.names.authentication_policy:
+                # The user signs in only through this environment's own integration.
+                cursor.execute(
+                    f"ALTER USER {quote(self._user(name))} SET AUTHENTICATION POLICY "
+                    + self._policy()
+                )
 
     def source_exists(self, table):
         def name(part, default):
@@ -84,12 +119,12 @@ class SnowflakeAdapter:
     def create_group(self, role):
         check_account(role)
         with self.control() as cursor:
-            cursor.execute(f"CREATE ROLE {quote(role)}")
+            cursor.execute(f"CREATE ROLE {quote(self._role(role))}")
 
     def drop_account(self, name):
         check_account(name)
         with self.control() as cursor:
-            cursor.execute(f"DROP USER {quote(name)}")
+            cursor.execute(f"DROP USER {quote(self._user(name))}")
 
     def open_membership(self, name):
         check_account(name)
@@ -105,12 +140,11 @@ class SnowflakeAdapter:
         roles = {self._role(r) for r in roles}
         if not roles:
             raise ValueError("principal has no warehouse group role")
-        token = self.mint_token(
-            subject=principal["warehouse_name"].upper(), roles=roles, expires_at=expires_at
-        )
+        user = self._user(principal["warehouse_name"])
+        token = self.mint_token(subject=user, roles=roles, expires_at=expires_at)
         connection = self.query_connect(
             account=self.account,
-            user=principal["warehouse_name"].upper(),
+            user=user,
             authenticator="oauth",
             token=token,
             role=sorted(roles)[0],
@@ -137,7 +171,9 @@ class SnowflakeAdapter:
         check_account(name)
         verb, direction = ("GRANT", "TO") if grant else ("REVOKE", "FROM")
         with self.control() as cursor:
-            cursor.execute(f"{verb} ROLE {quote(self._role(role))} {direction} USER {quote(name)}")
+            cursor.execute(
+                f"{verb} ROLE {quote(self._role(role))} {direction} USER {quote(self._user(name))}"
+            )
 
     def dataset_grant(self, role, source, grant=True):
         parts = source.split(".")
@@ -167,6 +203,13 @@ class SnowflakeAdapter:
     def check_scope(self, registry):
         provisioner = quote(self.names.provisioner_role)
         access = self.database.upper() + "." + self.names.access_schema.upper()
+        policy = self.names.authentication_policy
+        registry = registry if isinstance(registry, dict) else {}
+
+        def registered(name, kinds):
+            key = self._registry_name(name)
+            return key is not None and registry.get(key, {}).get("kind") in kinds
+
         with self.control() as cursor:
             rows = cursor.execute(f"SHOW GRANTS TO ROLE {provisioner}").fetchall()
             columns = [c[0].lower() for c in cursor.description]
@@ -179,18 +222,20 @@ class SnowflakeAdapter:
                         kind == "ROLE"
                         and (
                             name.upper() == self.names.analyst_role.upper()
-                            or (
-                                isinstance(registry, dict)
-                                and registry.get(name.lower(), {}).get("kind") == "group"
-                            )
+                            or registered(name, {"group"})
                         )
                         and privilege in {"OWNERSHIP", "USAGE"}
                     )
                     or (
                         kind == "USER"
                         and privilege == "OWNERSHIP"
-                        and isinstance(registry, dict)
-                        and registry.get(name.lower(), {}).get("kind") in {"human", "service"}
+                        and registered(name, {"human", "service"})
+                    )
+                    or (
+                        kind == "AUTHENTICATION_POLICY"
+                        and privilege == "APPLY"
+                        and policy is not None
+                        and name.upper() == f"{access}.{policy}"
                     )
                     or (
                         kind in {"TABLE", "VIEW"}
@@ -247,4 +292,4 @@ class SnowflakeAdapter:
     def drop_group(self, role):
         check_account(role)
         with self.control() as cursor:
-            cursor.execute(f"DROP ROLE {quote(role)}")
+            cursor.execute(f"DROP ROLE {quote(self._role(role))}")

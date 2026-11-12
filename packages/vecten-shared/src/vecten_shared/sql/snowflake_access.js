@@ -11,8 +11,9 @@ function execute(sqlText) { return snowflake.execute({sqlText: sqlText}); }
 var enabled = ENABLED === true || ENABLED === 1 ? true
     : ENABLED === false || ENABLED === 0 ? false : null;
 var relation = RELATION_NAME === undefined ? null : RELATION_NAME;
+// A group's role is at most 63 characters before the environment's suffix.
 if (enabled === null || typeof TARGET !== 'string' ||
-    !/^[A-Z][A-Z0-9_]{0,62}$/.test(TARGET) ||
+    TARGET.length > 63 + suffix.length || !/^[A-Z][A-Z0-9_]*$/.test(TARGET) ||
     /^(ADMIN_|SVC_|PG_)/.test(TARGET) ||
     ['PUBLIC','ACCOUNTADMIN','SECURITYADMIN','SYSADMIN','USERADMIN',
      'ORGADMIN','IMPERSONATOR','WAREHOUSE_OWNER',
@@ -23,6 +24,12 @@ if (typeof SCHEMA_NAME !== 'string' ||
     (['CORE','MARTS','STAGING','SNAPSHOTS'].indexOf(SCHEMA_NAME) === -1 &&
      !/^RAW_[A-Z0-9_]+$/.test(SCHEMA_NAME))) {
     throw new Error('schema is outside the approved convention');
+}
+// A first filter only: another project's suffix can end in this one's (`_X_ACME_DEV` ends in
+// `_ACME_DEV`), so ownership by this environment's provisioner stays the guard.
+if (suffix !== '' && (TARGET.length <= suffix.length ||
+    TARGET.slice(TARGET.length - suffix.length) !== suffix)) {
+    throw new Error('target is not a role of this environment');
 }
 if (TARGET !== analystRole) {
     var grants = execute('SHOW GRANTS ON ROLE ' + quoted(TARGET));

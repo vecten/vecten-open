@@ -43,6 +43,65 @@ def _baked(value):
     return json.dumps(value).replace("$", "\\u0024")
 
 
+def _commented(names):
+    """The comment clause a shared account's objects carry, which tells them from another
+    project's or environment's of the same name; the fixed layout's statements carry none."""
+    return f" COMMENT = {_literal(names.comment)}" if names.suffix else ""
+
+
+def _taken_guard(names):
+    """A block that stops the script, before it changes anything, at an account-level object
+    it would create that exists without the environment's comment: CREATE ... IF NOT EXISTS
+    would otherwise take that object over."""
+    checks = (
+        ("ROLES", "role", _name(names.analyst_role)),
+        ("ROLES", "role", _name(names.provisioner_role)),
+        ("USERS", "user", _name(names.provisioner_user)),
+        ("SECURITY INTEGRATIONS", "security integration", _name(names.integration)),
+    )
+    comment = _literal(names.comment)
+    declarations, body = [], []
+    for number, (show, kind, name) in enumerate(checks, start=1):
+        message = (
+            f"{kind} {name} exists without the comment {names.comment}: another project or "
+            "environment holds the name, and this script changed nothing"
+        )
+        declarations.append(f"  taken_{number} EXCEPTION (-{20000 + number}, {_literal(message)});")
+        body += [
+            f"  SHOW {show} LIKE {_literal(name)};",
+            # LIKE treats `_` as a wildcard, so the exact name is compared again.
+            "  SELECT COUNT(*) INTO :found FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
+            f'    WHERE "name" = {_literal(name)} AND COALESCE("comment", \'\') <> {comment};',
+            f"  IF (found > 0) THEN RAISE taken_{number}; END IF;",
+        ]
+    return (
+        "-- Stops here, changing nothing, when a name this script creates is another's.\n"
+        "EXECUTE IMMEDIATE $$\nDECLARE\n  found INTEGER DEFAULT 0;\n"
+        + "\n".join(declarations)
+        + "\nBEGIN\n"
+        + "\n".join(body)
+        + "\n  RETURN 'no name is taken';\nEND;\n$$;\n"
+    )
+
+
+def _sign_in_policy(names):
+    """The authentication policy that lets the environment's users sign in only through its
+    own integration, and the provisioner's right to set it on the users it creates."""
+    if not names.suffix:
+        return ""
+    policy = ".".join(
+        _ident(part)
+        for part in (names.database.upper(), names.access_schema, names.authentication_policy)
+    )
+    return f"""CREATE AUTHENTICATION POLICY IF NOT EXISTS {policy}
+  AUTHENTICATION_METHODS = ('OAUTH')
+  SECURITY_INTEGRATIONS = ('{_name(names.integration)}')
+  COMMENT = {_literal(names.comment)};
+ALTER AUTHENTICATION POLICY {policy} SET SECURITY_INTEGRATIONS = ('{_name(names.integration)}');
+GRANT APPLY ON AUTHENTICATION POLICY {policy} TO ROLE {_name(names.provisioner_role)};
+"""
+
+
 def snowflake_access_helper(names):
     database = names.database.upper()
     provisioner = _name(names.provisioner_role)
@@ -53,7 +112,7 @@ def snowflake_access_helper(names):
         f"SELECT COUNT(*) FROM {_ident(database)}.INFORMATION_SCHEMA.TABLES "
         "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"
     )
-    return f"""CREATE SCHEMA IF NOT EXISTS {namespace};
+    return f"""CREATE SCHEMA IF NOT EXISTS {namespace}{_commented(names)};
 REVOKE ALL PRIVILEGES ON SCHEMA {namespace} FROM ROLE PUBLIC;
 GRANT USAGE ON SCHEMA {namespace} TO ROLE {provisioner};
 CREATE OR REPLACE PROCEDURE {namespace}.READ_GRANT(
@@ -147,13 +206,17 @@ FROM pg_namespace n JOIN pg_roles r ON r.oid=n.nspowner WHERE n.nspname IN ('cor
                 )
     data_grants = "\n".join(grants)
     issuer = issuer.rstrip("/")
+    if names.suffix and not names.comment:
+        raise ValueError("a shared account's script needs the environment's comment")
+    guard = _taken_guard(names) if names.suffix else ""
+    comment = _commented(names)
     return f"""-- Run as ACCOUNTADMIN, or a role holding MANAGE GRANTS: the future grants need it.
-CREATE ROLE IF NOT EXISTS {analyst};
-CREATE ROLE IF NOT EXISTS {provisioner};
+{guard}CREATE ROLE IF NOT EXISTS {analyst}{comment};
+CREATE ROLE IF NOT EXISTS {provisioner}{comment};
 GRANT CREATE USER ON ACCOUNT TO ROLE {provisioner};
 GRANT CREATE ROLE ON ACCOUNT TO ROLE {provisioner};
 GRANT ROLE {analyst} TO ROLE {provisioner} WITH GRANT OPTION;
-CREATE USER IF NOT EXISTS {user} TYPE = SERVICE;
+CREATE USER IF NOT EXISTS {user} TYPE = SERVICE{comment};
 ALTER USER {user} SET RSA_PUBLIC_KEY = {_literal(key)};
 GRANT ROLE {provisioner} TO USER {user};
 GRANT USAGE ON DATABASE {database} TO ROLE {provisioner};
@@ -169,13 +232,13 @@ CREATE SECURITY INTEGRATION IF NOT EXISTS {integration}
   EXTERNAL_OAUTH_ANY_ROLE_MODE = ENABLE
   EXTERNAL_OAUTH_TOKEN_USER_MAPPING_CLAIM = ('sub')
   EXTERNAL_OAUTH_SNOWFLAKE_USER_MAPPING_ATTRIBUTE = 'LOGIN_NAME'
-  EXTERNAL_OAUTH_SCOPE_MAPPING_ATTRIBUTE = 'scope';
+  EXTERNAL_OAUTH_SCOPE_MAPPING_ATTRIBUTE = 'scope'{comment};
 ALTER SECURITY INTEGRATION {integration} SET EXTERNAL_OAUTH_ANY_ROLE_MODE = ENABLE;
 ALTER SECURITY INTEGRATION {integration} SET
   EXTERNAL_OAUTH_ISSUER = {_literal(issuer)}
   EXTERNAL_OAUTH_JWS_KEYS_URL = {_literal(issuer + "/jwks")}
   EXTERNAL_OAUTH_AUDIENCE_LIST = ({_literal(names.audience)});
-{_leftover_grants(names)}
+{_sign_in_policy(names)}{_leftover_grants(names)}
 -- The users and roles {provisioner} owns. On a running environment, or one whose state
 -- snapshot was restored, they are the MCP's own: keep them. On a deploy after a destroy
 -- without that restore, the new state knows none of them and the MCP refuses to start
