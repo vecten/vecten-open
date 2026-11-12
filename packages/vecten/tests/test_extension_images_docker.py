@@ -78,7 +78,7 @@ def test_extension_install_uses_ephemeral_build_secret(tmp_path, kind, monkeypat
         (project_dags / "project.py").write_text(
             "from airflow.sdk import DAG\ndag = DAG('project_dag', schedule=None)\n"
         )
-    from vecten.extensions import base_constraints, resolve_runtime_locks
+    from vecten.extensions import base_constraints, resolve_lock
     from vecten_shared.provider.local import LocalProvider
 
     baseline = base_constraints(kind)
@@ -86,9 +86,12 @@ def test_extension_install_uses_ephemeral_build_secret(tmp_path, kind, monkeypat
     LocalProvider(tmp_path, inside_compose=False).put_secret(
         "PACKAGE_INDEX_URL", "https://pypi.org/simple"
     )
-    for filename, lock in resolve_runtime_locks(
-        ["vecten-test-extension==1.0"], tmp_path, config
-    ).items():
+    runtime_locks = {
+        f"requirements-{kind}.lock": resolve_lock(
+            ["vecten-test-extension==1.0"], tmp_path, constraints=baseline, runtime=True
+        )
+    }
+    for filename, lock in runtime_locks.items():
         (tmp_path / filename).write_text(lock)
         subprocess.run(
             [
