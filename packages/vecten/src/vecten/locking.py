@@ -35,6 +35,10 @@ __all__ = [
     "inputs_hash",
     "lock_problems",
     "lock_state",
+    "listed_paths",
+    "metadata_current",
+    "paths_listed",
+    "metadata_markers",
     "parse_record",
     "read_pins",
     "read_record",
@@ -100,8 +104,14 @@ def roots(
         if req is None:
             return None
         name = normalize_name(req.name)
-        version = _exact_version(pins[name]) if name in pins else None
         entry = record.get(name)
+        if entry is not None and entry.source_path:
+            # uv resolves the path against its working directory, the project root.
+            extras = set(req.extras) | ({component} & set(entry.extras))
+            listed = f"[{','.join(sorted(extras))}]" if extras else ""
+            found.add(f"./{entry.source_path}{listed}")
+            continue
+        version = _exact_version(pins[name]) if name in pins else None
         # The runtimes refuse an installed version outside the registration's constraint.
         if version is None or entry is None or entry.version != version:
             return None
@@ -116,6 +126,50 @@ def roots(
     if component == "cli":
         found.add(f"vecten=={release()}")
     return sorted(found)
+
+
+def metadata_markers(record: dict[str, Extension]) -> list[str]:
+    """One input per in-repo extension: its pyproject.toml's hash as `vecten lock` read it.
+
+    Its metadata decides what resolves; its code does not, so only this joins a lock's inputs.
+    """
+    return sorted(
+        f"{name} metadata={entry.metadata_sha256}"
+        for name, entry in record.items()
+        if entry.source_path
+    )
+
+
+def metadata_current(root: Path, record: dict[str, Extension]) -> bool:
+    """Whether every in-repo extension's pyproject.toml is still the one the record hashed."""
+    for entry in record.values():
+        if not entry.source_path:
+            continue
+        try:
+            digest = hashlib.sha256((root / entry.source_path / "pyproject.toml").read_bytes())
+        except OSError:
+            return False
+        if digest.hexdigest() != entry.metadata_sha256:
+            return False
+    return True
+
+
+def listed_paths(root: Path) -> set[str]:
+    """The `./extensions/<name>` lines of requirements.txt, as project-relative paths."""
+    path = root / PINS_FILE
+    if not path.is_file():
+        return set()
+    return {
+        line[2:].split("[")[0].rstrip("/")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.startswith("./extensions/")
+    }
+
+
+def paths_listed(root: Path, record: dict[str, Extension]) -> bool:
+    """Whether requirements.txt still lists every in-repo extension by its path."""
+    listed = listed_paths(root)
+    return all(e.source_path in listed for e in record.values() if e.source_path)
 
 
 def inputs_hash(component: str, lock_roots: list[str]) -> str:
@@ -154,9 +208,10 @@ def lock_state(root: Path, config: VectenConfig, component: str) -> str:
         return "unstamped"
     record = read_record(root)
     lock_roots = None if record is None else roots(config, read_pins(root), record, component)
-    if lock_roots is None or stamp != (component, inputs_hash(component, lock_roots)):
+    if lock_roots is None or not metadata_current(root, record) or not paths_listed(root, record):
         return "stale"
-    return "fresh"
+    digest = inputs_hash(component, [*lock_roots, *metadata_markers(record)])
+    return "fresh" if stamp == (component, digest) else "stale"
 
 
 def lock_problems(root: Path, config: VectenConfig) -> list[str]:

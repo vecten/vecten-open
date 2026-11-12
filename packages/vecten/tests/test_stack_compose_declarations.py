@@ -106,3 +106,25 @@ def test_on_a_vm_a_connector_secret_cannot_shadow_the_hosts_own_variables(tmp_pa
         generate_compose(
             c, "vm", ["platform"], stack(tmp_path, None), project="acme", hosts=VM_HOSTS
         )
+
+
+def test_built_services_get_the_extensions_context_only_with_in_repo_extensions(tmp_path):
+    record = {"acme": Extension("1.0", (), source_path="extensions/acme", metadata_sha256="0")}
+    with_in_repo = generate_compose(
+        config(),
+        "vm",
+        ["platform", "mcp"],
+        stack(tmp_path / "a", record),
+        project="acme",
+        hosts=VM_HOSTS,
+    )
+    for name in ("airflow-api-server", "airflow-scheduler", "mcp-server"):
+        build = with_in_repo["services"][name].get("build")
+        if build:
+            assert build["additional_contexts"] == {"extensions": "../../extensions"}
+    without = generate_compose(
+        config(), "vm", ["platform", "mcp"], stack(tmp_path / "b"), project="acme", hosts=VM_HOSTS
+    )
+    assert all(
+        "additional_contexts" not in (s.get("build") or {}) for s in without["services"].values()
+    )

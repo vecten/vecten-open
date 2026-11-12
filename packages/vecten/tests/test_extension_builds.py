@@ -294,6 +294,97 @@ def test_a_dockerfile_without_system_packages_is_unchanged(tmp_path):
         assert text == (with_empty / "build" / f"{kind}.Dockerfile").read_text()
 
 
+# --- in-repo extensions -------------------------------------------------------
+
+
+def _in_repo_project(root, c):
+    from vecten import locking
+    from vecten_shared.extension_record import Extension
+
+    from .test_in_repo import make
+
+    make(root)
+    info = __import__("vecten.in_repo", fromlist=["read"]).check(root, "./extensions/acme-portal")
+    record = {
+        "acme-portal": Extension(
+            info.version,
+            info.extras,
+            source_path=info.path,
+            metadata_sha256=info.metadata_sha256,
+            build_requires=("hatchling==1.26.3", "pluggy==1.5.0"),
+        )
+    }
+    (root / "requirements.txt").write_text("./extensions/acme-portal\n")
+    (root / locking.RECORD_FILE).write_text(locking.record_text(record))
+    for component in locking.components(c):
+        roots = locking.roots(c, {}, record, component)
+        digest = locking.inputs_hash(component, [*roots, *locking.metadata_markers(record)])
+        (root / locking.LOCK_FILES[component]).write_text(
+            locking.stamp_line(component, digest) + "\nhttpx==0.28.1\n"
+        )
+
+
+def test_an_in_repo_extension_is_built_from_the_extra_context_without_resolving(tmp_path):
+    c = config(extensions=["acme-portal"])
+    _in_repo_project(tmp_path, c)
+    stack = tmp_path / ".vecten" / "stack"
+    write_project_layer(stack, c, None)
+    assert (stack / "build" / "build-constraints.txt").read_text() == (
+        "hatchling==1.26.3\npluggy==1.5.0\n"
+    )
+    for kind in ("airflow", "mcp"):
+        text = (stack / "build" / f"{kind}.Dockerfile").read_text()
+        assert "--mount=type=bind,from=extensions,target=/tmp/extensions,rw" in text
+        assert "--no-deps" in text and "-r /tmp/requirements.txt" in text
+        assert (
+            "--no-deps --build-constraint /tmp/build-constraints.txt /tmp/extensions/acme-portal"
+            in text
+        )
+        assert "pip check" in text
+
+
+def test_a_locked_project_without_in_repo_extensions_installs_its_lock_without_resolving(
+    tmp_path,
+):
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    stack = tmp_path / ".vecten" / "stack"
+    write_project_layer(stack, c, None)
+    for kind in ("airflow", "mcp"):
+        text = (stack / "build" / f"{kind}.Dockerfile").read_text()
+        assert "--no-deps" in text
+        assert "from=extensions" not in text
+    assert not (stack / "build" / "build-constraints.txt").exists()
+
+
+def test_an_unlocked_or_legacy_project_keeps_todays_install(tmp_path):
+    for root, prepare in (
+        (tmp_path / "unlocked", lambda r: None),
+        (
+            tmp_path / "legacy",
+            lambda r: (
+                (r / "requirements.txt").write_text("acme-demo==1.0\n"),
+                write_locks(r, "acme-demo==1.0\n"),
+            ),
+        ),
+    ):
+        root.mkdir()
+        prepare(root)
+        stack = root / ".vecten" / "stack"
+        write_project_layer(stack, config(), None)
+        for kind in ("airflow", "mcp"):
+            text = (stack / "build" / f"{kind}.Dockerfile").read_text()
+            assert "--no-deps" not in text and "extensions" not in text
+
+
+def test_a_build_rechecks_the_in_repo_rules(tmp_path):
+    c = config(extensions=["acme-portal"])
+    _in_repo_project(tmp_path, c)
+    (tmp_path / "extensions/acme-portal/src/link").symlink_to(tmp_path)
+    with pytest.raises(Failure, match="symbolic link"):
+        write_project_layer(tmp_path / ".vecten" / "stack", c, None)
+
+
 @pytest.mark.parametrize("body", ["acme-demo==9.0\n", ""])
 def test_a_stamped_lock_whose_body_breaks_its_inputs_is_refused(tmp_path, body):
     c = config(extensions=["acme-demo"])
@@ -302,3 +393,11 @@ def test_a_stamped_lock_whose_body_breaks_its_inputs_is_refused(tmp_path, body):
     (tmp_path / "requirements-mcp.lock").write_text(f"{stamp}\n{body}")
     with pytest.raises(Failure, match="requirements-mcp.lock"):
         write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_an_unlocked_project_never_installs_an_in_repo_name_from_an_index(tmp_path):
+    from .test_in_repo import make
+
+    make(tmp_path)
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", config(extensions=["acme-portal"]), None)

@@ -260,3 +260,13 @@ def test_settings_without_a_record_entry_name_vecten_lock():
     c = config(settings={"acme": {"daily_cap": 5}})
     with pytest.raises(Failure, match="vecten lock"):
         d.check_settings(c, {}, "local")
+
+
+def test_a_record_whose_in_repo_path_is_not_its_own_folder_reads_as_missing():
+    from vecten_shared.extension_record import parse_record, record_text
+
+    good = {"acme": Extension("1.0", (), source_path="extensions/acme", metadata_sha256="0")}
+    assert parse_record(record_text(good)) is not None
+    for path in ("../acme", "extensions/other", "extensions/acme/src", "/abs/acme"):
+        bad = {"acme": Extension("1.0", (), source_path=path, metadata_sha256="0")}
+        assert parse_record(record_text(bad)) is None, path

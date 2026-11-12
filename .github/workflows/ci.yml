@@ -133,6 +133,7 @@ jobs:
               packages/vecten-platform/tests/test_dbt_dag_in_image.py
               packages/vecten/tests/test_extension_images_docker.py
               packages/vecten/tests/test_component_dependencies_docker.py
+              packages/vecten/tests/test_in_repo_images_docker.py
             images: airflow mcp_base
           - part: rest-1
             tests: --shard 1/4 $REST
@@ -155,6 +156,7 @@ jobs:
         --ignore=packages/vecten/tests/test_up_e2e.py
         --ignore=packages/vecten/tests/test_extension_images_docker.py
         --ignore=packages/vecten/tests/test_component_dependencies_docker.py
+        --ignore=packages/vecten/tests/test_in_repo_images_docker.py
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The pulls run while uv sets up, and the tests find the images in place.

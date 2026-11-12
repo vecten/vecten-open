@@ -150,7 +150,15 @@ def _build(mode: str, stack_dir: Path, dockerfile: str) -> dict:
     # A bundle is rendered on another machine than the VM it runs on, so its context is
     # relative to the stack directory Compose runs from.
     context = f"./{BUILD_DIR}" if mode == "vm" else str(stack_dir / BUILD_DIR)
-    return {"context": context, "dockerfile": dockerfile}
+    build = {"context": context, "dockerfile": dockerfile}
+    if any(entry.source_path for entry in project_record(stack_dir).values()):
+        # In-repo extensions build from the project's own extensions/, never copied into the
+        # layer's context.
+        extensions = (
+            "../../extensions" if mode == "vm" else str(stack_dir.parent.parent / "extensions")
+        )
+        build["additional_contexts"] = {"extensions": extensions}
+    return build
 
 
 # A Scaleway VM has no instance identity, so the agent hands its containers the VM's key. The

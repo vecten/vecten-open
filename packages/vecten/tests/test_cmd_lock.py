@@ -13,6 +13,8 @@ from vecten_shared.config import load_config
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.versions import VERSIONS
 
+from .test_in_repo import make
+
 
 @pytest.fixture
 def project(invoke, workdir, monkeypatch):
@@ -44,17 +46,21 @@ def fakes(monkeypatch):
             extras=extras,
         )
 
-    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=()):
+    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=(), **kw):
         seen["compiles"].append(
-            {"roots": roots, "runtime": runtime, "previous": previous, "upgrade": upgrade}
+            {"roots": roots, "runtime": runtime, "previous": previous, "upgrade": upgrade, **kw}
         )
-        return "".join(f"{r}\n" for r in roots if "==" in r) + "helper==1.0\n"
+        # uv echoes a path input as given, without its extras.
+        paths = [r.split("[")[0] + "\n" for r in roots if r.startswith("./")]
+        return "".join(paths) + "".join(f"{r}\n" for r in roots if "==" in r) + "helper==1.0\n"
 
     monkeypatch.setattr(extensions, "inspect_package", inspect)
     monkeypatch.setattr(extensions, "resolve_lock", resolve)
     monkeypatch.setattr(extensions, "base_constraints", lambda kind: f"base-{kind}==1.0\n")
     monkeypatch.setattr(
-        extensions, "install_lock", lambda lock, root: seen["installed"].append(lock)
+        extensions,
+        "install_lock",
+        lambda lock, root, editable=(): seen["installed"].append((lock, tuple(editable))),
     )
     seen["packages"] = packages
     return seen
@@ -85,7 +91,7 @@ def test_lock_writes_every_record_with_inputs_lines(invoke, project, fakes):
         "settings": None,
     }
     assert locking.lock_problems(project, load_config(project)) == []
-    assert "acme-demo[cli]==1.2.0" in fakes["installed"][0]
+    assert "acme-demo[cli]==1.2.0" in fakes["installed"][0][0]
 
 
 def test_each_lock_requests_its_components_extra(invoke, project, fakes):
@@ -129,7 +135,7 @@ def test_a_failed_compile_changes_no_record_and_names_the_lock(invoke, project, 
     assert invoke("lock").exit_code == 0
     before = {p.name: p.read_bytes() for p in project.iterdir() if p.is_file()}
 
-    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=()):
+    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=(), **kw):
         if any("[mcp]" in r for r in roots):
             raise Failure(ExitCode.TOOL_FAILED, "resolution failed")
         return "x==1\n"
@@ -167,7 +173,7 @@ def test_a_pinned_extension_with_a_matching_record_is_not_inspected_again(invoke
 
 
 def test_json_reports_packages_pinned_differently_across_locks(invoke, project, fakes, monkeypatch):
-    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=()):
+    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=(), **kw):
         return "httpx==0.26.0\n" if runtime else "httpx==0.27.0\n"
 
     monkeypatch.setattr(extensions, "resolve_lock", resolve)
@@ -183,7 +189,7 @@ def test_resolve_lock_seeds_the_output_with_the_previous_lock_and_passes_upgrade
 ):
     seen = {}
 
-    def uv(args, root):
+    def uv(args, root, cwd=None):
         out = Path(args[args.index("--output-file") + 1])
         seen["seeded"] = out.read_text()
         seen["args"] = args
@@ -366,3 +372,117 @@ def test_two_extensions_may_name_their_manifest_entry_point_alike():
     )
     assert found["acme-one"].secrets == ("ONE_TOKEN",)
     assert found["acme-two"].secrets == ("TWO_TOKEN",)
+
+
+# --- in-repo extensions ------------------------------------------------------
+
+
+def _register(root):
+    make(root)
+    doc = tomllib.loads((root / "vecten.toml").read_text())
+    doc["extensions"] = ["acme-portal"]
+    (root / "vecten.toml").write_text(tomli_w.dumps(doc))
+    (root / "requirements.txt").write_text("./extensions/acme-portal\n")
+
+
+def test_extension_add_registers_an_in_repo_extension_by_its_path(invoke, project, fakes):
+    make(project)
+    r = invoke("extension", "add", "./extensions/acme-portal", "--json")
+    assert r.exit_code == 0, r.output
+    assert tomllib.loads((project / "vecten.toml").read_text())["extensions"] == ["acme-portal"]
+    assert (project / "requirements.txt").read_text() == "./extensions/acme-portal\n"
+    entry = json.loads((project / locking.RECORD_FILE).read_text())["extensions"]["acme-portal"]
+    assert entry["source"] == {"path": "extensions/acme-portal"}
+    assert entry["version"] == "0.1.0"
+    assert entry["extras"] == ["platform"]
+    assert len(entry["metadata_sha256"]) == 64
+    assert entry["build_requires"]
+    assert fakes["inspected"] == []
+
+
+def test_each_lock_is_resolved_with_the_extension_as_input_and_holds_no_path(
+    invoke, project, fakes
+):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    roots = {tuple(c["roots"]) for c in fakes["compiles"] if not c.get("build")}
+    assert any("./extensions/acme-portal[platform]" in r for r in roots)
+    assert all(c.get("cwd") == project for c in fakes["compiles"])
+    for name in locking.LOCK_FILES.values():
+        text = (project / name).read_text()
+        assert "./extensions" not in text and "acme-portal" not in text
+
+
+def test_the_cli_installs_the_lock_then_the_extension_editable(invoke, project, fakes):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    lock, editable = fakes["installed"][-1]
+    assert editable == ("extensions/acme-portal",)
+
+
+def test_a_code_edit_keeps_the_locks_and_a_metadata_edit_makes_them_stale(invoke, project, fakes):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    module = project / "extensions/acme-portal/src/acme_portal/__init__.py"
+    module.write_text("skill = 'changed'\n")
+    assert locking.lock_problems(project, load_config(project)) == []
+    metadata = project / "extensions/acme-portal/pyproject.toml"
+    metadata.write_text(metadata.read_text().replace("httpx>=0.27", "httpx>=0.28"))
+    assert "requirements-airflow.lock" in locking.lock_problems(project, load_config(project))
+
+
+def test_a_lock_that_pins_the_in_repo_name_from_an_index_is_refused(
+    invoke, project, fakes, monkeypatch
+):
+    _register(project)
+
+    def resolve(roots, root, **kw):
+        return "acme-portal==9.9.9\nhelper==1.0\n"
+
+    monkeypatch.setattr(extensions, "resolve_lock", resolve)
+    r = invoke("lock", "--json")
+    assert r.exit_code == ExitCode.REFUSED
+    assert "acme-portal" in r.output
+
+
+def test_a_registered_in_repo_extension_that_breaks_a_rule_stops_the_lock(invoke, project, fakes):
+    _register(project)
+    (project / "extensions/acme-portal/src/link").symlink_to(project)
+    r = invoke("lock", "--json")
+    assert r.exit_code != 0
+    assert "symbolic link" in r.output
+
+
+def test_an_in_repo_extension_stays_in_repo_when_its_requirements_line_is_lost(
+    invoke, project, fakes
+):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    (project / "requirements.txt").write_text("")
+    assert invoke("lock").exit_code == 0
+    assert fakes["inspected"] == []
+    assert (project / "requirements.txt").read_text() == "./extensions/acme-portal\n"
+
+
+def test_adding_by_name_an_extension_kept_in_the_project_is_refused(invoke, project, fakes):
+    make(project)
+    r = invoke("extension", "add", "acme-portal", "--json")
+    assert r.exit_code != 0
+    assert "./extensions/acme-portal" in r.output
+    assert fakes["inspected"] == []
+
+
+def test_switching_requirements_to_an_index_pin_makes_the_locks_stale_and_relocks_by_name(
+    invoke, project, fakes
+):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    import shutil
+
+    shutil.rmtree(project / "extensions")
+    (project / "requirements.txt").write_text("acme-portal==0.1.0\n")
+    assert "requirements-airflow.lock" in locking.lock_problems(project, load_config(project))
+    fakes["packages"]["acme-portal"] = ("0.1.0", ())
+    assert invoke("lock").exit_code == 0
+    entry = json.loads((project / locking.RECORD_FILE).read_text())["extensions"]["acme-portal"]
+    assert "source" not in entry

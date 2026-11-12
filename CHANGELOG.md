@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
+- In-repo extensions: an extension package kept in the project under `extensions/<name>/`,
+  registered with `vecten extension add ./extensions/<name>`, locked with its third-party
+  dependencies only, installed editable in the CLI's environment and built from the bundle on
+  every host. `vecten extension new <name> [--template <dir or git+https://…@<ref>>]` creates
+  one from a template or the built-in skeleton, once.
 - `vecten lock` writes `requirements.txt` (one pin per extension), one lock per component and
   `extensions.lock.json` together. An extension's `platform`, `mcp` and `cli` extras install
   only in that component, and `[dependencies.platform|mcp|cli] python` in `vecten.toml` adds a

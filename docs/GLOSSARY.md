@@ -34,7 +34,9 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Setting**: a value an extension or the project reads at run time, kept in `[settings.<extension>]` or `[settings.project]` of `vecten.toml`, with per-environment overrides under `env.<env>`; read with `vecten_shared.context`.
 
-**Bundle**: the archive of a project's DAGs, connectors, dbt project, `osi/` and `evals/` at one commit that a ship delivers to the hosts.
+**Bundle**: the archive of a project's DAGs, connectors, dbt project, `osi/`, `evals/` and in-repo `extensions/` at one commit that a ship delivers to the hosts.
+
+**In-repo extension**: an extension package kept in the project under `extensions/<name>/` and registered with `vecten extension add ./extensions/<name>`; the hosts build it from the bundle, so it is never published to or fetched from an index, while its third-party dependencies and build backend still come from one; see [extensions in the project](extensions.md#extensions-in-the-project).
 
 **Ship**: deliver a project's code and semantic files to existing hosts, without changing infrastructure through Terraform.
 

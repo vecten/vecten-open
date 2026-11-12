@@ -55,6 +55,7 @@ CONTENT: tuple[str, ...] = (
     "requirements-airflow.lock",
     "requirements-mcp.lock",
     "extensions.lock.json",
+    "extensions",
     "orchestration/dags",
     "orchestration/docker-compose.override.yml",
     "connectors",
@@ -119,6 +120,25 @@ def compose_project(config: VectenConfig, env: str) -> str:
     return name_prefix(config.project.name, env)
 
 
+# A package's local build output is rebuilt on the host from its source.
+SKIPPED_BUILD_OUTPUT = frozenset({"dist", "build"})
+
+
+def _extension_build_output(rel: str, name: str) -> bool:
+    """A build tool's output at an extension's root, or setuptools' egg-info beside its code.
+
+    Deeper folders of these names are package data, such as a portal's built static files.
+    """
+    parts = rel.split("/")
+    if parts[0] != "extensions" or len(parts) < 3:
+        return False
+    at_root = len(parts) == 3
+    under_src = len(parts) == 4 and parts[2] == "src"
+    return (at_root and name in SKIPPED_BUILD_OUTPUT) or (
+        (at_root or under_src) and name.endswith(".egg-info")
+    )
+
+
 def _skipped(rel: str, name: str) -> bool:
     return (
         name in SKIPPED_NAMES
@@ -126,6 +146,7 @@ def _skipped(rel: str, name: str) -> bool:
         or name.startswith(".env.")
         or name.endswith(SKIPPED_SUFFIXES)
         or rel in SKIPPED_PATHS
+        or _extension_build_output(rel, name)
     )
 
 

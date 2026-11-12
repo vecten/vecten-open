@@ -58,6 +58,58 @@ the command. Generated links are refreshed or removed only while their targets s
 the automatically generated `.vecten/extension-skills.json` ownership record; you do not
 need to maintain it manually.
 
+## Extensions in the project
+
+An extension can live in the project itself, under `extensions/<name>/`, as a normal Python
+package that the project owns and changes in its own pull requests. Nothing about it is
+published or fetched from an index.
+
+```text
+extensions/acme-portal/
+├── pyproject.toml            # static name and version, [build-system], entry points, extras
+├── README.md
+├── src/acme_portal/          # the package; DAGs, dbt projects, Ossie documents and skills
+│   ├── __init__.py           # live inside it as package data
+│   └── skills/acme-portal/SKILL.md
+└── tests/
+```
+
+**Create one.** `vecten extension new acme-portal` copies a minimal skeleton packaged with the
+CLI and registers it. `--template <dir>` or
+`--template 'git+https://<host>/<repo>@<tag>#subdirectory=<dir>'` copies a template instead,
+read once with your own git setup; nothing records where it came from, so name the template and
+its tag in your commit message. A template is an extension package whose names use four
+placeholders, replaced in text files and in file and directory names: `__vecten_name__`
+(`acme-portal`), `__vecten_package__` (`acme_portal`), `__vecten_title__` (`Acme Portal`) and
+`__vecten_version__` (the running Vecten Open). Other files, such as images, are copied byte for
+byte, and dbt's Jinja is untouched. An optional `vecten-template.toml` with `requires_vecten` is
+checked and not copied. `--no-add` copies without registering.
+
+**Register one.** `vecten extension add ./extensions/acme-portal` accepts only a directory
+directly under `extensions/` whose name is the package's normalised name, with no `..` and no
+symbolic link anywhere under it, and a `pyproject.toml` with a `[build-system]` and a static name, version, dependencies, extras and
+entry points: those decide what is locked and wired, and only this file is hashed. `vecten.toml` lists `acme-portal`; `requirements.txt` holds
+`./extensions/acme-portal`; `extensions.lock.json` records its path, version, the hash of its
+`pyproject.toml` and its build requirements, pinned. `vecten lock`, `up` and `ship` check the
+same rules again.
+
+**Dependencies.** The locks are resolved with the in-repo extension as an input and hold only
+third-party packages, never a line for the extension itself, and a lock that would take a
+package of the same name from an index is refused. Changing `pyproject.toml` (dependencies,
+extras, entry points) makes the locks stale until `vecten lock`; changing code does not.
+
+**Where it runs.** Vecten's own environment installs it editable, so the CLI, its skills and
+`vecten connector run` see every edit at once. The images install the lock with `--no-deps`, then
+build the extension from `extensions/` on the machine that builds them, with the pinned build
+requirements; the bundle carries `extensions/` without `dist`, `build` or `*.egg-info`. A
+package that compiles code needs a compiler in the image, from `[dependencies.<component>]
+system`. Because the images install the package rather than run its source, every resource it
+serves must be package data inside `src/<package>/`.
+
+**Reviewing a change** to an in-repo extension is reviewing project code: read the diff under
+`extensions/<name>/`, and treat a `pyproject.toml` change like any dependency change, with the
+lock diff beside it.
+
 ## Dependencies and locks
 
 `vecten lock` needs Docker and the release's base images, as `extension add` does. It writes
