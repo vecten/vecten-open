@@ -337,7 +337,8 @@ def content_mtime(data: bytes) -> int:
     """The mtime a member with these bytes carries: equal content, equal time.
 
     BuildKit reuses a build-context file it already holds whose size and mtime match, even one
-    from another release's directory, so two contents must never share a time."""
+    from another release's directory; a time drawn from the content's sha256 makes two contents
+    of one size share it with a chance of 1 in 2**29."""
     digest = int.from_bytes(hashlib.sha256(data).digest()[:8], "big")
     return CONTENT_MTIME_BASE + digest % CONTENT_MTIME_SPAN
 
