@@ -48,7 +48,9 @@ def app_secret_names(root: Path, config: VectenConfig, extension: str, app: str)
     return credential_names(app, bound.host)
 
 
-def connect_app(root: Path, key: str, env: str, *, adopt: bool = False) -> dict:
+def connect_app(
+    root: Path, key: str, env: str, *, adopt: bool = False, rotate: bool = True
+) -> dict:
     from vecten.mcp_client import AdminClient, endpoint
 
     extension, app = split_key(key)
@@ -56,9 +58,29 @@ def connect_app(root: Path, key: str, env: str, *, adopt: bool = False) -> dict:
     names = app_secret_names(root, config, extension, app)
     # Every refusal comes before the admin call: a call that succeeds has already replaced
     # the app's previous secret.
+    if adopt and not rotate:
+        raise Failure(
+            ExitCode.USAGE, "--adopt replaces the principal's credentials; drop --groups-only"
+        )
     endpoint(root, env)
-    store = None if env == "local" else cloud_store(root, env)
-    data = AdminClient(root, env).call("apps/connect", {"name": key, "adopt": adopt})
+    store = None if env == "local" or not rotate else cloud_store(root, env)
+    data = AdminClient(root, env).call(
+        "apps/connect", {"name": key, "adopt": adopt, "rotate": rotate}
+    )
+    if not rotate:
+        principal = data["principal"]["warehouse_name"]
+        return {
+            "app": key,
+            "env": env,
+            "principal": principal,
+            "created": False,
+            "groups": data["groups"],
+            "secrets": [],
+            "message": (
+                f"{principal} is in {', '.join(data['groups'])}, as vecten.toml binds {key}; "
+                "its credentials are unchanged."
+            ),
+        }
     credentials = data["credentials"]
     values = (credentials["client_id"], credentials["client_secret"])
     stored: list[str] = []

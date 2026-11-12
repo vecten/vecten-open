@@ -372,3 +372,88 @@ def test_the_analytics_screen_is_in_the_menu(apps):
 def test_the_analytics_screen_without_apps_says_how_to_bind_one(surfaces):
     page = screens.text(surfaces.http.get("/admin/apps"))
     assert "No analytics app is bound" in page and "vecten.toml" in page
+
+
+def connected(apps):
+    return cli(apps, "apps/connect", {"name": "acme-sales.overview"})["principal"]
+
+
+def member_grants(apps, name):
+    return [(op[1], op[3]) for op in apps.adapter.operations if op[0] == "member" and op[2] == name]
+
+
+def test_an_app_principal_may_join_no_group_outside_its_binding(apps):
+    principal = connected(apps)
+    apps.runtime.access.create_group("finance")
+    headers = {"Authorization": "Bearer " + apps.token}
+    data = {"group": "finance", "id": principal["id"], "member": True}
+    response = apps.http.post("/api/admin/groups/member", headers=headers, json=data)
+    assert response.status_code == 400
+    assert "acme-sales.overview" in response.json()["error"]
+    assert "finance" not in apps.runtime.state.groups_for(principal["id"])
+
+
+def test_an_app_principal_may_leave_a_group_and_rejoin_a_bound_one(apps):
+    principal = connected(apps)
+    access = apps.runtime.access
+    access.membership("sales", principal["id"], False)
+    access.membership("sales", principal["id"], True)
+    assert apps.runtime.state.groups_for(principal["id"]) == {"sales", "default"}
+
+
+def test_the_warehouse_grants_an_app_principal_its_admitted_groups_roles_only(apps):
+    principal = connected(apps)
+    grants = member_grants(apps, "svc_app_overview")
+    # default is admitted through its schema grant; sales holds no grant on orders.
+    assert ("analyst", True) in grants
+    assert ("sales", True) not in grants
+    apps.runtime.access.grant("sales", "dataset", "orders")
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", True)
+    apps.runtime.access.revoke("sales", "dataset", "orders")
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", False)
+    assert apps.runtime.state.groups_for(principal["id"]) == {"sales", "default"}
+
+
+def test_an_app_principal_whose_groups_differ_from_the_binding_is_in_access_health(apps):
+    principal = connected(apps)
+    apps.runtime.apps.apps["overview"] = BoundApp(
+        "acme-sales", "overview", "Sales overview", "container", ("orders",), ("sales",)
+    )
+    entry = next(
+        f
+        for f in api_read(apps, "access-health")["apps"]
+        if f.get("reason") == "groups differ from the binding"
+    )
+    assert entry["principal_id"] == principal["id"]
+    assert (entry["groups"], entry["bound"]) == (["default", "sales"], ["sales"])
+    assert "vecten app connect acme-sales.overview --env <env> --groups-only" in entry["message"]
+
+
+def test_connecting_with_groups_only_resyncs_without_rotating(apps):
+    oauth = apps.runtime.oauth
+    first = cli(apps, "apps/connect", {"name": "acme-sales.overview"})
+    apps.runtime.apps.apps["overview"] = BoundApp(
+        "acme-sales", "overview", "Sales overview", "container", ("orders",), ("sales",)
+    )
+    result = cli(apps, "apps/connect", {"name": "acme-sales.overview", "rotate": False})
+    assert result["credentials"] is None and result["groups"] == ["sales"]
+    assert apps.runtime.state.groups_for(first["principal"]["id"]) == {"sales"}
+    credentials = first["credentials"]
+    oauth.client_credentials(credentials["client_id"], credentials["client_secret"], oauth.resource)
+
+
+def test_groups_only_needs_an_existing_principal(apps):
+    error = refused(apps, {"name": "acme-sales.overview", "rotate": False})
+    assert "no principal" in error
+
+
+def test_adopting_an_unmarked_principal_whose_account_holds_other_roles_is_refused(apps):
+    from vecten_mcp.warehouse.base import Account
+
+    created = unmarked_service(apps)
+    apps.adapter.accounts["svc_app_overview"] = Account(
+        "svc_app_overview", ("ANALYST", "FINANCE", "PII_READER"), can_adopt=True
+    )
+    error = refused(apps, {"name": "acme-sales.overview", "adopt": True})
+    assert "PII_READER" in error and "FINANCE" not in error
+    assert apps.runtime.state.get(APP_PRINCIPALS, created["id"]) is None

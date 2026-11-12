@@ -268,7 +268,10 @@ class AdminService:
             return apps.listing(auth.issuer) if apps else []
         if operation == "apps/connect":
             return admin.connect_app(
-                getattr(runtime, "apps", None), data["name"], adopt=data.get("adopt") is True
+                getattr(runtime, "apps", None),
+                data["name"],
+                adopt=data.get("adopt") is True,
+                rotate=data.get("rotate") is not False,
             )
         if operation == "audit-status":
             if not runtime.audit:

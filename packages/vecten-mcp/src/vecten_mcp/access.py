@@ -8,11 +8,14 @@ from threading import RLock
 
 from sqlalchemy import delete, insert, select
 
+from vecten_mcp.apps import APP_PRINCIPALS
 from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import warehouse_name
 from vecten_mcp.state import groups, memberships
 
 logger = logging.getLogger(__name__)
+# Records kind: app principal id -> {"roles": the warehouse roles granted to it}.
+APP_ROLES = "app_roles"
 
 
 class AccessService:
@@ -29,6 +32,49 @@ class AccessService:
         with self.lock:
             if self.apps is not None:
                 self.apps.admit(self.datasets)
+                for principal_id, _ in self.state.scan(APP_PRINCIPALS):
+                    try:
+                        self.sync_app_roles(principal_id)
+                    except Exception as exc:
+                        # The query path refuses an app principal holding a role beyond its
+                        # admitted groups', so a failed revoke reads nothing until retried.
+                        logger.error(
+                            "app principal %s roles not synced: %s",
+                            principal_id,
+                            describe_error(exc),
+                        )
+
+    def sync_app_roles(self, principal_id):
+        """Grants an app principal, in the warehouse, the roles of its groups that its app
+        admits and revokes the others, so its inherited roles never exceed what admitted
+        viewers may read. APP_ROLES records the roles granted."""
+        principal = self.state.principal(principal_id)
+        if principal is None or self.apps is None:
+            return
+        groups = self.state.groups_for(principal_id)
+        admitted = self.apps.query_groups(principal_id, groups)
+        if admitted is None:
+            return
+        wanted = {self.state.group(g)["warehouse_role"] for g in admitted}
+        record = self.state.get(APP_ROLES, principal_id)
+        held = (
+            set(record["roles"])
+            if record
+            else {self.state.group(g)["warehouse_role"] for g in groups}
+        )
+        name = principal["warehouse_name"]
+        for role in sorted(wanted - held):
+            self.adapter.membership(role, name, True)
+        for role in sorted(held - wanted):
+            self.adapter.membership(role, name, False)
+        self.state.put(APP_ROLES, principal_id, {"roles": sorted(wanted)})
+        if wanted != held:
+            self.invalidate(principal_id)
+
+    def held_roles(self, principal_id):
+        """The warehouse roles an app principal holds, as recorded, or None for any other."""
+        record = self.state.get(APP_ROLES, principal_id)
+        return set(record["roles"]) if record else None
 
     def seed_defaults(self):
         # Setup SQL creates these grants. Record them once so revoke is effective,
@@ -93,6 +139,15 @@ class AccessService:
         principal = self.state.principal(principal_id)
         if not principal or not principal["provisioned"]:
             raise ValueError("principal is not provisioned")
+        marked, app = self.apps.app_of(principal_id) if self.apps else (False, None)
+        if marked:
+            if grant and (app is None or group not in app.groups):
+                where = app.key if app else "an app the running bundle does not bind"
+                raise ValueError(
+                    f"{principal['warehouse_name']} is the principal of {where}; it joins only "
+                    "the groups vecten.toml binds the app to"
+                )
+            return self._app_membership(group, principal, grant)
         with self.lock, self.state.transaction() as conn:
             self.adapter.membership(role, principal["warehouse_name"], grant)
             query = delete(memberships).where(
@@ -103,6 +158,32 @@ class AccessService:
                 conn.execute(
                     insert(memberships).values(principal_id=principal_id, group_name=group)
                 )
+        self.invalidate(principal_id)
+        return {"principal_id": principal_id, "group": group, "member": grant}
+
+    def _app_membership(self, group, principal, grant):
+        """An app principal's membership changes in state; its warehouse roles then follow
+        the groups its app admits."""
+        principal_id = principal["id"]
+        with self.lock:
+            if self.state.get(APP_ROLES, principal_id) is None:
+                held = {
+                    self.state.group(g)["warehouse_role"]
+                    for g in self.state.groups_for(principal_id)
+                }
+                self.state.put(APP_ROLES, principal_id, {"roles": sorted(held)})
+            with self.state.transaction() as conn:
+                conn.execute(
+                    delete(memberships).where(
+                        memberships.c.principal_id == principal_id,
+                        memberships.c.group_name == group,
+                    )
+                )
+                if grant:
+                    conn.execute(
+                        insert(memberships).values(principal_id=principal_id, group_name=group)
+                    )
+            self.sync_app_roles(principal_id)
         self.invalidate(principal_id)
         return {"principal_id": principal_id, "group": group, "member": grant}
 

@@ -214,7 +214,8 @@ def test_the_server_computes_admission_when_it_starts():
     access.model_changed(SOURCES)
     scopes = AppScopes(state, {"overview": OVERVIEW}, kind="postgres")
     runtime = Runtime(state, None, None, None, None, access=access)
-    runtime.apps = scopes
+    # As the runtime's setup wires them: the grants' service recomputes the apps' admission.
+    runtime.apps = access.apps = scopes
 
     async def start():
         runtime.start()

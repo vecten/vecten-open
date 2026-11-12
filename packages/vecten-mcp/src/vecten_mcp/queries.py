@@ -7,6 +7,7 @@ from psycopg import sql as pg_sql
 
 from vecten_mcp.audit import bound_sql, bound_sql_hash, receipt_time
 from vecten_mcp.audit_call import current_audit
+from vecten_mcp.failures import AppReadsNothing
 from vecten_mcp.warehouse.base import check_account
 from vecten_shared.osi.compiler import pyformat_statement
 from vecten_shared.osi.sql_policy import read_statement
@@ -34,9 +35,20 @@ def query_setting(state, name, default, maximum):
     return value
 
 
+# The roles the session user holds through membership that none of the given roles grants.
+STRAY_ROLES = (
+    "SELECT r.rolname FROM pg_roles r WHERE r.rolname <> current_user "
+    "AND pg_has_role(current_user, r.oid, 'USAGE') AND NOT EXISTS ("
+    "SELECT FROM unnest(%s::text[]) AS a(name) WHERE pg_has_role(a.name, r.oid, 'USAGE'))"
+)
+
+
 class QueryService:
     def __init__(self, state, pools, *, kind):
         self.state, self.pools, self.kind = state, pools, kind
+        # (principal id, groups) -> the groups an app principal queries with, or None for
+        # any other principal (AppScopes.query_groups).
+        self.narrow = None
 
     def setting(self, name, default, maximum):
         return query_setting(self.state, name, default, maximum)
@@ -66,7 +78,11 @@ class QueryService:
             if not call.row.get("datasets"):
                 call.row["datasets"] = table_datasets(statement.tables, call.model)
         query = f"/* vecten {identifier} */\n" + statement.sql
-        roles = {self.state.group(name)["warehouse_role"] for name in caller.groups}
+        narrowed = self.narrow(caller.principal["id"], caller.groups) if self.narrow else None
+        if narrowed is not None and not narrowed:
+            raise AppReadsNothing("this app admits no group, so its principal reads nothing")
+        groups = caller.groups if narrowed is None else narrowed
+        roles = {self.state.group(name)["warehouse_role"] for name in groups}
         check_account(caller.principal["warehouse_name"])
         if call:
             call.row["warehouse_attempted"] = True
@@ -81,6 +97,15 @@ class QueryService:
                             pg_sql.Identifier(caller.principal["warehouse_name"])
                         )
                     )
+                    if narrowed is not None:
+                        # The session user inherits every role granted to it, so an app
+                        # principal holding one beyond its admitted groups' reads nothing.
+                        stray = conn.execute(STRAY_ROLES, (sorted(roles),)).fetchall()
+                        if stray:
+                            raise AppReadsNothing(
+                                "the app's principal holds roles beyond its admitted groups: "
+                                + ", ".join(sorted(row[0] for row in stray))
+                            )
                     conn.execute(
                         "SELECT set_config('statement_timeout', %s, true)", (str(timeout * 1000),)
                     )

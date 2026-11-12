@@ -79,7 +79,18 @@ def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> 
 def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
     app, group = (str(entry.get(k, "?")) for k in ("app", "group"))
     where = f"`[apps.{app}]` groups in vecten.toml"
-    if "principal_id" in entry:
+    if entry.get("reason") == "groups differ from the binding":
+        name = str(entry.get("warehouse_name", "?"))
+        group = name
+        groups = ", ".join(str(g) for g in entry.get("groups", [])) or "no group"
+        bound = ", ".join(str(g) for g in entry.get("bound", []))
+        title = f"App principal {name} is in other groups than {app} is bound to"
+        resolution = (
+            f"{name} is in {groups}, but vecten.toml binds {app} to {bound}. Run "
+            f"`vecten app connect {app} --env {ctx.env} --groups-only` to set its groups to "
+            "the binding without changing its credentials."
+        )
+    elif "principal_id" in entry:
         name = str(entry.get("warehouse_name", "?"))
         group = name
         title = f"Service principal {name} is not marked as {app}'s principal"

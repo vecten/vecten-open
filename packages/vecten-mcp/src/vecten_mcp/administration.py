@@ -38,10 +38,11 @@ class Administration:
         principal = self._create(f"{uuid4().hex}@service.invalid", name, "service", None, adopt)
         return dict(principal, credentials=self.auth.service_credentials(principal["id"]))
 
-    def connect_app(self, apps, key, *, adopt=False):
+    def connect_app(self, apps, key, *, adopt=False, rotate=True):
         """Creates or rotates the principal of bound container app `key` (`<extension>.<app>`):
         named `principal_name(app)`, marked as the app's, a member of exactly its bound groups,
-        with new client credentials that replace any earlier ones."""
+        with new client credentials that replace any earlier ones. Without `rotate`, an
+        existing principal's groups follow the binding and its credentials stay."""
         from vecten_mcp.apps import APP_PRINCIPALS, principal_name
 
         extension, _, name = key.partition(".")
@@ -69,6 +70,7 @@ class Administration:
                 raise ValueError(f"{target} belongs to a person, not a service principal")
             if found is not None and not found["enabled"]:
                 raise ValueError(f"{target} is disabled; delete it, then connect {key} again")
+            marker = None
             if found is not None:
                 marker = self.state.get(APP_PRINCIPALS, found["id"])
                 if marker is not None and marker != {"extension": app.extension, "app": app.name}:
@@ -86,8 +88,18 @@ class Administration:
                         "uses it, then repeat with --adopt: its groups become "
                         f"{', '.join(sorted(app.groups))} and its credentials are replaced"
                     )
-            elif adopt:
-                self._adoptable_for(app, target)
+            if found is None and not rotate:
+                raise ValueError(
+                    f"{key} has no principal yet; connect it without --groups-only first"
+                )
+            if found is not None and not rotate and marker is None:
+                raise ValueError(
+                    f"{target} is not marked as {key}'s principal; connect it with --adopt, "
+                    "which replaces its credentials"
+                )
+            if adopt and (found is None or marker is None):
+                held = self.state.groups_for(found["id"]) if found else set()
+                self._adoptable_for(app, target, held)
             # The principal holds no client credentials until the last step, so nobody can
             # sign in as it before it is marked and its groups are set.
             principal = found or self._create(
@@ -99,7 +111,7 @@ class Administration:
                 self.access.membership(group, principal["id"], True)
             for group in sorted(held - bound):
                 self.access.membership(group, principal["id"], False)
-            credentials = self.auth.replace_service_credentials(principal["id"])
+            credentials = self.auth.replace_service_credentials(principal["id"]) if rotate else None
         return {
             "app": key,
             "created": found is None,
@@ -112,13 +124,15 @@ class Administration:
             "credentials": credentials,
         }
 
-    def _adoptable_for(self, app, target):
+    def _adoptable_for(self, app, target, held=()):
         """An app principal reads as exactly its bound groups' roles, so an existing warehouse
-        account holding any other role is not adopted as one."""
+        account holding any other role is not adopted as one. The roles of `held`, the MCP
+        groups an existing principal is in, are revoked by the connection and so count as
+        managed."""
         account = self.adapter.inspect_account(target)
         if account is None:
             return
-        groups = {*app.groups, "default"}
+        groups = {*app.groups, *held, "default"}
         # PUBLIC is every Snowflake user's; `default` is the group a new principal joins first
         # and leaves when the app is not bound to it.
         managed = {"public"} | {
@@ -210,8 +224,12 @@ class Administration:
     def delete_principal(self, principal_id):
         principal = self._require(principal_id)
         self.disable(principal_id)
-        for group in self.state.groups_for(principal_id):
-            role = self.state.group(group)["warehouse_role"]
+        held = self.access.held_roles(principal_id) if self.access else None
+        if held is None:
+            held = {
+                self.state.group(g)["warehouse_role"] for g in self.state.groups_for(principal_id)
+            }
+        for role in sorted(held):
             self.adapter.membership(role, principal["warehouse_name"], False)
         if principal["provisioned"] and not principal["adopted"]:
             self.adapter.drop_account(principal["warehouse_name"])
@@ -221,6 +239,8 @@ class Administration:
             if not principal["adopted"]:
                 self.state.remove("provisioner_registry", principal["warehouse_name"], conn=conn)
             self.state.remove("passwords", principal["email"], conn=conn)
+            self.state.remove("app_principals", principal_id, conn=conn)
+            self.state.remove("app_roles", principal_id, conn=conn)
             for key, link in self.state.scan("password_links", conn=conn):
                 if link.get("principal_id") == principal_id:
                     self.state.remove("password_links", key, conn=conn)
