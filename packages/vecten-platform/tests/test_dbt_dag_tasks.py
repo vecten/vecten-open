@@ -151,11 +151,16 @@ def test_the_dag_steps_pass_the_declared_areas(project, monkeypatch):
 
     config = load_config(project)
     save_config(project, config.model_copy(update={"areas": {"finance": AreaDecl()}}))
-    calls = fake_dbt(monkeypatch, {"build": (0, results()), "test": (0, results())})
+    sources = {"results": []}
+    calls = fake_dbt(
+        monkeypatch,
+        {"build": (0, results()), "test": (0, results()), "source": (0, sources)},
+    )
     build_step(RUN_ID)
     convention_step(RUN_ID)
+    freshness_check(RUN_ID)
     areas = ["--vars", '{"vecten_areas": ["finance"]}']
-    assert calls == [BUILD_ARGS + areas, CONVENTION_ARGS + areas]
+    assert calls == [BUILD_ARGS + areas, CONVENTION_ARGS + areas, ["source", "freshness", *areas]]
 
 
 def test_build_archives_results_and_raises_naming_the_failed_node(project, monkeypatch):

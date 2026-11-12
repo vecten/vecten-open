@@ -226,7 +226,8 @@ def _stale_sources(path: Path) -> list[str]:
 def freshness_check(run_id: str) -> None:
     """Staleness is recorded in the archived sources.json; only a missing record fails the task."""
     key = run_keys(run_id)["sources"]
-    run = _run_and_archive("freshness", FRESHNESS_STEP, "sources.json", key, FRESHNESS_TARGET)
+    args = (*FRESHNESS_STEP, *_area_vars())
+    run = _run_and_archive("freshness", args, "sources.json", key, FRESHNESS_TARGET)
     produced = target_dir(FRESHNESS_TARGET) / "sources.json"
     if not produced.is_file():
         raise RuntimeError(f"dbt source freshness failed: {failure_detail([], run)}")

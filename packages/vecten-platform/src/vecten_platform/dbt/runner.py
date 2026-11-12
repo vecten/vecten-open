@@ -163,8 +163,8 @@ def dbt_step(
 def area_vars(areas: Iterable[str]) -> tuple[str, ...]:
     """The `--vars` that pass the declared areas to dbt; none for a project without areas.
 
-    Every step of one build passes the same vars, since dbt re-parses the whole project when
-    they change.
+    Every dbt step vecten runs for a project passes the same vars, since dbt re-parses the
+    whole project when they change.
     """
     names = sorted(areas)
     return ("--vars", json.dumps({AREAS_VAR: names})) if names else ()
