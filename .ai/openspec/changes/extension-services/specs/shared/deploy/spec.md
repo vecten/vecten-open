@@ -31,7 +31,7 @@
 
 ### Requirement: The VM agent isolates services and hands them their secrets
 
-`host.json` SHALL carry `service_secrets`, the secret names that the bound services on the host declare within the scopes the host may read, and `service_network`, the bridge name of the services' network, or empty when the host runs no service. When `service_network` is set, the agent SHALL, on every ship and at boot and before Compose starts, ensure `DOCKER-USER` rules that drop traffic from that bridge to the cloud's instance metadata address (169.254.169.254 on AWS, 169.254.42.42 on Scaleway), and SHALL fail the step, naming it, when it cannot. The agent SHALL read each name in `service_secrets` from its scope, hand the values to Compose's environment only, and mask them in every line `ship` prints. A release whose `host.json` lacks either key SHALL be treated as having no service. The agent SHALL stay Python 3.9 standard library only, and its Terraform copy byte-identical.
+`host.json` SHALL carry `service_secrets`, the secret names that the bound services on the host declare within the scopes the host may read, and `service_network`, the bridge name of the services' network, or empty when the host runs no service. When `service_network` is set, the agent SHALL, on every ship, at boot before Docker starts, and before Compose starts, ensure `DOCKER-USER` rules that drop traffic from that bridge to the cloud's instance metadata address (169.254.169.254 on AWS, 169.254.42.42 on Scaleway), and SHALL fail the step, naming it, when it cannot. The agent SHALL read each name in `service_secrets` from its scope, hand the values to Compose's environment only, and mask them in every line `ship` prints. A release whose `host.json` lacks either key SHALL be treated as having no service. The agent SHALL stay Python 3.9 standard library only, and its Terraform copy byte-identical.
 
 #### Scenario: Ship with a bot on AWS
 
@@ -41,7 +41,7 @@
 #### Scenario: Reboot
 
 - **WHEN** the VM reboots
-- **THEN** the agent's boot step restores the rule before it starts the stack
+- **THEN** the rule is in place before Docker restarts any service, and the agent's boot step ensures it again before it starts the stack
 
 #### Scenario: Rule cannot be installed
 

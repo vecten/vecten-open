@@ -24,9 +24,13 @@ ENGINES = ("docker:25.0.5-dind", "docker:28.5.2-dind")
 PROBE = VERSIONS.log_cleaner_image
 METADATA = agent.METADATA_ADDRESSES["aws"]
 DAEMON_SECONDS = 60
+# `/hold` keeps dockerd down, as before `docker.service` starts at boot.
 SUPERVISED_DOCKERD = (
-    "while true; do dockerd-entrypoint.sh dockerd >>/var/log/dockerd.log 2>&1; sleep 1; done"
+    "while true; do [ -e /hold ] || dockerd-entrypoint.sh dockerd >>/var/log/dockerd.log 2>&1;"
+    " sleep 1; done"
 )
+# What a reboot leaves: no rule in any table, and no chain of Docker's.
+WIPE_IPTABLES = "for t in filter nat; do iptables -t $t -F; iptables -t $t -X; done"
 # Busybox ignores `peer name`, so the peer is renamed once created.
 METADATA_LISTENER = f"""
 set -e
@@ -236,3 +240,24 @@ def test_services_the_rule_cannot_cover_are_stopped_and_the_stack_kept(vm):
     agent.stop_services({"compose_project": PROJECT}, in_vm(vm, []))
     assert state(vm, "svc") == "false"
     assert state(vm, "dag") == "true"
+
+
+def test_the_guard_before_dockerd_starts_covers_the_services_the_daemon_restarts(vm):
+    start(vm, "svc", "svc-acme-bot", "--network", "vecten-services")
+    start(vm, "dag", "airflow-scheduler")
+    pid = docker("exec", vm, "pidof", "dockerd").stdout.strip()
+    docker(
+        "exec", vm, "sh", "-c", f"touch /hold; kill {pid}; while pidof dockerd; do sleep 1; done"
+    )
+    docker("exec", vm, "sh", "-c", WIPE_IPTABLES)
+
+    calls = []
+    host = {"cloud": "aws", "service_network": SERVICES_BRIDGE}
+    agent.isolate_services(host, in_vm(vm, calls), create_chain=True)
+    assert [c[3] for c in calls] == ["-N", "-C", "-I"]
+    docker("exec", vm, "rm", "/hold")
+    wait_for_daemon(vm, other_than=pid)
+    running(vm, "svc")
+    running(vm, "dag")
+    assert dropped(vm, "svc")
+    assert reads_metadata(vm, "dag")

@@ -117,6 +117,23 @@ _INTERFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}")
 XTABLES_WAIT_SECONDS = "30"
 # Every Compose service a binding generates is named with this prefix.
 SERVICE_PREFIX = "svc-"
+# After a reboot dockerd restarts services before any unit ordered after it, and keeps a
+# DOCKER-USER chain it finds, so the rule goes in before Docker starts.
+SYSTEMD_DIR = Path("/etc/systemd/system")
+GUARD_UNIT = "vecten-services-guard.service"
+GUARD_UNIT_TEXT = f"""[Unit]
+Description=Vecten: keep extension services off the instance metadata address
+Before=docker.service
+ConditionPathExists={RELEASES}/current
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 {RELEASES}/current/{SHIP_DIR}/apply.py guard
+
+[Install]
+WantedBy=docker.service
+"""
 
 # The metadata server answers user data only to a request from a source port below 1024.
 METADATA_KEY_URL = "http://169.254.42.42/user_data/vecten-key"
@@ -878,11 +895,12 @@ def stack_env(host: dict, key: tuple[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def isolate_services(host: dict, run: Run) -> None:
+def isolate_services(host: dict, run: Run, create_chain: bool = False) -> None:
     """Keep containers on the services bridge off the metadata address, before they start.
 
-    A reboot clears the rule, so boot inserts it again; `-C` first keeps one rule however
-    often this runs.
+    A reboot clears the rule, so the guard and boot insert it again; `-C` first keeps one rule
+    however often this runs. Only before dockerd starts may the chain be created here: while
+    it runs, a missing chain means nothing jumps to it, and the step must fail.
     """
     bridge = host["service_network"]
     if not bridge:
@@ -894,6 +912,9 @@ def isolate_services(host: dict, run: Run) -> None:
         raise AgentError(f"no metadata address known for cloud {host['cloud']!r}")
     rule = ["DOCKER-USER", "-i", bridge, "-d", address, "-j", "DROP"]
     iptables = ["iptables", "-w", XTABLES_WAIT_SECONDS]
+    if create_chain:
+        # Fails harmlessly when the chain exists.
+        run([*iptables, "-N", "DOCKER-USER"])
     if run([*iptables, "-C", *rule]).returncode == 0:
         return
     result = run([*iptables, "-I", *rule])
@@ -901,6 +922,35 @@ def isolate_services(host: dict, run: Run) -> None:
         raise AgentError(
             f"inserting the DOCKER-USER rule for {bridge} failed (exit {result.returncode})"
         )
+
+
+def install_guard(run: Run) -> None:
+    """Install and enable the unit that runs `guard` before Docker starts at boot."""
+    path = SYSTEMD_DIR / GUARD_UNIT
+    try:
+        current = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        current = None
+    commands = [["systemctl", "enable", GUARD_UNIT]]
+    if current != GUARD_UNIT_TEXT:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(GUARD_UNIT_TEXT, encoding="utf-8")
+        os.chmod(str(tmp), 0o644)
+        os.replace(str(tmp), str(path))
+        commands.insert(0, ["systemctl", "daemon-reload"])
+    for command in commands:
+        result = run(command)
+        if result.returncode != 0:
+            raise AgentError(f"{' '.join(command)} failed (exit {result.returncode})")
+
+
+def guard(releases: Path, run: Run) -> None:
+    """Before Docker starts at boot: the current release's rule, with no secret read."""
+    current = releases / "current"
+    if not current.is_dir():
+        return
+    isolate_services(load_host(_real(current)), run, create_chain=True)
 
 
 def stop_services(host: dict, run: Run) -> None:
@@ -1334,6 +1384,8 @@ def ship(
             write_run_files(host, env, run_dir or RUN_DIR)
         with step("service isolation"):
             isolate_services(host, run)
+            if host["service_network"]:
+                install_guard(run)
     except AgentError:
         # The certificate step may have stopped NGINX, and the running release still serves.
         _ensure_nginx(host, run)
@@ -1773,6 +1825,7 @@ def main(argv: list[str] | None = None, run: Run = run) -> int:
     commands.add_parser("rollback", help="start the previous release again")
     commands.add_parser("boot", help="rebuild the run files and start the current release")
     commands.add_parser("watch", help="ship the release this host's pointer object names")
+    commands.add_parser("guard", help="before Docker starts: keep services off the metadata")
     args = parser.parse_args(argv)
     try:
         if args.command == "ship":
@@ -1782,6 +1835,8 @@ def main(argv: list[str] | None = None, run: Run = run) -> int:
                 print(LOG_PREFIX + line, file=sys.stderr)
         elif args.command == "watch":
             print(f"vecten agent watch: {watch(RELEASES, run)}")
+        elif args.command == "guard":
+            guard(RELEASES, run)
         else:
             boot(RELEASES, run)
     except AgentError as exc:

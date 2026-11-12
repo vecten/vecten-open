@@ -39,6 +39,7 @@ def agent(tmp_path, monkeypatch):
     module = load_agent()
     monkeypatch.setattr(module, "LETSENCRYPT", tmp_path / "letsencrypt")
     monkeypatch.setattr(module, "RUN_DIR", tmp_path / "run" / "vecten")
+    monkeypatch.setattr(module, "SYSTEMD_DIR", tmp_path / "systemd")
     return module
 
 
@@ -160,7 +161,9 @@ class FakeRun:
         self.ps_fails = False
         self.downloads = {}
         self.rules = set()
+        self.chains = set()
         self.iptables_fails = False
+        self.systemctl_fails = False
 
     def __call__(self, args, env=None, input=None):
         self.calls.append({"args": list(args), "env": dict(env or {}), "input": input})
@@ -169,6 +172,8 @@ class FakeRun:
             return self._aws(args, input)
         if args[0] == "iptables":
             return self._iptables(args)
+        if args[0] == "systemctl":
+            return subprocess.CompletedProcess(args, 1 if self.systemctl_fails else 0, "", "")
         if args[:3] == ["docker", "compose", "version"]:
             return subprocess.CompletedProcess(args, 0, f"{self.compose_version}\n", "")
         if args[:3] == ["docker", "buildx", "version"]:
@@ -195,6 +200,10 @@ class FakeRun:
     def _iptables(self, args):
         assert args[1:3] == ["-w", "30"], args
         rule = tuple(args[4:])
+        if args[3] == "-N":
+            exists = args[4] in self.chains
+            self.chains.add(args[4])
+            return subprocess.CompletedProcess(args, 1 if exists else 0, "", "")
         if args[3] == "-C":
             return subprocess.CompletedProcess(args, 0 if rule in self.rules else 1, "", "")
         if self.iptables_fails:
@@ -1958,3 +1967,96 @@ def test_a_service_secret_is_masked_in_compose_output(agent, tmp_path):
     with pytest.raises(agent.AgentError) as exc:
         ship(agent, release, FailingUpWith(fake, stderr), tmp_path)
     assert exc.value.log[-1] == "compose: svc-acme-bot: bad token ***"
+
+
+GUARD_UNIT = "vecten-services-guard.service"
+
+
+def systemctl(run):
+    return run.argv("systemctl")
+
+
+def test_ship_installs_a_guard_that_runs_before_docker(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform", **with_services())
+    run = FakeRun(store=seeded(out))
+    ship(agent, release, run, tmp_path)
+    unit = (agent.SYSTEMD_DIR / GUARD_UNIT).read_text()
+    assert "Before=docker.service" in unit and "WantedBy=docker.service" in unit
+    assert (
+        "ExecStart=/usr/bin/python3 /opt/vecten/releases/current/.vecten/ship/apply.py guard"
+        in unit
+    )
+    assert systemctl(run) == [["systemctl", "daemon-reload"], ["systemctl", "enable", GUARD_UNIT]]
+    order = [
+        c["args"][0] for c in run.calls if c["args"][0] == "systemctl" or c in compose_calls(run)
+    ]
+    assert order[-1] == "docker"
+
+
+def test_an_unchanged_guard_is_enabled_without_a_reload(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    run = FakeRun(store=seeded(out))
+    ship(agent, stage(releases, out, "platform", "c1", **with_services()), run, tmp_path)
+    run.calls.clear()
+    ship(agent, stage(releases, out, "platform", "c2", **with_services()), run, tmp_path)
+    assert systemctl(run) == [["systemctl", "enable", GUARD_UNIT]]
+
+
+def test_a_host_without_services_installs_no_guard(agent, tmp_path):
+    out = outputs("standard")
+    run = FakeRun(store=seeded(out))
+    ship(agent, stage(tmp_path / "releases", out, "platform"), run, tmp_path)
+    assert not (agent.SYSTEMD_DIR / GUARD_UNIT).exists() and systemctl(run) == []
+
+
+def test_a_guard_that_cannot_be_enabled_fails_the_isolation_step(agent, tmp_path):
+    out = outputs("standard")
+    release = stage(tmp_path / "releases", out, "platform", **with_services())
+    run = FakeRun(store=seeded(out))
+    run.systemctl_fails = True
+    with pytest.raises(agent.AgentError, match="^service isolation: .*systemctl"):
+        ship(agent, release, run, tmp_path)
+    assert compose_calls(run) == []
+
+
+def test_guard_creates_the_chain_and_adds_the_rule_reading_no_secret(agent, tmp_path):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    ship(
+        agent,
+        stage(releases, out, "platform", **with_services()),
+        FakeRun(store=seeded(out)),
+        tmp_path,
+    )
+    run = FakeRun()
+    agent.guard(releases, run)
+    assert [c["args"][3] for c in run.calls] == ["-N", "-C", "-I"]
+    assert run.rules == {AWS_DROP}
+
+
+@pytest.mark.parametrize("services", [{}, None])
+def test_guard_does_nothing_without_a_release_running_services(agent, tmp_path, services):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    if services is not None:
+        ship(agent, stage(releases, out, "platform"), FakeRun(store=seeded(out)), tmp_path)
+    run = FakeRun()
+    agent.guard(releases, run)
+    assert run.calls == []
+
+
+def test_main_runs_the_guard(agent, tmp_path, monkeypatch):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    ship(
+        agent,
+        stage(releases, out, "platform", **with_services()),
+        FakeRun(store=seeded(out)),
+        tmp_path,
+    )
+    monkeypatch.setattr(agent, "RELEASES", releases)
+    run = FakeRun()
+    assert agent.main(["guard"], run=run) == 0
+    assert run.rules == {AWS_DROP}
