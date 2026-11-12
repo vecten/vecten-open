@@ -366,12 +366,14 @@ def service_hostname_vars(
     """The cloud root's `service_hostnames`: each label vecten.toml binds, mapped to the
     component whose host runs the service; nothing when no label is bound.
 
-    A destroy (`read_only`) of a root that never declared the variable passes nothing, since
-    such a root never created a service record.
+    A destroy (`read_only`) passes nothing: it removes what the state holds, records
+    included, whatever vecten.toml or the lock file says now.
     """
     from vecten_shared.extension_record import read_record
     from vecten_shared.services import bound_services
 
+    if read_only:
+        return ()
     labels = {
         bound.binding.hostname: bound.host
         for bound in bound_services(config, read_record(project_root) or {})
@@ -384,8 +386,6 @@ def service_hostname_vars(
         for path in sorted(root_dir.glob("*.tf"))
     )
     if not declared:
-        if read_only:
-            return ()
         rel = root_dir.relative_to(project_root).as_posix()
         raise Failure(
             ExitCode.CONFIG,

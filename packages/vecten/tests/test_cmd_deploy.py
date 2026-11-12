@@ -1186,3 +1186,13 @@ def test_a_deploy_reports_its_services_after_shipping(invoke, actions, project, 
     text = invoke("deploy", "--env", "prod")
     assert "service acme.bot: healthy" in text.stdout
     assert "routes waiting for `vecten deploy --env prod`: acme.portal.app" in text.stdout
+
+
+def test_a_destroy_passes_no_hostnames_and_needs_no_lock(project):
+    from vecten.deploy.control import service_hostname_vars
+
+    _bind_hostnames(project)
+    (project / "extensions.lock.json").unlink()
+    root_dir = project / "deploy" / "terraform" / "aws"
+    config = load_config(project)
+    assert service_hostname_vars(project, config, root_dir, read_only=True) == ()

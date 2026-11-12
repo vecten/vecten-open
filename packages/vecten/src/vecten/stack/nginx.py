@@ -149,11 +149,17 @@ SERVICE_MAPS = (
     "    default $vecten_cookie_stripped;\n"
     '    "~^;\\s*(?<vecten_cookie_rest>.*)$" $vecten_cookie_rest;\n'
     "}\n"
+    # A service may set a second cookie of that name in another letter case; the request
+    # that still holds one after the strip is refused.
+    "map $vecten_service_cookie $vecten_cookie_repeated {\n"
+    "    default 0;\n"
+    f'    "~*(?:^|;\\s*){GATE_COOKIE}=" 1;\n'
+    "}\n"
     # The location is picked by the normalised path, the client's own is forwarded: these
     # forms would let the service read another route than the one NGINX checked.
     "map $request_uri $vecten_ambiguous_path {\n"
     "    default 0;\n"
-    r'    "~^[^?]*(?:%2[fF]|%5[cC]|\\\\|//|/(?:\.|%2[eE]){1,2}(?:/|\?|$))" 1;' + "\n"
+    r'    "~^[^?]*(?:%2[fF]|%5[cC]|\\\\|;|%3[bB]|//|/(?:\.|%2[eE]){1,2}(?:/|\?|$))" 1;' + "\n"
     "}\n"
 )
 
@@ -182,7 +188,8 @@ def service_site(bound: Bound, host: str) -> ServiceSite:
 
 def _service_proxy(upstream: str, uri: str = "") -> str:
     return (
-        IDENTITY_CLEARED
+        "        if ($vecten_cookie_repeated) {\n            return 400;\n        }\n"
+        + IDENTITY_CLEARED
         + "        proxy_set_header Cookie $vecten_service_cookie;\n"
         + _upstream(upstream, uri)
         + PROXY_HEADERS

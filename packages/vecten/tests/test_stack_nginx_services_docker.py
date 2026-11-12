@@ -183,7 +183,11 @@ def test_nginx_serves_a_service_hostname_as_the_routes_and_the_health_path_say(t
         assert status(port, ca, "GET", "/api/messages/..%2F..%2Foffice") == 400
         assert status(port, ca, "GET", "/api/messages/%2e%2e/%2e%2e/office") == 400
         assert status(port, ca, "GET", "/api/messages/../../office") == 400
+        assert status(port, ca, "GET", "/api/messages/..;/office") == 400
         assert status(port, ca, "GET", "/office") == 403
+        decoy = "Cookie: __HOST-VECTEN-GATE=decoy; __Host-vecten-gate=REAL\r\n"
+        assert status(port, ca, "GET", "/api/messages", decoy) == 400
+        assert status(port, ca, "GET", "/_vecten/health", decoy) == 400
         assert status(port, ca, "GET", "/settings") == 503
         upgrade = request(
             port,

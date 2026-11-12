@@ -209,6 +209,11 @@ def test_a_route_refuses_a_path_nginx_would_read_otherwise_than_the_service():
         "/api%5cadmin",
         "/api\\admin",
         "/api//admin",
+        "/admin;/x",
+        "/pub/..;/priv",
+        "/a/%2E%2e;/b",
+        "/a%3Bb",
+        "/a%3bb",
     ):
         assert re.search(regex, uri), uri
     for uri in ("/api/messages", "/api/file.js", "/api/a..b", "/api?next=/x/../y", "/api?u=a//b"):
@@ -239,3 +244,22 @@ def test_two_service_hostnames_get_their_own_servers(mode):
     bare = ".localhost" if mode == "local" else ".data.acme.com"
     assert tls(text, f"bot{bare}") and tls(text, f"portal{bare}")
     assert text.count("map $http_cookie") == 1
+
+
+def test_a_gate_cookie_left_after_the_strip_refuses_the_request():
+    # A service can set a second cookie whose name differs only in case; the browser then
+    # sends both, and one strip pass would leave the real one.
+    text = conf(site(routes=[ServiceRoute("/", "public")]))
+    assert "map $vecten_service_cookie $vecten_cookie_repeated {" in text
+    pattern = re.search(
+        r'map \$vecten_service_cookie \$vecten_cookie_repeated \{\n.*?"~\*(.*?)" 1;', text, re.S
+    )
+    assert pattern
+    regex = pattern.group(1)
+    assert re.search(regex, "__Host-vecten-gate=REAL", re.I)
+    assert re.search(regex, "a=1; __host-vecten-gate=b", re.I)
+    assert not re.search(regex, "a=1; b=2", re.I)
+    assert not re.search(regex, "x__Host-vecten-gate=1", re.I)
+    for key, body in locations(tls(text, "bot.data.acme.com")).items():
+        refuses = "if ($vecten_cookie_repeated) {\n            return 400;\n        }" in body
+        assert refuses == ("proxy_pass" in body), key
