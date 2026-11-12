@@ -10,7 +10,7 @@ from vecten.next.semantic import osi_digest, semantic_items
 from vecten.next.stack import stack_items
 from vecten.scaffold.params import ScaffoldParams
 from vecten.scaffold.render import render_project
-from vecten_shared.config import load_config, save_config
+from vecten_shared.config import ComponentDependencies, load_config, save_config
 from vecten_shared.records import remove_record, write_record
 
 from .fixture_project import render_fixture
@@ -342,3 +342,38 @@ def test_a_prod_run_of_the_script_clears_it(tmp_path):
 def test_platform_project_has_no_existing_warehouse_items(tmp_path):
     root = render_fixture(tmp_path, "postgres")
     assert existing_warehouse_items(root, load_config(root), "prod") == []
+
+
+def test_no_lock_item_for_a_project_without_records(tmp_path):
+    from vecten.next.stack import lock_items
+
+    root = render_fixture(tmp_path, "postgres")
+    assert lock_items(root, load_config(root)) == []
+
+
+def test_a_stale_lock_is_reported_with_vecten_lock(tmp_path):
+    from vecten.next.stack import lock_items
+
+    root = render_fixture(tmp_path, "postgres")
+    (root / "requirements.lock").write_text("# vecten-lock: component=cli inputs=0\n")
+    items = lock_items(root, load_config(root))
+    assert [(i.kind, i.resolution) for i in items] == [("command", "vecten lock")]
+    assert "requirements.lock" in items[0].title
+
+
+def test_project_requirements_without_locks_are_reported(tmp_path):
+    from vecten.next.stack import lock_items
+
+    root = render_fixture(tmp_path, "postgres")
+    config = load_config(root)
+    config.dependencies.platform = ComponentDependencies(python=["polars"])
+    items = lock_items(root, config)
+    assert [(i.kind, i.resolution) for i in items] == [("command", "vecten lock")]
+
+
+def test_the_lock_item_comes_before_starting_the_stack(tmp_path):
+    from vecten.next.assemble import _project_items
+
+    root = render_fixture(tmp_path, "postgres")
+    (root / "requirements.lock").write_text("# vecten-lock: component=cli inputs=0\n")
+    assert _project_items(root, load_config(root))[0].resolution == "vecten lock"

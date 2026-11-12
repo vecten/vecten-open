@@ -22,7 +22,7 @@ from vecten.next.items import Item
 from vecten.next.modelling import modelling_items
 from vecten.next.post_deploy import post_deploy_items
 from vecten.next.semantic import semantic_items
-from vecten.next.stack import stack_items
+from vecten.next.stack import lock_items, stack_items
 from vecten_shared.config import EnvironmentFacts, VectenConfig, load_config
 
 ENV = "prod"
@@ -42,6 +42,7 @@ def next_items(cwd: Path) -> list[Item]:
 def _project_items(root: Path, config: VectenConfig) -> list[Item]:
     if config.has("platform"):
         local_loop = [
+            *lock_items(root, config),
             *stack_items(root, config),
             *ingestion_items(root, config),
             *modelling_items(root, config),
@@ -50,6 +51,7 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
     else:
         # The local MCP signs in as the provisioner, which only the administrator's SQL creates.
         local_loop = [
+            *lock_items(root, config),
             *ingestion_items(root, config),
             *modelling_items(root, config),
             *semantic_items(root, config),
