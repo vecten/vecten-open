@@ -171,7 +171,9 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
                 f"{rel} sets snowflake_account = {found!r} but vecten.toml sets no "
                 f"[warehouse] account; {ACCOUNT_HINT}",
             )
-        if found != expected:
+        # One account serves one environment, so only `prod` builds in the account vecten.toml
+        # names; another environment builds in its own.
+        if env == "prod" and found != expected:
             raise _mismatch(
                 rel, "snowflake_account", found, expected, "vecten.toml [warehouse] account"
             )

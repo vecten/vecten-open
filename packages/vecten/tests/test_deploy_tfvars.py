@@ -352,3 +352,17 @@ def test_tfvars_may_not_set_service_hostnames(project):
     failure = refusal(project)
     assert failure.code == ExitCode.CONFIG
     assert "service_hostnames" in failure.message and "vecten.toml" in failure.message
+
+
+def test_another_environment_may_build_in_its_own_snowflake_account(tmp_path):
+    from .fixture_project import render_fixture
+
+    root = render_fixture(tmp_path, "snowflake", deploy=True)
+    text = env_tfvars_path(root, "prod").read_text()
+    text = text.replace('environment       = "prod"', 'environment       = "dev"')
+    env_tfvars_path(root, "dev").write_text(text.replace('"ACME-PROD"', '"ACME-DEV"'))
+    assert check_tfvars(root, load_config(root), "dev")["snowflake_account"] == "ACME-DEV"
+    replace_line(root, "prod", "snowflake_account", 'snowflake_account = "ACME-DEV"')
+    failure = refusal(root)
+    assert failure.code == ExitCode.CONFIG
+    assert "'ACME-DEV'" in failure.message and "'ACME-PROD'" in failure.message
