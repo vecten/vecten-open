@@ -9,13 +9,14 @@ output "region" {
 }
 
 output "hosts" {
-  description = "Per host key (platform, mcp or main): instance id, Elastic IP, components and hostnames."
+  description = "Per host key (platform, mcp or main): instance id, Elastic IP, components, built-in hostnames and service hostnames."
   value = {
     for h, m in module.host : h => {
-      instance_id = m.instance_id
-      public_ip   = m.public_ip
-      components  = tolist(local.host_components[h])
-      hostnames   = tolist(local.host_hostnames[h])
+      instance_id       = m.instance_id
+      public_ip         = m.public_ip
+      components        = tolist(local.host_components[h])
+      hostnames         = tolist(local.host_hostnames[h])
+      service_hostnames = tolist(local.host_service_hostnames[h])
     }
   }
 }

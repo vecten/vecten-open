@@ -46,6 +46,12 @@ variable "destroying" {
   default = null
 }
 
+# `vecten deploy` sets it from the hostnames vecten.toml binds; each label gets a DNS record.
+variable "service_hostnames" {
+  type    = map(string)
+  default = {}
+}
+
 # Read by `vecten ship`, which renders the hosts' Airflow from it; the module takes no such
 # input, and the declaration keeps the plan free of an undeclared-variable warning.
 # tflint-ignore: terraform_unused_declarations

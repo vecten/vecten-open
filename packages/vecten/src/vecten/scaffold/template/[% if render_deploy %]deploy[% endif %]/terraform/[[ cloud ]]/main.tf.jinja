@@ -49,6 +49,7 @@ module "environment" {
   profile           = var.profile
   size              = var.size
   warehouse         = var.warehouse
+  service_hostnames = var.service_hostnames
 [%- if warehouse == 'snowflake' %]
   snowflake_account = var.snowflake_account
 [%- endif %]
