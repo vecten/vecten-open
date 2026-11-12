@@ -23,6 +23,7 @@ class Runtime:
     audit: object = None
     queries: object = None
     feedback_resolution: object = None
+    apps: object = None
     maintenance_task: object = field(default=None, init=False)
     last_reconcile: float = field(default=0, init=False)
     last_model_check: float = field(default=0, init=False)
@@ -48,6 +49,10 @@ class Runtime:
             self.adapter.cleanup_sessions()
         if self.model:
             self.model.reload()
+        if self.apps and self.access:
+            # A ship restarts the server with the new bundle, so admission follows its binding
+            # from the first request, before the first reconciliation.
+            self.apps.admit(self.access.datasets)
         if self.feedback_resolution:
             try:
                 self.feedback_resolution.reconcile()

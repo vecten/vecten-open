@@ -58,10 +58,12 @@ def create_app(project_root: Path | None = None, runtime=None) -> Starlette:
         finally:
             await runtime.close()
 
+    from vecten_mcp.audit_call import ViewerHeader
     from vecten_mcp.http_limits import BodyLimit
 
     app = Starlette(routes=[Route("/health", health)], lifespan=lifespan)
     app.add_middleware(BodyLimit)
+    app.add_middleware(ViewerHeader)
     if extensions is not None:
         app.state.extensions = extensions
     return app

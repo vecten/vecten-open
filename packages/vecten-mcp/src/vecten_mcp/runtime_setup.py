@@ -282,6 +282,17 @@ def configured_runtime(root, config, extensions):
         runtime.password_rotation = PasswordRotation(
             state, secrets, lambda password: connect_password("impersonator", password)
         )
+    from vecten_mcp.apps import AppScopes, read_bound_apps
+
+    # Built with no bound apps too, so a principal marked for an app that a ship unbound
+    # still reads nothing.
+    runtime.apps = AppScopes(
+        state,
+        read_bound_apps(root, config),
+        kind=config.warehouse.kind,
+        database=getattr(adapter, "database", None),
+    )
+    access.apps = runtime.apps
     from vecten_mcp.model import ModelService
     from vecten_shared.osi.revision import read_built_commit
 
@@ -296,6 +307,7 @@ def configured_runtime(root, config, extensions):
         on_swap=lambda model: access.model_changed(
             {name: dataset["source"] for name, dataset in model.datasets.items()}
         ),
+        checks=runtime.apps.missing,
     )
     from vecten_mcp.feedback_resolution import FeedbackResolution
 

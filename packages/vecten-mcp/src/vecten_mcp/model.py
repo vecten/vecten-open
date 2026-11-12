@@ -67,11 +67,14 @@ class ModelService:
         commit=lambda: None,
         built=lambda: None,
         on_swap=None,
+        checks=None,
         clock=time.time,
     ):
         self.directory, self.state, self.kind = directory, state, kind
         self.source_exists, self.platform = source_exists, platform
         self.commit, self.built, self.on_swap, self.clock = commit, built, on_swap, clock
+        # Warnings about the live model from outside it, such as an app's missing dataset.
+        self.checks = checks
         self._lock = threading.RLock()
         self._pending_hook = False
         # (revision, commit, when) of the last source check that found every source.
@@ -88,9 +91,12 @@ class ModelService:
 
     def health(self):
         with self._lock:
-            return copy.deepcopy(
+            health = copy.deepcopy(
                 {**self._health, "live_commit": self.current.commit if self.current else None}
             )
+            if self.checks:
+                health["warnings"] = health["warnings"] + self.checks(self.current)
+            return health
 
     def _hook(self):
         if not self._pending_hook or not self.on_swap:
