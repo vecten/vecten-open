@@ -139,3 +139,15 @@ def test_system_packages_for_the_cli_are_refused(tmp_path):
         _load(tmp_path, dependencies={"cli": {"system": ["libgomp1"]}})
     assert caught.value.code == ExitCode.CONFIG
     assert "laptop" in caught.value.message
+
+
+@pytest.mark.parametrize("entry", ["example=1", "example=1:1", "example=0:2.0-1"])
+def test_single_digit_debian_versions_with_or_without_an_epoch_are_accepted(tmp_path, entry):
+    config = _load(tmp_path, dependencies={"platform": {"system": [entry]}})
+    assert config.dependencies.system("platform") == [entry]
+
+
+@pytest.mark.parametrize("entry", ["curl=1-", "curl=1:1-", "curl=-"])
+def test_a_version_ending_in_a_hyphen_stays_refused(tmp_path, entry):
+    with pytest.raises(Failure):
+        _load(tmp_path, dependencies={"platform": {"system": [entry]}})
