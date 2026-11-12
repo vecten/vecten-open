@@ -38,6 +38,10 @@ These terms describe the files and components used to build and operate a Vecten
 
 **In-repo extension**: an extension package kept in the project under `extensions/<name>/` and registered with `vecten extension add ./extensions/<name>`; the hosts build it from the bundle, so it is never published to or fetched from an index, while its third-party dependencies and build backend still come from one; see [extensions in the project](extensions.md#extensions-in-the-project).
 
+**Analytics app**: a dashboard an extension declares in the `vecten.apps` group and a project binds to MCP groups in `[apps.<extension>.<app>]` of `vecten.toml`; a `container` app runs as a service on its own hostname, and the MCP decides who may open it and what data it reads; see [analytics apps](analytics-apps.md).
+
+**App principal**: the service principal `svc_app_<app>` through which an analytics app reads data from the MCP; `vecten app connect` creates or rotates it, marks it as the app's and puts it in exactly the app's bound groups, and the MCP holds it to the app's declared datasets.
+
 **Ship**: deliver a project's code and semantic files to existing hosts, without changing infrastructure through Terraform.
 
 **Provisioner**: the privileged warehouse identity that creates and manages the roles used by MCP principals.

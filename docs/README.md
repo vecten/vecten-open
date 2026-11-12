@@ -25,6 +25,7 @@ are for running, building on and looking things up.
 - [Querying metrics](query-metrics.md): how `query_metrics` compiles a question into SQL.
 - [Correcting a business definition](feedback-loop.md): from a reported gap to a merged fix.
 - [Installing and writing extensions](extensions.md): connectors, tools and identity backends as packages.
+- [Analytics apps](analytics-apps.md): dashboards an extension declares, who may open them and what data they read.
 - [The agent guide](agent-guide.md): the `guide` skill's text, rendered from the package.
 - [Skill evaluations](skill-evaluations.md): the harness, the runs and the results.
 

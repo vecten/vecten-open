@@ -7,6 +7,20 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
+- Analytics apps ([#39](https://github.com/vecten/vecten-open/issues/39)): an extension
+  declares a dashboard in the `vecten.apps` group and a project binds it to MCP groups in
+  `[apps.<extension>.<app>]`. A `container` app (Streamlit through `runtime = "streamlit"`, or
+  any command and port) runs as a service on its own hostname. It reads data through the MCP as
+  its app principal `svc_app_<app>`, held to its declared datasets in `describe`, `search`,
+  `query_metrics` and `sql-exec`, which accepts only those datasets' tables and a list of
+  reporting functions per warehouse. A bound group that cannot read every declared dataset admits
+  no one and is reported in access health and `vecten issues`; the viewer passed in
+  `X-Vecten-On-Behalf-Of` is recorded in the audit. `vecten app connect <extension>.<app> --env
+  <env>` creates or rotates the principal and stores its credentials where the app's host reads
+  them. The admin panel's Analytics screen, `GET /api/admin/apps`, the `list_apps` tool and the
+  `/apps` page list the apps. The gate in front of an app's hostname and publishing a
+  `snowflake` app come later; a laptop app reads no data. See
+  [analytics apps](docs/analytics-apps.md).
 - In-repo extensions: an extension package kept in the project under `extensions/<name>/`,
   registered with `vecten extension add ./extensions/<name>`, locked with its third-party
   dependencies only, installed editable in the CLI's environment and built from the bundle on

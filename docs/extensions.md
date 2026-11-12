@@ -221,6 +221,7 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.mcp.auth` | Callable identity backend. Selected by `auth = "company_login"` in the `[mcp]` section of `vecten.toml`; the registry refuses a missing backend at startup. Extensions cannot replace the reserved `password`/`oidc` names. |
 | `vecten.mcp.provisioning` | Callable provisioning hook. The registry invokes the named hook with the owning service's arguments. |
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
+| `vecten.apps` | A dictionary, or zero-argument factory returning one, declaring one analytics app: `title`, `description`, `kind` (`container` or `snowflake`), the Ossie `datasets` it reads and suggested `groups`; a `container` app gives `runtime = "streamlit"` with `entry`, or `command` and `port`. `vecten lock` records it; `extension add` binds it in `[apps.<extension>.<app>]`. See [analytics apps](analytics-apps.md). |
 | `vecten.manifest` | A dictionary, or zero-argument factory returning one, with `secrets` and `settings`: what the extension needs, not a part it contributes (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
 
 MCP means Model Context Protocol, the client/server interface for warehouse tools. OAuth login,

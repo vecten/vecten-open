@@ -37,6 +37,7 @@ PUBLIC_DOCS = {
     "docs/images/vecten-open-light.svg",
     "docs/agent-guide.md",
     "docs/agentic-flow.md",
+    "docs/analytics-apps.md",
     "docs/cli.md",
     "docs/connectors.md",
     "docs/deploy-aws.md",
