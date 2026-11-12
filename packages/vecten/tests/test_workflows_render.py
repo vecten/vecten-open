@@ -100,12 +100,18 @@ def test_workflows_gate_on_vecten_toml_facts(render, params):
 
     ship = docs["ship.yml"]["jobs"]
     gate = ship["gate"]
-    [check] = [s for s in steps(gate) if s.get("run") == "vecten ship --env prod --check"]
+    # Without --env the gate reports the first environment of the promotion order, read from
+    # the pushed vecten.toml when the workflow runs.
+    [check] = [s for s in steps(gate) if s.get("run") == "vecten ship --check"]
     assert gate["outputs"]["deployed"] == f"${{{{ steps.{check['id']}.outputs.deployed }}}}"
+    assert gate["outputs"]["env"] == f"${{{{ steps.{check['id']}.outputs.env }}}}"
     assert ship["ship"]["needs"] == "gate"
     assert ship["ship"]["if"] == "needs.gate.outputs.deployed == 'true'"
     assert ship["ship"]["uses"] == "./.github/workflows/deploy-platform.yml"
-    assert ship["ship"]["with"] == {"environment": "prod"}
+    assert ship["ship"]["with"] == {
+        "environment": "${{ needs.gate.outputs.env }}",
+        "commit": "${{ github.sha }}",
+    }
 
     for name in ("terraform-plan.yml", "ship.yml"):
         gate = docs[name]["jobs"]["gate"]
@@ -192,8 +198,8 @@ def test_plan_comment_is_fenced_and_truncated_under_the_limit(render, params, tm
 def test_apply_and_deploy_platform_declare_the_environment(render, params):
     docs = render(params)
     for name, job_name, command in (
-        ("terraform-apply.yml", "apply", "vecten deploy --env ${{ inputs.environment }} --json"),
-        ("deploy-platform.yml", "ship", "vecten ship --env ${{ inputs.environment }} --json"),
+        ("terraform-apply.yml", "apply", APPLY_COMMAND),
+        ("deploy-platform.yml", "ship", SHIP_COMMAND),
     ):
         doc = docs[name]
         job = doc["jobs"][job_name]
@@ -296,10 +302,12 @@ def key_env(access: str, secret: str) -> dict:
     return {"SCW_ACCESS_KEY": secret_ref(access), "SCW_SECRET_KEY": secret_ref(secret)}
 
 
+APPLY_COMMAND = 'vecten deploy --env ${{ inputs.environment }} ${COMMIT:+--commit "$COMMIT"} --json'
+SHIP_COMMAND = 'vecten ship --env ${{ inputs.environment }} ${COMMIT:+--commit "$COMMIT"} --json'
 SCALEWAY_JOBS = (
     ("terraform-plan.yml", "plan", "vecten deploy --env prod --plan-only --cloud-only --json"),
-    ("terraform-apply.yml", "apply", "vecten deploy --env ${{ inputs.environment }} --json"),
-    ("deploy-platform.yml", "ship", "vecten ship --env ${{ inputs.environment }} --json"),
+    ("terraform-apply.yml", "apply", APPLY_COMMAND),
+    ("deploy-platform.yml", "ship", SHIP_COMMAND),
 )
 
 
@@ -332,8 +340,13 @@ def test_scaleway_apply_and_ship_sign_with_the_environment_deploy_key(render, pa
         assert vecten_step(job, command)["env"] == {
             **key_env(ENV_ACCESS_SECRET, ENV_SECRET_SECRET),
             "GH_TOKEN": "${{ github.token }}",
+            "COMMIT": "${{ inputs.commit }}",
         }, name
-        assert permissions(doc, job) == {"contents": "read", "pull-requests": "read"}, name
+        assert permissions(doc, job) == {
+            "contents": "read",
+            "pull-requests": "read",
+            "statuses": "write",
+        }, name
 
 
 @pytest.mark.parametrize("params", SCALEWAY, ids=label)
@@ -438,3 +451,130 @@ def test_project_ci_pins_the_table_actions_and_runner(renders, params):
         for step in steps(job):
             if "uses" in step:
                 assert step["uses"] in _pinned_actions(), step["uses"]
+
+
+# Promotion: the commit input, commit statuses and the CLI the promoted commit pins
+
+SHIPPING = ("deploy-platform.yml", "terraform-apply.yml")
+
+
+def _vecten_job(doc: dict) -> dict:
+    [job] = [j for j in doc["jobs"].values() if any("vecten " in c for c in runs(j))]
+    return job
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_the_shipping_workflows_take_a_commit_that_defaults_to_the_runs_own(render, params):
+    docs = render(params)
+    for name in SHIPPING:
+        on = triggers(docs[name])
+        dispatched = on["workflow_dispatch"]["inputs"]["commit"]
+        assert dispatched["required"] is False and dispatched.get("default", "") == "", name
+        job = _vecten_job(docs[name])
+        [command] = [c for c in runs(job) if c.startswith(("vecten ship", "vecten deploy"))]
+        assert '${COMMIT:+--commit "$COMMIT"}' in command, name
+        [step] = [s for s in steps(job) if s.get("run") == command]
+        assert step["env"]["COMMIT"] == "${{ inputs.commit }}", name
+        # Full history, so the commit and the default branch's ancestry are in the checkout.
+        [checkout] = [s for s in steps(job) if "actions/checkout" in s.get("uses", "")]
+        assert checkout["with"]["fetch-depth"] == 0, name
+    called = triggers(docs["deploy-platform.yml"])["workflow_call"]["inputs"]["commit"]
+    assert called == {"type": "string", "required": False, "default": ""}
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_every_shipping_job_may_set_commit_statuses(render, params):
+    docs = render(params)
+    for name in SHIPPING:
+        job = _vecten_job(docs[name])
+        assert permissions(docs[name], job)["statuses"] == "write", name
+        [command] = [s for s in steps(job) if s.get("run", "").startswith("vecten ")]
+        assert command["env"]["GH_TOKEN"] == "${{ github.token }}", name
+    # A called workflow's token holds at most what the calling job grants.
+    caller = docs["ship.yml"]["jobs"]["ship"]
+    assert permissions(docs["ship.yml"], caller)["statuses"] == "write"
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_the_shipping_jobs_install_the_cli_the_commit_pins(render, params, tmp_path):
+    docs = render(params)
+    for name in SHIPPING:
+        job = _vecten_job(docs[name])
+        [version] = [s for s in steps(job) if s.get("id") == "version"]
+        assert version["env"] == {"COMMIT": "${{ inputs.commit }}"}
+        [install] = [s for s in steps(job) if "uv tool install" in s.get("run", "")]
+        assert install["run"] == 'uv tool install "vecten==$VECTEN_VERSION"'
+        assert install["env"] == {"VECTEN_VERSION": "${{ steps.version.outputs.vecten }}"}
+        order = [s.get("id") or s.get("run", s.get("uses", "")) for s in steps(job)]
+        assert order.index("version") < order.index(install["run"]), name
+        assert not any(f"vecten=={VERSIONS.vecten}" in c for c in runs(job)), name
+
+
+def _run_version_step(script: str, cwd: Path, env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["bash", "-e", "-c", script], cwd=cwd, env=env, capture_output=True, text=True
+    )
+
+
+@pytest.mark.parametrize("params", AWS[:1], ids=label)
+def test_the_version_step_reads_scaffold_version_at_the_commit(render, params, tmp_path):
+    [version] = [
+        s
+        for s in steps(_vecten_job(render(params)["deploy-platform.yml"]))
+        if s.get("id") == "version"
+    ]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.name", "T")
+    git("config", "user.email", "t@acme.test")
+    (repo / "vecten.toml").write_text('[project]\nname = "acme"\nscaffold_version = "0.1.1"\n')
+    git("add", "-A")
+    git("commit", "-q", "-m", "a")
+    old = git("rev-parse", "HEAD")
+    (repo / "vecten.toml").write_text('[project]\nname = "acme"\nscaffold_version = "0.2.0"\n')
+    git("commit", "-q", "-am", "b")
+    head = git("rev-parse", "HEAD")
+    base = {"PATH": os.environ["PATH"], "GITHUB_SHA": head}
+    for commit, expected in (("", "0.2.0"), (old, "0.1.1"), (old[:7], "0.1.1")):
+        out = tmp_path / f"out-{expected}-{len(commit)}"
+        env = {**base, "COMMIT": commit, "GITHUB_OUTPUT": str(out)}
+        result = _run_version_step(version["run"], repo, env)
+        assert result.returncode == 0, result.stderr
+        assert out.read_text() == f"vecten={expected}\n"
+    for bad in ("--output=/tmp/x", "HEAD~1"):
+        env = {**base, "COMMIT": bad, "GITHUB_OUTPUT": str(tmp_path / "bad")}
+        result = _run_version_step(version["run"], repo, env)
+        assert result.returncode != 0 and "commit id" in result.stderr
+        assert not (tmp_path / "bad").exists() or (tmp_path / "bad").read_text() == ""
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_no_shipping_workflow_names_prod_outside_its_defaults(render, raw, params):
+    for name in ("ship.yml", *SHIPPING):
+        text = raw(params, name)
+        lines = [
+            ln
+            for ln in text.splitlines()
+            if re.search(r"\bprod\b", ln) and not ln.strip().startswith("#")
+        ]
+        assert all(ln.strip() == "default: prod" for ln in lines), (name, lines)
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_every_needs_output_reference_names_a_declared_output(render, raw, params):
+    for name, doc in render(params).items():
+        declared = {
+            job_name: set((job.get("outputs") or {}).keys())
+            for job_name, job in doc["jobs"].items()
+        }
+        for job_name, output in re.findall(
+            r"needs\.([\w-]+)\.outputs\.([\w-]+)", raw(params, name)
+        ):
+            assert output in declared.get(job_name, set()), (name, job_name, output)

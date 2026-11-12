@@ -835,27 +835,89 @@ def emulate_apply(checkout: Path, env: str, commit: str) -> str:
     return f"applied the mocked cloud for {env}; shipped {commit} to {', '.join(hosts)}"
 
 
-def emulate_ship(store: Store, checkout: Path, env: str) -> str:
-    """The ship job: `vecten ship --env <env>` inside Actions, from the checkout.
+_EXPRESSION = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
 
-    The job sets its commit status through `gh`, which must be this stand-in: the real one
-    would write to GitHub.
-    """
+
+def _expand(text: str, values: dict[str, str]) -> str:
+    """`${{ <expression> }}` replaced from `values`; `secrets.*` the job lacks read empty."""
+
+    def value(match: re.Match) -> str:
+        name = match[1]
+        if name in values:
+            return values[name]
+        if name.startswith("secrets."):
+            return ""
+        raise Unanswered(f"workflow expression {name}")
+
+    return _EXPRESSION.sub(value, text)
+
+
+def _ci_environ(store: Store) -> dict[str, str]:
+    """A job's environment: inside Actions, with this stand-in as its `gh`, since a job sets
+    commit statuses through gh and the real one would write to GitHub."""
     environ = _clean_env()
-    result = subprocess.run(
-        [sys.executable, "-m", "vecten.cli.app", "ship", "--env", env, "--json"],
-        cwd=checkout,
-        capture_output=True,
-        text=True,
-        env={
-            **environ,
-            **install(store.root, python=sys.executable, environ=environ),
-            "GITHUB_ACTIONS": "true",
-        },
-    )
+    return {
+        **environ,
+        **install(store.root, python=sys.executable, environ=environ),
+        "GITHUB_ACTIONS": "true",
+    }
+
+
+def _run_step(store: Store, checkout: Path, step: dict, values: dict[str, str]) -> dict:
+    """Run a step's `run` with bash as a runner would; the `name=value` lines it wrote to
+    GITHUB_OUTPUT. `vecten` is this interpreter's CLI."""
+    env = {k: _expand(str(v), values) for k, v in (step.get("env") or {}).items()}
+    command = _expand(step["run"], values)
+    command = re.sub(r"^vecten ", f"{shlex.quote(sys.executable)} -m vecten.cli.app ", command)
+    with tempfile.NamedTemporaryFile("r", suffix=".out") as output:
+        result = subprocess.run(
+            ["bash", "-e", "-c", command],
+            cwd=checkout,
+            capture_output=True,
+            text=True,
+            env={**_ci_environ(store), **env, "GITHUB_OUTPUT": output.name},
+        )
+        written = output.read()
     if result.returncode != 0:
-        raise RuntimeError(f"vecten ship exited {result.returncode}: {result.stdout}")
-    return result.stdout.strip()
+        raise RuntimeError(f"{step['run']} exited {result.returncode}: {result.stdout}")
+    return dict(line.partition("=")[::2] for line in written.splitlines() if "=" in line)
+
+
+def _workflow(checkout: Path, name: str) -> dict:
+    import yaml
+
+    return yaml.safe_load((checkout / ".github" / "workflows" / name).read_text())
+
+
+def emulate_ship(store: Store, checkout: Path, inputs: dict[str, str]) -> str:
+    """The rendered `deploy-platform.yml` ship job's `vecten ship` step, from the checkout."""
+    job = _workflow(checkout, SHIP_WORKFLOW)["jobs"]["ship"]
+    [step] = [s for s in job["steps"] if s.get("run", "").startswith("vecten ship")]
+    values = {f"inputs.{key}": value for key, value in inputs.items()}
+    values.setdefault("inputs.commit", "")
+    _run_step(store, checkout, step, {**values, "github.token": "stand-in-token"})
+    return f"{step['run']} for {inputs['environment']}: shipped"
+
+
+def emulate_push(store: Store, checkout: Path, commit: str) -> str:
+    """The rendered `ship.yml` on a push: its gate step, its condition, then the ship job it
+    calls with the inputs it passes."""
+    doc = _workflow(checkout, PUSH_WORKFLOW)
+    gate = doc["jobs"]["gate"]
+    [facts] = [s for s in gate["steps"] if s.get("id") == "facts"]
+    written = _run_step(store, checkout, facts, {})
+    step_values = {f"steps.facts.outputs.{k}": v for k, v in written.items()}
+    outputs = {k: _expand(str(v), step_values) for k, v in gate["outputs"].items()}
+    job = doc["jobs"]["ship"]
+    condition = re.fullmatch(r"needs\.gate\.outputs\.(\w+) == '(\w+)'", job["if"])
+    if condition is None:
+        raise Unanswered(f"ship.yml condition {job['if']}")
+    if outputs.get(condition[1]) != condition[2]:
+        return f"gate: {outputs.get('env', 'prod')} is not deployed in this commit; nothing shipped"
+    values = {f"needs.gate.outputs.{k}": v for k, v in outputs.items()}
+    values["github.sha"] = commit
+    inputs = {k: _expand(str(v), values) for k, v in job["with"].items()}
+    return emulate_ship(store, checkout, inputs)
 
 
 def record_run(
@@ -906,7 +968,7 @@ def dispatch(store: Store, name: str, workflow: str, ref: str, inputs: dict) -> 
     elif workflow == SHIP_WORKFLOW:
 
         def emulate(checkout, commit):
-            return emulate_ship(store, checkout, env)
+            return emulate_ship(store, checkout, {"environment": env, **inputs})
 
     else:
 
@@ -1430,8 +1492,9 @@ def merge_pull(store: Store, name: str, pull: dict, *, squash: bool) -> str:
 
 
 def post_receive(store: Store, bare: Path, lines: list[str]) -> None:
-    """`ship.yml` on a push to the default branch: ship when the pushed vecten.toml records a
-    deployed commit for prod, as its gate job reads it, else finish green having done nothing."""
+    """`ship.yml` on a push to the default branch, as the pushed commit renders it: its gate
+    reads the first environment of the promotion order, and the ship job runs once that
+    environment is deployed, else the run finishes green having done nothing."""
     name = str(bare.resolve().relative_to((store.root / "repos").resolve()))
     name = name.removesuffix(".git")
     repo = store.read(name)
@@ -1447,12 +1510,7 @@ def post_receive(store: Store, bare: Path, lines: list[str]) -> None:
             continue
 
         def emulate(checkout, commit):
-            from vecten_shared.config import load_config
-
-            facts = load_config(checkout).environments.get("prod")
-            if facts is None or not facts.deployed_commit:
-                return "gate: prod is not deployed in this commit; nothing shipped"
-            return emulate_ship(store, checkout, "prod")
+            return emulate_push(store, checkout, commit)
 
         run = record_run(store, name, PUSH_WORKFLOW, "push", repo["default_branch"], new, emulate)
         sys.stderr.write(f"{PUSH_WORKFLOW} run {run['id']}: {run['conclusion']}\n")

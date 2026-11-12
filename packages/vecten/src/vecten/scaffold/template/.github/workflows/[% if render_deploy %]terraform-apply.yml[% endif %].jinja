@@ -6,6 +6,10 @@ on:
         description: Environment to apply
         required: true
         default: prod
+      commit:
+        description: Commit of the default branch to apply and ship; empty takes the branch's head
+        required: false
+        default: ""
 permissions:
   contents: read
 concurrency:
@@ -28,6 +32,8 @@ jobs:
 [%- endif %]
       contents: read
       pull-requests: read
+      # Every ship records its outcome on the commit as `vecten/ship/<env>`.
+      statuses: write
     steps:
       - uses: [[ action_checkout ]]
         with:
@@ -38,7 +44,30 @@ jobs:
           terraform_version: "~[[ terraform_engine ]].0"
           # The wrapper adds a [command] line to stdout, which breaks `terraform output -json`.
           terraform_wrapper: false
-      - run: uv tool install "vecten==[[ vecten_version ]]"
+      # The CLI that built the commit for the environment before this one builds it here:
+      # the version its vecten.toml names, not the one this workflow was rendered with.
+      - id: version
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'EOF'
+          import os, re, subprocess, sys, tomllib
+          commit = os.environ["COMMIT"] or os.environ["GITHUB_SHA"]
+          if not re.fullmatch(r"[0-9a-f]{7,40}", commit):
+              sys.exit(f"commit must be a commit id of 7 to 40 hex digits; got {commit!r}")
+          shown = subprocess.run(
+              ["git", "show", f"{commit}:vecten.toml"], capture_output=True, text=True
+          )
+          if shown.returncode != 0:
+              sys.exit(f"git show {commit}:vecten.toml failed: {shown.stderr.strip()}")
+          version = tomllib.loads(shown.stdout)["project"]["scaffold_version"]
+          if not re.fullmatch(r"[0-9]+(\.[0-9]+)*((a|b|rc)[0-9]+)?", version):
+              sys.exit(f"scaffold_version at {commit} is no vecten release; got {version!r}")
+          print(f"vecten={version}")
+          EOF
+        env:
+          COMMIT: ${{ inputs.commit }}
+      - run: uv tool install "vecten==$VECTEN_VERSION"
+        env:
+          VECTEN_VERSION: ${{ steps.version.outputs.vecten }}
 [%- if cloud == 'aws' %]
       # The session keeps IAM's default hour, the longest the deploy role allows.
       - uses: [[ action_configure_aws_credentials ]]
@@ -46,9 +75,10 @@ jobs:
           role-to-assume: ${{ vars.VECTEN_AWS_ROLE_ARN }}
           aws-region: [[ region | tojson ]]
 [%- endif %]
-      - run: vecten deploy --env ${{ inputs.environment }} --json
+      - run: vecten deploy --env ${{ inputs.environment }} ${COMMIT:+--commit "$COMMIT"} --json
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ inputs.commit }}
 [%- if cloud != 'aws' %]
           SCW_ACCESS_KEY: ${{ secrets.VECTEN_SCW_ACCESS_KEY }}
           SCW_SECRET_KEY: ${{ secrets.VECTEN_SCW_SECRET_KEY }}

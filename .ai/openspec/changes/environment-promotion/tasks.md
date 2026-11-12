@@ -25,10 +25,10 @@
 
 ## 5. Workflows
 
-- [ ] 5.1 `ship.yml`: the gate reports the first environment; the ship job passes `environment` and `commit: ${{ github.sha }}` and grants `statuses: write`
-- [ ] 5.2 `deploy-platform.yml` and `terraform-apply.yml`: a `commit` input (default: the run's own commit), checkout of the default branch with full history, `vecten` installed at the version the commit's `scaffold_version` names, `statuses: write` and `statuses: read`
-- [ ] 5.3 Render tests for both clouds: the inputs, the permissions, the version step, and that no workflow names `prod` as a literal outside its defaults
-- [ ] 5.4 The rendered workflows parse as YAML and every `needs.*.outputs` reference names an output the job declares
+- [x] 5.1 `ship.yml`: the gate reports the first environment; the ship job passes `environment` and `commit: ${{ github.sha }}` and grants `statuses: write`
+- [x] 5.2 `deploy-platform.yml` and `terraform-apply.yml`: a `commit` input (default: the run's own commit), checkout of the default branch with full history, `vecten` installed at the version the commit's `scaffold_version` names, `statuses: write` and `statuses: read`
+- [x] 5.3 Render tests for both clouds: the inputs, the permissions, the version step, and that no workflow names `prod` as a literal outside its defaults
+- [x] 5.4 The rendered workflows parse as YAML and every `needs.*.outputs` reference names an output the job declares
 
 ## 6. `next`
 
