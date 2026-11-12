@@ -17,12 +17,13 @@ publishing is a later change with #40 (section 5).
 
 ## 2. Data scoping, admission and audit in the MCP (PR G)
 
-- [ ] 2.1 The server reads bound apps from the shipped `vecten.toml` and `extensions.lock.json`; app principals are marked by `vecten app connect`
-- [ ] 2.2 Scope app principals to declared datasets in `sql-exec` (from the parsed table list), `query_metrics` (home dataset), `describe` and `search`; declared datasets missing from the model in model health
-- [ ] 2.3 Admitted groups per app (dataset, schema and, with #51, restricted-area grants), recomputed at reconciliation, model swap and ship; access-health entries; the gate's verify uses admitted groups for app routes
-- [ ] 2.4 `X-Vecten-On-Behalf-Of` recorded in the audit for app principals only (state migration for the audit column)
-- [ ] 2.5 Check that no per-address limit applies to app principals' tool calls (design.md, Risks)
-- [ ] 2.6 Tests: refusals for undeclared relations (including a CTE, a subquery and a quoted name), an undeclared metric, filtered `describe` and `search`; admission with a group lacking a grant and after the grant is added; header recorded for an app principal and ignored for a person; Postgres and Snowflake warehouse fixtures where the repository's test tiers allow
+- [x] 2.1 The server reads bound apps from the shipped `vecten.toml` and `extensions.lock.json`; app principals are marked by `vecten app connect` (the stored marker, a `records` row of kind `app_principals` per principal naming its extension and app, is defined here; `vecten app connect` sets it in 3.4)
+- [x] 2.2 Scope app principals to declared datasets in `sql-exec` (from the parsed table list), `query_metrics` (home dataset), `describe` and `search`; declared datasets missing from the model in model health
+- [x] 2.3 Admitted groups per app (dataset, schema and, with #51, restricted-area grants), recomputed at reconciliation, model swap and ship; access-health entries (the gate's part is 2.7)
+- [x] 2.4 `X-Vecten-On-Behalf-Of` recorded in the audit for app principals only (state migration for the audit column)
+- [x] 2.5 Check that no per-address limit applies to app principals' tool calls (design.md, Risks)
+- [x] 2.6 Tests: refusals for undeclared relations (including a CTE, a subquery and a quoted name), an undeclared metric, filtered `describe` and `search`; admission with a group lacking a grant and after the grant is added; header recorded for an app principal and ignored for a person; Postgres and Snowflake warehouse fixtures where the repository's test tiers allow
+- [ ] 2.7 The gate's verify admits a person to an app's route only through the app's admitted groups (`AppScopes.admitted`), and the gate reads app routes from `[apps]`: needs the gate (extension-services PR D), which this branch does not carry yet
 
 ## 3. Listing and app connect (PR H)
 

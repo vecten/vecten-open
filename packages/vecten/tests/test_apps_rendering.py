@@ -163,6 +163,17 @@ def test_nginx_serves_the_app_at_its_hostname_with_one_login_route_and_its_healt
     assert "proxy_pass $upstream/_stcore/health;" in tls(text, "overview.data.acme.example")
 
 
+def test_nginx_limits_no_request_rate_by_address_for_the_app_or_the_mcp(tmp_path):
+    # An app's MCP calls arrive from its host's one public address (design.md, Risks), so no
+    # per-address rate limit may stand between the app and the MCP.
+    stack(tmp_path)
+    [bound] = bound_services(config(BOUND), read_record(tmp_path / "proj"))
+    site = service_site(bound, "overview.data.acme.example")
+    for components in (["platform"], ["mcp"], ["platform", "mcp"]):
+        text = generate_nginx_conf(components, VM_HOSTS, "vm", services=[site])
+        assert "limit_req" not in text and "limit_conn" not in text
+
+
 def tls(text: str, name: str) -> str:
     import re
 
