@@ -137,6 +137,44 @@ Deployed, Airflow sits behind NGINX at `https://airflow.<domain>` with Airflow's
 API password comes from the environment's secrets store. `vecten issues --env <env>` reads it for
 you; see below.
 
+## Airflow in a deployed environment
+
+Two settings change how a deployed Airflow behaves. Neither affects the laptop.
+
+**Who reaches the login.** By default anyone on the internet can reach Airflow's sign-in page at
+`https://airflow.<domain>`. To restrict it to known networks, list them in `vecten.toml`:
+
+```toml
+[airflow]
+# Only these networks may reach airflow.<domain>; everyone else gets 403.
+allow = ["203.0.113.0/24", "2001:db8::/32"]
+```
+
+`allow` takes IPv4 or IPv6 networks, and a bare address means that one address. It is checked
+the same way as `admin_allow` under `[mcp]` (see [the admin panel](admin-panel.md)), and it
+applies to every environment. NGINX on the platform host enforces it, and Airflow's login still
+applies to the networks it admits. One path stays open to everyone, Airflow's health path
+`/api/v2/monitor/health`. `vecten ship` polls it after each ship from wherever the ship runs,
+including GitHub's runners, whose addresses no list can name, and the path reports only
+component states. NGINX lets only reads through it and forwards nothing but that path to
+Airflow. `vecten issues --env <env>` signs in to the API, so run it from a listed
+network. From anywhere else it reports that Airflow refused the login with HTTP 403. The setting
+takes effect at the next ship.
+
+**Whether a new DAG starts paused.** On the laptop every new DAG starts paused. In a deployed
+environment a new DAG starts unpaused by default, because no deployed step unpauses a DAG, so a
+scheduled DAG can start running as soon as the ship that brings it lands, before anyone has
+looked at it. To make the DAGs of one environment start paused instead, set this in its
+`deploy/envs/<env>.tfvars`:
+
+```hcl
+dags_paused_at_creation = true
+```
+
+Someone then unpauses each new DAG in the Airflow UI. The setting applies only to DAGs Airflow
+has not seen before: a DAG that exists keeps the state it has. It takes effect at the next ship
+and needs no Terraform change.
+
 ## Shipping
 
 After the first deploy, every push to the project's default branch ships the DAGs, the

@@ -7,6 +7,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
+- Deployed hosts: `dags_paused_at_creation = true` in `deploy/envs/<env>.tfvars` makes that
+  environment's new DAGs start paused, `[airflow] allow` in `vecten.toml` limits which networks
+  reach `airflow.<domain>` (Airflow's health path stays open for `vecten ship`), and
+  `root_volume_size_gb` in the tfvars sizes every VM's root volume on AWS and Scaleway. Every
+  default is the current behaviour.
 - `build_sync_dag` takes `stages` (objects that run in a declared order, each stage once the
   one before it synced), `params` (run parameters passed to the connector's `source()`),
   `pool`, `guard` (a function whose falsy return skips the run without failing it),
@@ -29,6 +34,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Fixed
 
+- `--env <env>` commands that reach or name the MCP (`vecten login`, `user`, `group`, `grant`,
+  `issues`, `mcp admin-link`, `mcp connection`, `mcp provisioner-script` and the sign-in items
+  of `next`) use the environment's own domain from `deploy/envs/<env>.tfvars`, not prod's
+  `[deploy] domain` ([#36](https://github.com/vecten/vecten-open/issues/36)).
 - A sync DAG no longer publishes its asset when an object failed, so `dbt_build` no longer
   builds on a partial sync. The asset now follows the `check` task, and existing DAG files
   pick this up unchanged.

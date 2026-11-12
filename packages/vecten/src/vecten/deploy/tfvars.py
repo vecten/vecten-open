@@ -25,6 +25,9 @@ REQUIRED = (
     "warehouse",
 )
 SECOND_WAREHOUSE = "a second warehouse is a second deployment"
+# Read by `ship` when it renders a host's stack; Terraform has no use for it, and the cloud
+# root declares it only so the shared tfvars file plans without an undeclared-variable warning.
+DAGS_PAUSED_AT_CREATION = "dags_paused_at_creation"
 _KEY = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)")
 
 
@@ -107,19 +110,24 @@ def _mismatch(rel: str, key: str, found: Any, expected: Any, where: str) -> Fail
     return Failure(ExitCode.CONFIG, f"{rel} sets {key} = {found!r}; {where} says {expected!r}")
 
 
+def no_tfvars(env: str) -> Failure:
+    """The refusal for an environment whose `deploy/envs/<env>.tfvars` does not exist."""
+    hint = (
+        "run `vecten init --deploy` to render it"
+        if env == "prod"
+        else f'copy deploy/envs/prod.tfvars to it, set environment = "{env}" and set '
+        "domain to the name this environment serves under"
+    )
+    return Failure(ExitCode.REFUSED, f"environment {env!r} has no deploy/envs/{env}.tfvars; {hint}")
+
+
 def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str, Any]:
     """Read `deploy/envs/<env>.tfvars` and refuse it unless it describes this project."""
     check_env_name(env)
     rel = f"deploy/envs/{env}.tfvars"
     path = env_tfvars_path(project_root, env)
     if not path.is_file():
-        hint = (
-            "run `vecten init --deploy` to render it"
-            if env == "prod"
-            else f'copy deploy/envs/prod.tfvars to it, set environment = "{env}" and set '
-            "domain to the name this environment serves under"
-        )
-        raise Failure(ExitCode.REFUSED, f"environment {env!r} has no {rel}; {hint}")
+        raise no_tfvars(env)
     values = read_tfvars(path)
     snowflake = config.warehouse.kind == "snowflake"
     required = REQUIRED + (("snowflake_account",) if snowflake else ())
@@ -187,5 +195,11 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
         raise Failure(
             ExitCode.CONFIG,
             f"{rel} sets size = {values['size']!r}; size must be one of: {', '.join(TIERS)}",
+        )
+    paused = values.get(DAGS_PAUSED_AT_CREATION, False)
+    if not isinstance(paused, bool):
+        raise Failure(
+            ExitCode.CONFIG,
+            f"{rel} sets {DAGS_PAUSED_AT_CREATION} = {paused!r}; it must be true or false",
         )
     return values

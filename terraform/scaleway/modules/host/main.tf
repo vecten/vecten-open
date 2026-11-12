@@ -58,7 +58,7 @@ resource "scaleway_instance_server" "this" {
 
   root_volume {
     volume_type           = local.root_volume_type
-    size_in_gb            = 30
+    size_in_gb            = var.root_volume_size_gb
     delete_on_termination = true
   }
 

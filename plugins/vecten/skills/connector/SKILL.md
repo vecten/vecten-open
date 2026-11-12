@@ -261,9 +261,11 @@ object group, `orchestration/dags/sync_<name>_<group>.py`, running daily in UTC 
 off; a connector from an extension may come with several groups on their own schedules. In the
 local Airflow that `vecten up` starts, a new DAG appears paused; once unpaused, it syncs the
 latest whole day at once, then runs after each midnight. To load now without Airflow,
-`vecten connector run <name>` syncs from this machine. Whether a new DAG starts paused in a
-deployed environment is that environment's setting. A sync whose object fails publishes nothing,
-so the dbt build does not run on partial data.
+`vecten connector run <name>` syncs from this machine. In a deployed environment a new DAG
+starts unpaused, unless that environment's `deploy/envs/<env>.tfvars` sets
+`dags_paused_at_creation = true`; then it starts paused and runs only once someone unpauses it
+in that environment's Airflow. A sync whose object fails publishes nothing, so the dbt build
+does not run on partial data.
 
 Each DAG file is one call to `build_sync_dag`. When the human asks for one of the following,
 add the keyword to that call rather than writing a DAG by hand:

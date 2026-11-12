@@ -72,8 +72,15 @@ class AirflowClient:
         http = httpx.Client(timeout=30, verify=self._verify, transport=TRANSPORT)
         response = self._send(http, "POST", "/auth/token", json=self._login)
         if response.status_code not in (200, 201):
+            # Airflow answers a wrong password with 401, so a 403 here most likely comes from
+            # NGINX refusing an address outside the `[airflow] allow` list.
+            hint = (
+                "; this address may be outside `[airflow] allow` in vecten.toml"
+                if response.status_code == 403
+                else ""
+            )
             raise SourceUnavailable(
-                f"Airflow at {self.base_url} refused the login (HTTP {response.status_code})"
+                f"Airflow at {self.base_url} refused the login (HTTP {response.status_code})" + hint
             )
         http.headers["Authorization"] = f"Bearer {response.json()['access_token']}"
         self._http = http

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vecten.deploy.snowflake import identity_pending
 from vecten.intake.facts import OIDC_REGISTERED_PREFIX
+from vecten.mcp_url import mcp_url
 from vecten.next.deploy import PUSH
 from vecten.next.gitstate import GitState
 from vecten.next.ingestion import access_apply_items
@@ -31,10 +32,10 @@ ADMIN = Item(
 )
 
 
-def _register_callback(config: VectenConfig, env: str) -> Item:
+def _register_callback(root: Path, config: VectenConfig, env: str) -> Item:
     return Item(
         "ask",
-        f"Register https://mcp.{config.deploy.domain}/oidc/callback with your identity "
+        f"Register {mcp_url(root, config, env)}/oidc/callback with your identity "
         "provider. If it gave you a client secret, store it with "
         f"`vecten secret set MCP_OIDC_CLIENT_SECRET --env {env}`.",
         f"vecten answer {OIDC_REGISTERED_PREFIX}{env} yes",
@@ -50,7 +51,7 @@ def _signed_in(root: Path, config: VectenConfig, env: str) -> bool:
     from vecten.mcp_client import TokenCache, login_record, session_usable
 
     try:
-        session = TokenCache().load(f"https://mcp.{config.deploy.domain}")
+        session = TokenCache().load(mcp_url(root, config, env))
         record = read_record(root, login_record(env))
     except Failure:
         return False
@@ -73,7 +74,7 @@ def _sign_in_items(
         if not (mcp.oidc_issuer and mcp.oidc_client_id):
             return []
         if not facts.oidc_registered:
-            return [] if facts.first_user_added else [_register_callback(config, env)]
+            return [] if facts.first_user_added else [_register_callback(root, config, env)]
     elif mcp.auth == "password":
         if not facts.admin_link_issued and not facts.first_user_added:
             title = "Give the first admin a password link"

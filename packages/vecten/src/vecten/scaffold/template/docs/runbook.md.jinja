@@ -205,6 +205,11 @@ holding a secret on a VM.
 Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secrets Manager page.
+[%- if 'platform' in components %]
+To keep the login page off the open internet, list the networks that may reach it under
+`[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
+the ship polls. Run `vecten issues --env <env>` from a listed network.
+[%- endif %]
 
 ### Admin access
 [% if 'platform' in components and warehouse == 'postgres' %]
@@ -379,6 +384,18 @@ destroy again.
   instance.
 - `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
   `instance_type_overrides` replaces the instance type of a host or an instance by its key.
+- `root_volume_size_gb` sets the size of every VM's encrypted root volume, which holds the
+  images and Docker's named volumes: 30 GiB by default, from 30 to 16384. A larger value grows
+  each volume in place at the next deploy; EBS cannot shrink a volume, so a smaller value fails
+  the apply. A running VM's file system does not see the added space until its partition and
+  file system are grown; cloud-init grows both at boot, so a reboot should do it, which is not
+  verified.
+[%- if 'platform' in components %]
+- `dags_paused_at_creation = true` makes the environment's new DAGs start paused, so nothing
+  scheduled runs until someone unpauses it in the Airflow UI. By default a deployed DAG starts
+  unpaused, because no deployed step unpauses it. The setting is read by `vecten ship`, not by
+  Terraform, takes effect at the next ship, and leaves a DAG Airflow already knows as it is.
+[%- endif %]
 - The Terraform root's provider lock file, `deploy/terraform/aws/.terraform.lock.hcl`, is
   committed. The first local `vecten deploy --env <env> --plan-only` writes it; commit and push
   it with `vecten github push`, because `vecten deploy` refuses while `deploy/` holds changes
@@ -637,6 +654,11 @@ secret on a VM.
 Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secret Manager page of the project `<prefix>`.
+[%- if 'platform' in components %]
+To keep the login page off the open internet, list the networks that may reach it under
+`[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
+the ship polls. Run `vecten issues --env <env>` from a listed network.
+[%- endif %]
 
 ### Shipping
 
@@ -893,6 +915,17 @@ in a way that would replace a resource, and a person reconciles the two, startin
 - `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
   `instance_type_overrides` replaces the server or node type of a host or an instance by its
   key: `platform`, `mcp`, `main`, `state` or `warehouse`.
+- `root_volume_size_gb` sets the size of every VM's boot volume, which holds the images and
+  Docker's named volumes: 30 GB by default, and at least 30. A DEV1 type boots from its local
+  SSD, so the size cannot exceed the type's local storage (40 GB on DEV1-M, 80 GB on DEV1-L);
+  a POP2 type boots from an SBS volume, which can grow but never shrink. Whether a changed size
+  is applied in place or replaces the VM is not verified, so set it before the first deploy.
+[%- if 'platform' in components %]
+- `dags_paused_at_creation = true` makes the environment's new DAGs start paused, so nothing
+  scheduled runs until someone unpauses it in the Airflow UI. By default a deployed DAG starts
+  unpaused, because no deployed step unpauses it. The setting is read by `vecten ship`, not by
+  Terraform, takes effect at the next ship, and leaves a DAG Airflow already knows as it is.
+[%- endif %]
 - The Terraform root's provider lock file, `deploy/terraform/scaleway/.terraform.lock.hcl`, is
   committed. The first local `vecten deploy --env <env> --plan-only` writes it; commit and push
   it with `vecten github push`, because `vecten deploy` refuses while `deploy/` holds changes

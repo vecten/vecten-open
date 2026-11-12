@@ -221,8 +221,9 @@ This procedure applies when `components = ["mcp"]` and `[warehouse] existing = t
 Run `vecten mcp provisioner-script` to review SQL for a warehouse administrator. On Snowflake,
 first configure the cloud deployment settings using `vecten init --deploy`, as described in the
 [AWS deployment guide](deploy-aws.md) or
-[Scaleway deployment guide](deploy-scaleway.md). Its `[deploy] domain` determines the public HTTPS
-issuer and JWKS URL. On its first run the script generates the provisioner's key pair into the
+[Scaleway deployment guide](deploy-scaleway.md). The environment's domain, the `domain` in
+`deploy/envs/<env>.tfvars` (for `prod`, `[deploy] domain`), determines the public HTTPS issuer and
+JWKS URL. On its first run the script generates the provisioner's key pair into the
 laptop's store as `MCP_PROVISIONER_PRIVATE_KEY`, kept on one line because the local `.env`
 holds no newline, and fills the public half into the SQL; the private key never reaches the
 locator or the SQL. `vecten secret set MCP_PROVISIONER_PRIVATE_KEY --env <env> --from-local`

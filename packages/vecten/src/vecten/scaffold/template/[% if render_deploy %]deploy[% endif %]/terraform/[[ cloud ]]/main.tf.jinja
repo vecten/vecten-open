@@ -54,6 +54,7 @@ module "environment" {
 [%- endif %]
 
   platform_size           = var.platform_size
+  root_volume_size_gb     = var.root_volume_size_gb
   instance_type_overrides = var.instance_type_overrides
   database_public_cidrs   = var.database_public_cidrs
 [%- if cloud == 'aws' %]

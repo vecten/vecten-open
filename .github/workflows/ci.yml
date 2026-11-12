@@ -59,6 +59,11 @@ jobs:
   browser-auth:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # The image carries Chromium, WebKit and their system libraries, so the job installs
+    # nothing from apt. It holds one Playwright release's browser builds only, so the versions
+    # table pins it at the playwright version uv.lock resolves.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.64.1-noble@sha256:330d401ae23c905896a0c26c66c36fc971b621519e7b11b435a8328d7bf6e031
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -66,7 +71,6 @@ jobs:
           enable-cache: true
       - run: uv python install 3.14
       - run: uv sync --locked --all-packages --group browser
-      - run: uv run --group browser playwright install --with-deps chromium webkit
       - run: uv run --group browser pytest packages/vecten-mcp/tests/test_oauth_browser.py packages/vecten/tests/test_eval_harness_person_tools.py -q
 
   render-matrix:

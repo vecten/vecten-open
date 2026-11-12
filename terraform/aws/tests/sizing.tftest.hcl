@@ -222,6 +222,52 @@ run "rejects_an_unknown_platform_size" {
   expect_failures = [var.platform_size]
 }
 
+run "root_volume_size_gb_sizes_every_root_volume" {
+  command = plan
+
+  variables {
+    root_volume_size_gb = 80
+  }
+
+  assert {
+    condition     = alltrue([for h in module.host : h.settings.root_volume.volume_size == 80 && h.settings.root_volume.volume_type == "gp3" && h.settings.root_volume.encrypted])
+    error_message = "root_volume_size_gb sizes every host's encrypted gp3 root volume"
+  }
+}
+
+run "root_volume_defaults_to_30_gib" {
+  command = plan
+
+  variables {
+    root_volume_size_gb = null
+  }
+
+  assert {
+    condition     = alltrue([for h in module.host : h.settings.root_volume.volume_size == 30])
+    error_message = "a null root_volume_size_gb, which the thin root passes when tfvars sets none, keeps 30 GiB"
+  }
+}
+
+run "rejects_a_root_volume_below_30_gib" {
+  command = plan
+
+  variables {
+    root_volume_size_gb = 20
+  }
+
+  expect_failures = [var.root_volume_size_gb]
+}
+
+run "rejects_a_fractional_root_volume" {
+  command = plan
+
+  variables {
+    root_volume_size_gb = 40.5
+  }
+
+  expect_failures = [var.root_volume_size_gb]
+}
+
 run "rejects_an_unknown_override_key" {
   command = plan
 

@@ -3,6 +3,7 @@
 import json
 import re
 
+from vecten.mcp_url import mcp_url
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, load_config, save_config
 from vecten_shared.identity_setup import introspection_document, provisioner_script
@@ -67,9 +68,9 @@ def setup_script(root, env, confirm=False, public_key=None):
         check_env_name(env)
         if not config.deploy:
             raise Failure(ExitCode.PREREQUISITE, "configure the deploy layer first")
-    issuer = (
-        f"https://mcp.{config.deploy.domain}" if config.deploy else "https://mcp.localhost:8443"
-    )
+    # Snowflake fetches the issuer's keys from the internet, which cannot reach the laptop, so
+    # the laptop's script names prod's public issuer once a deploy layer exists.
+    issuer = mcp_url(root, config, "prod" if env == "local" and config.deploy else env)
     if config.warehouse.kind == "snowflake" and not config.deploy:
         raise Failure(
             ExitCode.PREREQUISITE,

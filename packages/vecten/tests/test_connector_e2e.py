@@ -17,7 +17,7 @@ from dotenv import dotenv_values
 
 from vecten.stack.compose import LOCAL_HTTPS_PORT, compose_project_name
 from vecten_shared.config import load_config, save_config
-from vecten_shared.provider.local import LOCAL_PG_PUBLISHED_PORT
+from vecten_shared.provider.local import local_pg_published_port
 
 from .docker_util import remove_stack_images
 
@@ -174,7 +174,7 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
         env = dotenv_values(proj / ".env", interpolate=False)
         with psycopg.connect(
             host="127.0.0.1",
-            port=LOCAL_PG_PUBLISHED_PORT,
+            port=local_pg_published_port(),
             user="loader",
             password=env["LOADER_PASSWORD"],
             dbname="warehouse",
@@ -254,7 +254,7 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
 
         with psycopg.connect(
             host="127.0.0.1",
-            port=LOCAL_PG_PUBLISHED_PORT,
+            port=local_pg_published_port(),
             user="loader",
             password=env["LOADER_PASSWORD"],
             dbname="warehouse",
