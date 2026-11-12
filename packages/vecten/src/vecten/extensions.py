@@ -7,16 +7,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import tomlkit
+from pydantic import ValidationError
 
 from vecten import in_repo, locking
 from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
-from vecten_shared.config import VectenConfig, load_config
+from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
 from vecten_shared.declarations import (
     Manifest,
     check_settings,
@@ -634,9 +636,18 @@ def add_extension(root: Path, package: str) -> dict:
     if registration not in config.extensions:
         config.extensions.append(registration)
     files, report = lock_project(root, config, added=dist)
+    record = locking.parse_record(files[root / locking.RECORD_FILE]) or {}
     doc = tomlkit.parse((root / "vecten.toml").read_text())
     doc["extensions"] = config.extensions
-    write_project_files({root / "vecten.toml": tomlkit.dumps(doc), **files})
+    name = normalize_name(dist.name)
+    services = _bind_services(doc, config, name, record.get(name))
+    text = tomlkit.dumps(doc)
+    try:
+        bound = VectenConfig.model_validate(tomllib.loads(text))
+    except ValidationError as exc:
+        raise Failure(ExitCode.CONFIG, f"binding the services of {name}: {exc}") from None
+    check_bindings(bound, record)
+    write_project_files({root / "vecten.toml": text, **files})
     pinned = (
         f"./{in_repo.EXTENSIONS_DIR}/{normalize_name(dist.name)}{extras}"
         if dist.in_repo
@@ -648,7 +659,92 @@ def add_extension(root: Path, package: str) -> dict:
         "unknown_groups": unknown,
         "missing_secrets": report["missing_locally"],
         "undelivered": report["undelivered"],
+        **services,
     }
+
+
+def _free_label(extension: str, service: str, taken: set[str]) -> str:
+    """The service's name when free, else `<extension>-<service>`, numbered when taken too."""
+    base = f"{extension}-{service}"[:60].rstrip("-")
+    candidates = [service, base, *(f"{base}-{n}" for n in range(2, 100))]
+    for label in candidates:
+        if label not in taken and label_problem(label) is None:
+            return label
+    raise Failure(ExitCode.CONFIG, f"no free hostname label for {extension}.{service}")
+
+
+def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
+    """Bind each declared service the project does not bind yet, from its suggestions.
+
+    A bound service keeps its binding as the person left it: an upgrade's new route, or a
+    changed suggestion, is only named, so a route never becomes reachable without a diff.
+    """
+    out: dict[str, list[str]] = {"public_routes": [], "hostnames": [], "binding_notes": []}
+    if entry is None or not entry.services:
+        return out
+    existing = config.services.get(extension, {})
+    taken = {b.hostname for t in config.services.values() for b in t.values() if b.hostname}
+    for name, service in sorted(entry.services.items()):
+        key = f"{extension}.{name}"
+        if name in existing:
+            for route_name, route in sorted(service.routes.items()):
+                bound = existing[name].routes.get(route_name)
+                if bound is None:
+                    out["binding_notes"].append(f"{key} route {route_name}: declared, not bound")
+                elif bound.access != route.access:
+                    out["binding_notes"].append(
+                        f"{key} route {route_name}: bound {bound.access}, suggested {route.access}"
+                    )
+            continue
+        enabled = [c for c in service.components if config.has(c)]
+        if not enabled:
+            out["binding_notes"].append(
+                f"{key}: runs from {', '.join(service.components)}, which the project does not "
+                "enable; not bound"
+            )
+            continue
+        table = tomlkit.table()
+        routes = tomlkit.table(is_super_table=True)
+        for route_name, route in sorted(service.routes.items()):
+            if route.access == "login" and not config.has("mcp"):
+                out["binding_notes"].append(
+                    f"{key} route {route_name}: login needs the mcp component; not bound"
+                )
+                continue
+            route_table = tomlkit.table()
+            route_table["access"] = route.access
+            if route.access == "login":
+                route_table["groups"] = list(route.groups)
+            else:
+                out["public_routes"].append(f"{key} route {route_name}")
+            routes[route_name] = route_table
+        if routes:
+            label = _free_label(extension, name, taken)
+            taken.add(label)
+            table["hostname"] = label
+            if config.deploy is not None:
+                out["hostnames"].append(service_hostname(label, config.deploy.domain))
+        if "platform" not in enabled:
+            table["host"] = enabled[0]
+        if routes:
+            table["routes"] = routes
+        if "services" not in doc:
+            doc["services"] = tomlkit.table(is_super_table=True)
+        if extension not in doc["services"]:
+            doc["services"][extension] = tomlkit.table(is_super_table=True)
+        doc["services"][extension][name] = table
+    return out
+
+
+def services_message(data: dict) -> list[str]:
+    """Lines naming public routes just bound, hostnames needing a deploy, and binding notes."""
+    lines = []
+    if data.get("public_routes"):
+        lines.append("public, reachable by anyone: " + ", ".join(data["public_routes"]))
+    if data.get("hostnames"):
+        lines.append("new hostnames, served after `vecten deploy`: " + ", ".join(data["hostnames"]))
+    lines += data.get("binding_notes", [])
+    return lines
 
 
 def secrets_message(missing: list[str], undelivered: list[str]) -> list[str]:

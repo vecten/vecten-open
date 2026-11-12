@@ -593,3 +593,136 @@ def test_lock_refuses_a_binding_of_an_undeclared_service(invoke, project, fakes,
     assert r.exit_code == ExitCode.CONFIG, r.output
     assert "services.acme-demo.portal" in r.output
     assert (project / locking.RECORD_FILE).read_bytes() == before
+
+
+PORTAL = {
+    **BOT,
+    "routes": {
+        "webhook": {"path": "/api/messages", "access": "public"},
+        "admin": {"path": "/", "access": "login", "groups": ["default"]},
+    },
+}
+
+
+def _declared(monkeypatch, services):
+    from vecten_shared.services import parse_service
+
+    monkeypatch.setattr(
+        extensions,
+        "load_services",
+        lambda config, candidates=None, only=None: {
+            "acme-demo": {n: parse_service("acme-demo", n, v) for n, v in services.items()}
+        },
+    )
+
+
+def test_extension_add_binds_each_service_from_its_suggestions(invoke, project, fakes, monkeypatch):
+    _declared(monkeypatch, {"bot": PORTAL})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    text = (project / "vecten.toml").read_text()
+    assert "[services.acme-demo.bot]" in text
+    assert "[services.acme-demo.bot.routes.webhook]" in text
+    binding = load_config(project).services["acme-demo"]["bot"]
+    assert binding.hostname == "bot" and binding.host is None
+    assert binding.routes["webhook"].access == "public"
+    assert (binding.routes["admin"].access, binding.routes["admin"].groups) == (
+        "login",
+        ["default"],
+    )
+    assert json.loads(r.stdout)["public_routes"] == ["acme-demo.bot route webhook"]
+    _edit_config(project, lambda doc: doc.pop("services"))
+    out = invoke("extension", "add", "acme-demo").output
+    assert "public, reachable by anyone: acme-demo.bot route webhook" in out
+
+
+def test_a_service_without_routes_gets_no_hostname(invoke, project, fakes, monkeypatch):
+    _declared(monkeypatch, {"worker": {"command": ["run"], "health": {"command": ["true"]}}})
+    assert invoke("extension", "add", "acme-demo").exit_code == 0
+    assert load_config(project).services["acme-demo"]["worker"].hostname is None
+
+
+def test_a_reserved_or_taken_label_falls_back_to_extension_and_service(
+    invoke, project, fakes, monkeypatch
+):
+    _declared(monkeypatch, {"mcp": PORTAL, "www": PORTAL})
+    assert invoke("extension", "add", "acme-demo").exit_code == 0, invoke("lock").output
+    services = load_config(project).services["acme-demo"]
+    assert services["mcp"].hostname == "acme-demo-mcp"
+    assert services["www"].hostname == "acme-demo-www"
+
+
+def test_upgrade_keeps_the_projects_binding_and_names_the_difference(
+    invoke, project, fakes, monkeypatch
+):
+    _declared(monkeypatch, {"bot": PORTAL})
+    assert invoke("extension", "add", "acme-demo").exit_code == 0
+    changed = {
+        **PORTAL,
+        "routes": {
+            "webhook": {"path": "/api/messages", "access": "login", "groups": ["default"]},
+            "admin": {"path": "/", "access": "login", "groups": ["default"]},
+            "export": {"path": "/export", "access": "public"},
+        },
+    }
+    _declared(monkeypatch, {"bot": changed})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    binding = load_config(project).services["acme-demo"]["bot"]
+    assert binding.routes["webhook"].access == "public"
+    assert "export" not in binding.routes
+    notes = json.loads(r.stdout)["binding_notes"]
+    assert "acme-demo.bot route webhook: bound public, suggested login" in notes
+    assert "acme-demo.bot route export: declared, not bound" in notes
+
+
+def test_a_login_route_is_left_unbound_without_the_mcp(invoke, project, fakes, monkeypatch):
+    _edit_config(project, lambda doc: doc.__setitem__("components", ["platform"]))
+    _declared(monkeypatch, {"bot": PORTAL})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    assert set(load_config(project).services["acme-demo"]["bot"].routes) == {"webhook"}
+    assert (
+        "acme-demo.bot route admin: login needs the mcp component; not bound"
+        in (json.loads(r.stdout)["binding_notes"])
+    )
+
+
+def test_a_service_for_a_component_the_project_lacks_is_not_bound(
+    invoke, project, fakes, monkeypatch
+):
+    _edit_config(project, lambda doc: doc.__setitem__("components", ["platform"]))
+    _declared(monkeypatch, {"tool": {**BOT, "components": ["mcp"]}})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    assert load_config(project).services == {}
+    assert (
+        "acme-demo.tool: runs from mcp, which the project does not enable; not bound"
+        in (json.loads(r.stdout)["binding_notes"])
+    )
+
+
+def test_a_service_only_the_mcp_runs_is_placed_there(invoke, project, fakes, monkeypatch):
+    _declared(monkeypatch, {"tool": {**BOT, "components": ["mcp"]}})
+    assert invoke("extension", "add", "acme-demo").exit_code == 0
+    assert load_config(project).services["acme-demo"]["tool"].host == "mcp"
+
+
+def test_a_hostname_needing_deploy_is_named_once_the_project_deploys(
+    invoke, project, fakes, monkeypatch
+):
+    deploy = {
+        "cloud": "aws",
+        "region": "eu-west-1",
+        "domain": "data.acme.com",
+        "dns_zone": "acme.com",
+        "github_repository": "acme/data",
+    }
+    _edit_config(project, lambda doc: doc.__setitem__("deploy", deploy))
+    _declared(monkeypatch, {"bot": PORTAL})
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["hostnames"] == ["bot.data.acme.com"]
+    _edit_config(project, lambda doc: doc.pop("services"))
+    out = invoke("extension", "add", "acme-demo").output
+    assert "bot.data.acme.com" in out and "vecten deploy" in out

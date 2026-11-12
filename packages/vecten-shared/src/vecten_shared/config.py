@@ -175,6 +175,21 @@ _LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 RESERVED_LABELS = frozenset({"airflow", "mcp", "www"})
 
 
+def label_problem(value: str) -> str | None:
+    """Why `value` cannot name a service's hostname below the domain, or None."""
+    if value == APEX:
+        return None
+    if value in RESERVED_LABELS or value.startswith("_"):
+        return f"{value} is reserved; choose another label"
+    if not _LABEL.fullmatch(value):
+        return "a DNS label of lowercase letters, digits and inner hyphens, or @ for the apex"
+    return None
+
+
+def service_hostname(label: str, domain: str) -> str:
+    return domain if label == APEX else f"{label}.{domain}"
+
+
 class RouteBinding(Strict):
     access: Literal["public", "login"]
     groups: list[str] = Field(default_factory=list)
@@ -214,15 +229,7 @@ class ServiceBinding(Strict):
     @field_validator("hostname")
     @classmethod
     def _label(cls, value: str | None) -> str | None:
-        if value is None or value == APEX:
-            return value
-        if value in RESERVED_LABELS or value.startswith("_"):
-            raise ValueError(f"{value} is reserved; choose another label")
-        if not _LABEL.fullmatch(value):
-            raise ValueError(
-                "a DNS label of lowercase letters, digits and inner hyphens, or @ for the apex"
-            )
-        return value
+        return value if value is None else _checked(label_problem(value), value)
 
     @field_validator("routes")
     @classmethod
