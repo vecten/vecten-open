@@ -3,10 +3,11 @@
 from importlib import metadata
 from pathlib import Path
 
-from packaging.requirements import InvalidRequirement, Requirement
+from packaging.requirements import Requirement
 
 from vecten_shared.config import VectenConfig
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.requirements import requirement
 from vecten_shared.versions import normalize_name
 
 GROUPS = (
@@ -21,20 +22,6 @@ GROUPS = (
     "vecten.skills",
 )
 RESOURCE_GROUPS = frozenset({"vecten.dbt_packages", "vecten.dags", "vecten.osi", "vecten.skills"})
-
-
-def requirement(text: str) -> Requirement:
-    try:
-        parsed = Requirement(text)
-        if parsed.url or parsed.marker or any(c in text for c in "\r\n"):
-            raise InvalidRequirement()
-    except InvalidRequirement:
-        raise Failure(
-            ExitCode.USAGE,
-            "use a package name with optional extras/version; "
-            "URLs, paths, options and markers are not supported",
-        ) from None
-    return parsed
 
 
 def selected_entry_points(config: VectenConfig, group: str, candidates=None) -> list:

@@ -30,6 +30,7 @@ from vecten_shared.names import (
 )
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
+from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
 
 CONFIG_FILE = "vecten.toml"
 Component = Literal["platform", "mcp"]
@@ -281,6 +282,28 @@ class PackagesSection(Strict):
     private_index: bool = False
 
 
+class ComponentDependencies(Strict):
+    python: list[str] = Field(default_factory=list)
+
+    @field_validator("python")
+    @classmethod
+    def _python(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            if parse_requirement(entry) is None:
+                raise ValueError(f"{entry!r}: {REQUIREMENT_RULE}")
+        return value
+
+
+class DependenciesSection(Strict):
+    platform: ComponentDependencies | None = None
+    mcp: ComponentDependencies | None = None
+    cli: ComponentDependencies | None = None
+
+    def python(self, component: str) -> list[str]:
+        section = getattr(self, component)
+        return list(section.python) if section is not None else []
+
+
 class VectenConfig(Strict):
     packages: PackagesSection = Field(default_factory=PackagesSection)
     users: int = Field(gt=0)
@@ -295,6 +318,7 @@ class VectenConfig(Strict):
     mcp: McpSection = Field(default_factory=McpSection)
     airflow: AirflowSection = Field(default_factory=AirflowSection)
     connectors: list[ConnectorDecl] = Field(default_factory=list)
+    dependencies: DependenciesSection = Field(default_factory=DependenciesSection)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -309,6 +333,17 @@ class VectenConfig(Strict):
         # Without the platform no host serves Airflow, so the list would restrict nothing.
         if self.airflow.allow and not self.has("platform"):
             raise ValueError("[airflow] allow needs the platform component")
+        return self
+
+    @model_validator(mode="after")
+    def _dependencies_need_their_component(self) -> VectenConfig:
+        # No image would install them, so the requirements would be silently ignored.
+        for component in ("platform", "mcp"):
+            if getattr(self.dependencies, component) is not None and not self.has(component):
+                raise ValueError(
+                    f"[dependencies.{component}] needs the {component} component, "
+                    "which this project does not enable"
+                )
         return self
 
     def model_post_init(self, context: Any, /) -> None:
@@ -346,6 +381,8 @@ def stack_project_name(project_root: Path, project_name: str) -> str:
 
 def save_config(project_root: Path, config: VectenConfig) -> None:
     data = config.model_dump(mode="json", exclude_none=True)
+    if not data.get("dependencies"):
+        data.pop("dependencies", None)
     write_text_atomic(project_root / CONFIG_FILE, tomli_w.dumps(data))
 
 

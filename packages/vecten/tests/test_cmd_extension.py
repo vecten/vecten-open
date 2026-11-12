@@ -30,23 +30,24 @@ def installer(monkeypatch, groups=GROUPS, fail=False):
         calls.append(req)
         if fail:
             raise Failure(ExitCode.TOOL_FAILED, "package installation failed")
-        return SimpleNamespace(
+        return extensions.PackageMetadata(
             name="acme-demo",
             version="1.2.0",
-            entry_points=[SimpleNamespace(group=g) for g in groups],
+            entry_points=tuple(SimpleNamespace(group=g) for g in groups),
         )
 
     monkeypatch.setattr(extensions, "inspect_package", install)
     monkeypatch.setattr(extensions, "install_lock", lambda *a: None)
-    monkeypatch.setattr(
-        extensions,
-        "resolve_runtime_locks",
-        lambda reqs, root, config: {
-            f"requirements-{kind}.lock": "\n".join(reqs) + "\n" for kind in ("airflow", "mcp")
-        },
-    )
-    monkeypatch.setattr(extensions, "resolve_lock", lambda reqs, root: "\n".join(reqs) + "\n")
+    monkeypatch.setattr(extensions, "base_constraints", lambda kind: "")
+    monkeypatch.setattr(extensions, "resolve_lock", lambda reqs, root, **kw: "\n".join(reqs) + "\n")
     return calls
+
+
+def lock_body(path):
+    """A lock's pins without its inputs line."""
+    return "".join(
+        line + "\n" for line in path.read_text().splitlines() if not line.startswith("#")
+    )
 
 
 def test_add_records_all_groups_and_repeat(invoke, project, monkeypatch):
@@ -59,7 +60,7 @@ def test_add_records_all_groups_and_repeat(invoke, project, monkeypatch):
     doc = tomllib.loads((project / "vecten.toml").read_text())
     assert doc["extensions"] == ["acme-demo"]
     assert (project / "requirements.txt").read_text() == "acme-demo==1.2.0\n"
-    assert (project / "requirements.lock").read_text() == "acme-demo==1.2.0\n"
+    assert "acme-demo==1.2.0\n" in lock_body(project / "requirements.lock")
     assert len(calls) == 2
 
 
@@ -116,14 +117,14 @@ def test_upgrade_changes_only_dependency_records(invoke, project, monkeypatch):
     monkeypatch.setattr(
         extensions,
         "inspect_package",
-        lambda *args: SimpleNamespace(
-            name="acme-demo", version="2.0.0", entry_points=[SimpleNamespace(group="vecten.dags")]
+        lambda *args: extensions.PackageMetadata(
+            name="acme-demo", version="2.0.0", entry_points=(SimpleNamespace(group="vecten.dags"),)
         ),
     )
     assert invoke("extension", "add", "acme-demo==2.0.0").exit_code == 0
     assert (project / "vecten.toml").read_bytes() == before
     assert (project / "requirements.txt").read_text() == "acme-demo==2.0.0\n"
-    assert (project / "requirements.lock").read_text() == "acme-demo==2.0.0\n"
+    assert "acme-demo==2.0.0\n" in lock_body(project / "requirements.lock")
 
 
 def test_resolution_and_installation_keep_release_constraints(tmp_path, monkeypatch):
@@ -202,23 +203,43 @@ def test_compile_targets_runtime_python_and_does_not_install(tmp_path, monkeypat
     assert len(calls) == 1
 
 
-def test_each_runtime_lock_uses_its_own_base_constraints(project, monkeypatch):
+def test_each_runtime_lock_uses_its_own_base_constraints(invoke, project, monkeypatch):
     from vecten import extensions
-    from vecten_shared.config import load_config
 
-    seen = []
-    monkeypatch.setattr(
-        extensions, "base_constraints", lambda kind: f"base-{kind}==1.0\n", raising=False
-    )
+    installer(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(extensions, "base_constraints", lambda kind: f"base-{kind}==1.0\n")
 
-    def resolve(reqs, root, *, constraints="", runtime=False):
-        seen.append((constraints, runtime))
-        return "acme-demo==1.0\n" + constraints
+    def resolve(reqs, root, *, constraints="", runtime=False, previous=None, upgrade=()):
+        seen[constraints] = runtime
+        return "acme-demo==1.2.0\n"
 
     monkeypatch.setattr(extensions, "resolve_lock", resolve)
-    locks = extensions.resolve_runtime_locks(["acme-demo==1.0"], project, load_config(project))
-    assert locks == {
-        "requirements-airflow.lock": "acme-demo==1.0\nbase-airflow==1.0\n",
-        "requirements-mcp.lock": "acme-demo==1.0\nbase-mcp==1.0\n",
-    }
-    assert seen == [("base-airflow==1.0\n", True), ("base-mcp==1.0\n", True)]
+    assert invoke("extension", "add", "acme-demo").exit_code == 0
+    assert seen == {"": False, "base-airflow==1.0\n": True, "base-mcp==1.0\n": True}
+
+
+@pytest.mark.parametrize(
+    ("lines", "extras"),
+    [
+        (
+            "Provides-Extra: platform\nProvides-Extra: mcp\nProvides-Extra: CLI\n",
+            ("cli", "mcp", "platform"),
+        ),
+        ("", ()),
+    ],
+)
+def test_inspection_reads_the_extras_a_wheel_provides(tmp_path, monkeypatch, lines, extras):
+    from pathlib import Path
+
+    from vecten.extensions import inspect_package
+
+    def uv(args, root):
+        info = Path(args[args.index("--target") + 1]) / "acme_demo-1.0.dist-info"
+        info.mkdir(parents=True)
+        (info / "METADATA").write_text(
+            f"Metadata-Version: 2.4\nName: acme-demo\nVersion: 1.0\n{lines}"
+        )
+
+    monkeypatch.setattr("vecten.extensions._uv", uv)
+    assert inspect_package("acme-demo", tmp_path).extras == extras

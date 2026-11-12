@@ -52,6 +52,7 @@ CONTENT: tuple[str, ...] = (
     "requirements.lock",
     "requirements-airflow.lock",
     "requirements-mcp.lock",
+    "extensions.lock.json",
     "orchestration/dags",
     "orchestration/docker-compose.override.yml",
     "connectors",

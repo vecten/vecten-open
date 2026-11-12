@@ -31,28 +31,9 @@ A package with no known entry points, or a dependency-resolution failure, leaves
 Python environment and the project's records unchanged. Unknown Vecten groups are reported
 while the known groups remain usable.
 
-`vecten.toml` registers package names and extras. `requirements.txt` pins extension versions
-and includes connector dependencies. Three dependency locks serve different environments:
-
-| File | Environment |
-|---|---|
-| `requirements.lock` | The CLI, including its own dependencies; supports Python 3.14 and newer. |
-| `requirements-airflow.lock` | The platform image, resolved against packages already installed in its base image. |
-| `requirements-mcp.lock` | The MCP image, resolved against its own base image. |
-
-Only enabled components get an image lock. The command does not pull images itself.
-Resolution targets Python 3.14 from the repository's
-[version table](../packages/vecten-shared/src/vecten_shared/versions.toml); image locks target Linux. The same
-extension version is used everywhere, while transitive dependencies can differ to preserve
-each runtime's existing packages. Builds refuse incompatible or missing image locks and
-refuse to upgrade or downgrade packages supplied by the base image.
-
-Commit `vecten.toml`, `requirements.txt` and all generated lock files. Repeat `extension add`
-with a new version to upgrade; registration stays unchanged and the dependency records
-change. Re-run it after enabling another component or changing the base images. The command
-owns these requirements and lock files; do not keep unrelated dependencies in them.
-Names, extras and version constraints are accepted. Direct URLs, paths, pip options and
-conditional top-level requirements are refused.
+`vecten.toml` registers package names and extras; the dependency records the command writes
+are described under [Dependencies and locks](#dependencies-and-locks). Repeat `extension add`
+with a new version to upgrade: registration stays unchanged and the records change.
 
 A successful command installs the CLI lock into the environment running Vecten. If several
 projects share that environment, their dependencies are shared too: adding an extension in
@@ -76,6 +57,65 @@ project. Skill links are exposed under both `skills/<entry-name>` and
 the command. Generated links are refreshed or removed only while their targets still match
 the automatically generated `.vecten/extension-skills.json` ownership record; you do not
 need to maintain it manually.
+
+## Dependencies and locks
+
+`vecten lock` needs Docker and the release's base images, as `extension add` does. It writes
+these records together, or changes none of them:
+
+| File | What it holds |
+|---|---|
+| `requirements.txt` | One exact pin per extension, such as `acme-resolution==1.2.0`. |
+| `requirements.lock` | The CLI's environment, for any operating system on Python 3.14: each extension with its `cli` extra, the connectors' dependencies, `[dependencies.cli] python` and the release's `vecten`. |
+| `requirements-airflow.lock` | The Airflow image, for Linux, against the packages its base image installs: each extension with its `platform` extra, the connectors' dependencies and `[dependencies.platform] python`. |
+| `requirements-mcp.lock` | The MCP image, for Linux, against its base image: each extension with its `mcp` extra, the connectors' dependencies and `[dependencies.mcp] python`. |
+| `extensions.lock.json` | Each extension's version and the extras its wheel provides. |
+
+Only enabled components get an image lock. Before writing them, the command installs the new
+`requirements.lock` into the environment running Vecten; it adds and upgrades packages there
+but does not remove ones the lock no longer holds. `extension add` ends by running the same
+steps, and `connector add` runs them when the project already has locks and the new connector
+brings dependencies. Commit every one of these files.
+
+**Project requirements.** A package the project's own code needs goes in `vecten.toml`, under
+the component that imports it:
+
+```toml
+[dependencies.platform]   # DAGs and connectors in Airflow
+python = ["polars>=1,<2"]
+
+[dependencies.mcp]        # the MCP server
+python = ["rapidfuzz>=3,<4"]
+
+[dependencies.cli]        # vecten connector run, local dbt, anything a skill imports
+python = ["polars>=1,<2"]
+```
+
+Entries are names with optional extras and a version range; URLs, paths, pip options and
+markers are refused, and so is a section for a component the project does not enable. Edit the
+section, then run `vecten lock`.
+
+**Keeping pins.** Each lock is resolved starting from the committed one, so an existing pin
+stays while it still satisfies the inputs: adding one package moves nothing else unless the
+resolution needs it. `vecten lock --upgrade httpx` lets one package move in every lock; repeat
+`--upgrade` for several. An extension's own version changes only through `extension add`.
+
+**Stale locks.** Each lock starts with a line such as
+`# vecten-lock: component=platform inputs=<sha256>`, a hash of its inputs: the requirements
+above, the base image, the Vecten release and the Python version. `vecten up` and the bundle that
+`ship` builds recompute it for the image locks from `vecten.toml`, `requirements.txt` and
+`extensions.lock.json` and refuse one that no longer matches, naming the file and
+`vecten lock`. `vecten next` offers the command whenever any of the records, the CLI's lock
+included, is out of date. A `vecten update` to a new release therefore asks for `vecten lock` too.
+
+**Different versions per lock.** Every extension has the same version in every lock. Other
+packages may differ, because each image keeps the versions its base image installs.
+`vecten lock --json` lists them under `divergence`, for review.
+
+**Projects locked by an earlier release.** Their locks have no inputs line and their
+`requirements.txt` also holds connector dependencies. They keep building, checked name by name
+as before, until the first `vecten lock`, which rewrites `requirements.txt` to the extension
+pins and writes every lock with its inputs line and `extensions.lock.json`.
 
 ## Declare package entry points
 
@@ -125,6 +165,29 @@ concurrent submission, and await the query before returning from the handler so 
 is present when the invocation is recorded.
 
 No CLI-command or HTTP-route extension hooks are offered yet.
+
+### Dependencies per component
+
+The CLI, the Airflow image and the MCP server all install the same version of an extension,
+because each discovers its entry points. Its dependencies can still differ: declare
+component-only packages in the standard extras named after the component.
+
+```toml
+[project]
+dependencies = ["httpx>=0.27"]          # every component
+
+[project.optional-dependencies]
+platform = ["polars>=1,<2"]             # the Airflow image: DAGs and connectors
+mcp = ["rapidfuzz>=3,<4"]               # the MCP server: tools and hooks
+cli = ["polars>=1,<2"]                  # vecten connector run, local dbt, skills
+```
+
+`vecten lock` requests `acme-resolution[platform]` for the Airflow image, `[mcp]` for the MCP
+image and `[cli]` for the CLI, and only the extras the wheel declares (`Provides-Extra`), so a
+wheel without them locks as before. The three names are reserved: an extra called `mcp` for
+another purpose would be installed in the MCP image. A connector's runtime dependencies belong
+in both `platform` and `cli`, or in the base list. Prefer extras over a connector's
+`dependencies` list, which goes into every lock.
 
 ### Connector groups and schedules
 

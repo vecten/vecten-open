@@ -13,11 +13,13 @@ from pathlib import Path
 
 import tomlkit
 
-from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image, project_requirements
-from vecten_shared.config import load_config
+from vecten import locking
+from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
+from vecten_shared.config import VectenConfig, load_config
 from vecten_shared.extensions import GROUPS, requirement
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
+from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
 from vecten_shared.versions import VERSIONS, normalize_name
 
 
@@ -81,6 +83,8 @@ class PackageMetadata:
     name: str
     version: str
     entry_points: tuple
+    # The extras the wheel provides (`Provides-Extra`), read without importing it.
+    extras: tuple[str, ...] = ()
 
 
 def inspect_package(package: str, root: Path) -> PackageMetadata:
@@ -104,7 +108,10 @@ def inspect_package(package: str, root: Path) -> PackageMetadata:
         )
         for dist in metadata.distributions(path=[str(site)]):
             if normalize_name(dist.name) == normalize_name(req.name):
-                return PackageMetadata(dist.name, dist.version, tuple(dist.entry_points))
+                extras = sorted({e.lower() for e in dist.metadata.get_all("Provides-Extra") or ()})
+                return PackageMetadata(
+                    dist.name, dist.version, tuple(dist.entry_points), tuple(extras)
+                )
     raise Failure(ExitCode.TOOL_FAILED, f"could not inspect package {req.name}")
 
 
@@ -147,16 +154,6 @@ def base_constraints(kind: str) -> str:
     return result.stdout
 
 
-def resolve_runtime_locks(requirements: list[str], root: Path, config) -> dict[str, str]:
-    return {
-        f"requirements-{kind}.lock": resolve_lock(
-            requirements, root, constraints=base_constraints(kind), runtime=True
-        )
-        for component, kind in (("platform", "airflow"), ("mcp", "mcp"))
-        if component in config.components
-    }
-
-
 def install_lock(lock: str, root: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="vecten-install-") as temp:
         path = Path(temp) / "requirements.lock"
@@ -179,12 +176,22 @@ def install_lock(lock: str, root: Path) -> None:
 
 
 def resolve_lock(
-    requirements: list[str], root: Path, *, constraints: str = "", runtime: bool = False
+    requirements: list[str],
+    root: Path,
+    *,
+    constraints: str = "",
+    runtime: bool = False,
+    previous: str | None = None,
+    upgrade: tuple[str, ...] = (),
 ) -> str:
+    """Resolve `requirements`, keeping every pin of `previous` that still satisfies them."""
     with tempfile.TemporaryDirectory(prefix="vecten-lock-") as temp:
         source, lock = Path(temp) / "requirements.txt", Path(temp) / "requirements.lock"
-        roots = requirements if runtime else [*requirements, f"vecten=={VERSIONS.vecten}"]
-        source.write_text("\n".join(roots) + "\n")
+        source.write_text("\n".join(requirements) + "\n")
+        # uv reads an existing output file as preferences, so a re-lock moves only what the
+        # changed inputs or an explicit upgrade require.
+        if previous is not None:
+            lock.write_text(previous)
         constraint_file = release_constraints(Path(temp) / "constraints.txt")
         constraint_file.write_text(constraint_file.read_text() + constraints)
         _uv(
@@ -201,6 +208,7 @@ def resolve_lock(
                 "--no-annotate",
                 "--output-file",
                 str(lock),
+                *(arg for name in upgrade for arg in ("--upgrade-package", name)),
             ],
             root,
         )
@@ -260,6 +268,114 @@ def write_project_files(files: dict[Path, str | Path | None]) -> None:
         ) from None
 
 
+RUNTIME_KINDS = {"platform": "airflow", "mcp": "mcp"}
+
+
+def _pinned_version(text: str) -> str | None:
+    specs = list(requirement(text).specifier)
+    return specs[0].version if len(specs) == 1 and specs[0].operator == "==" else None
+
+
+def _extension_pins(
+    root: Path, config: VectenConfig, added: PackageMetadata | None
+) -> tuple[dict[str, str], dict[str, locking.Extension]]:
+    """Each registered extension's exact pin and record entry, inspecting only what is unknown.
+
+    `requirements.txt` may still hold an earlier release's connector dependencies; only the
+    registered extensions' lines are kept.
+    """
+    pins = locking.read_pins(root)
+    record = locking.read_record(root) or {}
+    found_pins, found_record = {}, {}
+    for registration in config.extensions:
+        req = requirement(registration)
+        name = normalize_name(req.name)
+        extras = f"[{','.join(sorted(req.extras))}]" if req.extras else ""
+        if added is not None and normalize_name(added.name) == name:
+            dist = added
+        else:
+            pinned, entry = pins.get(name), record.get(name)
+            version = _pinned_version(pinned) if pinned else None
+            satisfied = version is not None and (not req.specifier or version in req.specifier)
+            if satisfied and entry and version == entry.version:
+                found_pins[name], found_record[name] = f"{name}{extras}=={entry.version}", entry
+                continue
+            dist = inspect_package(pinned if satisfied else registration, root)
+        found_pins[name] = f"{name}{extras}=={dist.version}"
+        found_record[name] = locking.Extension(version=dist.version, extras=tuple(dist.extras))
+    return found_pins, found_record
+
+
+def _check_connector_dependencies(config: VectenConfig) -> None:
+    # Each one becomes a line of uv's input file, where a URL, a marker or a newline-borne
+    # option would change what is resolved and installed into the CLI's environment.
+    for connector in config.connectors:
+        for dependency in connector.dependencies:
+            if parse_requirement(dependency) is None:
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"connector {connector.name}: dependency {dependency!r}: {REQUIREMENT_RULE}",
+                )
+
+
+def lock_project(
+    root: Path,
+    config: VectenConfig,
+    *,
+    upgrade: tuple[str, ...] = (),
+    added: PackageMetadata | None = None,
+) -> tuple[dict[Path, str], dict]:
+    """Resolve every component's lock and install the CLI's; return the records to write.
+
+    Nothing is written here: the caller writes these files together, so a failure in any
+    resolution leaves every committed record as it was.
+    """
+    _check_connector_dependencies(config)
+    pins, record = _extension_pins(root, config, added)
+    locks = {}
+    for component in locking.components(config):
+        lock_roots = locking.roots(config, pins, record, component)
+        name = locking.LOCK_FILES[component]
+        previous = root / name
+        try:
+            text = resolve_lock(
+                lock_roots,
+                root,
+                constraints=(
+                    base_constraints(RUNTIME_KINDS[component]) if component != "cli" else ""
+                ),
+                runtime=component != "cli",
+                previous=previous.read_text() if previous.is_file() else None,
+                upgrade=upgrade,
+            )
+        except Failure as failure:
+            raise Failure(failure.code, f"{name}: {failure.message}") from None
+        digest = locking.inputs_hash(component, lock_roots)
+        body = "".join(f"{line}\n" for line in text.splitlines() if not line.startswith("#"))
+        locks[component] = f"{locking.stamp_line(component, digest)}\n{body}"
+    install_lock(locks["cli"], root)
+    from vecten.extension_skills import skill_artifacts
+
+    files = {
+        root / locking.PINS_FILE: "".join(f"{pin}\n" for pin in sorted(pins.values())),
+        root / locking.RECORD_FILE: locking.record_text(record),
+        **{root / locking.LOCK_FILES[c]: text for c, text in locks.items()},
+        **skill_artifacts(root, config),
+    }
+    report = {
+        "locks": [locking.LOCK_FILES[c] for c in locks],
+        "extensions": {name: entry.version for name, entry in sorted(record.items())},
+        "divergence": locking.divergence(locks),
+    }
+    return files, report
+
+
+def lock(root: Path, upgrade: tuple[str, ...] = ()) -> dict:
+    files, report = lock_project(root, load_config(root), upgrade=upgrade)
+    write_project_files(files)
+    return report
+
+
 def add_extension(root: Path, package: str) -> dict:
     req = requirement(package)
     config = load_config(root)
@@ -275,58 +391,17 @@ def add_extension(root: Path, package: str) -> dict:
     if not known:
         raise Failure(ExitCode.REFUSED, f"{req.name} declares no Vecten extension point")
     extras = f"[{','.join(sorted(req.extras))}]" if req.extras else ""
-    pinned = f"{normalize_name(dist.name)}{extras}=={dist.version}"
     registration = f"{normalize_name(dist.name)}{extras}"
-    previous = {}
-    records = root / "requirements.txt"
-    if records.exists():
-        for line in records.read_text().splitlines():
-            if line.strip() and not line.startswith("#"):
-                saved = requirement(line)
-                previous[normalize_name(saved.name)] = str(saved)
+    # Registration is stable across upgrades; only the dependency records own exact versions.
     config.extensions = [
         registration if normalize_name(requirement(p).name) == normalize_name(req.name) else p
         for p in config.extensions
     ]
     if registration not in config.extensions:
         config.extensions.append(registration)
-    # Registration is stable across upgrades; only the dependency records own exact versions.
-    reqs = []
-    for text in project_requirements(config):
-        wanted = requirement(text)
-        name = normalize_name(wanted.name)
-        if name == normalize_name(req.name):
-            reqs.append(pinned)
-        elif text in config.extensions and name in previous:
-            saved = requirement(previous[name])
-            pins = list(saved.specifier)
-            if (
-                len(pins) == 1
-                and pins[0].operator == "=="
-                and pins[0].version in wanted.specifier
-                and saved.extras == wanted.extras
-            ):
-                reqs.append(str(saved))
-            else:
-                reqs.append(text)
-        else:
-            reqs.append(text)
-    reqs = sorted(set(reqs))
-    lock = resolve_lock(reqs, root)
-    runtime_locks = resolve_runtime_locks(reqs, root, config)
-    install_lock(lock, root)
-    from vecten.extension_skills import skill_artifacts
-
-    links = skill_artifacts(root, config)
+    files, _ = lock_project(root, config, added=dist)
     doc = tomlkit.parse((root / "vecten.toml").read_text())
     doc["extensions"] = config.extensions
-    write_project_files(
-        {
-            root / "vecten.toml": tomlkit.dumps(doc),
-            root / "requirements.txt": "\n".join(reqs) + "\n",
-            root / "requirements.lock": lock,
-            **{root / name: value for name, value in runtime_locks.items()},
-            **links,
-        }
-    )
+    write_project_files({root / "vecten.toml": tomlkit.dumps(doc), **files})
+    pinned = f"{normalize_name(dist.name)}{extras}=={dist.version}"
     return {"package": pinned, "groups": known, "unknown_groups": unknown}

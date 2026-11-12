@@ -9,6 +9,7 @@ import yaml
 
 from vecten.connectors import extensions as ext_mod
 from vecten.connectors.verified import SourceFiles
+from vecten_shared.output import ExitCode, Failure
 
 LOCAL = ("--name", "acme", "--users", "3", "--source", "hubspot", "--source", "stripe")
 
@@ -574,3 +575,62 @@ def test_broken_extension_spec_is_config(invoke, project, monkeypatch, ep):
     assert r.exit_code == 6, r.stdout
     err = json.loads(r.stdout)["error"]
     assert "acme-ext" in err and "attio" in err
+
+
+def _record_locks(monkeypatch):
+    from vecten import extensions
+
+    calls = []
+    monkeypatch.setattr(extensions, "lock", lambda root, upgrade=(): calls.append(root) or {})
+    return calls
+
+
+def test_add_relocks_a_project_that_has_locks(invoke, project, monkeypatch):
+    calls = _record_locks(monkeypatch)
+    (project / "requirements.lock").write_text("# vecten-lock: component=cli inputs=x\n")
+    r = invoke("connector", "add", "google_sheets", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert calls == [project]
+    assert json.loads(r.stdout)["locked"] is True
+
+
+def test_add_leaves_a_project_without_locks_unlocked(invoke, project, monkeypatch):
+    calls = _record_locks(monkeypatch)
+    r = invoke("connector", "add", "google_sheets", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert calls == []
+    assert json.loads(r.stdout)["locked"] is False
+
+
+def test_a_failed_relock_keeps_the_connector_and_names_vecten_lock(invoke, project, monkeypatch):
+    from vecten import extensions
+
+    def fail(root, upgrade=()):
+        raise Failure(ExitCode.TOOL_FAILED, "requirements-airflow.lock: resolution failed")
+
+    monkeypatch.setattr(extensions, "lock", fail)
+    (project / "requirements.lock").write_text("# vecten-lock: component=cli inputs=x\n")
+    r = invoke("connector", "add", "google_sheets", "--json")
+    assert r.exit_code != 0
+    assert "vecten lock" in r.stdout + r.stderr
+    assert (project / "connectors" / "google_sheets" / "connector.py").is_file()
+
+
+def test_add_without_dependencies_keeps_fresh_locks_without_relocking(invoke, project, monkeypatch):
+    from vecten import locking
+
+    calls = _record_locks(monkeypatch)
+    (project / "requirements.lock").write_text("# vecten-lock: component=cli inputs=x\n")
+    monkeypatch.setattr(locking, "lock_problems", lambda root, config: [])
+    r = invoke("connector", "add", "crm", "--from", "rest", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert calls == []
+
+
+def test_add_without_dependencies_never_relocks_a_legacy_project(invoke, project, monkeypatch):
+    calls = _record_locks(monkeypatch)
+    # Locks an earlier release wrote: unstamped, and no extensions.lock.json.
+    (project / "requirements.lock").write_text("helper==1.0\n")
+    r = invoke("connector", "add", "crm", "--from", "rest", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert calls == []

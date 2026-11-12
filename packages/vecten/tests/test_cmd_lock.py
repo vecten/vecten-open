@@ -1,0 +1,225 @@
+"""`vecten lock`: per-component locks, their recorded inputs, and the extension record."""
+
+import json
+import tomllib
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import tomli_w
+
+from vecten import extensions, locking
+from vecten_shared.config import load_config
+from vecten_shared.output import ExitCode, Failure
+from vecten_shared.versions import VERSIONS
+
+
+@pytest.fixture
+def project(invoke, workdir, monkeypatch):
+    assert (
+        invoke(
+            "init", "p", "--name", "demo", "--users", "2", "--source", "demo", "--json"
+        ).exit_code
+        == 0
+    )
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    return root
+
+
+@pytest.fixture
+def fakes(monkeypatch):
+    """uv, Docker and the CLI's environment replaced; every compile is recorded."""
+    seen = {"compiles": [], "installed": [], "inspected": []}
+    packages = {"acme-demo": ("1.2.0", ("cli", "mcp", "platform"))}
+
+    def inspect(package, root):
+        name = package.split("[")[0].split("=")[0].split(">")[0]
+        seen["inspected"].append(package)
+        version, extras = packages[name]
+        return extensions.PackageMetadata(
+            name=name,
+            version=version,
+            entry_points=(SimpleNamespace(group="vecten.dags"),),
+            extras=extras,
+        )
+
+    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=()):
+        seen["compiles"].append(
+            {"roots": roots, "runtime": runtime, "previous": previous, "upgrade": upgrade}
+        )
+        return "".join(f"{r}\n" for r in roots if "==" in r) + "helper==1.0\n"
+
+    monkeypatch.setattr(extensions, "inspect_package", inspect)
+    monkeypatch.setattr(extensions, "resolve_lock", resolve)
+    monkeypatch.setattr(extensions, "base_constraints", lambda kind: f"base-{kind}==1.0\n")
+    monkeypatch.setattr(
+        extensions, "install_lock", lambda lock, root: seen["installed"].append(lock)
+    )
+    seen["packages"] = packages
+    return seen
+
+
+def _edit_config(root, change):
+    doc = tomllib.loads((root / "vecten.toml").read_text())
+    change(doc)
+    (root / "vecten.toml").write_text(tomli_w.dumps(doc))
+
+
+def _add_extension(root):
+    _edit_config(root, lambda doc: doc.__setitem__("extensions", ["acme-demo"]))
+
+
+def test_lock_writes_every_record_with_inputs_lines(invoke, project, fakes):
+    _add_extension(project)
+    r = invoke("lock", "--json")
+    assert r.exit_code == 0, r.output
+    assert (project / "requirements.txt").read_text() == "acme-demo==1.2.0\n"
+    for component, name in locking.LOCK_FILES.items():
+        assert locking.read_stamp((project / name).read_text())[0] == component
+    record = json.loads((project / locking.RECORD_FILE).read_text())
+    assert record["extensions"]["acme-demo"] == {
+        "version": "1.2.0",
+        "extras": ["cli", "mcp", "platform"],
+    }
+    assert locking.lock_problems(project, load_config(project)) == []
+    assert "acme-demo[cli]==1.2.0" in fakes["installed"][0]
+
+
+def test_each_lock_requests_its_components_extra(invoke, project, fakes):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    assert "acme-demo[platform]==1.2.0" in (project / "requirements-airflow.lock").read_text()
+    assert "acme-demo[mcp]==1.2.0" in (project / "requirements-mcp.lock").read_text()
+    cli = (project / "requirements.lock").read_text()
+    assert "acme-demo[cli]==1.2.0" in cli
+    assert f"vecten=={VERSIONS.vecten}" in cli
+
+
+def test_a_project_requirement_reaches_only_its_components_lock(invoke, project, fakes):
+    _edit_config(
+        project,
+        lambda doc: doc.__setitem__("dependencies", {"platform": {"python": ["polars==1.0"]}}),
+    )
+    assert invoke("lock").exit_code == 0
+    assert "polars==1.0" in (project / "requirements-airflow.lock").read_text()
+    assert "polars" not in (project / "requirements-mcp.lock").read_text()
+    assert "polars" not in (project / "requirements.lock").read_text()
+
+
+def test_each_compile_starts_from_the_committed_lock(invoke, project, fakes):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    committed = {c: (project / n).read_text() for c, n in locking.LOCK_FILES.items()}
+    fakes["compiles"].clear()
+    assert invoke("lock").exit_code == 0
+    previous = sorted(c["previous"] for c in fakes["compiles"])
+    assert previous == sorted(committed.values())
+
+
+def test_upgrade_reaches_every_compile(invoke, project, fakes):
+    assert invoke("lock", "--upgrade", "httpx", "--upgrade", "rich").exit_code == 0
+    assert {tuple(c["upgrade"]) for c in fakes["compiles"]} == {("httpx", "rich")}
+
+
+def test_a_failed_compile_changes_no_record_and_names_the_lock(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    before = {p.name: p.read_bytes() for p in project.iterdir() if p.is_file()}
+
+    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=()):
+        if any("[mcp]" in r for r in roots):
+            raise Failure(ExitCode.TOOL_FAILED, "resolution failed")
+        return "x==1\n"
+
+    monkeypatch.setattr(extensions, "resolve_lock", resolve)
+    r = invoke("lock", "--json")
+    assert r.exit_code != 0
+    assert "requirements-mcp.lock" in r.output
+    assert {p.name: p.read_bytes() for p in project.iterdir() if p.is_file()} == before
+
+
+def test_the_first_lock_of_an_earlier_releases_project_migrates_its_records(invoke, project, fakes):
+    _add_extension(project)
+    _edit_config(
+        project,
+        lambda doc: doc["connectors"].append(
+            {"name": "crm", "source": "rest", "dependencies": ["httpx==0.27.0"]}
+        ),
+    )
+    (project / "requirements.txt").write_text("acme-demo==1.2.0\nhttpx==0.27.0\n")
+    for name in locking.LOCK_FILES.values():
+        (project / name).write_text("acme-demo==1.2.0\nhttpx==0.27.0\n")
+    assert invoke("lock").exit_code == 0
+    assert (project / "requirements.txt").read_text() == "acme-demo==1.2.0\n"
+    assert (project / locking.RECORD_FILE).exists()
+    assert locking.lock_problems(project, load_config(project)) == []
+
+
+def test_a_pinned_extension_with_a_matching_record_is_not_inspected_again(invoke, project, fakes):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    fakes["inspected"].clear()
+    assert invoke("lock").exit_code == 0
+    assert fakes["inspected"] == []
+
+
+def test_json_reports_packages_pinned_differently_across_locks(invoke, project, fakes, monkeypatch):
+    def resolve(roots, root, *, constraints="", runtime=False, previous=None, upgrade=()):
+        return "httpx==0.26.0\n" if runtime else "httpx==0.27.0\n"
+
+    monkeypatch.setattr(extensions, "resolve_lock", resolve)
+    r = invoke("lock", "--json")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["divergence"] == {
+        "httpx": {"cli": "0.27.0", "mcp": "0.26.0", "platform": "0.26.0"}
+    }
+
+
+def test_resolve_lock_seeds_the_output_with_the_previous_lock_and_passes_upgrades(
+    tmp_path, monkeypatch
+):
+    seen = {}
+
+    def uv(args, root):
+        out = Path(args[args.index("--output-file") + 1])
+        seen["seeded"] = out.read_text()
+        seen["args"] = args
+        out.write_text("httpx==0.28.0\n")
+
+    monkeypatch.setattr(extensions, "_uv", uv)
+    text = extensions.resolve_lock(
+        ["httpx"], tmp_path, previous="# vecten-lock: x\nhttpx==0.27.0\n", upgrade=("httpx",)
+    )
+    assert text == "httpx==0.28.0\n"
+    assert seen["seeded"] == "# vecten-lock: x\nhttpx==0.27.0\n"
+    assert seen["args"][seen["args"].index("--upgrade-package") + 1] == "httpx"
+
+
+def test_a_constraint_the_pin_breaks_is_resolved_again(invoke, project, fakes):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    fakes["packages"]["acme-demo"] = ("2.0.0", ("platform",))
+    _edit_config(project, lambda doc: doc.__setitem__("extensions", ["acme-demo>=2"]))
+    fakes["inspected"].clear()
+    assert invoke("lock").exit_code == 0
+    assert fakes["inspected"] == ["acme-demo>=2"]
+    assert (project / "requirements.txt").read_text() == "acme-demo==2.0.0\n"
+
+
+@pytest.mark.parametrize(
+    "dependency", ["polars\n--extra-index-url https://evil.example/simple", "x @ file:///tmp/x"]
+)
+def test_a_connector_dependency_that_is_not_a_plain_requirement_is_refused(
+    invoke, project, fakes, dependency
+):
+    _edit_config(
+        project,
+        lambda doc: doc["connectors"].append(
+            {"name": "crm", "source": "rest", "dependencies": [dependency]}
+        ),
+    )
+    r = invoke("lock", "--json")
+    assert r.exit_code != 0
+    assert "crm" in r.output
+    assert fakes["compiles"] == []

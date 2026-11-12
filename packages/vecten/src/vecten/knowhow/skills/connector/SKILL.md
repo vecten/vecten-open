@@ -102,9 +102,12 @@ Read the JSON the command prints:
   change that breaks a live sync: `vecten connector run <name> --json` is the live proof;
 - `dags`: the sync DAG, `orchestration/dags/sync_<name>_default.py`;
 - `secrets`: the secret names the code reads, used in step 3;
-- `dependencies`: Python packages a verified source needs. The Airflow image installs them; for
+- `dependencies`: Python packages a verified source needs; `locked` says whether the command
+  pinned them. With `locked: true`, every lock holds them and vecten's own environment has them.
+  With `locked: false` (a project without locks), the Airflow image installs them unpinned; for
   `vecten connector run` on this machine, ask the human to install them where vecten runs, for
-  example `uv tool install vecten --with <package>`.
+  example `uv tool install vecten --with <package>`. A failed re-lock exits non-zero naming
+  `vecten lock`: the connector is added, and `vecten up` refuses until the locks are rewritten.
 
 Exit 4 with "already exists" means the directory is there: edit it rather than adding again.
 `vecten.toml` now declares the connector, and the `Connect <name>` item is gone from `next`.
