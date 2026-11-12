@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 from filelock import FileLock, Timeout
 
+from vecten.mcp_url import mcp_url
 from vecten_shared.config import load_config
 from vecten_shared.issues import cap
 from vecten_shared.names import check_env_name
@@ -104,11 +105,9 @@ def endpoint(root, env):
     config = load_config(root)
     if not config.has("mcp"):
         raise Failure(ExitCode.REFUSED, "project has no MCP component")
-    if env == "local":
-        return "https://mcp.localhost:8443"
-    if not config.deploy or env not in config.environments:
+    if env != "local" and (not config.deploy or env not in config.environments):
         raise Failure(ExitCode.PREREQUISITE, f"environment {env} is not configured")
-    return f"https://mcp.{config.deploy.domain}"
+    return mcp_url(root, config, env)
 
 
 def http_client(root=None, env=None, transport=None):
