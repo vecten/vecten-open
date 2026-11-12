@@ -662,3 +662,35 @@ def test_a_listed_hostname_no_longer_bound_on_the_host_is_not_handed_to_the_agen
     assert platform["hostnames"] == ["airflow.data.acme.com", "bot.data.acme.com"]
     mcp = host_json(build(project, tmp_path / "m", host="mcp", outputs=outputs))
     assert mcp["hostnames"] == ["mcp.data.acme.com"]
+
+
+def nginx_conf(bundle):
+    return read(bundle, ".vecten/stack/nginx/conf.d/default.conf")
+
+
+def test_the_bundle_serves_each_listed_service_hostname_on_the_host_that_runs_it(project, tmp_path):
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com"], "mcp": ["portal.data.acme.com"]})
+    platform = nginx_conf(build(project, tmp_path / "p", outputs=outputs))
+    assert "server_name bot.data.acme.com;" in platform
+    assert "set $upstream http://svc-acme-bot:8000;" in platform
+    assert "portal.data.acme.com" not in platform
+    mcp = nginx_conf(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert "server_name portal.data.acme.com;" in mcp
+    assert "server_name bot.data.acme.com;" not in mcp
+
+
+def test_a_hostname_waiting_for_deploy_is_not_rendered(project, tmp_path):
+    _portal_and_bot(project)
+    platform = nginx_conf(build(project, tmp_path / "p"))
+    assert "bot.data.acme.com" not in platform
+    assert "svc-acme-bot" not in platform
+
+
+def test_a_bundle_without_services_renders_the_nginx_of_a_project_without_them(project, tmp_path):
+    from vecten.stack.compose import vm_hostnames
+    from vecten.stack.nginx import generate_nginx_conf
+
+    outputs = EnvironmentOutputs.model_validate(STANDARD_OUTPUTS)
+    expected = generate_nginx_conf(["platform"], vm_hostnames(outputs), "vm")
+    assert nginx_conf(build(project, tmp_path / "p")) == expected

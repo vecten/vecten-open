@@ -609,3 +609,60 @@ def test_up_skips_the_check_when_this_checkout_is_not_installed(invoke, workdir,
     assert "differs from extensions.lock.json" not in r.stdout, r.stdout
     assert asked == [("acme", workdir / "p" / "extensions" / "acme")]
     assert seen == []
+
+
+def _laptop_conf(root):
+    return (root / ".vecten" / "stack" / "nginx" / "conf.d" / "default.conf").read_text()
+
+
+def test_up_serves_a_routed_service_at_its_localhost_name_with_its_own_certificate(
+    invoke, workdir, fake, monkeypatch
+):
+    invoke("init", "p", *LOCAL, "--json")
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    _bound_bot(root, monkeypatch)
+    r = invoke("up", "--json")
+    assert r.exit_code == 0, r.stdout
+    conf = _laptop_conf(root)
+    assert "server_name bot.localhost;" in conf
+    assert "ssl_certificate /etc/nginx/certs/bot.localhost.crt;" in conf
+    assert "set $upstream http://svc-acme-bot:8000;" in conf
+    assert (root / ".vecten" / "stack" / "certs" / "bot.localhost.crt").is_file()
+    doc = json.loads(r.stdout)
+    assert doc["routes"] == {"acme.bot.webhook": "https://bot.localhost:8443/api/messages"}
+    assert "route acme.bot.webhook: https://bot.localhost:8443/api/messages" in invoke("up").stdout
+
+
+def test_up_ignores_a_routes_allow_list(invoke, workdir, fake, monkeypatch):
+    invoke("init", "p", *LOCAL, "--json")
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    _bound_bot(root, monkeypatch, routes={"webhook": {"access": "public", "allow": ["10.0.0.0/8"]}})
+    assert invoke("up", "--json").exit_code == 0
+    conf = _laptop_conf(root)
+    assert "server_name bot.localhost;" in conf
+    assert "allow 10.0.0.0/8;" not in conf
+
+
+def test_up_does_not_serve_a_service_kept_off_the_laptop(invoke, workdir, fake, monkeypatch):
+    invoke("init", "p", *LOCAL, "--json")
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    _bound_bot(root, monkeypatch, local=False)
+    r = invoke("up", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert "bot.localhost" not in _laptop_conf(root)
+    assert json.loads(r.stdout)["routes"] == {}
+
+
+def test_up_without_services_writes_the_nginx_of_before(invoke, workdir, fake, monkeypatch):
+    from vecten.stack.compose import local_hostnames
+    from vecten.stack.nginx import generate_nginx_conf
+
+    invoke("init", "p", *LOCAL, "--json")
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    assert invoke("up", "--json").exit_code == 0
+    expected = generate_nginx_conf(["platform", "mcp"], local_hostnames(), "local")
+    assert _laptop_conf(root) == expected
