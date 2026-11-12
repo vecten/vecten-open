@@ -56,6 +56,7 @@ from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
 from vecten_shared.records import write_text_atomic
+from vecten_shared.services import check_bindings
 
 SHIP_WORKFLOW = "deploy-platform.yml"
 APPLY_WORKFLOW = "terraform-apply.yml"
@@ -342,6 +343,7 @@ def ship_env(
     config = load_config(project_root)
     # The settings this commit would ship are checked before any host or cloud is touched.
     check_settings(config, read_extension_record(project_root) or {}, env)
+    check_bindings(config, read_extension_record(project_root) or {})
     if check:
         found = check_facts(config, env)
         export_facts(found)

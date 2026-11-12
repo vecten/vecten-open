@@ -45,6 +45,7 @@ from vecten_shared.extension_record import Extension, read_record
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.records import write_text_atomic
+from vecten_shared.services import check_bindings
 from vecten_shared.sql import setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -371,6 +372,7 @@ def build_host_bundle(
         )
     tfvars = check_tfvars(project_root, config, env)
     check_settings(config, read_record(project_root) or {}, env)
+    check_bindings(config, read_record(project_root) or {})
     host_doc = host_document(
         config, env, outputs, host, commit, tfvars, read_record(project_root) or {}
     )

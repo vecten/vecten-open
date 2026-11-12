@@ -582,3 +582,14 @@ def test_switching_requirements_to_an_index_pin_makes_the_locks_stale_and_relock
     assert invoke("lock").exit_code == 0
     entry = json.loads((project / locking.RECORD_FILE).read_text())["extensions"]["acme-portal"]
     assert "source" not in entry
+
+
+def test_lock_refuses_a_binding_of_an_undeclared_service(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    before = (project / locking.RECORD_FILE).read_bytes()
+    _edit_config(project, lambda doc: doc.__setitem__("services", {"acme-demo": {"portal": {}}}))
+    r = invoke("lock", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.output
+    assert "services.acme-demo.portal" in r.output
+    assert (project / locking.RECORD_FILE).read_bytes() == before

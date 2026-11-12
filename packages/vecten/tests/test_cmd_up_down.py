@@ -418,3 +418,68 @@ def test_up_refuses_an_unknown_setting_before_anything_starts(invoke, workdir, f
     assert r.exit_code == ExitCode.CONFIG, r.stdout
     assert "settings.acme.dialy_cap" in r.stdout and "local" in r.stdout
     assert fake.calls == []
+
+
+def test_up_refuses_a_binding_the_record_does_not_declare(invoke, workdir, fake, monkeypatch):
+    from vecten_shared.output import ExitCode
+
+    from .services_fixtures import with_services
+
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    with_services(workdir / "p", {"portal": {}})
+    r = invoke("up", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.stdout
+    assert "services.acme.portal" in r.stdout
+    assert fake.calls == []
+
+
+def _in_repo_bot(root, monkeypatch, command):
+    from vecten import extensions
+    from vecten_shared.services import parse_service
+
+    from .services_fixtures import BOT, with_services
+
+    with_services(
+        root,
+        {"bot": {}},
+        declared={"bot": {**BOT, "routes": {}}},
+        source_path="extensions/acme",
+        metadata_sha256="0" * 64,
+    )
+    seen = []
+
+    def load(config, candidates=None, only=None):
+        seen.append(only)
+        value = {**BOT, "routes": {}, "command": command}
+        return {"acme": {"bot": parse_service("acme", "bot", value)}}
+
+    monkeypatch.setattr(extensions, "load_services", load)
+    return seen
+
+
+def test_up_refuses_an_in_repo_service_changed_since_the_lock(invoke, workdir, fake, monkeypatch):
+    from vecten_shared.output import ExitCode
+
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    seen = _in_repo_bot(workdir / "p", monkeypatch, ["python", "-m", "acme.bot2"])
+    r = invoke("up", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.stdout
+    assert "service bot differs from extensions.lock.json" in r.stdout
+    assert "vecten lock" in r.stdout
+    assert seen == [{"acme"}]
+    assert fake.calls == []
+
+
+def test_up_reads_only_in_repo_declarations_and_accepts_an_unchanged_one(
+    invoke, workdir, fake, monkeypatch
+):
+    from .services_fixtures import BOT
+
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    seen = _in_repo_bot(workdir / "p", monkeypatch, BOT["command"])
+    r = invoke("up", "--json")
+    assert "differs from extensions.lock.json" not in r.stdout, r.stdout
+    assert seen == [{"acme"}]

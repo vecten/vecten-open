@@ -311,3 +311,14 @@ def test_check_refuses_a_setting_of_the_wrong_type_for_the_environment(invoke, n
     r = invoke("ship", "--env", "prod", "--check", "--json")
     assert r.exit_code == ExitCode.CONFIG, r.stdout
     assert "settings.acme.daily_cap" in r.stdout and "prod" in r.stdout
+
+
+def test_check_refuses_a_binding_the_record_does_not_declare(invoke, no_cloud):
+    from vecten_shared.output import ExitCode
+
+    from .services_fixtures import with_services
+
+    with_services(no_cloud, {"portal": {}})
+    r = invoke("ship", "--env", "prod", "--check", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.stdout
+    assert "services.acme.portal" in r.stdout

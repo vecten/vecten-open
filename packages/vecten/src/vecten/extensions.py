@@ -33,7 +33,7 @@ from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
 from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
 from vecten_shared.services import GROUP as SERVICES_GROUP
-from vecten_shared.services import Declaration, parse_service
+from vecten_shared.services import Declaration, check_bindings, parse_service
 from vecten_shared.versions import VERSIONS, normalize_name
 
 
@@ -435,6 +435,7 @@ def lock_project(
     }
     for env in environments_named(config):
         check_settings(config, record, env)
+    check_bindings(config, record)
     from vecten.extension_skills import skill_artifacts
 
     files = {
@@ -516,10 +517,14 @@ def load_manifests(config: VectenConfig, candidates=None) -> dict[str, Manifest]
     return found
 
 
-def load_services(config: VectenConfig, candidates=None) -> dict[str, dict[str, Declaration]]:
+def load_services(
+    config: VectenConfig, candidates=None, only: set[str] | None = None
+) -> dict[str, dict[str, Declaration]]:
     """Each listed extension's `vecten.services` declarations, by extension and service."""
     found: dict[str, dict[str, Declaration]] = {}
     listed = {normalize_name(requirement(r).name) for r in config.extensions}
+    if only is not None:
+        listed &= only
     points = metadata.entry_points(group=SERVICES_GROUP) if candidates is None else candidates
     for point in points:
         dist = getattr(point, "dist", None)
@@ -535,6 +540,30 @@ def load_services(config: VectenConfig, candidates=None) -> dict[str, dict[str, 
             ) from exc
         found.setdefault(name, {})[point.name] = parse_service(name, point.name, value)
     return found
+
+
+def refuse_stale_services(config: VectenConfig, record: dict[str, locking.Extension]) -> None:
+    """Refuse when an in-repo extension's code declares services other than its record holds.
+
+    An in-repo extension is installed editable, so its code can change without a new version
+    or a changed pyproject.toml, which are what make a lock stale.
+    """
+    local = {name for name, entry in record.items() if entry.source_path}
+    if not local:
+        return
+    declared = load_services(config, only=local)
+    for name in sorted(local):
+        current = {s: d.service for s, d in declared.get(name, {}).items()}
+        recorded = record[name].services
+        changed = sorted(
+            s for s in set(current) | set(recorded) if current.get(s) != recorded.get(s)
+        )
+        if changed:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: service {', '.join(changed)} differs from "
+                f"{locking.RECORD_FILE}; run `vecten lock`",
+            )
 
 
 def _unsupported(
