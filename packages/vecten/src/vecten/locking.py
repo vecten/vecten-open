@@ -76,11 +76,16 @@ def roots(
     """
     found = set()
     for registration in config.extensions:
-        req = Requirement(registration)
+        req = parse_requirement(registration)
+        if req is None:
+            return None
         name = normalize_name(req.name)
         version = _exact_version(pins[name]) if name in pins else None
         entry = record.get(name)
+        # The runtimes refuse an installed version outside the registration's constraint.
         if version is None or entry is None or entry.version != version:
+            return None
+        if req.specifier and version not in req.specifier:
             return None
         extras = set(req.extras) | ({component} & set(entry.extras))
         listed = f"[{','.join(sorted(extras))}]" if extras else ""

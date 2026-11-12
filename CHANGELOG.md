@@ -12,8 +12,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   only in that component, and `[dependencies.platform|mcp|cli] python` in `vecten.toml` adds a
   project's own packages to one component. Each lock records a hash of its inputs, which `up`
   and the bundle build check, naming `vecten lock` when stale; re-locking keeps existing pins,
-  and `--upgrade <package>` moves one. `extension add` and `connector add` lock the same way
-  ([#50](https://github.com/vecten/vecten-open/issues/50)).
+  and `--upgrade <package>` moves one. `extension add` locks the same way, and `connector add`
+  re-locks a project that already has locks ([#50](https://github.com/vecten/vecten-open/issues/50)).
 - Deployed hosts: `dags_paused_at_creation = true` in `deploy/envs/<env>.tfvars` makes that
   environment's new DAGs start paused, `[airflow] allow` in `vecten.toml` limits which networks
   reach `airflow.<domain>` (Airflow's health path stays open for `vecten ship`), and

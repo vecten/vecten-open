@@ -19,6 +19,7 @@ from vecten_shared.config import VectenConfig, load_config
 from vecten_shared.extensions import GROUPS, requirement
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
+from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
 from vecten_shared.versions import VERSIONS, normalize_name
 
 
@@ -294,13 +295,27 @@ def _extension_pins(
             dist = added
         else:
             pinned, entry = pins.get(name), record.get(name)
-            if pinned and entry and _pinned_version(pinned) == entry.version:
+            version = _pinned_version(pinned) if pinned else None
+            satisfied = version is not None and (not req.specifier or version in req.specifier)
+            if satisfied and entry and version == entry.version:
                 found_pins[name], found_record[name] = f"{name}{extras}=={entry.version}", entry
                 continue
-            dist = inspect_package(pinned or registration, root)
+            dist = inspect_package(pinned if satisfied else registration, root)
         found_pins[name] = f"{name}{extras}=={dist.version}"
         found_record[name] = locking.Extension(version=dist.version, extras=tuple(dist.extras))
     return found_pins, found_record
+
+
+def _check_connector_dependencies(config: VectenConfig) -> None:
+    # Each one becomes a line of uv's input file, where a URL, a marker or a newline-borne
+    # option would change what is resolved and installed into the CLI's environment.
+    for connector in config.connectors:
+        for dependency in connector.dependencies:
+            if parse_requirement(dependency) is None:
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"connector {connector.name}: dependency {dependency!r}: {REQUIREMENT_RULE}",
+                )
 
 
 def lock_project(
@@ -315,6 +330,7 @@ def lock_project(
     Nothing is written here: the caller writes these files together, so a failure in any
     resolution leaves every committed record as it was.
     """
+    _check_connector_dependencies(config)
     pins, record = _extension_pins(root, config, added)
     locks = {}
     for component in locking.components(config):

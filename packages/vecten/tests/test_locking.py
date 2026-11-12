@@ -167,3 +167,16 @@ def test_a_project_without_extensions_has_fresh_locks_with_an_empty_record(tmp_p
         stamp = locking.stamp_line(component, locking.inputs_hash(component, roots))
         (tmp_path / locking.LOCK_FILES[component]).write_text(stamp + "\n")
     assert locking.lock_problems(tmp_path, c) == []
+
+
+def test_a_registration_constraint_the_pin_breaks_makes_the_locks_stale(tmp_path):
+    c = config(extensions=["acme"])
+    _write_locked_project(tmp_path, c, {"acme": ALL_EXTRAS}, "acme==1.0\n")
+    c.extensions = ["acme>=2"]
+    assert locking.lock_state(tmp_path, c, "platform") == "stale"
+    assert locking.roots(c, pins("acme==1.0"), {"acme": ALL_EXTRAS}, "platform") is None
+
+
+def test_an_invalid_registration_reads_as_stale_not_as_a_crash():
+    c = config(extensions=["acme @ https://example.com/a.whl"])
+    assert locking.roots(c, pins("acme==1.0"), {"acme": ALL_EXTRAS}, "platform") is None

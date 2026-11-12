@@ -614,3 +614,14 @@ def test_a_failed_relock_keeps_the_connector_and_names_vecten_lock(invoke, proje
     assert r.exit_code != 0
     assert "vecten lock" in r.stdout + r.stderr
     assert (project / "connectors" / "google_sheets" / "connector.py").is_file()
+
+
+def test_add_without_dependencies_keeps_fresh_locks_without_relocking(invoke, project, monkeypatch):
+    from vecten import locking
+
+    calls = _record_locks(monkeypatch)
+    (project / "requirements.lock").write_text("# vecten-lock: component=cli inputs=x\n")
+    monkeypatch.setattr(locking, "lock_problems", lambda root, config: [])
+    r = invoke("connector", "add", "crm", "--from", "rest", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert calls == []

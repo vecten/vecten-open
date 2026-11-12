@@ -101,8 +101,20 @@ STALE = "project dependency records are stale; run `vecten lock`"
 RUNTIME = (("platform", "airflow"), ("mcp", "mcp"))
 
 
-def _legacy_lines(root: Path, config: VectenConfig, reqs: list[str]) -> list[str]:
-    """Locks an earlier release wrote, without inputs lines: checked name by name."""
+def _legacy_lines(
+    root: Path, config: VectenConfig, reqs: list[str]
+) -> tuple[list[str], list[Requirement]]:
+    """Locks an earlier release wrote, without inputs lines: checked name by name.
+
+    Returns the CLI lock's lines and every requirement a runtime lock must also satisfy.
+    """
+    if any(config.dependencies.python(c) for c in ("platform", "mcp")):
+        # An earlier release never resolved these, so its locks cannot hold them.
+        raise Failure(
+            ExitCode.REFUSED,
+            "[dependencies] Python requirements need locks written by `vecten lock`; "
+            "run `vecten lock`",
+        )
     inputs, lock = root / "requirements.txt", root / "requirements.lock"
     if not inputs.is_file() or not lock.is_file():
         raise Failure(ExitCode.REFUSED, STALE)
@@ -126,7 +138,8 @@ def _legacy_lines(root: Path, config: VectenConfig, reqs: list[str]) -> list[str
             )
             if candidate.extras != wanted.extras or not compatible:
                 raise Failure(ExitCode.REFUSED, STALE)
-    return lock_lines(lock, [*configured, *direct])
+    wanted = [*configured, *direct]
+    return lock_lines(lock, wanted), wanted
 
 
 def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | None) -> None:
@@ -152,7 +165,7 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
             state = locking.lock_state(root, config, component)
             if state == "unstamped" and not (root / locking.RECORD_FILE).exists():
                 legacy = legacy if legacy is not None else _legacy_lines(root, config, reqs)
-                runtime[kind] = lock_lines(root / name, [requirement(r) for r in reqs])
+                runtime[kind] = lock_lines(root / name, legacy[1])
             elif state == "fresh":
                 runtime[kind] = lock_lines(root / name, [])
             else:
@@ -161,7 +174,7 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
                     f"{name} is {state}: it does not match vecten.toml, requirements.txt and "
                     f"{locking.RECORD_FILE}; run `vecten lock`",
                 )
-        reqs = legacy if legacy is not None else []
+        reqs = legacy[0] if legacy is not None else []
     build_dir.mkdir(parents=True, exist_ok=True)
     write_text_atomic(build_dir / "requirements.txt", "".join(f"{r}\n" for r in reqs))
     pins = {"airflow": f'"apache-airflow=={VERSIONS.airflow_version}" ', "mcp": ""}

@@ -13,13 +13,18 @@ from vecten_shared.output import ExitCode, Failure, Result
 connector = typer.Typer(help="Wire dlt sources into the project and run them locally.")
 
 
-def _relock(root, name: str) -> bool:
-    """Re-lock a project that has locks, so the new dependencies are pinned like the rest."""
-    from vecten import extensions as project_extensions
-    from vecten.locking import LOCK_FILES
+def _relock(root, name: str, dependencies: list[str]) -> bool:
+    """Re-lock a project that has locks, so the new dependencies are pinned like the rest.
 
-    if not any((root / f).is_file() for f in LOCK_FILES.values()):
+    A connector without dependencies leaves fresh locks fresh, and re-locking needs Docker.
+    """
+    from vecten import extensions as project_extensions
+    from vecten import locking
+
+    if not any((root / f).is_file() for f in locking.LOCK_FILES.values()):
         return False
+    if not dependencies and not locking.lock_problems(root, load_config(root)):
+        return True
     try:
         project_extensions.lock(root)
     except Failure as failure:
@@ -52,7 +57,7 @@ def add(
         root = ctx.require_project()
         extensions = extension_connectors(load_config(root)) if from_kind is None else {}
         res = add_connector(root, name, from_kind, get_verified_sources(), extensions)
-        locked = _relock(root, name)
+        locked = _relock(root, name, res.dependencies)
         lines = [
             f"added {name} ({res.source}); files: {len(res.files)}; dags: {', '.join(res.dags)}"
         ]

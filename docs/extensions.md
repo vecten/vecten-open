@@ -60,7 +60,8 @@ need to maintain it manually.
 
 ## Dependencies and locks
 
-`vecten lock` writes these records together, or changes none of them:
+`vecten lock` needs Docker and the release's base images, as `extension add` does. It writes
+these records together, or changes none of them:
 
 | File | What it holds |
 |---|---|
@@ -70,8 +71,11 @@ need to maintain it manually.
 | `requirements-mcp.lock` | The MCP image, for Linux, against its base image: each extension with its `mcp` extra, the connectors' dependencies and `[dependencies.mcp] python`. |
 | `extensions.lock.json` | Each extension's version and the extras its wheel provides. |
 
-Only enabled components get an image lock. `extension add` ends by running the same steps, and
-`connector add` runs them when the project already has locks. Commit every one of these files.
+Only enabled components get an image lock. Before writing them, the command installs the new
+`requirements.lock` into the environment running Vecten; it adds and upgrades packages there
+but does not remove ones the lock no longer holds. `extension add` ends by running the same
+steps, and `connector add` runs them when the project already has locks and the new connector
+brings dependencies. Commit every one of these files.
 
 **Project requirements.** A package the project's own code needs goes in `vecten.toml`, under
 the component that imports it:
@@ -99,9 +103,10 @@ resolution needs it. `vecten lock --upgrade httpx` lets one package move in ever
 **Stale locks.** Each lock starts with a line such as
 `# vecten-lock: component=platform inputs=<sha256>`, a hash of its inputs: the requirements
 above, the base image, the Vecten release and the Python version. `vecten up` and the bundle that
-`ship` builds recompute it from `vecten.toml`, `requirements.txt` and `extensions.lock.json` and
-refuse a lock that no longer matches, naming the file and `vecten lock`; `vecten next` offers
-the command. A `vecten update` to a new release therefore asks for `vecten lock` too.
+`ship` builds recompute it for the image locks from `vecten.toml`, `requirements.txt` and
+`extensions.lock.json` and refuse one that no longer matches, naming the file and
+`vecten lock`. `vecten next` offers the command whenever any of the records, the CLI's lock
+included, is out of date. A `vecten update` to a new release therefore asks for `vecten lock` too.
 
 **Different versions per lock.** Every extension has the same version in every lock. Other
 packages may differ, because each image keeps the versions its base image installs.

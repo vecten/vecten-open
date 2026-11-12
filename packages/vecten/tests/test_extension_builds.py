@@ -246,3 +246,21 @@ def test_an_unstamped_lock_refusal_names_vecten_lock(tmp_path):
     write_locks(tmp_path, "acme-demo==9.0\n")
     with pytest.raises(Failure, match="vecten lock"):
         write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_project_requirements_in_a_project_locked_by_an_earlier_release_are_refused(tmp_path):
+    c = config(dependencies={"platform": {"python": ["polars"]}})
+    (tmp_path / "requirements.txt").write_text("acme-demo==1.0\n")
+    write_locks(tmp_path, "acme-demo==1.0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_a_legacy_runtime_lock_must_match_the_pinned_extension(tmp_path):
+    c = config(extensions=["acme-demo"])
+    (tmp_path / "requirements.txt").write_text("acme-demo==1.0\n")
+    (tmp_path / "requirements.lock").write_text("acme-demo==1.0\n")
+    (tmp_path / "requirements-airflow.lock").write_text("acme-demo==9.0\n")
+    (tmp_path / "requirements-mcp.lock").write_text("acme-demo==1.0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)

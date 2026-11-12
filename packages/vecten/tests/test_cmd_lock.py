@@ -194,3 +194,32 @@ def test_resolve_lock_seeds_the_output_with_the_previous_lock_and_passes_upgrade
     assert text == "httpx==0.28.0\n"
     assert seen["seeded"] == "# vecten-lock: x\nhttpx==0.27.0\n"
     assert seen["args"][seen["args"].index("--upgrade-package") + 1] == "httpx"
+
+
+def test_a_constraint_the_pin_breaks_is_resolved_again(invoke, project, fakes):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    fakes["packages"]["acme-demo"] = ("2.0.0", ("platform",))
+    _edit_config(project, lambda doc: doc.__setitem__("extensions", ["acme-demo>=2"]))
+    fakes["inspected"].clear()
+    assert invoke("lock").exit_code == 0
+    assert fakes["inspected"] == ["acme-demo>=2"]
+    assert (project / "requirements.txt").read_text() == "acme-demo==2.0.0\n"
+
+
+@pytest.mark.parametrize(
+    "dependency", ["polars\n--extra-index-url https://evil.example/simple", "x @ file:///tmp/x"]
+)
+def test_a_connector_dependency_that_is_not_a_plain_requirement_is_refused(
+    invoke, project, fakes, dependency
+):
+    _edit_config(
+        project,
+        lambda doc: doc["connectors"].append(
+            {"name": "crm", "source": "rest", "dependencies": [dependency]}
+        ),
+    )
+    r = invoke("lock", "--json")
+    assert r.exit_code != 0
+    assert "crm" in r.output
+    assert fakes["compiles"] == []
