@@ -625,3 +625,12 @@ def test_add_without_dependencies_keeps_fresh_locks_without_relocking(invoke, pr
     r = invoke("connector", "add", "crm", "--from", "rest", "--json")
     assert r.exit_code == 0, r.stdout + r.stderr
     assert calls == []
+
+
+def test_add_without_dependencies_never_relocks_a_legacy_project(invoke, project, monkeypatch):
+    calls = _record_locks(monkeypatch)
+    # Locks an earlier release wrote: unstamped, and no extensions.lock.json.
+    (project / "requirements.lock").write_text("helper==1.0\n")
+    r = invoke("connector", "add", "crm", "--from", "rest", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    assert calls == []

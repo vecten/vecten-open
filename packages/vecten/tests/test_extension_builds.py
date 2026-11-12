@@ -264,3 +264,13 @@ def test_a_legacy_runtime_lock_must_match_the_pinned_extension(tmp_path):
     (tmp_path / "requirements-mcp.lock").write_text("acme-demo==1.0\n")
     with pytest.raises(Failure, match="vecten lock"):
         write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+@pytest.mark.parametrize("body", ["acme-demo==9.0\n", ""])
+def test_a_stamped_lock_whose_body_breaks_its_inputs_is_refused(tmp_path, body):
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    stamp = (tmp_path / "requirements-mcp.lock").read_text().splitlines()[0]
+    (tmp_path / "requirements-mcp.lock").write_text(f"{stamp}\n{body}")
+    with pytest.raises(Failure, match="requirements-mcp.lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)

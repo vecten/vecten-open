@@ -12,6 +12,7 @@ from vecten_shared.config import VectenConfig
 from vecten_shared.extensions import requirement
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
+from vecten_shared.requirements import parse_requirement
 from vecten_shared.versions import VERSIONS
 
 LOCAL_AIRFLOW = "vecten-airflow"
@@ -142,6 +143,20 @@ def _legacy_lines(
     return lock_lines(lock, wanted), wanted
 
 
+def _wanted(root: Path, config: VectenConfig, component: str) -> list[Requirement]:
+    """What a fresh stamped lock must pin: every requirement among its recorded inputs."""
+    from vecten import locking
+
+    record = locking.read_record(root) or {}
+    roots = locking.roots(config, locking.read_pins(root), record, component) or []
+    wanted = []
+    for text in roots:
+        req = parse_requirement(text)
+        if req is not None:
+            wanted.append(req)
+    return wanted
+
+
 def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | None) -> None:
     from vecten import locking
 
@@ -167,7 +182,8 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
                 legacy = legacy if legacy is not None else _legacy_lines(root, config, reqs)
                 runtime[kind] = lock_lines(root / name, legacy[1])
             elif state == "fresh":
-                runtime[kind] = lock_lines(root / name, [])
+                # The stamp proves the inputs are unchanged, not that the body still pins them.
+                runtime[kind] = lock_lines(root / name, _wanted(root, config, component))
             else:
                 raise Failure(
                     ExitCode.REFUSED,
