@@ -323,3 +323,77 @@ def test_one_served_repository_lists_every_commit_as_a_branch(tmp_path):
     found = {row.split()[0] for row in listed.splitlines()}
     assert {one, two} <= found
     assert _git("rev-parse", "HEAD", cwd=served) == one
+
+
+def _bare_with_paths(tmp_path: Path, paths: list[str]) -> Path:
+    """A bare repository whose SOURCE_REF commit holds exactly `paths`, built without a work
+    tree, so names a case-insensitive file system would merge can coexist."""
+    bare = tmp_path / "plumbed.git"
+    _git("init", "-q", "--bare", str(bare), cwd=tmp_path)
+    env_index = tmp_path / "index"
+    # git on macOS precomposes decomposed names in its arguments unless told not to.
+    plain = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_INDEX_FILE": str(env_index),
+    }
+    for path in paths:
+        blob = (
+            subprocess.run(
+                ["git", "--git-dir", str(bare), "hash-object", "-w", "--stdin"],
+                input=path.encode(),
+                capture_output=True,
+                check=True,
+            )
+            .stdout.decode()
+            .strip()
+        )
+        subprocess.run(
+            ["git", "-c", "core.precomposeunicode=false", "--git-dir", str(bare)]
+            + ["update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"],
+            env=plain,
+            check=True,
+            capture_output=True,
+        )
+    tree = subprocess.run(
+        ["git", "--git-dir", str(bare), "write-tree"],
+        env=plain,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    commit = _git("--git-dir", str(bare), "commit-tree", tree, "-m", "plumbed", cwd=tmp_path)
+    _git("--git-dir", str(bare), "update-ref", SOURCE_REF, commit, cwd=tmp_path)
+    return bare
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ["Foo/a.py", "foo/b.py"],
+        ["A", "a/b.py"],
+        ["README", "readme"],
+        ["café.txt", "café.txt"],
+        ["src/Café/x.py", "src/café/y.py"],
+    ],
+    ids=["directories-by-case", "file-beside-directory", "files-by-case", "nfc-nfd", "nested"],
+)
+def test_checkout_refuses_paths_a_file_system_could_merge(tmp_path, paths):
+    bare = _bare_with_paths(tmp_path, paths)
+    into = tmp_path / "copy"
+    with pytest.raises(Failure) as caught:
+        checkout(bare, into)
+    assert caught.value.code == ExitCode.REFUSED
+    assert "collide" in caught.value.message
+    assert not into.exists() or not any(into.iterdir())
+
+
+def test_checkout_keeps_paths_that_differ_in_more_than_case(tmp_path):
+    bare = _bare_with_paths(tmp_path, ["Foo/a.py", "food/b.py", "A.py"])
+    into = checkout(bare, tmp_path / "copy")
+    assert sorted(p.relative_to(into).as_posix() for p in into.rglob("*.py")) == [
+        "A.py",
+        "Foo/a.py",
+        "food/b.py",
+    ]

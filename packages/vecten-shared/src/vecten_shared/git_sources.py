@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unicodedata
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -760,6 +761,26 @@ def _tree_path(raw: bytes) -> str:
     return os.fsdecode(raw)
 
 
+def _refuse_merged_paths(paths: list[str]) -> None:
+    """Refuse two paths, or a file and a directory, whose names differ only in letter case or
+    Unicode normalisation: a case-insensitive or normalising file system would merge them, and
+    the copy, and its hash, would then differ between macOS and Linux."""
+    seen: dict[str, tuple[str, bool]] = {}
+    for path in sorted(paths):
+        parts = path.split("/")
+        for depth in range(1, len(parts) + 1):
+            spelled = "/".join(parts[:depth])
+            is_file = depth == len(parts)
+            key = unicodedata.normalize("NFC", spelled).casefold()
+            other = seen.setdefault(key, (spelled, is_file))
+            if other[0] != spelled or (other[1] or is_file) and other != (spelled, is_file):
+                raise Failure(
+                    ExitCode.REFUSED,
+                    f"{other[0]} and {spelled} collide on a file system that ignores letter "
+                    "case or Unicode normalisation; rename one in the repository",
+                )
+
+
 def checkout(repository: Path, into: Path, subdirectory: str | None = None) -> Path:
     """Write the files of `SOURCE_REF` in `repository`, or of its `subdirectory`, into `into`.
 
@@ -795,6 +816,7 @@ def checkout(repository: Path, into: Path, subdirectory: str | None = None) -> P
                 ExitCode.REFUSED, f"{path} is a submodule or special file; a git source holds files"
             )
         files.append((path, oid, REGULAR_MODES[mode]))
+    _refuse_merged_paths([path for path, _, _ in files])
     contents = _git_bytes(
         ["cat-file", "--batch"], run, stdin=b"".join(oid + b"\n" for _, oid, _ in files)
     )
