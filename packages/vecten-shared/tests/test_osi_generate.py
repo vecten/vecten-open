@@ -315,3 +315,66 @@ def test_a_declared_key_must_list_declared_columns(key, named):
     [issue] = exc.value.issues
     assert issue.code == "invalid_primary_key"
     assert "sales_pipeline" in issue.message and named in issue.message
+
+
+def _move_to(manifest: dict, catalog: dict, alias: str, schema: str) -> None:
+    for node in manifest["nodes"].values():
+        if node.get("resource_type") == "model" and node["alias"] == alias:
+            node["schema"] = schema
+    for entry in catalog["nodes"].values():
+        if entry["metadata"]["name"].lower() == alias:
+            entry["metadata"]["schema"] = schema
+
+
+def test_a_mart_in_a_declared_area_becomes_a_dataset_named_by_its_schema():
+    manifest, catalog = _artifacts()
+    _move_to(manifest, catalog, "company_overview", "marts_finance")
+    doc = generate_datasets(
+        manifest, catalog, database="warehouse", model_name="acme", areas=["finance"]
+    )
+    sources = {d["name"]: d["source"] for d in doc["semantic_model"][0]["datasets"]}
+    assert sources == {
+        "company_overview": "warehouse.marts_finance.company_overview",
+        "sales_pipeline": "warehouse.marts.sales_pipeline",
+    }
+    # Ordered by name across schemas, the same as without areas.
+    assert list(sources) == ["company_overview", "sales_pipeline"]
+
+
+def test_a_mart_in_an_undeclared_area_or_a_core_area_is_no_dataset():
+    manifest, catalog = _artifacts()
+    _move_to(manifest, catalog, "company_overview", "marts_finance")
+    doc = generate_datasets(manifest, catalog, database="warehouse", model_name="acme")
+    assert [d["name"] for d in doc["semantic_model"][0]["datasets"]] == ["sales_pipeline"]
+    _move_to(manifest, catalog, "company_overview", "core_finance")
+    doc = generate_datasets(
+        manifest, catalog, database="warehouse", model_name="acme", areas=["finance"]
+    )
+    assert [d["name"] for d in doc["semantic_model"][0]["datasets"]] == ["sales_pipeline"]
+
+
+def test_two_marts_of_one_alias_in_different_schemas_are_refused():
+    manifest, catalog = _artifacts()
+    twin = next(
+        dict(n, unique_id="model.acme.finance_sales_pipeline", name="finance_sales_pipeline")
+        for n in manifest["nodes"].values()
+        if n.get("resource_type") == "model" and n["alias"] == "sales_pipeline"
+    )
+    twin["schema"] = "marts_finance"
+    manifest["nodes"][twin["unique_id"]] = twin
+    original = next(
+        k for k, e in catalog["nodes"].items() if e["metadata"]["name"].lower() == "sales_pipeline"
+    )
+    copy = json.loads(json.dumps(catalog["nodes"][original]))
+    copy["metadata"]["schema"] = "marts_finance"
+    catalog["nodes"][twin["unique_id"]] = copy
+    with pytest.raises(GeneratorError) as exc:
+        generate_datasets(
+            manifest, catalog, database="warehouse", model_name="acme", areas=["finance"]
+        )
+    assert any(
+        i.code == "duplicate_dataset"
+        and "marts.sales_pipeline" in i.message
+        and "marts_finance.sales_pipeline" in i.message
+        for i in exc.value.issues
+    )

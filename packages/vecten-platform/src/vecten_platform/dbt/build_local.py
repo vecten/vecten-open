@@ -183,6 +183,7 @@ def _build_and_generate(build: _Build, env: dict[str, str]) -> str:
             catalog,
             database=dataset_database(build.config),
             model_name=build.config.project.name.replace("-", "_"),
+            areas=build.config.areas,
         )
     except GeneratorError as exc:
         lines = "\n".join(f"  {issue.render()}" for issue in exc.issues)

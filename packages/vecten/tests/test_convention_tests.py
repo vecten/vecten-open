@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ import yaml
 
 from vecten_platform.dbt import runner
 from vecten_shared.config import AreaDecl, load_config, save_config
+from vecten_shared.osi.generate import dataset_database, generate_datasets
 
 from .fixture_project import build_fixture, render_fixture
 
@@ -176,5 +178,19 @@ def test_models_in_declared_areas_pass_every_convention_test(tmp_path):
     root = render_fixture(tmp_path, "snowflake")
     _into_area(root, MART, "marts_finance", "finance", "payroll")
     _configure(root / CORE_DEAL, "schema='core_finance'")
-    runs = build_fixture(root)
-    assert [r.returncode for r in runs] == [0, 0], runner.failed_nodes(root / "dbt")
+    runs = build_fixture(root, docs=True)
+    assert [r.returncode for r in runs] == [0, 0, 0], runner.failed_nodes(root / "dbt")
+    target = root / "dbt" / "target"
+    config = load_config(root)
+    doc = generate_datasets(
+        json.loads((target / "manifest.json").read_text()),
+        json.loads((target / "catalog.json").read_text()),
+        database=dataset_database(config),
+        model_name="acme",
+        areas=config.areas,
+    )
+    sources = {d["name"]: d["source"] for d in doc["semantic_model"][0]["datasets"]}
+    assert sources == {
+        "company_overview": "acme.marts_finance.company_overview",
+        "sales_pipeline": "acme.marts.sales_pipeline",
+    }
