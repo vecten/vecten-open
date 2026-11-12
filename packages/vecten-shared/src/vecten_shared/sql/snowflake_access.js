@@ -5,6 +5,9 @@ function quoted(value) {
     return '"' + value.replace(/"/g, '""') + '"';
 }
 function execute(sqlText) { return snowflake.execute({sqlText: sqlText}); }
+// Every relation kind a model can be built as, in the plural GRANT ... ON ALL takes.
+var KINDS = ['TABLES', 'VIEWS', 'MATERIALIZED VIEWS', 'DYNAMIC TABLES', 'EXTERNAL TABLES',
+             'ICEBERG TABLES'];
 // READER is reserved for a reader of every schema, which no grant here may create.
 function bounded(target) {
     if (typeof target !== 'string' ||
@@ -54,7 +57,7 @@ function readGrant() {
     var schema = quoted(database) + '.' + quoted(SCHEMA_NAME);
     var action = enabled ? 'GRANT' : 'REVOKE';
     var direction = enabled ? ' TO' : ' FROM';
-    var relationType = 'TABLE';
+    var relationTypes = ['TABLE'];
     if (relation !== null) {
         quoted(relation);
         var table = snowflake.execute({
@@ -62,24 +65,46 @@ function readGrant() {
             binds: [SCHEMA_NAME, relation]
         });
         if (!table.next()) throw new Error('dataset relation does not exist');
-        if (table.getColumnValue(1) === 'VIEW') relationType = 'VIEW';
+        var tableType = table.getColumnValue(1);
+        // TABLE_TYPE names a dynamic or Iceberg table BASE TABLE, so each object type that
+        // can be one is tried in turn.
+        relationTypes = ['VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE'].indexOf(tableType) !== -1
+            ? [tableType] : ['TABLE', 'DYNAMIC TABLE', 'ICEBERG TABLE'];
     }
     if (enabled) {
         execute('GRANT USAGE ON DATABASE ' + quoted(database) + ' TO' + target);
         if (warehouse !== null) execute('GRANT USAGE ON WAREHOUSE ' + quoted(warehouse) + ' TO' + target);
         execute('GRANT USAGE ON SCHEMA ' + schema + ' TO' + target);
     }
+    var refused = [];
     if (relation !== null) {
-        execute(action + ' SELECT ON ' + relationType + ' ' + schema + '.' + quoted(relation) + direction + target);
+        var first = null;
+        for (var i = 0; i < relationTypes.length; i++) {
+            try {
+                execute(action + ' SELECT ON ' + relationTypes[i] + ' ' + schema + '.' +
+                        quoted(relation) + direction + target);
+                first = null;
+                break;
+            } catch (e) {
+                if (first === null) first = e;
+            }
+        }
+        if (first !== null) throw first;
     } else {
-        ['TABLES','VIEWS'].forEach(function(kind) {
+        // Tables and views hold every mart dbt builds by default, so a refusal there fails
+        // the call; another kind the account refuses is reported and the rest still apply.
+        KINDS.forEach(function(kind, index) {
             ['ALL','FUTURE'].forEach(function(shape) {
-                execute(action + ' SELECT ON ' + shape + ' ' + kind + ' IN SCHEMA ' + schema + direction + target);
+                var statement = action + ' SELECT ON ' + shape + ' ' + kind + ' IN SCHEMA ' +
+                    schema + direction + target;
+                if (index < 2) { execute(statement); return; }
+                try { execute(statement); }
+                catch (e) { refused.push({kind: shape + ' ' + kind, error: String(e.message || e)}); }
             });
         });
         if (!enabled) execute('REVOKE USAGE ON SCHEMA ' + schema + ' FROM' + target);
     }
-    return 'ok';
+    return refused.length ? 'refused: ' + JSON.stringify(refused) : 'ok';
 }
 // What one bounded target holds in this database, read and never changed: USAGE and SELECT
 // grants, and the future grants made at schema or database level.

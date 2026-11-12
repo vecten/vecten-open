@@ -220,3 +220,14 @@ def test_postgres_read_grants_reads_the_catalog_acls_of_the_given_roles():
         assert catalog in statement
     assert "relkind IN ('r','p','v','m','f')" in statement
     assert "LEFT JOIN pg_catalog.pg_namespace" in statement
+
+
+def test_snowflake_schema_grant_returns_the_kinds_read_grant_reports_refused():
+    refusals = [{"kind": "ALL ICEBERG TABLES", "error": "unsupported feature 'ICEBERG'"}]
+    adapter, _ = snowflake(lambda sql, params: "refused: " + json.dumps(refusals))
+    assert adapter.schema_grant("finance", "marts") == [
+        "ALL ICEBERG TABLES: unsupported feature 'ICEBERG'"
+    ]
+    adapter, _ = snowflake(lambda sql, params: "ok")
+    assert adapter.schema_grant("finance", "marts") == []
+    assert adapter.dataset_grant("finance", "D.MARTS.ORDERS") == []

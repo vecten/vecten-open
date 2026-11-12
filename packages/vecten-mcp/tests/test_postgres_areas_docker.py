@@ -120,6 +120,22 @@ def test_a_rebuilt_mart_is_readable_by_the_group_and_refused_for_default_before_
     )[0][0]
 
 
+def test_every_relation_kind_dbt_builds_in_the_area_is_readable_by_the_group(stack):
+    stack.pg.sql(
+        "CREATE VIEW marts_finance.finance_view AS SELECT 1 AS one; "
+        "CREATE MATERIALIZED VIEW marts_finance.finance_matview AS SELECT 1 AS one; "
+        "CREATE TABLE marts_finance.finance_parts (id int) PARTITION BY RANGE (id)",
+        user="loader",
+    )
+    for name in ("finance_view", "finance_matview", "finance_parts"):
+        relation = f"marts_finance.{name}"
+        for role, readable in (("finance", True), ("analyst", False)):
+            held = stack.pg.sql(
+                "SELECT has_table_privilege(%s, %s, 'SELECT')", params=(role, relation)
+            )[0][0]
+            assert held is readable, (role, relation)
+
+
 def test_a_hand_grant_in_the_area_is_revoked_and_the_group_keeps_it(stack):
     stack.pg.sql(
         "GRANT USAGE ON SCHEMA marts_finance TO analyst; "

@@ -38,7 +38,12 @@ plus the provisioner's table SELECT grant options on core/marts. It installs an 
 procedure in the configured database's `VECTEN_ACCESS` schema. The procedure accepts only
 `ANALYST` or provisioner-owned reader roles, and the convention schemas, `RAW_<SOURCE>` schemas
 and schemas matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$` (restricted areas, by pattern, so declaring
-an area needs no rerun), and can grant/revoke only read privileges. Run setup under an administrator authorized to manage existing and future
+an area needs no rerun), and can grant/revoke only read privileges. A schema or area grant
+covers tables, views, materialized views, dynamic tables, external tables and Iceberg tables,
+each with its current and future grants; a kind the account refuses is listed in access health
+with Snowflake's message while the others apply. A dataset grant names its relation's kind
+from `INFORMATION_SCHEMA.TABLES`. On Postgres the helpers cover tables, partitioned tables,
+views, materialized views and foreign tables. Run setup under an administrator authorized to manage existing and future
 grants; that authority is kept on the procedure owner, never granted to provisioner.
 See Snowflake's [owner-rights procedure rules](https://docs.snowflake.com/en/developer-guide/stored-procedure/stored-procedures-rights)
 and [grant authority requirements](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#access-control-requirements).

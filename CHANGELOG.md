@@ -87,6 +87,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   procedures are version 3: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, area
   grants are refused and drift is neither listed nor revoked, while every other grant keeps
   reconciling ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- Read grants on Snowflake cover every relation kind a mart can be: a schema or area grant
+  grants and revokes `SELECT` on all and future tables, views, materialized views, dynamic
+  tables, external tables and Iceberg tables, and a dataset grant names its relation's kind. A
+  kind the account refuses is a failure in access health carrying Snowflake's message, and the
+  other kinds still apply; a refusal on tables or views fails the grant
+  ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
 ### Changed
 

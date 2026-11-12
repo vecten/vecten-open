@@ -355,6 +355,9 @@ def test_snowflake_grants_call_bounded_owner_procedure(grant):
             statements.append((sql, params))
             return self
 
+        def fetchone(self):
+            return ("ok",)
+
         def close(self):
             pass
 

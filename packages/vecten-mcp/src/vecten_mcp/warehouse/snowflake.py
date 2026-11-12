@@ -160,19 +160,25 @@ class SnowflakeAdapter:
             parts.insert(0, self.database)
         if parts[0].upper() != self.database.upper():
             raise ValueError("dataset must belong to the configured database")
-        self._grant(role, parts[1], parts[2], grant)
+        return self._grant(role, parts[1], parts[2], grant)
 
     def schema_grant(self, role, schema, grant=True):
-        self._grant(role, schema, None, grant)
+        return self._grant(role, schema, None, grant)
 
     def _grant(self, role, schema, relation, grant):
+        """`<shape> <kind>: <warehouse message>` for each relation kind READ_GRANT reports the
+        account refused; the other kinds were applied."""
         if role != "analyst":
             check_account(role)
         with self.control() as cursor:
-            cursor.execute(
+            row = cursor.execute(
                 f'CALL {quote(self.database)}."VECTEN_ACCESS".READ_GRANT(%s,%s,%s,%s)',
                 (role.upper(), schema.upper(), relation.upper() if relation else None, grant),
-            )
+            ).fetchone()
+        answer = str(row[0]) if row else ""
+        if not answer.startswith("refused: "):
+            return []
+        return [f"{r['kind']}: {r['error']}" for r in json.loads(answer.removeprefix("refused: "))]
 
     def access_version(self):
         """The installed procedures' version: READ_GRANT reports it when every argument is

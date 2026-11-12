@@ -31,7 +31,7 @@ def postgres_access_helpers():
 
 
 # An install from before the procedures reported a version is version 1; version 2 added
-# READ_GRANTS, version 3 the area schemas.
+# READ_GRANTS, version 3 the area schemas and every relation kind.
 ACCESS_VERSION = 3
 
 

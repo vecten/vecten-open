@@ -444,3 +444,29 @@ def test_an_area_no_longer_declared_is_closed_and_opens_again_once_declared():
     adapter.ops.clear()
     AccessService(state, adapter, areas={"finance"}).reconcile()
     assert ("schema", "finance", "marts_finance", True) in adapter.ops
+
+
+class RefusingIceberg(Adapter):
+    """A Snowflake account that refuses Iceberg table grants: READ_GRANT applies the other
+    kinds and reports the refused one."""
+
+    def schema_grant(self, role, schema, grant=True):
+        super().schema_grant(role, schema, grant)
+        return [f"FUTURE ICEBERG TABLES: unsupported feature 'ICEBERG' in {schema}"]
+
+
+def test_a_kind_the_warehouse_refuses_is_a_failure_with_its_message_and_the_grant_holds():
+    adapter = RefusingIceberg()
+    access = service(adapter, seeded=False)
+    access.create_group("finance")
+    row = access.grant("finance", "schema", "marts")
+    assert row["refused"] == [
+        "marts: FUTURE ICEBERG TABLES: unsupported feature 'ICEBERG' in marts"
+    ]
+    assert {"group": "finance", "kind": "schema", "target": "marts"} in access.list_grants()
+    result = access.reconcile()
+    [failure] = result["failures"]
+    assert (failure["group"], failure["kind"], failure["target"]) == ("finance", "schema", "marts")
+    assert failure["operation"] == "grant" and "unsupported feature 'ICEBERG'" in failure["error"]
+    assert result["reconciled"] == 1 and not result["complete"]
+    assert access.health()["failures"] == [failure]

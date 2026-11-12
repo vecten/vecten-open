@@ -40,6 +40,16 @@ process.stdout.write(JSON.stringify({value,statement}));
     assert output["statement"]["binds"] == ["RAW_APP", 'Orders";DROP TABLE x;--']
 
 
+KINDS = (
+    "TABLES",
+    "VIEWS",
+    "MATERIALIZED VIEWS",
+    "DYNAMIC TABLES",
+    "EXTERNAL TABLES",
+    "ICEBERG TABLES",
+)
+
+
 @pytest.mark.parametrize(
     ("target", "schema", "relation", "enabled", "owned", "error"),
     [
@@ -123,7 +133,7 @@ process.stdout.write(JSON.stringify({statements,error}));
         assert output["statements"] == []
     elif relation is None:
         verb = "GRANT" if enabled else "REVOKE"
-        for kind in ("TABLES", "VIEWS"):
+        for kind in KINDS:
             assert any(f"{verb} SELECT ON FUTURE {kind}" in s for s in output["statements"])
             assert any(f"{verb} SELECT ON ALL {kind}" in s for s in output["statements"])
     else:
@@ -260,3 +270,106 @@ def test_read_grants_keeps_read_grants_target_bounds(target, owned, error):
     else:
         assert error in output["error"], output
         assert not any(s.startswith("SHOW GRANTS TO") for s in output["statements"])
+
+
+KIND_RUN = r"""
+const fs = require('fs');
+const p = JSON.parse(fs.readFileSync(0, 'utf8'));
+const statements = [];
+const rows = (list) => {
+    let i = -1;
+    return {next: () => ++i < list.length, getColumnValue: (key) => list[i][key]};
+};
+const snowflake = {execute: ({sqlText}) => {
+    if (sqlText.startsWith('SHOW GRANTS ON ROLE')) {
+        return rows([{privilege:'OWNERSHIP', granted_to:'ROLE', grantee_name:'PROVISIONER'}]);
+    }
+    if (sqlText.startsWith('SELECT TABLE_TYPE')) return rows([{1: p.tableType}]);
+    const refused = p.refuse.find(part => sqlText.indexOf(part) !== -1);
+    if (refused) throw new Error('SQL compilation error: ' + refused + ' is not supported');
+    statements.push(sqlText);
+    return rows([]);
+}};
+const arg = v => v === null ? undefined : (typeof v === 'boolean' ? Number(v) : v);
+let value = null, error = null;
+try {
+    value = new Function('snowflake','TARGET','SCHEMA_NAME','RELATION_NAME','ENABLED',p.handler)(
+        snowflake, 'FINANCE', 'MARTS', arg(p.relation), arg(p.enabled));
+} catch (e) { error = String(e); }
+process.stdout.write(JSON.stringify({value, error, statements}));
+"""
+
+
+def _kinds(relation=None, enabled=True, table_type="BASE TABLE", refuse=()):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
+    handler = _script().split("$$")[1]
+    result = subprocess.run(
+        [node, "-e", KIND_RUN],
+        input=json.dumps(
+            dict(
+                handler=handler,
+                relation=relation,
+                enabled=enabled,
+                tableType=table_type,
+                refuse=list(refuse),
+            )
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_schema_grant_covers_every_relation_kind_now_and_in_future(enabled):
+    output = _kinds(enabled=enabled)
+    assert output["error"] is None and output["value"] == "ok", output
+    verb, direction = ("GRANT", "TO") if enabled else ("REVOKE", "FROM")
+    for kind in KINDS:
+        for shape in ("ALL", "FUTURE"):
+            statement = (
+                f'{verb} SELECT ON {shape} {kind} IN SCHEMA "D"."MARTS" {direction} ROLE "FINANCE"'
+            )
+            assert statement in output["statements"]
+
+
+def test_a_kind_the_account_refuses_is_reported_and_the_others_still_apply():
+    output = _kinds(enabled=False, refuse=["ICEBERG TABLES"])
+    assert output["error"] is None, output
+    assert output["value"].startswith("refused: ")
+    refusals = json.loads(output["value"].removeprefix("refused: "))
+    assert [r["kind"] for r in refusals] == ["ALL ICEBERG TABLES", "FUTURE ICEBERG TABLES"]
+    assert all("ICEBERG TABLES is not supported" in r["error"] for r in refusals)
+    assert any("DYNAMIC TABLES" in s for s in output["statements"])
+    assert 'REVOKE USAGE ON SCHEMA "D"."MARTS" FROM ROLE "FINANCE"' in output["statements"]
+
+
+def test_a_refused_table_grant_fails_the_whole_call():
+    output = _kinds(refuse=["ALL TABLES"])
+    assert "ALL TABLES is not supported" in output["error"]
+
+
+@pytest.mark.parametrize(
+    ("table_type", "refuse", "expected"),
+    [
+        ("BASE TABLE", (), "TABLE"),
+        ("VIEW", (), "VIEW"),
+        ("MATERIALIZED VIEW", (), "MATERIALIZED VIEW"),
+        ("EXTERNAL TABLE", (), "EXTERNAL TABLE"),
+        ("BASE TABLE", ("ON TABLE",), "DYNAMIC TABLE"),
+        ("BASE TABLE", ("ON TABLE", "ON DYNAMIC TABLE"), "ICEBERG TABLE"),
+    ],
+)
+def test_a_dataset_grant_names_its_relations_kind(table_type, refuse, expected):
+    output = _kinds(relation="ORDERS", table_type=table_type, refuse=refuse)
+    assert output["error"] is None and output["value"] == "ok", output
+    selects = [s for s in output["statements"] if " SELECT ON " in s]
+    assert selects == [f'GRANT SELECT ON {expected} "D"."MARTS"."ORDERS" TO ROLE "FINANCE"']
+
+
+def test_a_base_table_no_object_type_accepts_fails_with_the_first_refusal():
+    output = _kinds(relation="ORDERS", refuse=("ON TABLE", "ON DYNAMIC TABLE", "ON ICEBERG TABLE"))
+    assert "ON TABLE is not supported" in output["error"]

@@ -184,12 +184,25 @@ class AccessService:
         return None
 
     def _apply(self, grant, source, allowed):
+        """The relation kinds the warehouse refused, each with its message; the grant holds
+        for every other kind."""
         role = self.require_group(grant["group"])["warehouse_role"]
         if grant["kind"] == "dataset":
-            self.adapter.dataset_grant(role, source, allowed)
-            return
+            return list(self.adapter.dataset_grant(role, source, allowed) or [])
+        refused = []
         for schema in source if grant["kind"] == "area" else [source]:
-            self.adapter.schema_grant(role, schema, allowed)
+            kinds = self.adapter.schema_grant(role, schema, allowed) or []
+            refused += [f"{schema}: {kind}" for kind in kinds]
+        if refused:
+            logger.warning(
+                "%s of %s %s for %s left out: %s",
+                "Grant" if allowed else "Revoke",
+                grant["kind"],
+                grant["target"],
+                grant["group"],
+                "; ".join(refused),
+            )
+        return refused
 
     def grant(self, group, kind, target):
         self.require_group(group)
@@ -198,11 +211,11 @@ class AccessService:
             raise ValueError(f"areas need the current access procedures. {OUTDATED_FIX}")
         row = {"group": group, "kind": kind, "target": target}
         with self.lock:
-            self._apply(row, source, True)
+            refused = self._apply(row, source, True)
             key = self._key(group, kind, target)
             self.state.put("grants", key, row)
             self.state.put("applied_grants", key, dict(row, source=source))
-        return row
+        return dict(row, refused=refused) if refused else row
 
     def revoke(self, group, kind, target):
         self.require_group(group)
@@ -263,9 +276,11 @@ class AccessService:
                     role = self.require_group(row["group"])["warehouse_role"]
                     pieces = self._pieces(role, row["kind"], source)
                     absent = key not in applied if held is None else not pieces <= _folded(held)
-                    self._apply(row, source, True)
+                    refused = self._apply(row, source, True)
                     self.state.put("applied_grants", key, dict(row, source=source))
                     reconciled += 1
+                    if refused:
+                        failures.append(dict(row, operation="grant", error="; ".join(refused)))
                     if absent:
                         report["added"].append(dict(row))
                         logger.info("Granted %s %s to %s", row["kind"], row["target"], row["group"])
