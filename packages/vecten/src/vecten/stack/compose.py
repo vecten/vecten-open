@@ -18,6 +18,7 @@ from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.provider.local import local_pg_published_port
+from vecten_shared.services import Bound, bound_services
 from vecten_shared.sql import local_init_script_path, setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -295,6 +296,99 @@ def _airflow_common(
     return common
 
 
+SERVICES_NETWORK = "vecten-services"
+# The VM agent's DOCKER-USER rules match this interface name; Linux caps one at 15 characters.
+SERVICES_BRIDGE = "vecten-services"
+SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
+SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
+SERVICE_COMPONENT = "service"
+
+
+def _literal(value: str) -> str:
+    # Compose interpolates `$` in every string, so a declared value keeps its own text this way.
+    return value.replace("$", "$$")
+
+
+def _public_url(mode: str, label: str, hosts: dict[str, str]) -> str:
+    if mode == "local":
+        name = "localhost" if label == "@" else f"{label}.localhost"
+        return f"https://{name}:{LOCAL_HTTPS_PORT}"
+    # An environment's domain comes from its tfvars, so it is read off its built-in names.
+    builtin = hosts.get("mcp") or hosts["airflow"]
+    domain = builtin.split(".", 1)[1]
+    return f"https://{domain if label == '@' else f'{label}.{domain}'}"
+
+
+def _service(
+    bound: Bound,
+    mode: str,
+    project: str,
+    hosts: dict[str, str],
+    stack_dir: Path,
+) -> dict:
+    declared, root = bound.service, SERVICE_ROOTS[bound.host]
+    environment = {
+        "VECTEN_ENV": "local" if mode == "local" else "${VECTEN_ENV}",
+        "VECTEN_COMPONENT": SERVICE_COMPONENT,
+        "VECTEN_SERVICE": bound.key,
+        "VECTEN_PROJECT_ROOT": root,
+    }
+    if declared.port is not None:
+        environment["PORT"] = str(declared.port)
+    if bound.binding.hostname is not None:
+        environment["VECTEN_PUBLIC_URL"] = _public_url(mode, bound.binding.hostname, hosts)
+    # Only the extension's own names its host may read: no cloud key, no stack variable.
+    entry = project_record(stack_dir).get(bound.extension)
+    secrets = sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+    for secret in secrets:
+        if secret in environment:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"declared secret {secret} collides with a service variable; rename the secret",
+            )
+    _add_secrets(environment, secrets, "declared")
+    if declared.health_path is not None:
+        url = f"http://localhost:{declared.port}{declared.health_path}"
+        test = ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", url]
+    else:
+        test = ["CMD", *(_literal(arg) for arg in declared.health_command or ())]
+    volumes = [f"../../vecten.toml:{root}/vecten.toml:ro", *_record_mount(stack_dir, root)]
+    if declared.volume is not None:
+        volumes.append(f"{bound.compose_name}-data:{declared.volume}")
+    return {
+        "image": f"{project}-{SERVICE_IMAGES[bound.host]}:{VERSIONS.vecten}",
+        # The host component's own service builds this image; a service only runs it.
+        "pull_policy": "never",
+        "profiles": [bound.host],
+        "command": [_literal(arg) for arg in declared.command],
+        "environment": environment,
+        "volumes": volumes,
+        "mem_limit": f"{bound.memory_mb}m",
+        "cpus": bound.cpus,
+        "networks": [SERVICES_NETWORK],
+        "healthcheck": {
+            "test": test,
+            "interval": "10s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "30s",
+        },
+        "restart": "unless-stopped",
+    }
+
+
+def services_to_run(
+    config: VectenConfig, mode: str, host_components: list[str], stack_dir: Path
+) -> list[Bound]:
+    """The bound services this stack runs: those placed on its components, and on the laptop
+    only those that do not opt out."""
+    return [
+        bound
+        for bound in bound_services(config, project_record(stack_dir))
+        if bound.host in host_components and (mode != "local" or bound.binding.local)
+    ]
+
+
 def _postgres(config: VectenConfig) -> dict:
     with_mcp = config.has("mcp")
     environment = {
@@ -502,7 +596,20 @@ def generate_compose(
         "depends_on": nginx_depends,
         "restart": "unless-stopped",
     }
+    running = services_to_run(config, mode, host_components, stack_dir)
+    for bound in running:
+        services[bound.compose_name] = _service(bound, mode, project, hosts, stack_dir)
+        if bound.service.volume is not None:
+            volumes[f"{bound.compose_name}-data"] = {}
     document = {"name": project, "services": services, "volumes": volumes}
+    if running:
+        services["nginx"]["networks"] = ["default", SERVICES_NETWORK]
+        network = (
+            {"driver_opts": {"com.docker.network.bridge.name": SERVICES_BRIDGE}}
+            if mode == "vm"
+            else {}
+        )
+        document["networks"] = {SERVICES_NETWORK: network}
     if config.packages.private_index:
         secrets = {}
         for name, service in services.items():

@@ -193,6 +193,31 @@ def _wanted(root: Path, config: VectenConfig, component: str) -> list[Requiremen
     return wanted
 
 
+def volume_step(config: VectenConfig, root: Path, kind: str) -> str:
+    """Create each declared service volume path owned by the image's runtime user.
+
+    Docker seeds an empty named volume with the ownership of the image's directory at the mount
+    path, so a path the image lacks would come up owned by root and unwritable.
+    """
+    if not config.services:
+        return ""
+    from vecten_shared.extension_record import read_record
+    from vecten_shared.services import bound_services
+
+    component = "platform" if kind == "airflow" else "mcp"
+    paths = sorted(
+        {
+            bound.service.volume
+            for bound in bound_services(config, read_record(root) or {})
+            if bound.host == component and bound.service.volume is not None
+        }
+    )
+    if not paths:
+        return ""
+    user, quoted = IMAGE_USERS[kind], " ".join(shlex.quote(p) for p in paths)
+    return f"USER root\nRUN mkdir -p {quoted} && chown {user} {quoted}\nUSER {user}\n"
+
+
 def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | None) -> None:
     from vecten import locking
 
@@ -300,5 +325,6 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         write_text_atomic(
             build_dir / f"{kind}.Dockerfile",
             f"FROM {base_image(kind, registry)}\n"
-            f"{_system_step(config, kind)}{install if lines or local else ''}",
+            f"{_system_step(config, kind)}{install if lines or local else ''}"
+            f"{volume_step(config, root, kind)}",
         )
