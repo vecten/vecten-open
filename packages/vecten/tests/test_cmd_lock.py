@@ -189,7 +189,7 @@ def test_resolve_lock_seeds_the_output_with_the_previous_lock_and_passes_upgrade
 ):
     seen = {}
 
-    def uv(args, root, cwd=None, copies=()):
+    def uv(args, root, cwd=None, served=None):
         out = Path(args[args.index("--output-file") + 1])
         seen["seeded"] = out.read_text()
         seen["args"] = args

@@ -669,6 +669,42 @@ def fetch(
     return into
 
 
+def serve(commits: list[tuple[Path, str]], into: Path) -> Path:
+    """A bare repository at `into` holding each `(repository, commit)` pair's commit, read
+    from the repository `fetch` wrote, as a branch, with HEAD detached at the first.
+
+    One repository serves every recorded commit of a URL, so a single URL rewrite reaches
+    them all; a client that fetches a remote's branches and HEAD, as uv does, finds each."""
+    if not commits:
+        raise ValueError("serve needs at least one commit")
+    into = Path(os.path.abspath(into))
+    if into.exists() and (not into.is_dir() or any(into.iterdir())):
+        raise Failure(ExitCode.REFUSED, f"{into} must be absent or empty to serve git sources")
+    into.mkdir(parents=True, exist_ok=True)
+    object_format = "sha256" if len(commits[0][1]) == 64 else "sha1"
+    run = _local(into)
+    # The copies are local repositories; nothing here reaches a network.
+    run = replace(run, env={**run.env, "GIT_ALLOW_PROTOCOL": "file"})
+    steps = [["init", "--quiet", "--bare", "--template=", f"--object-format={object_format}"]]
+    for repository, commit in commits:
+        steps.append(
+            [
+                "fetch",
+                "--quiet",
+                "--depth",
+                "1",
+                "--no-tags",
+                f"file://{os.path.abspath(repository)}",
+                f"+{commit}:refs/heads/vecten/{commit}",
+            ]
+        )
+    steps.append(["update-ref", "--no-deref", "HEAD", commits[0][1]])
+    for args in steps:
+        if _git(args, run).returncode != 0:
+            raise Failure(ExitCode.TOOL_FAILED, f"git could not prepare the sources in {into}")
+    return into
+
+
 def _peel(into: Path, ref: str) -> str:
     result = _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], _local(into))
     return result.stdout.strip()

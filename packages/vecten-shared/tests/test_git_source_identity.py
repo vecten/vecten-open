@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from vecten_shared import git_sources
 from vecten_shared.extension_record import Extension, GitOrigin, parse_record, record_text
 from vecten_shared.git_sources import SOURCE_REF, checkout, source_sha256
 from vecten_shared.output import ExitCode, Failure
@@ -58,7 +59,7 @@ def _files(directory: Path, order=None) -> Path:
 def _bare(tmp_path: Path, populate) -> tuple[Path, str]:
     """A bare repository holding one commit of the tree `populate` writes, at SOURCE_REF."""
     work = tmp_path / "work"
-    work.mkdir()
+    work.mkdir(parents=True)
     _git("init", "-q", "-b", "main", cwd=work)
     populate(work)
     _git("add", "-A", cwd=work)
@@ -309,3 +310,16 @@ def test_verify_refuses_a_missing_directory_and_an_unreadable_record(tmp_path):
 
 def test_verify_takes_exactly_a_directory_and_a_record(tmp_path):
     assert _verify(str(tmp_path)).returncode == ExitCode.USAGE
+
+
+# --- serving recorded commits to uv ---------------------------------------------------------
+
+
+def test_one_served_repository_lists_every_commit_as_a_branch(tmp_path):
+    first, one = _bare(tmp_path / "a", _files)
+    second, two = _bare(tmp_path / "b", lambda work: _files(work / "other"))
+    served = git_sources.serve([(first, one), (second, two)], tmp_path / "served.git")
+    listed = _git("ls-remote", f"file://{served}", "HEAD", "refs/heads/*", cwd=tmp_path)
+    found = {row.split()[0] for row in listed.splitlines()}
+    assert {one, two} <= found
+    assert _git("rev-parse", "HEAD", cwd=served) == one

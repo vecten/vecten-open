@@ -192,27 +192,40 @@ def check_tag_version(copy: Copy) -> None:
         )
 
 
-def uv_settings(base: Mapping[str, str], copies: Iterable[Copy]) -> dict[str, str]:
-    """`base` for uv while git sources are locked: uv's own git reads each source from its
-    fetched copy and reaches nothing else, and uv asks GitHub's API nothing."""
-    copies = list(copies)
+def serve_copies(copies: Iterable[Copy], workdir: Path) -> dict[str, Path]:
+    """One repository per source URL, under `workdir`, holding every commit fetched from it."""
+    by_url: dict[str, list[Copy]] = {}
+    for copy in copies:
+        by_url.setdefault(copy.origin.url, []).append(copy)
+    served = {}
+    for url, found in sorted(by_url.items()):
+        pairs = sorted({(c.repository, c.origin.commit) for c in found}, key=lambda p: p[1])
+        into = Path(tempfile.mkdtemp(prefix="served-", dir=workdir)) / "repository.git"
+        served[url] = git_sources.serve(pairs, into)
+    return served
+
+
+def uv_settings(base: Mapping[str, str], served: Mapping[str, Path]) -> dict[str, str]:
+    """`base` for uv: never a git credential, and while git sources are locked, a git that
+    reads each source URL from the repository `served` names for it and reaches nothing else,
+    with GitHub's API left unasked."""
+    env = {name: value for name, value in base.items() if name not in CREDENTIAL_VARIABLES}
+    if not served:
+        return env
     env = {
         name: value
-        for name, value in base.items()
-        if name not in CREDENTIAL_VARIABLES
-        and (not name.startswith("GIT_") or name in git_sources.KEPT_GIT_VARIABLES)
+        for name, value in env.items()
+        if (not name.startswith("GIT_") or name in git_sources.KEPT_GIT_VARIABLES)
         and name not in git_sources.DROPPED_VARIABLES
     }
-    if not copies:
-        return env
     settings = [git_sources.NO_HELPER]
-    for copy in sorted(copies, key=lambda c: c.origin.url):
-        settings.append((f"url.file://{copy.repository}.insteadOf", copy.origin.url))
+    for url, repository in sorted(served.items()):
+        settings.append((f"url.file://{repository}.insteadOf", url))
     env.update(
         GIT_CONFIG_GLOBAL=os.devnull,
         GIT_CONFIG_NOSYSTEM="1",
         GIT_TERMINAL_PROMPT="0",
-        # Every source is rewritten to its copy, so git never needs another transport.
+        # Every source is rewritten to a local repository, so git never needs another transport.
         GIT_ALLOW_PROTOCOL="file",
         UV_NO_GITHUB_FAST_PATH="1",
         GIT_CONFIG_COUNT=str(len(settings)),

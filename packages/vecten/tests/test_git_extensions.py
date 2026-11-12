@@ -25,6 +25,7 @@ from vecten_shared.git_sources import SOURCE_REF, checkout, source_sha256
 NAME = "acme-resolution"
 REPOSITORY = "acme/extensions.git"
 SUBDIRECTORY = f"extensions/{NAME}"
+PORTAL = "acme-portal"
 
 PYPROJECT = """[project]
 name = "{name}"
@@ -92,6 +93,12 @@ class Remote:
         self.release("acme-resolution/v-link", version='version = "1.2.0"', link=True)
         self.release("acme-resolution/v-renamed", version='version = "1.2.0"', name="acme-other")
         self.release("acme-resolution/v1.4.0", version='version = "1.4.0"')
+        self.release(
+            "acme-portal/v0.3.0",
+            version='version = "0.3.0"',
+            name=PORTAL,
+            directory=f"extensions/{PORTAL}",
+        )
         self.release("moving", version='version = "1.2.0"')
         _git("branch", "release-branch", cwd=work)
         self.bare = root / REPOSITORY
@@ -122,8 +129,15 @@ class Remote:
         if link:
             (package / "shared").symlink_to("../../..")
 
-    def release(self, tag: str, version: str, link: bool = False, name: str = NAME) -> str:
-        self._package(self.work / SUBDIRECTORY, name, version, link)
+    def release(
+        self,
+        tag: str,
+        version: str,
+        link: bool = False,
+        name: str = NAME,
+        directory: str = SUBDIRECTORY,
+    ) -> str:
+        self._package(self.work / directory, name, version, link)
         _git("add", "-A", cwd=self.work)
         _git("commit", "-qm", tag, cwd=self.work)
         _git("tag", "-a", tag, "-m", tag, cwd=self.work)
@@ -167,25 +181,19 @@ with open({log!r}, "a") as log:
 if args[1:3] != ["pip", "compile"]:
     sys.exit(0)
 env = os.environ
-rewrites = {{
-    env[f"GIT_CONFIG_VALUE_{{i}}"]: env[f"GIT_CONFIG_KEY_{{i}}"]
-    for i in range(int(env.get("GIT_CONFIG_COUNT", "0")))
-    if env[f"GIT_CONFIG_KEY_{{i}}"].lower().endswith(".insteadof")
-}}
 out = []
 for line in open(args[3]).read().splitlines():
     if " @ " in line:
         name, url = line.split(" @ ")
         location, _, fragment = url[len("git+"):].partition("#")
         repository, _, commit = location.rpartition("@")
-        key = rewrites.get(repository)
-        copy = key[len("url.file://"):-len(".insteadof")] if key else None
-        # uv fetches the commit and the copy's HEAD.
-        found = copy and subprocess.run(
-            ["git", "--git-dir", copy, "rev-parse", "--verify", "HEAD^{{commit}}"],
-            capture_output=True, text=True,
-        ).stdout.strip() == commit
-        if not found:
+        # uv's git, with uv's environment, fetches the remote's HEAD and branches, so the
+        # commit must be among them wherever git's rewrite of the URL leads.
+        listed = subprocess.run(
+            ["git", "ls-remote", repository, "HEAD", "refs/heads/*"],
+            capture_output=True, text=True, cwd=os.path.dirname({log!r}),
+        )
+        if commit not in {{row.split()[0] for row in listed.stdout.splitlines()}}:
             sys.exit("uv: no copy of " + repository + " holds " + commit)
         out.append(name.split("[")[0] + " @ " + url)
     elif line.startswith("./"):
@@ -300,6 +308,24 @@ def test_add_from_a_prefixed_tag_in_a_monorepo_records_the_commit_everywhere(inv
     assert data["groups"] == ["vecten.dags"]
     assert locking.lock_problems(root, load_config(root)) == []
     assert locking.git_problems(root, load_config(root)) == []
+
+
+def test_two_extensions_of_one_repository_at_different_commits_lock_together(invoke, served):
+    assert _add(invoke, served, "acme-resolution/v1.2.0").exit_code == 0
+    portal = (
+        f"{PORTAL} @ git+{served.server.url}/{REPOSITORY}@acme-portal/v0.3.0"
+        f"#subdirectory=extensions/{PORTAL}"
+    )
+    r = invoke("extension", "add", portal, "--json")
+    assert r.exit_code == 0, r.output
+    r = invoke("lock", "--json")
+    assert r.exit_code == 0, r.output
+    commits = {served.commits.commits[t] for t in ("acme-resolution/v1.2.0", "acme-portal/v0.3.0")}
+    assert len(commits) == 2
+    for name in locking.LOCK_FILES.values():
+        assert {line.split("@")[2].split("#")[0] for line in _lock_lines(served.root, name)} == (
+            commits
+        )
 
 
 def test_the_token_reaches_no_argument_record_output_or_build_environment(
@@ -641,6 +667,6 @@ def test_inputs_lines_change_with_the_commit(invoke, served):
 def test_uv_never_sees_a_credential_even_without_git_sources(project, monkeypatch):
     monkeypatch.setenv("GIT_CREDENTIALS", "https://u:t@example.com")
     monkeypatch.setenv("MCP_GIT_CREDENTIALS", "https://u:t@example.com")
-    env = extensions.uv_environment(project, ())
+    env = extensions.uv_environment(project)
     assert "GIT_CREDENTIALS" not in env and "MCP_GIT_CREDENTIALS" not in env
     assert "UV_NO_GITHUB_FAST_PATH" not in env

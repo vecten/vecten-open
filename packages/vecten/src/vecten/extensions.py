@@ -11,7 +11,7 @@ import sys
 import sysconfig
 import tempfile
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path, PurePosixPath
@@ -59,21 +59,21 @@ def package_environment(root: Path) -> dict[str, str]:
     return env
 
 
-def uv_environment(root: Path, copies: Iterable[git_extensions.Copy] = ()) -> dict[str, str]:
+def uv_environment(root: Path, served: Mapping[str, Path] | None = None) -> dict[str, str]:
     """The environment uv and the build backends it runs get: never a git credential, and
-    with git sources, a git that reads each one from its fetched copy alone."""
-    return git_extensions.uv_settings(package_environment(root), copies)
+    with git sources, a git that reads each one from the repository serving its URL."""
+    return git_extensions.uv_settings(package_environment(root), served or {})
 
 
 def _uv(
     args: list[str],
     root: Path,
     cwd: Path | None = None,
-    copies: Iterable[git_extensions.Copy] = (),
+    served: Mapping[str, Path] | None = None,
 ) -> None:
     if not shutil.which("uv"):
         raise Failure(ExitCode.PREREQUISITE, "install uv to manage extension dependencies")
-    env = uv_environment(root, copies)
+    env = uv_environment(root, served)
     try:
         result = subprocess.run(
             ["uv", "--no-config", *args],
@@ -255,12 +255,14 @@ def resolve_lock(
     upgrade: tuple[str, ...] = (),
     cwd: Path | None = None,
     sources: Mapping[str, tuple[git_extensions.Copy, str]] | None = None,
+    served: Mapping[str, Path] | None = None,
 ) -> str:
     """Resolve `requirements`, keeping every pin of `previous` that still satisfies them.
 
     A `./extensions/<name>` input resolves against `cwd`; uv echoes its line as given. Each
-    of `sources`, by name, is a git source's fetched copy and its record line: uv reads the
-    source from the copy, and its line in the output is replaced by the record line.
+    of `sources`, by name, is a git source's fetched copy and its record line, and `served`
+    the repository serving each source URL: uv reads the sources from those, and a source's
+    line in the output is replaced by its record line.
     """
     sources = sources or {}
     with tempfile.TemporaryDirectory(prefix="vecten-lock-") as temp:
@@ -290,7 +292,7 @@ def resolve_lock(
             ],
             root,
             cwd=cwd,
-            copies=[copy for copy, _ in sources.values()],
+            served=served,
         )
         text = lock.read_text()
         from packaging.requirements import InvalidRequirement, Requirement
@@ -560,6 +562,7 @@ def _lock_project(
 ) -> tuple[dict[Path, str], dict]:
     pins, record, copies = _extension_pins(root, config, added, fetched)
     sources = {name: (copy, pins[name]) for name, copy in copies.items()}
+    served = git_extensions.serve_copies(copies.values(), fetched)
     locks = {}
     for component in locking.components(config):
         lock_roots = locking.roots(config, pins, record, component)
@@ -577,6 +580,7 @@ def _lock_project(
                 upgrade=upgrade,
                 cwd=root,
                 sources=sources,
+                served=served,
             )
         except Failure as failure:
             raise Failure(failure.code, f"{name}: {failure.message}") from None
