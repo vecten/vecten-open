@@ -15,7 +15,7 @@ from vecten_shared.config import VectenConfig, stack_project_name
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
-from vecten_shared.provider.local import LOCAL_PG_PUBLISHED_PORT
+from vecten_shared.provider.local import local_pg_published_port
 from vecten_shared.sql import local_init_script_path, setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -259,7 +259,7 @@ def _postgres(config: VectenConfig) -> dict:
         "profiles": ["local"],
         "command": ["postgres", "-c", "log_line_prefix=%m [%p] %u@%d app=%a "],
         "environment": environment,
-        "ports": [f"127.0.0.1:{LOCAL_PG_PUBLISHED_PORT}:5432"],
+        "ports": [f"127.0.0.1:{local_pg_published_port()}:5432"],
         "volumes": [
             "postgres-data:/var/lib/postgresql/data",
             "./pg-init:/docker-entrypoint-initdb.d:ro",

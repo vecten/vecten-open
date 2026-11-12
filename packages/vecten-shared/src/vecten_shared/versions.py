@@ -45,6 +45,7 @@ class Versions:
     ruff: str
     github_runner: str
     github_actions: dict[str, str]
+    ci_playwright_image: str
     vecten_convention: str
     ossie_spec: str
     schema_convention: int
@@ -89,6 +90,7 @@ def _load() -> Versions:
         ruff=raw["tools"]["ruff"],
         github_runner=raw["github_actions"]["runner"],
         github_actions={k: v for k, v in raw["github_actions"].items() if k != "runner"},
+        ci_playwright_image=raw["ci"]["playwright_image"],
         vecten_convention=raw["dbt_packages"]["vecten_convention"],
         ossie_spec=raw["specs"]["ossie"],
         schema_convention=raw["specs"]["schema_convention"],
