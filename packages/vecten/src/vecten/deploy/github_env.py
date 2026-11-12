@@ -562,12 +562,20 @@ def follow_push_run(
 
 
 def dispatch_and_follow(
-    project_root: Path, workflow: str, env: str, gh: ToolRunner, git: ToolRunner
+    project_root: Path,
+    workflow: str,
+    env: str,
+    gh: ToolRunner,
+    git: ToolRunner,
+    *,
+    commit: str | None = None,
 ) -> dict:
     """Run `workflow` on the default branch for `env` and wait for its conclusion.
 
-    The result's `matches_local_head` says whether the run built this checkout's HEAD; the
-    workflow always runs the default branch as GitHub holds it.
+    The workflow always runs the default branch as GitHub holds it. With `commit` it ships
+    that commit, which the result names as `commit`; the run's `head_sha` stays the default
+    branch's. The result's `matches_local_head` says whether the run's head is this
+    checkout's HEAD.
     """
     config = load_config(project_root)
     if config.deploy is None:
@@ -588,6 +596,7 @@ def dispatch_and_follow(
         branch,
         "-f",
         f"environment={env}",
+        *(["-f", f"commit={commit}"] if commit else []),
         "--repo",
         repository,
     )
@@ -596,7 +605,7 @@ def dispatch_and_follow(
     url, head_sha, conclusion = _follow(
         gh, project_root, repository, workflow, run, f"{workflow} for {env}"
     )
-    return {
+    followed = {
         "run_id": run_id,
         "head_sha": head_sha,
         "conclusion": conclusion,
@@ -604,3 +613,4 @@ def dispatch_and_follow(
         "branch": branch,
         "matches_local_head": head_sha == head_commit(git, project_root),
     }
+    return {**followed, "commit": commit} if commit else followed

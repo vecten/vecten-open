@@ -99,6 +99,28 @@ def require_on_default_branch(
     return branch
 
 
+def require_commit_on_default_branch(
+    project_root: Path, git: ToolRunner, branch: str, commit: str
+) -> None:
+    """Refuse `commit` unless the remote default branch holds it.
+
+    Every environment deploys from the default branch only, so a commit only a feature
+    branch holds has not passed review.
+    """
+    _git(git, project_root, "fetch", "origin", branch)
+    ancestry_args = ["merge-base", "--is-ancestor", commit, "FETCH_HEAD"]
+    ancestry = git.run(ancestry_args, project_root)
+    # `--is-ancestor` exits 1 for "not an ancestor"; any other non-zero exit is an error.
+    if ancestry.returncode == 1:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"commit {commit[:8]} is not on origin/{branch}; every environment ships only "
+            f"commits of {branch}, so merge it to {branch} first",
+        )
+    if ancestry.returncode != 0:
+        raise _git_failure(ancestry_args, ancestry)
+
+
 def require_deployed(config: VectenConfig, env: str) -> None:
     if not is_deployed(config, env):
         raise Failure(

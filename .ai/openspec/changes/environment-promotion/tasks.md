@@ -12,11 +12,11 @@
 
 ## 3. Shipping a given commit
 
-- [ ] 3.1 `ship --env <env> --commit <sha>` inside Actions: ancestry check against the remote default branch; for a later environment, the previous environment's status check; bundle and tfvars from the commit; `[environments.<env>]` facts from the working tree's head
-- [ ] 3.2 `ship --env <later env>` outside Actions refuses, naming `promote`; `ship --check` without `--env` reports the first environment and its facts
-- [ ] 3.3 `deploy --env <later env> [--commit]`: resolve the commit, dispatch the apply workflow with it, record it as `deployed_commit`; Terraform roots and tfvars from the commit
-- [ ] 3.4 `dispatch_and_follow` passes `commit`, and the result reports the commit that was shipped rather than the run's `head_sha`
-- [ ] 3.5 Tests: every refusal, the facts read from the head while content comes from the commit, the dispatch arguments
+- [x] 3.1 `ship --env <env> --commit <sha>` inside Actions: ancestry check against the remote default branch; for a later environment, the previous environment's status check; bundle and tfvars from the commit; `[environments.<env>]` facts from the working tree's head
+- [x] 3.2 `ship --env <later env>` outside Actions refuses, naming `promote`; `ship --check` without `--env` reports the first environment and its facts
+- [x] 3.3 `deploy --env <later env> [--commit]`: resolve the commit, dispatch the apply workflow with it, record it as `deployed_commit`; Terraform roots and tfvars from the commit
+- [x] 3.4 `dispatch_and_follow` passes `commit`, and the result reports the commit that was shipped rather than the run's `head_sha`
+- [x] 3.5 Tests: every refusal, the facts read from the head while content comes from the commit, the dispatch arguments
 
 ## 4. `vecten promote`
 

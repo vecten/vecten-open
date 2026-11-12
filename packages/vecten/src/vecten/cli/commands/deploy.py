@@ -56,20 +56,31 @@ def _service_lines(data: dict) -> list[str]:
 def ship(
     env: str | None = typer.Option(None, "--env", help="The environment to ship to."),
     check: bool = typer.Option(
-        False, "--check", help="Report whether the environment is bootstrapped and deployed."
+        False,
+        "--check",
+        help="Report whether the environment is bootstrapped and deployed; without --env, "
+        "for the first environment of the promotion order.",
+    ),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="Inside GitHub Actions, the default branch's commit to ship instead of the "
+        "checked-out one.",
     ),
     json_output: bool = JsonFlag,
 ) -> None:
     """Send the project's content to every host of an environment; never runs Terraform."""
 
     def run(ctx: CliContext) -> Result:
-        if not env:
+        if not env and not check:
             raise Failure(ExitCode.USAGE, "ship needs --env <env>")
         # Deferred so that importing the CLI loads no deploy machinery or boto3.
         from vecten.deploy.run import ship_env
 
         root = ctx.require_project()
-        data = ship_env(root, env, gh=gh_mod.get_gh(), git=gh_mod.get_git(), check=check)
+        data = ship_env(
+            root, env or None, gh=gh_mod.get_gh(), git=gh_mod.get_git(), check=check, commit=commit
+        )
         return Result(data=data, message=_facts_message(data) if check else _ship_message(data))
 
     run_command(json_output, run)
@@ -190,6 +201,12 @@ def deploy(
         "--cloud-only",
         help="With --plan-only, plan the cloud root alone and read no Snowflake secret.",
     ),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="For an environment after the first in the promotion order, a commit the "
+        "environment before it shipped, instead of the newest one.",
+    ),
     json_output: bool = JsonFlag,
 ) -> None:
     """Create or update an environment's infrastructure and ship every host. Inside GitHub
@@ -213,6 +230,7 @@ def deploy(
             git=gh_mod.get_git(),
             terraform=get_terraform(),
             cloud_only=cloud_only,
+            commit=commit,
         )
         return Result(data=data, message=_facts_message(data) if check else _deploy_message(data))
 

@@ -1,5 +1,7 @@
 """The promotion order as the CLI reads it, and the commit statuses that record each ship."""
 
+import re
+
 import pytest
 
 from vecten.deploy import github_env
@@ -21,9 +23,9 @@ def ordered(root, order=("dev", "prod"), version="0.1.1", tfvars=("dev",)):
     """Declare `order` in vecten.toml under `version`, with a tfvars file for each of `tfvars`."""
     prod = root / "deploy" / "envs" / "prod.tfvars"
     for env in tfvars:
-        (root / "deploy" / "envs" / f"{env}.tfvars").write_text(
-            prod.read_text().replace('environment = "prod"', f'environment = "{env}"')
-        )
+        text = re.sub(r'(?m)^(environment\s*=\s*)"prod"', rf'\1"{env}"', prod.read_text())
+        assert f'"{env}"' in text
+        (root / "deploy" / "envs" / f"{env}.tfvars").write_text(text)
     text = (root / "vecten.toml").read_text()
     text = text.replace("scaffold_version = ", f'scaffold_version = "{version}"\n# ', 1)
     names = ", ".join(f'"{env}"' for env in order)
