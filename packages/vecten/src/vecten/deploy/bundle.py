@@ -31,8 +31,8 @@ from vecten.github.gh import ToolRunner, get_git
 from vecten.stack.compose import (
     PROJECT_MOUNTS,
     STACK_DIR,
-    connector_secrets,
     generate_compose,
+    platform_secrets,
     vm_hostnames,
     write_extension_dag_loader,
 )
@@ -40,6 +40,7 @@ from vecten.stack.images import write_project_layer
 from vecten.stack.nginx import write_nginx
 from vecten.stack.up import PUBLISHED_REGISTRY
 from vecten_shared.config import VectenConfig
+from vecten_shared.extension_record import Extension, read_record
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.records import write_text_atomic
@@ -234,6 +235,7 @@ def host_document(
     host: str,
     commit: str,
     tfvars: dict[str, Any],
+    record: dict[str, Extension] | None = None,
 ) -> dict[str, Any]:
     if config.deploy is None:
         raise Failure(ExitCode.REFUSED, "no deploy answers; run `vecten init --deploy` first")
@@ -253,7 +255,8 @@ def host_document(
         "hostnames": list(outputs.hosts[host].hostnames),
         "secret_prefix": outputs.secret_prefix,
         "compose_project": compose_project(config, env),
-        "connector_secrets": connector_secrets(config),
+        # Every platform name the project and its extensions declare, not connectors' alone.
+        "connector_secrets": platform_secrets(config, record or {}),
         "private_package_index": config.packages.private_index,
         "compose_plugin_version": VERSIONS.docker_compose_plugin,
         "buildx_plugin_version": VERSIONS.docker_buildx_plugin,
@@ -345,7 +348,9 @@ def build_host_bundle(
             f"host {host!r} is not in the outputs of {env!r}; hosts: {', '.join(outputs.hosts)}",
         )
     tfvars = check_tfvars(project_root, config, env)
-    host_doc = host_document(config, env, outputs, host, commit, tfvars)
+    host_doc = host_document(
+        config, env, outputs, host, commit, tfvars, read_record(project_root) or {}
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / bundle_name(host, commit)
     with tempfile.TemporaryDirectory(dir=out_dir, prefix=".bundle-") as tmp:
