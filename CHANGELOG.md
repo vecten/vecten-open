@@ -63,6 +63,16 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   and `test` and `source freshness` are refused while the project declares on-run hooks or a
   test stores its failures. Every command runs on other environments. A Postgres project is
   refused, because its deployed warehouse is on a private network.
+- Restricted areas, in the schema convention's version 2, a superset of version 1:
+  `[areas.<area>]` in `vecten.toml`, with an optional `access.groups` list, declares the
+  schemas `core_<area>` and `marts_<area>`, which no warehouse role reads until an admin grants
+  the area to a group. Their models follow the core and marts rules, each mart in
+  `marts_<area>` becomes a dataset whose source names that schema, and
+  `convention_model_naming` fails a model in a `core_<name>` or `marts_<name>` schema whose
+  area is not declared. `vecten dbt-build-local` and the dbt DAG pass the declared areas to
+  dbt as the var `vecten_areas`. `vecten update` moves an existing project's
+  `docs/schema-convention.md` and `convention_version` to version 2
+  ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
 ### Changed
 

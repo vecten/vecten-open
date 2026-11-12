@@ -214,6 +214,35 @@ people will ask, and propose a mart for them.
           meta: {osi: {synonyms: [value, deal size]}}
 ```
 
+### Restricted areas
+
+When the human says a group alone may read some marts, such as finance figures, they belong in
+a restricted area, which `vecten.toml` declares as `[areas.<area>]` (lowercase letters and
+digits, no underscore). Its marts go to `dbt/models/marts_<area>/` and the core models only
+they read to `dbt/models/core_<area>/`, each folder configured in `dbt/dbt_project.yml`:
+
+```yaml
+models:
+  acme:
+    core_finance:
+      +schema: core_finance
+      +materialized: table
+    marts_finance:
+      +schema: marts_finance
+      +materialized: table
+```
+
+A core model whose rows the default group must not read goes to `core_<area>`, even when it is
+an ordinary entity such as `invoice`; leaving it in `core` lets the default group read the facts
+the area hides. A core model that unrestricted marts also read stays in `core`. Area models
+follow their layer's rules, and each mart in `marts_<area>` is a dataset. No role reads an area
+until an admin grants it, so declaring the area is the human's decision, never yours. dbt can
+still copy restricted rows into an unrestricted schema; never build a `core` or `marts` model
+from an area's models.
+
+Never set dbt's `grants` config or a granting post-hook: the MCP owns every read grant, and
+`convention_no_grants` fails the build.
+
 ## 7. Build until green
 
 ```bash
@@ -241,15 +270,16 @@ the marts. The document carries `ok`,
   `osi/metrics.json` that reads a mart you renamed or removed. Metrics are the `semantic`
   skill's; tell the human which metric and why.
 
-The four convention tests fail as nodes of those names, each message reading
+The five convention tests fail as nodes of those names, each message reading
 `model <name>: <reason>`:
 
 | Test | What a failure means | Fix |
 |---|---|---|
-| `convention_model_naming` | A model's name breaks its layer's rule, or it lands outside `staging`, `snapshots`, `core` and `marts`. | Rename the file and every `ref` to it. |
+| `convention_model_naming` | A model's name breaks its layer's rule, or it lands outside `staging`, `snapshots`, `core`, `marts` and the declared areas' schemas. "add [areas.<area>]" names an area `vecten.toml` does not declare. | Rename the file and every `ref` to it; for an area, fix a misspelt `+schema`, or ask the human whether to declare the area. |
 | `convention_descriptions` | A core or mart model or column has no description, or a built column is not declared in `schema.yml`. | Declare and describe it. |
 | `convention_core_primary_key` | A core model has no column tested both `unique` and `not_null`. | Test the key column. |
 | `convention_staging_load_metadata` | A staging model lacks `_loaded_at` or `_source`. | Add both columns. |
+| `convention_no_grants` | A model, snapshot or seed sets dbt's `grants` config, or a Snowflake model sets `copy_grants` to `false`. | Remove the setting. |
 
 A failing data test is information about the data: a `unique` failure on a key means the
 staging model or the snapshot key is wrong, or the source really repeats ids, which the human

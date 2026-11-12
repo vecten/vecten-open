@@ -8,9 +8,11 @@ This project runs only the MCP over an existing warehouse; the dbt parts apply t
 [% endif %]
 ## Schemas
 
-`raw_<source>`, `staging`, `snapshots`, `core`, `marts`. The names are the same on Postgres and
-Snowflake and never take the profile's target schema as a prefix. dlt writes `raw_<source>`;
-dbt writes the other four and never writes into a raw schema.
+`raw_<source>`, `staging`, `snapshots`, `core`, `marts`, and `core_<area>` and `marts_<area>`
+for each restricted area `vecten.toml` declares as `[areas.<area>]`; `<area>` is lowercase
+letters and digits, starting with a letter. The names are the same on Postgres and Snowflake and
+never take the profile's target schema as a prefix. dlt writes `raw_<source>`; dbt writes the
+others and never writes into a raw schema.
 
 ## Model names
 
@@ -24,8 +26,9 @@ dbt writes the other four and never writes into a raw schema.
 Names are lowercase letters and digits joined by single underscores, never start with a digit,
 and use full words, never abbreviations. The test `convention_model_naming` checks what it can:
 the `staging_` and `snapshot_` prefixes with a source and an entity segment, the character rules,
-and that every model lands in one of the four dbt schemas. It cannot tell an abbreviation from a
-word or a plural from a singular, so `companies` passes the test and is still wrong.
+and that every model lands in one of the four dbt schemas or a declared area's. It cannot tell an
+abbreviation from a word or a plural from a singular, so `companies` passes the test and is still
+wrong.
 
 ## Layers
 
@@ -38,6 +41,16 @@ word or a plural from a singular, so `companies` passes the test and is still wr
   (`where dbt_valid_to is null`).
 - **Marts.** Tables for one domain, built from core, named with the domain first. Every mart is
   one dataset in the semantic model.
+
+## Restricted areas
+
+An area is a pair of schemas that no role reads until an admin grants the area to a group, which
+then reads both. Its models live in `dbt/models/core_<area>/` and `dbt/models/marts_<area>/`,
+each folder configured in `dbt/dbt_project.yml` with `+schema` set to its schema. A model in
+`core_<area>` follows every core rule and one in `marts_<area>` every marts rule, so each mart
+there is a dataset too. A core model whose rows the default group must not read goes to
+`core_<area>`; one that unrestricted marts also read stays in `core`. A model in a `core_<name>`
+or `marts_<name>` schema whose area `vecten.toml` does not declare fails `convention_model_naming`.
 
 ## Descriptions and keys
 
@@ -54,9 +67,16 @@ run as a second step after the build:
     dbt build --exclude package:vecten_convention,test_type:singular
     dbt test  --select  package:vecten_convention,test_type:singular
 
-`vecten dbt-build-local` and the `dbt_build` DAG run both; `vecten dbt build` runs what you pass.
-A violation of `convention_model_naming`, `convention_descriptions`, `convention_core_primary_key`
-or `convention_staging_load_metadata` reads `model <name>: <reason>`.
+`vecten dbt-build-local` and the `dbt_build` DAG run both, passing the declared areas as the dbt
+var `vecten_areas`; `vecten dbt build` runs what you pass. A violation of
+`convention_model_naming`, `convention_descriptions`, `convention_core_primary_key`,
+`convention_staging_load_metadata` or `convention_no_grants` reads `model <name>: <reason>`
+(`snapshot` or `seed` in place of `model` for those).
+
+The MCP owns every read grant, so the project declares none: `convention_no_grants` fails a model,
+snapshot or seed that sets dbt's `grants` config. On Snowflake `dbt/dbt_project.yml` sets
+`+copy_grants: true`, so a rebuilt relation keeps the grants of the one it replaces, and the test
+fails a model that sets `copy_grants` to `false`.
 
 ## Identity macros
 
@@ -102,8 +122,9 @@ feature, and the warning is harmless.
 
 The generator writes one dataset per mart, ordered by name:
 
-- `source` is `<database>.marts.<alias>`, the database being `[warehouse] database` in
-  `vecten.toml`, or `warehouse` when unset; the local build uses the same database name.
+- `source` is `<database>.<schema>.<alias>`, the schema being `marts` or the mart's
+  `marts_<area>`, and the database `[warehouse] database` in `vecten.toml`, or `warehouse` when
+  unset; the local build uses the same database name. Two marts of one alias are refused.
 - Fields are the columns declared in `schema.yml`, in order, with their descriptions;
   `primary_key` is `meta.osi.primary_key` or else the columns tested `unique` and `not_null`.
 - A column named `*_at` or `*_date`, or with a date or timestamp type, is a time dimension. A

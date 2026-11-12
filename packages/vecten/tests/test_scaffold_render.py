@@ -46,6 +46,7 @@ CONVENTION_SECTIONS = [
     "Schemas",
     "Model names",
     "Layers",
+    "Restricted areas",
     "Descriptions and keys",
     "Identity macros",
     "Time",
@@ -120,9 +121,10 @@ def test_render_layout(tmp_path, params):
         assert f"reboot-db-instance --db-instance-identifier <prefix>-{holder}`" in runbook
         assert "-backend-config=encrypt=true" in runbook
     convention = (target / "docs" / "schema-convention.md").read_text()
-    assert convention.startswith("# Schema convention, version 1\n")
+    assert convention.startswith(f"# Schema convention, version {VERSIONS.schema_convention}\n")
+    assert VERSIONS.schema_convention == 2
     assert f"Apache Ossie {VERSIONS.ossie_spec}" in convention
-    assert len(convention.splitlines()) < 120
+    assert len(convention.splitlines()) < 150
     headings = re.findall(r"^## (.+)$", convention, re.M)
     assert headings == CONVENTION_SECTIONS
     platform = "platform" in params.components
