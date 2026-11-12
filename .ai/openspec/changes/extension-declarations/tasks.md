@@ -2,22 +2,22 @@ The three groups below are three pull requests, in this order (design, "Migratio
 
 ## 1. Locking per component (#50, pull request 1)
 
-- [ ] 1.1 Test then implement: `vecten_shared.config` gains `[dependencies.platform|mcp|cli]` (`python`, and `system` except under `cli`), refused for a component the project lacks; Python entries pass `vecten_shared.extensions.requirement`
-- [ ] 1.2 Test: a fixture extension wheel with `platform`, `mcp` and `cli` extras, each naming a different package, and one with no extras
-- [ ] 1.3 One lock routine in `vecten/extensions.py` that builds each component's roots (extension pin with the component's extra when `Provides-Extra` lists it, connector dependencies, the component's `python` list, and `vecten==<release>` for the CLI)
-- [ ] 1.4 Each compile starts from the committed lock as its output file; `--upgrade <package>` passes `--upgrade-package`; test that adding one root leaves other pins unchanged
-- [ ] 1.5 The `# vecten-lock: component=<c> inputs=<sha256>` first line, and a function that recomputes it from `vecten.toml`, `requirements.txt` and `extensions.lock.json`
-- [ ] 1.6 `extensions.lock.json` with each extension's version and provided extras (secrets and settings follow in 3.x); written atomically with the locks and `requirements.txt`, restored together on failure
-- [ ] 1.7 `requirements.txt` holds only extension pins
-- [ ] 1.8 `vecten lock` command (`--upgrade`, `--json` with the cross-lock divergence report); `extension add` ends by calling the same routine
-- [ ] 1.9 `connector add` runs the lock routine when the project already has locks
-- [ ] 1.10 `stack/images.py`: the project layer installs each component's own lock; a stamped lock is checked by its hash, an unstamped one by today's name rule; a `[dependencies]` Python requirement without locks is refused; every refusal names `vecten lock`
-- [ ] 1.11 `deploy/bundle.py`: `extensions.lock.json` joins `CONTENT`
-- [ ] 1.12 Tests: legacy project (unstamped locks, connector dependencies in `requirements.txt`) still builds; first `vecten lock` migrates it; stale lock refused by `up` and by bundle build; failure leaves every record unchanged
-- [ ] 1.13 Docker-tier test: a project with different `python` lists per component builds both layers, and each image holds only its own packages
-- [ ] 1.14 `next` reports `vecten lock` when a record is stale or missing
-- [ ] 1.15 Docs: `docs/extensions.md` (extras, `[dependencies]`, `vecten lock`, the lock table), `docs/cli.md`; the `guide` skill where it mentions `extension add` for dependencies; render the plugin and `docs/agent-guide.md`
-- [ ] 1.16 Changelog
+- [x] 1.1 Test then implement: `vecten_shared.config` gains `[dependencies.platform|mcp|cli]` (`python`, and `system` except under `cli`), refused for a component the project lacks; Python entries pass `vecten_shared.extensions.requirement`
+- [x] 1.2 Test: a fixture extension wheel with `platform`, `mcp` and `cli` extras, each naming a different package, and one with no extras
+- [x] 1.3 One lock routine in `vecten/extensions.py` that builds each component's roots (extension pin with the component's extra when `Provides-Extra` lists it, connector dependencies, the component's `python` list, and `vecten==<release>` for the CLI)
+- [x] 1.4 Each compile starts from the committed lock as its output file; `--upgrade <package>` passes `--upgrade-package`; test that adding one root leaves other pins unchanged
+- [x] 1.5 The `# vecten-lock: component=<c> inputs=<sha256>` first line, and a function that recomputes it from `vecten.toml`, `requirements.txt` and `extensions.lock.json`
+- [x] 1.6 `extensions.lock.json` with each extension's version and provided extras (secrets and settings follow in 3.x); written atomically with the locks and `requirements.txt`, restored together on failure
+- [x] 1.7 `requirements.txt` holds only extension pins
+- [x] 1.8 `vecten lock` command (`--upgrade`, `--json` with the cross-lock divergence report); `extension add` ends by calling the same routine
+- [x] 1.9 `connector add` runs the lock routine when the project already has locks
+- [x] 1.10 `stack/images.py`: the project layer installs each component's own lock; a stamped lock is checked by its hash, an unstamped one by today's name rule; a `[dependencies]` Python requirement without locks is refused; every refusal names `vecten lock`
+- [x] 1.11 `deploy/bundle.py`: `extensions.lock.json` joins `CONTENT`
+- [x] 1.12 Tests: legacy project (unstamped locks, connector dependencies in `requirements.txt`) still builds; first `vecten lock` migrates it; stale lock refused by `up` and by bundle build; failure leaves every record unchanged
+- [x] 1.13 Docker-tier test: a project with different `python` lists per component builds both layers, and each image holds only its own packages
+- [x] 1.14 `next` reports `vecten lock` when a record is stale or missing
+- [x] 1.15 Docs: `docs/extensions.md` (extras, `[dependencies]`, `vecten lock`, the lock table), `docs/cli.md`; the `guide` skill where it mentions `extension add` for dependencies; render the plugin and `docs/agent-guide.md`
+- [x] 1.16 Changelog
 
 ## 2. Operating-system packages (#50, pull request 2)
 

@@ -374,10 +374,11 @@ which MCP code cannot import.
 1. *A handle per extension.*
    ```python
    from vecten_shared.context import extension, project
+
    acme = extension("acme-resolution")
-   acme.settings["daily_cap"]      # read-only; default <- [settings.acme-resolution] <- env.<VECTEN_ENV>
-   acme.secret("ACME_API_KEY")     # only names acme's manifest declares, for this component
-   acme.env                        # "local", "prod", ...
+   acme.settings["daily_cap"]  # read-only; default <- [settings.acme-resolution] <- env.<VECTEN_ENV>
+   acme.secret("ACME_API_KEY")  # only names acme's manifest declares, for this component
+   acme.env  # "local", "prod", ...
    project().settings["alert_channel"]
    project().secret("SLACK_TOKEN")  # only names vecten.toml's top-level `secrets` lists
    ```
