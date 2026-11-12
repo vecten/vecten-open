@@ -27,8 +27,14 @@ def names(database="D", warehouse="W", *, shared_account=False, env="prod"):
 
 
 def read_grant_body(sql):
-    """READ_GRANT's handler: the first procedure body the script creates."""
-    return sql.split("EXECUTE AS OWNER AS $$", 1)[1].split("$$", 1)[0]
+    """READ_GRANT's handler: the first procedure body the script creates, `$$`-quoted with
+    fixed names and a single-quoted literal inside the shared script's block."""
+    if "EXECUTE AS OWNER AS $$" in sql:
+        return sql.split("EXECUTE AS OWNER AS $$", 1)[1].split("$$", 1)[0]
+    literal = sql.split("EXECUTE AS OWNER AS '", 1)[1]
+    end = re.search(r"(?<!')'(?:'')*;", literal)
+    body = literal[: end.start() + len(end.group(0)) - 2]
+    return body.replace("''", "'").replace("\\\\", "\\")
 
 
 def test_metadata_procedure_returns_only_existence_and_binds_relation_identifiers():
@@ -197,31 +203,77 @@ def test_the_shared_script_binds_sign_in_to_the_environments_integration():
     policy = '"ACME_DEV"."VECTEN_ACCESS"."MCP_SIGN_IN"'
     assert (
         f"CREATE AUTHENTICATION POLICY IF NOT EXISTS {policy}\n"
-        "  AUTHENTICATION_METHODS = ('OAUTH')\n"
-        "  SECURITY_INTEGRATIONS = ('EXTERNAL_OAUTH_ACME_DEV')\n"
-        f"  COMMENT = {COMMENT};"
+        "    AUTHENTICATION_METHODS = ('OAUTH')\n"
+        "    SECURITY_INTEGRATIONS = ('EXTERNAL_OAUTH_ACME_DEV')\n"
+        f"    COMMENT = {COMMENT};"
     ) in sql
     assert f"GRANT APPLY ON AUTHENTICATION POLICY {policy} TO ROLE PROVISIONER_ACME_DEV;" in sql
     # The policy names the integration, which must exist first.
     assert sql.index("CREATE SECURITY INTEGRATION") < sql.index("CREATE AUTHENTICATION POLICY")
 
 
-def test_the_shared_script_stops_before_any_change_at_an_object_with_another_comment():
-    sql = shared_script()
-    guard, rest = sql.split("CREATE ROLE IF NOT EXISTS", 1)
-    assert "CREATE" not in guard.replace("CREATE ROLE IF NOT EXISTS", "")
-    assert guard.count("EXECUTE IMMEDIATE $$") == 1
-    for show, name in (
-        ("ROLES", "ANALYST_ACME_DEV"),
-        ("ROLES", "PROVISIONER_ACME_DEV"),
-        ("USERS", "PROVISIONER_ACME_DEV"),
-        ("SECURITY INTEGRATIONS", "EXTERNAL_OAUTH_ACME_DEV"),
+def _block_and_reports(sql):
+    """The shared script's one block, and what follows it."""
+    head, rest = sql.split("EXECUTE IMMEDIATE $$\n", 1)
+    block, reports = rest.split("\n$$;\n", 1)
+    return head, block, reports
+
+
+def test_every_change_of_the_shared_script_runs_in_one_block_that_stops_at_the_first_error():
+    head, block, reports = _block_and_reports(shared_script())
+    assert all(line.startswith("--") for line in head.splitlines())
+    assert "$$" not in block
+    assert block.rstrip().endswith("END;")
+    # After the block only reports run: SHOW and SELECT print what an administrator drops.
+    changing = re.compile(r"\s*(CREATE|GRANT|ALTER|DROP|REVOKE|EXECUTE|CALL|USE)\b")
+    assert not [line for line in reports.splitlines() if changing.match(line)]
+    assert "SHOW GRANTS TO ROLE PROVISIONER_ACME_DEV;" in reports
+    for statement in (
+        "CREATE ROLE",
+        "GRANT CREATE USER",
+        "CREATE SECURITY INTEGRATION",
+        "CREATE AUTHENTICATION POLICY",
+        "CREATE OR REPLACE PROCEDURE",
     ):
-        assert f"SHOW {show} LIKE '{name}';" in guard, name
+        assert statement in block, statement
+    # The checks come before the first change.
+    assert block.index("RAISE taken_4") < block.index("CREATE ROLE")
+
+
+def test_the_shared_script_stops_at_an_object_another_project_owns_or_comments():
+    _, block, _ = _block_and_reports(shared_script())
+    assert "SHOW DATABASES LIKE 'ACME_DEV';" in block
+    assert 'SELECT MAX("owner") INTO :keeper' in block
+    for show, kind, name in (
+        ("ROLES", "ROLE", "ANALYST_ACME_DEV"),
+        ("ROLES", "ROLE", "PROVISIONER_ACME_DEV"),
+        ("USERS", "USER", "PROVISIONER_ACME_DEV"),
+        ("SECURITY INTEGRATIONS", "INTEGRATION", "EXTERNAL_OAUTH_ACME_DEV"),
+    ):
+        assert f"SHOW {show} LIKE '{name}';" in block, name
         # LIKE treats `_` as a wildcard, so the exact name is compared again.
-        assert f"WHERE \"name\" = '{name}' AND COALESCE(\"comment\", '') <> {COMMENT};" in guard
-        assert f"{name} exists" in guard
-    assert "RAISE" in guard
+        assert f"WHERE \"name\" = '{name}';" in block, name
+        assert f'SHOW GRANTS ON {kind} "{name}";' in block, name
+        assert f"{name} exists" in block
+    assert f"COUNT_IF(COALESCE(\"comment\", '') <> {COMMENT})" in block
+    assert '"grantee_name" IN (CURRENT_ROLE(), :keeper)' in block
+    assert "IF (foreign > 0 OR owned = 0) THEN RAISE" in block
+
+
+def test_the_shared_provisioner_user_signs_in_by_its_key_alone():
+    _, block, _ = _block_and_reports(shared_script())
+    policy = '"ACME_DEV"."VECTEN_ACCESS"."SERVICE_SIGN_IN"'
+    assert "ALTER USER PROVISIONER_ACME_DEV UNSET RSA_PUBLIC_KEY_2;" in block
+    assert "ALTER USER PROVISIONER_ACME_DEV UNSET PASSWORD;" in block
+    assert (
+        f"CREATE AUTHENTICATION POLICY IF NOT EXISTS {policy}\n"
+        "    AUTHENTICATION_METHODS = ('KEYPAIR')\n"
+        f"    COMMENT = {COMMENT};"
+    ) in block
+    assert f"ALTER USER PROVISIONER_ACME_DEV SET AUTHENTICATION POLICY {policy};" in block
+    assert block.index("UNSET AUTHENTICATION POLICY") < block.index(
+        f"SET AUTHENTICATION POLICY {policy}"
+    )
 
 
 def test_the_fixed_script_keeps_its_statements():

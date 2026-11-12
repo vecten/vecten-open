@@ -49,56 +49,115 @@ def _commented(names):
     return f" COMMENT = {_literal(names.comment)}" if names.suffix else ""
 
 
-def _taken_guard(names):
-    """A block that stops the script, before it changes anything, at an account-level object
-    it would create that exists without the environment's comment: CREATE ... IF NOT EXISTS
-    would otherwise take that object over."""
+_SHOW = {"role": "ROLES", "user": "USERS", "integration": "SECURITY INTEGRATIONS"}
+
+
+def _checked_block(names, changes):
+    """`changes` inside one Snowflake Scripting block, which first stops, changing nothing,
+    at an account-level object the script would create that another project or environment
+    holds, and then stops at the first statement that fails, whatever the client running
+    the script does after an error.
+
+    `CREATE ... IF NOT EXISTS` would take such an object over. An object is the
+    environment's when it carries the environment's comment and is owned by the role running
+    the script or by the one that created the environment's database; a comment alone can
+    be copied by any role that may create users or roles.
+    """
+    database = names.database.upper()
     checks = (
-        ("ROLES", "role", _name(names.analyst_role)),
-        ("ROLES", "role", _name(names.provisioner_role)),
-        ("USERS", "user", _name(names.provisioner_user)),
-        ("SECURITY INTEGRATIONS", "security integration", _name(names.integration)),
+        ("role", _name(names.analyst_role)),
+        ("role", _name(names.provisioner_role)),
+        ("user", _name(names.provisioner_user)),
+        ("integration", _name(names.integration)),
     )
-    comment = _literal(names.comment)
-    declarations, body = [], []
-    for number, (show, kind, name) in enumerate(checks, start=1):
+    declarations = [
+        "  found INTEGER DEFAULT 0;",
+        "  foreign INTEGER DEFAULT 0;",
+        "  owned INTEGER DEFAULT 0;",
+        "  keeper VARCHAR;",
+    ]
+    body = [
+        f"  SHOW DATABASES LIKE {_literal(database)};",
+        '  SELECT MAX("owner") INTO :keeper FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))',
+        f'    WHERE "name" = {_literal(database)};',
+    ]
+    for number, (kind, name) in enumerate(checks, start=1):
         message = (
-            f"{kind} {name} exists without the comment {names.comment}: another project or "
-            "environment holds the name, and this script changed nothing"
+            f"{kind} {name} exists without the comment {names.comment} or an owner of this "
+            "environment: another project or environment holds the name, and this script "
+            "changed nothing"
         )
         declarations.append(f"  taken_{number} EXCEPTION (-{20000 + number}, {_literal(message)});")
         body += [
-            f"  SHOW {show} LIKE {_literal(name)};",
+            f"  SHOW {_SHOW[kind]} LIKE {_literal(name)};",
             # LIKE treats `_` as a wildcard, so the exact name is compared again.
-            "  SELECT COUNT(*) INTO :found FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
-            f'    WHERE "name" = {_literal(name)} AND COALESCE("comment", \'\') <> {comment};',
-            f"  IF (found > 0) THEN RAISE taken_{number}; END IF;",
+            "  SELECT COUNT(*), COUNT_IF(COALESCE(\"comment\", '') <> "
+            f"{_literal(names.comment)}) INTO :found, :foreign",
+            f'    FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "name" = {_literal(name)};',
+            "  IF (found > 0) THEN",
+            f"    SHOW GRANTS ON {kind.upper()} {_ident(name)};",
+            "    SELECT COUNT(*) INTO :owned FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))",
+            "      WHERE \"privilege\" = 'OWNERSHIP'",
+            '        AND "grantee_name" IN (CURRENT_ROLE(), :keeper);',
+            f"    IF (foreign > 0 OR owned = 0) THEN RAISE taken_{number}; END IF;",
+            "  END IF;",
         ]
+    statements = "\n".join(
+        "  " + line if line else line for line in _single_quoted_bodies(changes).splitlines()
+    )
     return (
-        "-- Stops here, changing nothing, when a name this script creates is another's.\n"
-        "EXECUTE IMMEDIATE $$\nDECLARE\n  found INTEGER DEFAULT 0;\n"
+        "-- One block: it changes nothing when a name it creates is another's, and stops at\n"
+        "-- the first statement that fails.\n"
+        "EXECUTE IMMEDIATE $$\nDECLARE\n"
         + "\n".join(declarations)
         + "\nBEGIN\n"
         + "\n".join(body)
-        + "\n  RETURN 'no name is taken';\nEND;\n$$;\n"
+        + "\n"
+        + statements
+        + "\n  RETURN 'done';\nEND;\n$$;\n"
     )
 
 
-def _sign_in_policy(names):
-    """The authentication policy that lets the environment's users sign in only through its
-    own integration, and the provisioner's right to set it on the users it creates."""
+def _single_quoted_bodies(text):
+    """`text` with each `$$`-quoted procedure body as a single-quoted string, which a block
+    that is itself `$$`-quoted can hold; Snowflake reads a doubled backslash or quote in it
+    as one."""
+
+    def quoted(match):
+        body = match.group(1).replace("\\", "\\\\").replace("'", "''")
+        return f"AS '{body}';"
+
+    return re.sub(r"AS \$\$\n(.*?)\$\$;", quoted, text, flags=re.S)
+
+
+def _sign_in_policies(names):
+    """In a shared account, the policy that lets the environment's users sign in only through
+    its own integration, the provisioner's right to set it on the users it creates, and the
+    key-pair-only policy of the provisioner's own user."""
     if not names.suffix:
         return ""
-    policy = ".".join(
-        _ident(part)
-        for part in (names.database.upper(), names.access_schema, names.authentication_policy)
-    )
+    schema = (_ident(names.database.upper()), _ident(names.access_schema))
+    policy = ".".join((*schema, _ident(names.authentication_policy)))
+    service = ".".join((*schema, _ident(names.service_policy)))
+    integration, user = _name(names.integration), _name(names.provisioner_user)
+    comment = _literal(names.comment)
     return f"""CREATE AUTHENTICATION POLICY IF NOT EXISTS {policy}
   AUTHENTICATION_METHODS = ('OAUTH')
-  SECURITY_INTEGRATIONS = ('{_name(names.integration)}')
-  COMMENT = {_literal(names.comment)};
-ALTER AUTHENTICATION POLICY {policy} SET SECURITY_INTEGRATIONS = ('{_name(names.integration)}');
+  SECURITY_INTEGRATIONS = ('{integration}')
+  COMMENT = {comment};
+ALTER AUTHENTICATION POLICY {policy} SET SECURITY_INTEGRATIONS = ('{integration}');
 GRANT APPLY ON AUTHENTICATION POLICY {policy} TO ROLE {_name(names.provisioner_role)};
+CREATE AUTHENTICATION POLICY IF NOT EXISTS {service}
+  AUTHENTICATION_METHODS = ('KEYPAIR')
+  COMMENT = {comment};
+ALTER AUTHENTICATION POLICY {service} SET AUTHENTICATION_METHODS = ('KEYPAIR');
+BEGIN
+  -- A user holds one authentication policy, so a rerun replaces the one it set.
+  ALTER USER {user} UNSET AUTHENTICATION POLICY;
+EXCEPTION
+  WHEN STATEMENT_ERROR THEN NULL;
+END;
+ALTER USER {user} SET AUTHENTICATION POLICY {service};
 """
 
 
@@ -206,17 +265,23 @@ FROM pg_namespace n JOIN pg_roles r ON r.oid=n.nspowner WHERE n.nspname IN ('cor
                 )
     data_grants = "\n".join(grants)
     issuer = issuer.rstrip("/")
-    if names.suffix and not names.comment:
+    shared = bool(names.suffix)
+    if shared and not names.comment:
         raise ValueError("a shared account's script needs the environment's comment")
-    guard = _taken_guard(names) if names.suffix else ""
     comment = _commented(names)
-    return f"""-- Run as ACCOUNTADMIN, or a role holding MANAGE GRANTS: the future grants need it.
-{guard}CREATE ROLE IF NOT EXISTS {analyst}{comment};
+    # A shared account's provisioner user keeps no second key or password, which its
+    # key-pair-only policy would otherwise still admit beside the environment's own key.
+    keys_only = (
+        f"\nALTER USER {user} UNSET RSA_PUBLIC_KEY_2;\nALTER USER {user} UNSET PASSWORD;"
+        if shared
+        else ""
+    )
+    changes = f"""CREATE ROLE IF NOT EXISTS {analyst}{comment};
 CREATE ROLE IF NOT EXISTS {provisioner}{comment};
 GRANT CREATE USER ON ACCOUNT TO ROLE {provisioner};
 GRANT CREATE ROLE ON ACCOUNT TO ROLE {provisioner};
 GRANT ROLE {analyst} TO ROLE {provisioner} WITH GRANT OPTION;
-CREATE USER IF NOT EXISTS {user} TYPE = SERVICE{comment};
+CREATE USER IF NOT EXISTS {user} TYPE = SERVICE{comment};{keys_only}
 ALTER USER {user} SET RSA_PUBLIC_KEY = {_literal(key)};
 GRANT ROLE {provisioner} TO USER {user};
 GRANT USAGE ON DATABASE {database} TO ROLE {provisioner};
@@ -238,7 +303,8 @@ ALTER SECURITY INTEGRATION {integration} SET
   EXTERNAL_OAUTH_ISSUER = {_literal(issuer)}
   EXTERNAL_OAUTH_JWS_KEYS_URL = {_literal(issuer + "/jwks")}
   EXTERNAL_OAUTH_AUDIENCE_LIST = ({_literal(names.audience)});
-{_sign_in_policy(names)}{_leftover_grants(names)}
+{_sign_in_policies(names)}"""
+    reports = f"""{_leftover_grants(names)}
 -- The users and roles {provisioner} owns. On a running environment, or one whose state
 -- snapshot was restored, they are the MCP's own: keep them. On a deploy after a destroy
 -- without that restore, the new state knows none of them and the MCP refuses to start
@@ -248,6 +314,10 @@ SELECT 'DROP ' || "granted_on" || ' "' || "name" || '";' AS leftover
 FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "privilege" = 'OWNERSHIP' AND \
 ("granted_on" = 'USER' OR ("granted_on" = 'ROLE' AND "name" <> {_literal(analyst)}));
 """
+    header = "-- Run as ACCOUNTADMIN, or a role holding MANAGE GRANTS: the future grants need it.\n"
+    if not shared:
+        return header + changes + reports
+    return header + _checked_block(names, changes) + reports
 
 
 def _leftover_grants(names):

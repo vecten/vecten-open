@@ -53,6 +53,10 @@ run "fixed_names_keep_every_address_and_name" {
     condition     = alltrue([for r in concat(values(snowflake_account_role.this), [snowflake_database.this, snowflake_warehouse.this, snowflake_service_user.loader], values(snowflake_schema.convention)) : r.comment == "vecten acme prod in ACME-PROD"])
     error_message = "every object keeps its comment"
   }
+  assert {
+    condition     = length(snowflake_schema.sign_in) == 0 && length(snowflake_authentication_policy.loader) == 0 && length(snowflake_user_authentication_policy_attachment.loader) == 0
+    error_message = "the fixed layout adds no sign-in policy, so its plan stays as it was"
+  }
 }
 
 run "a_shared_account_names_every_role_and_the_loader_from_the_variables" {
@@ -67,6 +71,24 @@ run "a_shared_account_names_every_role_and_the_loader_from_the_variables" {
     loader_role_name      = "LOADER_ACME_DEV"
     loader_user_name      = "LOADER_ACME_DEV"
     provisioner_role_name = "PROVISIONER_ACME_DEV"
+    loader_sign_in        = { schema = "VECTEN_SIGN_IN", policy = "SERVICE_SIGN_IN" }
+  }
+
+  assert {
+    condition     = snowflake_schema.sign_in[0].name == "VECTEN_SIGN_IN" && snowflake_schema.sign_in[0].database == "ACME_DEV" && startswith(snowflake_schema.sign_in[0].comment, "vecten acme dev")
+    error_message = "the loader's sign-in policy lives in its own schema of the environment's database"
+  }
+  assert {
+    condition     = snowflake_authentication_policy.loader[0].name == "SERVICE_SIGN_IN" && snowflake_authentication_policy.loader[0].schema == "VECTEN_SIGN_IN" && snowflake_authentication_policy.loader[0].authentication_methods == toset(["KEYPAIR"])
+    error_message = "the loader signs in by key pair only, so no integration's token names it"
+  }
+  assert {
+    condition     = snowflake_user_authentication_policy_attachment.loader[0].user_name == "LOADER_ACME_DEV"
+    error_message = "the policy is set on the loader user"
+  }
+  assert {
+    condition     = !contains(keys(snowflake_grant_ownership.schema), "VECTEN_SIGN_IN")
+    error_message = "the loader role does not own the schema of its own sign-in policy"
   }
 
   assert {
@@ -414,4 +436,14 @@ run "rejects_an_environment_with_doubled_hyphens" {
   }
 
   expect_failures = [var.environment]
+}
+
+run "a_sign_in_policy_name_that_is_no_plain_identifier_is_refused" {
+  command = plan
+
+  variables {
+    loader_sign_in = { schema = "VECTEN_SIGN_IN", policy = "sign in" }
+  }
+
+  expect_failures = [var.loader_sign_in]
 }

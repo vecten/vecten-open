@@ -239,7 +239,8 @@ def ensure_key_pair(provider: Provider, name: str, *, store: bool = True) -> str
 def _name_vars(
     project_root: Path, root_dir: Path, names: SnowflakeNames
 ) -> tuple[tuple[str, str], ...]:
-    """The role and user names the root's variables take.
+    """The role and user names the root's variables take, and in a shared account the
+    loader's sign-in policy.
 
     A thin root rendered before these variables existed pins a module that spells the fixed
     names itself, so it plans the same objects without them; any other names need the
@@ -251,6 +252,11 @@ def _name_vars(
         ("loader_user_name", names.loader_user),
         ("provisioner_role_name", names.provisioner_role),
     )
+    if names.sign_in_schema and names.service_policy:
+        # The module creates the loader's key-pair-only policy only when this is set, so a
+        # fixed environment's plan stays as it was.
+        sign_in = f'{{schema="{names.sign_in_schema}",policy="{names.service_policy}"}}'
+        values += (("loader_sign_in", sign_in),)
     text = "\n".join(path.read_text(encoding="utf-8") for path in sorted(root_dir.glob("*.tf")))
     declared = {name for name, _ in values if re.search(rf'^variable\s+"{name}"', text, re.M)}
     missing = [name for name, _ in values if name not in declared]

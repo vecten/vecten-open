@@ -55,6 +55,7 @@ def test_fixed_names_are_the_released_literals(project, database, env, db_name, 
     assert names.integration == "VECTEN_EXTERNAL_OAUTH"
     assert names.access_schema == "VECTEN_ACCESS"
     assert names.authentication_policy is None
+    assert names.sign_in_schema is None and names.service_policy is None
     assert names.comment == f"vecten {project} {env} in ACME-PROD"
     assert names.audience == "https://ACME-PROD.snowflakecomputing.com"
 
@@ -81,6 +82,8 @@ def test_names_in_a_shared_account_carry_the_environment_suffix():
         access_schema="VECTEN_ACCESS",
         authentication_policy="MCP_SIGN_IN",
         comment="vecten acme dev in ACME-PROD",
+        sign_in_schema="VECTEN_SIGN_IN",
+        service_policy="SERVICE_SIGN_IN",
     )
 
 
@@ -96,7 +99,13 @@ def test_two_shared_environments_share_no_name():
     dev = snowflake_names(config("acme"), "dev", shared_account=True)
     prod = snowflake_names(config("acme"), "prod", shared_account=True)
     shared = set(astuple(dev)) & set(astuple(prod))
-    assert shared == {"ACME-PROD", "VECTEN_ACCESS", "MCP_SIGN_IN"}
+    assert shared == {
+        "ACME-PROD",
+        "VECTEN_ACCESS",
+        "MCP_SIGN_IN",
+        "VECTEN_SIGN_IN",
+        "SERVICE_SIGN_IN",
+    }
 
 
 def test_an_undeployed_environment_takes_the_projects_setting():
@@ -169,7 +178,7 @@ NAMING_MODULE = "packages/vecten-shared/src/vecten_shared/provider/__init__.py"
 # longer word.
 SPELLED = re.compile(
     r"(?<![A-Za-z0-9_])(ANALYST|LOADER|PROVISIONER|VECTEN_PROVISIONER|VECTEN_EXTERNAL_OAUTH"
-    r"|VECTEN_ACCESS|MCP_SIGN_IN)(?![A-Za-z0-9_])|_WH(?![A-Za-z0-9_])"
+    r"|VECTEN_ACCESS|MCP_SIGN_IN|VECTEN_SIGN_IN|SERVICE_SIGN_IN)(?![A-Za-z0-9_])|_WH(?![A-Za-z0-9_])"
 )
 # Constants a caller would keep beside the function, whatever their value.
 CONSTANTS = re.compile(r"\bSNOWFLAKE_(LOADER|ANALYST|PROVISIONER)_(ROLE|USER)\b")

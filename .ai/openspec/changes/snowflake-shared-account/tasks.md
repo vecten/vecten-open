@@ -26,7 +26,7 @@
 
 ## 4. Identities in a shared account
 
-- [x] 4.1 The provisioner script in the shared layout: suffixed roles and users, the authentication policy and `APPLY` on it, the environment's integration, comments on every object, and the stop on a foreign comment
+- [x] 4.1 The provisioner script in the shared layout: suffixed roles and users, the authentication policy and `APPLY` on it, the environment's integration, comments on every object, and the stop on a foreign comment; every change inside one block that stops on a foreign owner or comment and at the first error; the provisioner and loader users signing in by key pair only (a key-pair-only policy, the provisioner's set by the script, the loader's by the Snowflake root)
 - [x] 4.2 `READ_GRANT` refuses a target whose name does not end in the environment's suffix before the ownership check, which stays the guard; its TARGET pattern (`^[A-Z][A-Z0-9_]{0,62}$` today) must admit a suffixed group role, up to 63 characters before a suffix of up to 64
 - [x] 4.3 `SnowflakeAdapter` appends the suffix when it names users and roles, strips it from `SHOW GRANTS` before registry lookups, sets the authentication policy on every user it creates, and refuses adoption in a shared account
 - [x] 4.4 `check_scope` accepts `APPLY` on the environment's policy and nothing of another environment
@@ -62,3 +62,7 @@
 - [ ] 9.4 What `DROP DATABASE` does while users carry a policy that the database holds
 - [ ] 9.5 An existing fixed-name sandbox environment plans empty after `vecten update`
 - [ ] 9.6 Two environments in one account: `dev`'s loader key, provisioner key and MCP signing key each fail to read `prod`'s marts; `destroy --env dev --delete-data dev` leaves every `prod` object in place
+- [ ] 9.7 External OAuth is refused for a `TYPE = SERVICE` user carrying a key-pair-only authentication policy (`AUTHENTICATION_METHODS = ('KEYPAIR')`), so another environment's integration cannot sign in as `PROVISIONER_<BASE>_<ENV>` or `LOADER_<BASE>_<ENV>`
+- [ ] 9.8 `SHOW GRANTS TO ROLE` names the provisioner's grant on the sign-in policy with `granted_on = AUTHENTICATION_POLICY` and the name `<DB>.VECTEN_ACCESS.MCP_SIGN_IN`, as `SnowflakeAdapter.check_scope` expects
+- [ ] 9.9 The shared provisioner script runs as one `EXECUTE IMMEDIATE` block: `SHOW` with `RESULT_SCAN`, `CREATE SECURITY INTEGRATION`, single-quoted procedure bodies, `UNSET RSA_PUBLIC_KEY_2` and `UNSET PASSWORD` on a service user, and the `UNSET`/`SET AUTHENTICATION POLICY` pair on a rerun; a squatted role, user or integration (another owner or comment) stops it before any change
+- [ ] 9.10 The deploy role can create the loader's authentication policy and set it on the loader user it owns (the Snowflake root's `snowflake_user_authentication_policy_attachment`)

@@ -316,7 +316,9 @@ def test_snowflake_root_takes_the_provider_from_the_environment_and_names_by_var
     provider = re.search(r'^provider "snowflake" \{\n(.*?)^\}', main, re.M | re.S)
     assert provider
     assert provider.group(1).strip() == (
-        'preview_features_enabled = ["snowflake_current_role_datasource"]'
+        'preview_features_enabled = ["snowflake_current_role_datasource", '
+        '"snowflake_authentication_policy_resource", '
+        '"snowflake_user_authentication_policy_attachment_resource"]'
     )
     assert f'version = "~> {VERSIONS.terraform_snowflake_provider}.0"' in main
     assert f"vecten-open.git//terraform/snowflake?ref={params.terraform_module_ref}" in main
@@ -329,6 +331,7 @@ def test_snowflake_root_takes_the_provider_from_the_environment_and_names_by_var
         "provisioner_role_name",
         "warehouse_size",
         "loader_public_key",
+        "loader_sign_in",
     ):
         assert re.search(rf"^\s*{name}\s*=\s*var\.{name}\s*$", main, re.M), name
         assert f'variable "{name}"' in (root / "variables.tf").read_text(), name

@@ -125,7 +125,9 @@ class SnowflakeNames:
 
     `access_schema` sits inside `database`, and `authentication_policy` inside that schema;
     the fixed layout has no policy. `comment` is the one the Snowflake root gives every
-    object it creates, unknown without the account.
+    object it creates, unknown without the account. In a shared account `service_policy` is
+    the key-pair-only policy of the service users: the provisioner's in `access_schema`, the
+    loader's in `sign_in_schema`, which the Snowflake root creates.
     """
 
     account: str | None
@@ -141,6 +143,8 @@ class SnowflakeNames:
     access_schema: str
     authentication_policy: str | None
     comment: str | None
+    sign_in_schema: str | None
+    service_policy: str | None
 
     @property
     def audience(self) -> str:
@@ -162,6 +166,8 @@ def shipped_account() -> str | None:
 
 ACCESS_SCHEMA = "VECTEN_ACCESS"
 AUTHENTICATION_POLICY = "MCP_SIGN_IN"
+SIGN_IN_SCHEMA = "VECTEN_SIGN_IN"
+SERVICE_POLICY = "SERVICE_SIGN_IN"
 
 
 # Every account-level name is at most 63 characters before the suffix, so with a suffix of
@@ -259,6 +265,8 @@ def snowflake_names(
             access_schema=ACCESS_SCHEMA,
             authentication_policy=None,
             comment=comment,
+            sign_in_schema=None,
+            service_policy=None,
         )
     suffix = _shared_suffix(config, env)
     base = suffix[1:]
@@ -278,4 +286,6 @@ def snowflake_names(
         access_schema=ACCESS_SCHEMA,
         authentication_policy=AUTHENTICATION_POLICY,
         comment=comment,
+        sign_in_schema=SIGN_IN_SCHEMA,
+        service_policy=SERVICE_POLICY,
     )

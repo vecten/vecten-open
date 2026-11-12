@@ -707,6 +707,15 @@ def test_a_fixed_account_still_offers_adoption(monkeypatch):
         (("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.MCP_SIGN_IN", "false"), True),
         (("APPLY", "AUTHENTICATION_POLICY", "ACME_PROD.VECTEN_ACCESS.MCP_SIGN_IN", "false"), False),
         (("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.OTHER", "false"), False),
+        # The service users' key-pair-only policy is the administrator's to set, never the MCP's.
+        (
+            ("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.SERVICE_SIGN_IN", "false"),
+            False,
+        ),
+        (
+            ("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_SIGN_IN.SERVICE_SIGN_IN", "false"),
+            False,
+        ),
         (("USAGE", "DATABASE", "ACME_PROD", "false"), False),
     ],
 )
