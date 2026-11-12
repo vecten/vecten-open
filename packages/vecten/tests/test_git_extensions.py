@@ -731,8 +731,23 @@ def test_records_that_disagree_are_refused_naming_extension_add(invoke, served, 
     assert "vecten extension add" in caught.value.message
 
 
-def test_a_project_without_git_sources_has_no_git_problems(invoke, project):
+def test_a_locked_project_without_git_sources_has_no_git_problems_until_a_url_appears(
+    invoke, project, uv, monkeypatch
+):
+    monkeypatch.setattr(
+        extensions,
+        "inspect_package",
+        lambda package, root: extensions.PackageMetadata(
+            "acme-demo", "1.0.0", (SimpleNamespace(group="vecten.dags"),), ()
+        ),
+    )
+    assert invoke("extension", "add", "acme-demo==1.0.0").exit_code == 0
     assert locking.git_problems(project, load_config(project)) == []
+    lock = project / "requirements-mcp.lock"
+    lock.write_text(lock.read_text() + "acme-demo @ git+https://example.com/a/b@" + "a" * 40 + "\n")
+    assert locking.git_problems(project, load_config(project)) == [
+        "requirements-mcp.lock: acme-demo comes from git, but extensions.lock.json says not"
+    ]
 
 
 def test_the_record_check_reads_no_network(invoke, served, monkeypatch):

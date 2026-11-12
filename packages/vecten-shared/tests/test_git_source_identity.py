@@ -397,3 +397,13 @@ def test_checkout_keeps_paths_that_differ_in_more_than_case(tmp_path):
         "Foo/a.py",
         "food/b.py",
     ]
+
+
+@pytest.mark.parametrize("where", [".git", "src/acme/.git", "src/.GIT"])
+def test_verify_refuses_git_metadata_anywhere_in_a_git_sourced_directory(tmp_path, where):
+    extensions, record = _bundle(tmp_path, TREE_SHA256)
+    (extensions / "acme" / where).mkdir(parents=True)
+    (extensions / "acme" / where / "HEAD").write_text("ref: refs/heads/main\n")
+    result = _verify(str(extensions), str(record))
+    assert result.returncode == ExitCode.REFUSED
+    assert where in result.stderr

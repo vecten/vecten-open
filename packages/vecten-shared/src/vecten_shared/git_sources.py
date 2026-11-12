@@ -883,6 +883,19 @@ def source_sha256(directory: Path) -> str:
     return total.hexdigest()
 
 
+def _refuse_git_metadata(name: str, commit: str, directory: Path) -> None:
+    """Refuse a `.git` entry, in any letter case, anywhere in a bundled source: a checkout never
+    writes one, and the hash would not cover it."""
+    for current, directories, files in os.walk(directory):
+        for entry in [*directories, *files]:
+            if entry.casefold() == ".git":
+                relative = (Path(current) / entry).relative_to(directory).as_posix()
+                raise Failure(
+                    ExitCode.REFUSED,
+                    f"{name} at {commit}: {relative} is git metadata, which a source never holds",
+                )
+
+
 def verify(extensions: Path, record_path: Path, out: TextIO | None = None) -> None:
     """Check every git-sourced extension's directory, `<extensions>/<name>`, against the
     `source_sha256` that `record_path` holds for it."""
@@ -901,6 +914,7 @@ def verify(extensions: Path, record_path: Path, out: TextIO | None = None) -> No
         directory = Path(extensions) / name
         if not directory.is_dir():
             raise Failure(ExitCode.REFUSED, f"{name} at {entry.git.commit}: the source is missing")
+        _refuse_git_metadata(name, entry.git.commit, directory)
         actual = source_sha256(directory)
         if actual != entry.source_sha256:
             raise Failure(
