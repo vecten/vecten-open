@@ -172,6 +172,7 @@ def test_copier_data_has_only_scaffold_parameters_and_derived():
         "action_setup_uv",
         "action_setup_terraform",
         "action_configure_aws_credentials",
+        "action_create_github_app_token",
         "convention_version",
         "ossie_spec",
         "warehouse_host",

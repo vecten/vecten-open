@@ -39,6 +39,17 @@ jobs:
           # The wrapper adds a [command] line to stdout, which breaks `terraform output -json`.
           terraform_wrapper: false
       - run: uv tool install "vecten==[[ vecten_version ]]"
+      # A token for the extensions' git repositories, minted for this job only when the
+      # GitHub App is configured; the step that runs vecten is the only one that reads it.
+      - id: git-app-token
+        if: vars.VECTEN_GIT_APP_ID != ''
+        uses: [[ action_create_github_app_token ]]
+        with:
+          client-id: ${{ vars.VECTEN_GIT_APP_ID }}
+          private-key: ${{ secrets.VECTEN_GIT_APP_PRIVATE_KEY }}
+          owner: ${{ vars.VECTEN_GIT_APP_OWNER }}
+          repositories: ${{ vars.VECTEN_GIT_APP_REPOSITORIES }}
+          permission-contents: read
 [%- if cloud == 'aws' %]
       # The session keeps IAM's default hour, the longest the deploy role allows.
       - uses: [[ action_configure_aws_credentials ]]
@@ -49,6 +60,7 @@ jobs:
       - run: vecten deploy --env ${{ inputs.environment }} --json
         env:
           GH_TOKEN: ${{ github.token }}
+          GIT_CREDENTIALS: ${{ steps.git-app-token.outputs.token && format('https://x-access-token:{0}@github.com', steps.git-app-token.outputs.token) || secrets.VECTEN_GIT_CREDENTIALS }}
 [%- if cloud != 'aws' %]
           SCW_ACCESS_KEY: ${{ secrets.VECTEN_SCW_ACCESS_KEY }}
           SCW_SECRET_KEY: ${{ secrets.VECTEN_SCW_SECRET_KEY }}

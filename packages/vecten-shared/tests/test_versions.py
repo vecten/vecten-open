@@ -183,6 +183,7 @@ def test_github_actions_are_pinned_to_release_commits():
         "setup_uv",
         "setup_terraform",
         "configure_aws_credentials",
+        "create_github_app_token",
     }
     for name, uses in VERSIONS.github_actions.items():
         assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+", uses), name

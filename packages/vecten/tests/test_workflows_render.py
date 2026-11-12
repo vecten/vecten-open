@@ -332,6 +332,7 @@ def test_scaleway_apply_and_ship_sign_with_the_environment_deploy_key(render, pa
         assert vecten_step(job, command)["env"] == {
             **key_env(ENV_ACCESS_SECRET, ENV_SECRET_SECRET),
             "GH_TOKEN": "${{ github.token }}",
+            "GIT_CREDENTIALS": GIT_CREDENTIALS_VALUE,
         }, name
         assert permissions(doc, job) == {"contents": "read", "pull-requests": "read"}, name
 
@@ -355,21 +356,26 @@ def test_scaleway_ship_passes_the_deploy_key_by_name(render, params):
     assert docs["ship.yml"]["jobs"]["ship"]["secrets"] == {
         ENV_ACCESS_SECRET: secret_ref(ENV_ACCESS_SECRET),
         ENV_SECRET_SECRET: secret_ref(ENV_SECRET_SECRET),
+        **{name: secret_ref(name) for name in GIT_SECRETS},
     }
     declared = triggers(docs["deploy-platform.yml"])["workflow_call"]["secrets"]
     assert declared == {
         ENV_ACCESS_SECRET: {"required": True},
         ENV_SECRET_SECRET: {"required": True},
+        **{name: {"required": False} for name in GIT_SECRETS},
     }
 
 
-@pytest.mark.parametrize("params", DEPLOYED, ids=label)
-def test_an_aws_ship_passes_no_secret(render, params):
-    if params.cloud != "aws":
-        pytest.skip("AWS signs with OIDC")
+@pytest.mark.parametrize("params", AWS, ids=label)
+def test_an_aws_ship_passes_only_the_optional_git_secrets(render, params):
     docs = render(params)
-    assert "secrets" not in docs["ship.yml"]["jobs"]["ship"]
-    assert "secrets" not in triggers(docs["deploy-platform.yml"])["workflow_call"]
+    # AWS signs with OIDC, so the git credential is the only secret the ship job needs.
+    assert docs["ship.yml"]["jobs"]["ship"]["secrets"] == {
+        name: secret_ref(name) for name in GIT_SECRETS
+    }
+    assert triggers(docs["deploy-platform.yml"])["workflow_call"]["secrets"] == {
+        name: {"required": False} for name in GIT_SECRETS
+    }
 
 
 @pytest.mark.parametrize("params", SCALEWAY, ids=label)
@@ -380,7 +386,7 @@ def test_scaleway_keys_reach_only_the_vecten_step(render, raw, params):
         assert "GITHUB_ENV" not in raw(params, name), name
         for job_name, job in doc["jobs"].items():
             for step in steps(job):
-                if "secrets." not in str(step):
+                if "secrets." not in str(step) or step.get("id") == APP_TOKEN_STEP:
                     continue
                 # The comment step reads only the workflow's own token.
                 assert (name, job_name, step.get("run")) in wanted, (name, job_name, step)
@@ -406,6 +412,73 @@ def test_ship_jobs_can_read_review_verification(render, params):
                 for cmd in runs(job)
             ) or job.get("uses", "").endswith("deploy-platform.yml"):
                 assert permissions(docs[name], job).get("pull-requests") == "read"
+
+
+# The git credential: only the step that runs vecten ship, or vecten deploy, gets it
+
+GIT_SECRETS = ("VECTEN_GIT_CREDENTIALS", "VECTEN_GIT_APP_PRIVATE_KEY")
+APP_TOKEN_STEP = "git-app-token"
+GIT_CREDENTIALS_VALUE = (
+    "${{ steps.git-app-token.outputs.token && "
+    "format('https://x-access-token:{0}@github.com', steps.git-app-token.outputs.token) "
+    "|| secrets.VECTEN_GIT_CREDENTIALS }}"
+)
+SHIPPING_JOBS = (
+    ("terraform-apply.yml", "apply", "vecten deploy --env ${{ inputs.environment }} --json"),
+    ("deploy-platform.yml", "ship", "vecten ship --env ${{ inputs.environment }} --json"),
+)
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_only_the_shipping_vecten_step_gets_the_git_credential(render, raw, params):
+    docs = render(params)
+    wanted = {(name, job, command) for name, job, command in SHIPPING_JOBS}
+    holders = set()
+    for name, doc in docs.items():
+        assert "GIT_CREDENTIALS" not in str(doc.get("env", {})), name
+        for job_name, job in doc["jobs"].items():
+            assert "GIT_CREDENTIALS" not in str(job.get("env", {})), (name, job_name)
+            for step in steps(job):
+                if "GIT_CREDENTIALS" in str(step.get("env", {})) or "app-token" in str(
+                    step.get("env", {})
+                ):
+                    holders.add((name, job_name, step.get("run")))
+                if step.get("id") != APP_TOKEN_STEP:
+                    assert "VECTEN_GIT_APP_PRIVATE_KEY" not in str(step), (name, job_name)
+    assert holders == wanted
+    for name, job_name, command in SHIPPING_JOBS:
+        env = vecten_step(docs[name]["jobs"][job_name], command)["env"]
+        assert env["GIT_CREDENTIALS"] == GIT_CREDENTIALS_VALUE, name
+    # A pull request's code runs in the plan job, which never reaches the git credential.
+    assert "GIT_" not in raw(params, "terraform-plan.yml")
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_a_github_app_token_is_minted_for_the_shipping_job_only_when_configured(render, params):
+    docs = render(params)
+    for name, job_name, command in SHIPPING_JOBS:
+        job = docs[name]["jobs"][job_name]
+        ids = [step.get("id") for step in steps(job)]
+        [mint] = [step for step in steps(job) if step.get("id") == APP_TOKEN_STEP]
+        assert mint["if"] == "vars.VECTEN_GIT_APP_ID != ''", name
+        assert mint["uses"] == VERSIONS.github_actions["create_github_app_token"].split(" #")[0]
+        assert mint["with"] == {
+            "client-id": "${{ vars.VECTEN_GIT_APP_ID }}",
+            "private-key": secret_ref("VECTEN_GIT_APP_PRIVATE_KEY"),
+            "owner": "${{ vars.VECTEN_GIT_APP_OWNER }}",
+            "repositories": "${{ vars.VECTEN_GIT_APP_REPOSITORIES }}",
+            "permission-contents": "read",
+        }, name
+        shipping = [step.get("run") for step in steps(job)].index(command)
+        assert ids.index(APP_TOKEN_STEP) < shipping, name
+
+
+@pytest.mark.parametrize("params", DEPLOYED, ids=label)
+def test_the_ship_workflow_passes_the_git_secrets_by_name(render, params):
+    ship = render(params)["ship.yml"]["jobs"]["ship"]
+    assert ship["secrets"] != "inherit"
+    for name in GIT_SECRETS:
+        assert ship["secrets"][name] == secret_ref(name)
 
 
 # Actions and runners: every rendered workflow takes them from the versions table
