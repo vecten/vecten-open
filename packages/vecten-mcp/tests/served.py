@@ -84,8 +84,9 @@ class LaptopPg:
 
 
 @contextmanager
-def laptop_postgres(tmp_path):
-    """The `local` profile's Postgres: the laptop init script, every database, the log prefix."""
+def laptop_postgres(tmp_path, environment=None):
+    """The `local` profile's Postgres: the laptop init script, every database, the log prefix;
+    `environment` adds what the generated Compose file passes, such as VECTEN_AREAS."""
     from vecten_shared.sql import local_init_script_path, setup_sql_path
 
     init = tmp_path / "pg-init"
@@ -96,7 +97,7 @@ def laptop_postgres(tmp_path):
     shutil.copy(setup_sql_path(), init / "vecten" / "warehouse_setup.sql")
     init.chmod(0o755)
     (init / "vecten").chmod(0o755)
-    env = {"VECTEN_WITH_MCP": "true", **LAPTOP_PASSWORDS}
+    env = {"VECTEN_WITH_MCP": "true", **LAPTOP_PASSWORDS, **(environment or {})}
     command = ["postgres", "-c", f"log_line_prefix={LOG_LINE_PREFIX}"]
     with docker_util.pg_container(init, env, command) as (connect, name):
         with connect("postgres", LAPTOP_PASSWORDS["POSTGRES_PASSWORD"], "postgres") as c:
