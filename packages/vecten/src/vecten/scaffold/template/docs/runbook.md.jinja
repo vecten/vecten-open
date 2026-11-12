@@ -1028,9 +1028,10 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
 - Terraform signs in as a deploy user with key-pair authentication. Create that user with a
   default role that holds
   CREATE DATABASE, CREATE WAREHOUSE, CREATE ROLE, CREATE USER and MANAGE GRANTS
-  on the account. MANAGE GRANTS lets the first apply set the future grants in `CORE` and
-  `MARTS` through which `ANALYST` reads every table dbt builds there. Then store the user's
-  name and private key:
+  on the account. [% if 'mcp' in components %]`ANALYST` reads `CORE` and `MARTS` through the
+  default group's grants, which the MCP applies; the module grants it no schema. [% else %]MANAGE GRANTS lets the first apply set the future grants in `CORE` and
+  `MARTS` through which `ANALYST` reads every table dbt builds there. [% endif %]Then store
+  the user's name and private key:
   `vecten secret set DEPLOY_SNOWFLAKE_USER --env <env>` and
   `vecten secret set DEPLOY_SNOWFLAKE_PRIVATE_KEY --env <env> < <private key file>`.
   `vecten deploy` refuses while either is missing.

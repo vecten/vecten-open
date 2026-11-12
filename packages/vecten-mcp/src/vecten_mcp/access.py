@@ -23,8 +23,8 @@ class AccessService:
         self.lock = RLock()
 
     def seed_defaults(self):
-        # Setup SQL creates these grants. Record them once so revoke is effective,
-        # without reintroducing an administrator's later revocation on restart.
+        # No setup grants these: the first reconciliation applies them. Recording them once
+        # keeps an administrator's later revocation from coming back on restart.
         with self.lock, self.state.transaction() as conn:
             if self.state.get("bootstrap", "default_grants", conn=conn):
                 return

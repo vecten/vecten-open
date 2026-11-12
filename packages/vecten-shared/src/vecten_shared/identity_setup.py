@@ -90,15 +90,10 @@ SELECT format('CREATE ROLE impersonator LOGIN NOINHERIT PASSWORD %L', :'imperson
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='impersonator') \\gexec
 GRANT analyst TO provisioner WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
 GRANT CONNECT ON DATABASE {_ident(database)} TO analyst, provisioner, impersonator;
-SELECT format('GRANT USAGE ON SCHEMA %I TO analyst, provisioner', nspname)
-FROM pg_namespace WHERE nspname IN ('core','marts') \\gexec
-SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO analyst', nspname)
+SELECT format('GRANT USAGE ON SCHEMA %I TO provisioner', nspname)
 FROM pg_namespace WHERE nspname IN ('core','marts') \\gexec
 SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO provisioner WITH GRANT OPTION', nspname)
 FROM pg_namespace WHERE nspname IN ('core','marts') \\gexec
-SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON TABLES TO analyst',
-              r.rolname,n.nspname)
-FROM pg_namespace n JOIN pg_roles r ON r.oid=n.nspowner WHERE n.nspname IN ('core','marts') \\gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
               'GRANT SELECT ON TABLES TO provisioner WITH GRANT OPTION',
               r.rolname,n.nspname)
@@ -111,19 +106,20 @@ FROM pg_namespace n JOIN pg_roles r ON r.oid=n.nspowner WHERE n.nspname IN ('cor
     if public_key is not None and not re.fullmatch(r"[A-Za-z0-9+/=]+", public_key):
         raise ValueError("invalid provisioner public key")
     key = public_key or "<provisioner RSA public key without PEM headers>"
+    # ANALYST's reads are the default group's grants in the MCP's state, which its
+    # reconciliation applies; a grant here would undo a revoke made there on every rerun.
     grants = [f"GRANT USAGE ON DATABASE {_ident(database.upper())} TO ROLE ANALYST;"]
     if warehouse:
         for role in ("ANALYST", "PROVISIONER"):
             grants.append(f"GRANT USAGE ON WAREHOUSE {_ident(warehouse.upper())} TO ROLE {role};")
     for schema in ("CORE", "MARTS"):
         target = f"{_ident(database.upper())}.{_ident(schema)}"
-        for role in ("ANALYST", "PROVISIONER"):
-            grants.append(f"GRANT USAGE ON SCHEMA {target} TO ROLE {role};")
-            suffix = " WITH GRANT OPTION" if role == "PROVISIONER" else ""
-            for shape in ("ALL", "FUTURE"):
-                grants.append(
-                    f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE {role}{suffix};"
-                )
+        grants.append(f"GRANT USAGE ON SCHEMA {target} TO ROLE PROVISIONER;")
+        for shape in ("ALL", "FUTURE"):
+            grants.append(
+                f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE PROVISIONER "
+                "WITH GRANT OPTION;"
+            )
     data_grants = "\n".join(grants)
     helper = snowflake_access_helper(database, warehouse)
     leftover_grants = _leftover_grants(database.upper(), warehouse.upper() if warehouse else None)

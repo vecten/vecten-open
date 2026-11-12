@@ -344,14 +344,16 @@ def test_snowflake_script_seeds_scoped_data_access_without_owner_power():
     assert 'GRANT USAGE ON WAREHOUSE "ANALYTICS_WH" TO ROLE ANALYST;' in sql
     for schema in ("CORE", "MARTS"):
         target = f'"ANALYTICS"."{schema}"'
-        for role in ("ANALYST", "PROVISIONER"):
-            assert f"GRANT USAGE ON SCHEMA {target} TO ROLE {role};" in sql
-            suffix = " WITH GRANT OPTION" if role == "PROVISIONER" else ""
-            for shape in ("ALL", "FUTURE"):
-                assert (
-                    f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE {role}{suffix};"
-                    in sql
-                )
+        assert f"GRANT USAGE ON SCHEMA {target} TO ROLE PROVISIONER;" in sql
+        for shape in ("ALL", "FUTURE"):
+            assert (
+                f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE PROVISIONER "
+                "WITH GRANT OPTION;"
+            ) in sql
+    # ANALYST's reads come from the MCP's state, which its reconciliation applies.
+    assert "ON SCHEMA" not in "".join(
+        line for line in sql.splitlines() if line.endswith("TO ROLE ANALYST;")
+    )
     # The leftover note advises an administrator in a comment; no statement grants ownership.
     statements = "\n".join(line for line in sql.splitlines() if not line.startswith("--"))
     assert "MANAGE GRANTS" not in statements

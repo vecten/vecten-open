@@ -175,9 +175,15 @@ def test_identity_contract_grants(init_dir):
                     "select has_table_privilege('provisioner', %s, 'SELECT WITH GRANT OPTION')",
                     (rel,),
                 ).fetchone()[0]
-            assert c.execute("select has_schema_privilege('analyst', 'core', 'USAGE')").fetchone()[
-                0
-            ]
+            # The MCP's reconciliation grants analyst its reads, from the state database.
+            for schema in ("core", "marts"):
+                assert not c.execute(
+                    "select has_schema_privilege('analyst', %s, 'USAGE')", (schema,)
+                ).fetchone()[0]
+            assert not c.execute(
+                "select 1 from pg_default_acl d cross join lateral aclexplode(d.defaclacl) a"
+                " where a.grantee = 'analyst'::regrole"
+            ).fetchall()
             memberships = c.execute(
                 "select g.rolname, m.admin_option from pg_auth_members m"
                 " join pg_roles g on g.oid = m.roleid join pg_roles u on u.oid = m.member"
@@ -192,8 +198,25 @@ def test_identity_contract_grants(init_dir):
             c.execute("create role probe login password 'x' in role analyst")
             c.commit()
         with connect("probe", "x", "warehouse") as c:
+            for relation in ("core.t", "marts.v", "staging.s"):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    c.execute(f"select x from {relation}")
+                c.rollback()
+
+
+def test_without_mcp_analyst_reads_core_and_marts(init_dir):
+    with pg_container(init_dir, ENV_WITHOUT_MCP) as (connect, _):
+        with connect("loader", "l1", "warehouse") as c:
+            c.execute("create table core.t (x int)")
+            c.execute("insert into core.t values (1)")
+            c.execute("create table marts.m as select x from core.t")
+            c.execute("create table staging.s (x int)")
+        with connect("postgres", "master", "warehouse") as c:
+            c.execute("create role probe login password 'x' in role analyst")
+            c.commit()
+        with connect("probe", "x", "warehouse") as c:
             assert c.execute("select x from core.t").fetchone() == (1,)
-            assert c.execute("select x from marts.v").fetchone() == (1,)
+            assert c.execute("select x from marts.m").fetchone() == (1,)
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 c.execute("select x from staging.s")
 

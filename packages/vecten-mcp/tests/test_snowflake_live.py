@@ -187,6 +187,10 @@ def account():
             database=DATABASE,
             warehouse=WAREHOUSE,
         )
+        # The script grants ANALYST no data: the MCP's first reconciliation applies the default
+        # group's schema grants through READ_GRANT, as here.
+        for schema in ("core", "marts"):
+            adapter.schema_grant("analyst", schema)
         yield type("Account", (), {"cursor": cursor, "adapter": adapter, "keys": keys})
     finally:
         try:
