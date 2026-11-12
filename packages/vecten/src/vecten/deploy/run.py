@@ -56,7 +56,7 @@ from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
 from vecten_shared.records import write_text_atomic
-from vecten_shared.services import check_bindings
+from vecten_shared.services import check_bindings, limits_per_host
 
 SHIP_WORKFLOW = "deploy-platform.yml"
 APPLY_WORKFLOW = "terraform-apply.yml"
@@ -347,7 +347,8 @@ def ship_env(
     if check:
         found = check_facts(config, env)
         export_facts(found)
-        return found
+        limits = limits_per_host(config, read_extension_record(project_root) or {})
+        return {**found, "service_limits": limits} if limits else found
     plane = control_plane(config, project_root, env)
     require_deployed(config, env)
     # A ship workflow runs on every push, the first deploy's own included; inside Actions it

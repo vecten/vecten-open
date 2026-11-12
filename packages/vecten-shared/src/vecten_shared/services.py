@@ -359,3 +359,14 @@ def unbound_parts(config: VectenConfig, record: dict[str, Extension]) -> list[st
                 if route not in binding.routes
             ]
     return found
+
+
+def limits_per_host(config: VectenConfig, record: dict[str, Extension]) -> dict[str, dict]:
+    """What bound services reserve on each deployed host: one VM under `minimal`."""
+    found: dict[str, dict] = {}
+    for bound in bound_services(config, record):
+        host = "vm" if config.profile == "minimal" else bound.host
+        entry = found.setdefault(host, {"memory_mb": 0, "cpus": 0.0})
+        entry["memory_mb"] += bound.memory_mb
+        entry["cpus"] = round(entry["cpus"] + bound.cpus, 2)
+    return found

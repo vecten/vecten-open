@@ -322,3 +322,27 @@ def test_check_refuses_a_binding_the_record_does_not_declare(invoke, no_cloud):
     r = invoke("ship", "--env", "prod", "--check", "--json")
     assert r.exit_code == ExitCode.CONFIG, r.stdout
     assert "services.acme.portal" in r.stdout
+
+
+def test_check_names_what_services_reserve_on_each_host(invoke, no_cloud, tmp_path, monkeypatch):
+    from .services_fixtures import BOT, with_services
+
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    tool = {**BOT, "routes": {}, "components": ["mcp"], "memory_mb": 128, "cpus": 0.25}
+    with_services(
+        no_cloud,
+        {"bot": {"memory_mb": 512}, "tool": {"host": "mcp"}, "worker": {"local": False}},
+        declared={"bot": {**BOT, "routes": {}}, "tool": tool, "worker": {**BOT, "routes": {}}},
+    )
+    r = invoke("ship", "--env", "prod", "--check", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["service_limits"] == {
+        "platform": {"memory_mb": 768, "cpus": 1.0},
+        "mcp": {"memory_mb": 128, "cpus": 0.25},
+    }
+    assert out.read_text() == "bootstrapped=false\ndeployed=false\n"
+    text = invoke("ship", "--env", "prod", "--check").stdout
+    assert "services on platform reserve 768 MB and 1 CPUs" in text
+    assert "bootstrapped=false deployed=false" in text

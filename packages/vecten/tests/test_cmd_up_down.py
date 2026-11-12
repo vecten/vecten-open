@@ -39,6 +39,20 @@ class FakeDocker:
         self.profiles.append(list(profiles))
         if args[:1] == ["up"] and self._fail_up:
             return subprocess.CompletedProcess(args, 1, "", "service nginx failed")
+        if args[:2] == ["config", "--services"]:
+            names = []
+            for path in files:
+                if not path.is_file():
+                    continue
+                for name, svc in (
+                    (yaml.safe_load(path.read_text()) or {}).get("services", {}).items()
+                ):
+                    if not svc.get("profiles") or set(svc["profiles"]) & set(profiles):
+                        names.append(name)
+            return subprocess.CompletedProcess(args, 0, "\n".join(dict.fromkeys(names)), "")
+        if args[:1] == ["ps"] and "--format" in args:
+            rows = [{"Service": n, "State": "running", "Health": "starting"} for n in args[3:]]
+            return subprocess.CompletedProcess(args, 0, "\n".join(map(json.dumps, rows)), "")
         if args[:1] == ["ps"]:
             return subprocess.CompletedProcess(args, 0, "abc123\n" if self._running else "", "")
         return subprocess.CompletedProcess(args, 0, "", "")
@@ -483,3 +497,95 @@ def test_up_reads_only_in_repo_declarations_and_accepts_an_unchanged_one(
     r = invoke("up", "--json")
     assert "differs from extensions.lock.json" not in r.stdout, r.stdout
     assert seen == [{"acme"}]
+
+
+def _bound_bot(root, monkeypatch, **binding):
+    from .services_fixtures import BOT, with_services
+
+    declared = {**BOT, "routes": {"webhook": BOT["routes"]["webhook"]}, "memory_mb": 384}
+    worker = {"command": ["run"], "health": {"command": ["true"]}, "cpus": 0.25}
+    bindings = {
+        "bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}, **binding},
+        "worker": {},
+    }
+    with_services(root, bindings, declared={"bot": declared, "worker": worker})
+    monkeypatch.setattr(up_mod, "write_project_layer", lambda *a, **k: None)
+
+
+def test_up_starts_services_after_the_stack_and_never_waits_for_them(
+    invoke, workdir, fake, monkeypatch
+):
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    _bound_bot(workdir / "p", monkeypatch)
+    r = invoke("up", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert ["config", "--services"] in fake.calls
+    stack_up, services_up, ps = [c for c in fake.calls if c[:1] in (["up"], ["ps"])]
+    assert stack_up[:6] == ["up", "-d", "--build", "--wait", "--wait-timeout", "240"]
+    assert "nginx" in stack_up[6:] and "airflow-api-server" in stack_up[6:]
+    assert not [name for name in stack_up if name.startswith("svc-")]
+    assert services_up == ["up", "-d", "--no-build", "svc-acme-bot", "svc-acme-worker"]
+    assert ps == ["ps", "--format", "json", "svc-acme-bot", "svc-acme-worker"]
+    doc = json.loads(r.stdout)
+    assert doc["services"] == {"acme.bot": "starting", "acme.worker": "starting"}
+    assert doc["limits"] == {"memory_mb": 640, "cpus": 0.75}
+    text = invoke("up").stdout
+    assert "service acme.bot: starting" in text
+    assert "services reserve 640 MB and 0.75 CPUs" in text
+
+
+def test_up_without_services_starts_the_stack_as_one_call(invoke, workdir, fake, monkeypatch):
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    r = invoke("up", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert [c for c in fake.calls if c[:1] == ["up"]] == [
+        ["up", "-d", "--build", "--wait", "--wait-timeout", "240"]
+    ]
+    doc = json.loads(r.stdout)
+    assert doc["services"] == {} and doc["limits"] == {"memory_mb": 0, "cpus": 0}
+
+
+def test_a_service_kept_off_the_laptop_is_not_started(invoke, workdir, fake, monkeypatch):
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    _bound_bot(workdir / "p", monkeypatch, local=False)
+    r = invoke("up", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert ["up", "-d", "--no-build", "svc-acme-worker"] in fake.calls
+    assert json.loads(r.stdout)["services"] == {"acme.worker": "starting"}
+
+
+def test_a_service_compose_cannot_start_is_reported_and_the_stack_stays_up(
+    invoke, workdir, fake, monkeypatch
+):
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    _bound_bot(workdir / "p", monkeypatch)
+    real = fake.compose
+
+    def compose(project_root, files, profiles, args):
+        if args[:3] == ["up", "-d", "--no-build"]:
+            fake.calls.append(args)
+            return subprocess.CompletedProcess(args, 1, "", "no such image")
+        return real(project_root, files, profiles, args)
+
+    monkeypatch.setattr(fake, "compose", compose)
+    r = invoke("up", "--json")
+    assert r.exit_code == 0, r.stdout
+    services = json.loads(r.stdout)["services"]
+    assert services["acme.bot"].startswith("not started: no such image")
+
+
+def test_services_an_override_file_adds_start_with_the_stack(invoke, workdir, fake, monkeypatch):
+    invoke("init", "p", *LOCAL, "--json")
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    _bound_bot(root, monkeypatch)
+    override = root / "orchestration" / "docker-compose.override.yml"
+    override.parent.mkdir(exist_ok=True)
+    override.write_text(yaml.safe_dump({"services": {"mailhog": {"image": "mailhog"}}}))
+    assert invoke("up", "--json").exit_code == 0
+    stack_up = next(c for c in fake.calls if c[:1] == ["up"])
+    assert "mailhog" in stack_up
