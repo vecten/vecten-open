@@ -1,5 +1,6 @@
-"""The MCP's own health from the admin API: a semantic model that never became ready, and
-grants the last reconciliation could not apply. Both clear once the MCP reports them fixed."""
+"""The MCP's own health from the admin API: a semantic model that never became ready, grants
+the last reconciliation could not apply, and bound groups an analytics app does not admit. Each
+clears once the MCP reports it fixed."""
 
 from __future__ import annotations
 
@@ -75,6 +76,38 @@ def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> 
     )
 
 
+def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
+    app, group = (str(entry.get(k, "?")) for k in ("app", "group"))
+    where = f"`[apps.{app}]` groups in vecten.toml"
+    if "dataset" in entry:
+        dataset, source = str(entry.get("dataset", "?")), str(entry.get("source", "?"))
+        title = f"App {app} does not admit group {group}"
+        resolution = (
+            f"vecten.toml binds {app} to group {group}, but {group} cannot read {source}, which "
+            "the app shows, so the gate does not let its members open the app. Grant it with "
+            f"`vecten grant {dataset} --group {group} --env {ctx.env}` if they should see that "
+            f"data; otherwise remove {group} from the {where} and ship."
+        )
+    else:
+        title = f"App {app} is bound to group {group}"
+        resolution = (
+            f"vecten.toml binds {app} to group {group}, which does not exist on the MCP. Create "
+            f"it with `vecten group add {group} --env {ctx.env}`, or remove it from the "
+            f"{where} and ship."
+        )
+    return Issue(
+        id=mcp_issue_id("app", app, group),
+        source="mcp",
+        kind="ask",
+        title=cap(title, TITLE_LIMIT),
+        resolution=resolution,
+        occurrences=1,
+        first_seen=None,
+        last_seen=iso(checked_at),
+        evidence=untrusted(sanitized(ctx, entry)),
+    )
+
+
 def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     if ctx.admin is None:
         raise SourceUnavailable("the admin API is not reachable from here")
@@ -86,4 +119,7 @@ def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     for failure in access.get("failures") or []:
         if isinstance(failure, dict):
             issues.append(grant_issue(ctx, failure, access.get("checked_at")))
+    for entry in access.get("apps") or []:
+        if isinstance(entry, dict):
+            issues.append(app_issue(ctx, entry, access.get("checked_at")))
     return issues
