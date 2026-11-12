@@ -287,7 +287,7 @@ class PackagesSection(Strict):
 # apt reads a trailing `-` as "remove this package", and a version starts with a digit after an
 # optional numeric epoch.
 _DEBIAN_PACKAGE = re.compile(
-    r"[a-z0-9][a-z0-9+.-]*[a-z0-9+.](=([0-9]+:)?[0-9][A-Za-z0-9.+~-]*[A-Za-z0-9.+~])?"
+    r"[a-z0-9][a-z0-9+.-]*[a-z0-9+.](=([0-9]+:)?[0-9]([A-Za-z0-9.+~-]*[A-Za-z0-9.+~])?)?"
 )
 
 
