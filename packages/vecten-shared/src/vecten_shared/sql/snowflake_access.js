@@ -57,7 +57,7 @@ function readGrant() {
     var schema = quoted(database) + '.' + quoted(SCHEMA_NAME);
     var action = enabled ? 'GRANT' : 'REVOKE';
     var direction = enabled ? ' TO' : ' FROM';
-    var relationTypes = ['TABLE'];
+    var relationTypes = [];
     if (relation !== null) {
         quoted(relation);
         var table = snowflake.execute({
@@ -66,8 +66,9 @@ function readGrant() {
         });
         if (!table.next()) throw new Error('dataset relation does not exist');
         var tableType = table.getColumnValue(1);
-        // TABLE_TYPE names a dynamic or Iceberg table BASE TABLE, so each object type that
-        // can be one is tried in turn.
+        // A base table may be a dynamic or Iceberg table, whose GRANT names another object
+        // type; a statement naming the wrong one can succeed and change nothing, so each type
+        // is tried until the grant reads back as wanted.
         relationTypes = ['VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE'].indexOf(tableType) !== -1
             ? [tableType] : ['TABLE', 'DYNAMIC TABLE', 'ICEBERG TABLE'];
     }
@@ -76,35 +77,59 @@ function readGrant() {
         if (warehouse !== null) execute('GRANT USAGE ON WAREHOUSE ' + quoted(warehouse) + ' TO' + target);
         execute('GRANT USAGE ON SCHEMA ' + schema + ' TO' + target);
     }
-    var refused = [];
+    var prefix = database + '.' + SCHEMA_NAME + '.';
     if (relation !== null) {
         var first = null;
         for (var i = 0; i < relationTypes.length; i++) {
             try {
                 execute(action + ' SELECT ON ' + relationTypes[i] + ' ' + schema + '.' +
                         quoted(relation) + direction + target);
-                first = null;
-                break;
             } catch (e) {
                 if (first === null) first = e;
+                continue;
             }
+            if (selectsIn(prefix + relation, false) === enabled) return 'ok';
         }
-        if (first !== null) throw first;
-    } else {
-        // Tables and views hold every mart dbt builds by default, so a refusal there fails
-        // the call; another kind the account refuses is reported and the rest still apply.
-        KINDS.forEach(function(kind, index) {
-            ['ALL','FUTURE'].forEach(function(shape) {
-                var statement = action + ' SELECT ON ' + shape + ' ' + kind + ' IN SCHEMA ' +
-                    schema + direction + target;
-                if (index < 2) { execute(statement); return; }
-                try { execute(statement); }
-                catch (e) { refused.push({kind: shape + ' ' + kind, error: String(e.message || e)}); }
-            });
-        });
-        if (!enabled) execute('REVOKE USAGE ON SCHEMA ' + schema + ' FROM' + target);
+        throw first !== null ? first
+            : new Error('no object type changed SELECT on ' + prefix + relation);
     }
-    return refused.length ? 'refused: ' + JSON.stringify(refused) : 'ok';
+    // A refusal on tables or views, which hold dbt's default marts, fails the call.
+    var refused = [];
+    KINDS.forEach(function(kind, index) {
+        ['ALL','FUTURE'].forEach(function(shape) {
+            var statement = action + ' SELECT ON ' + shape + ' ' + kind + ' IN SCHEMA ' +
+                schema + direction + target;
+            if (index < 2) { execute(statement); return; }
+            try { execute(statement); }
+            catch (e) { refused.push({kind: shape + ' ' + kind, error: String(e.message || e)}); }
+        });
+    });
+    // A grant reports another refused kind and keeps the rest; a revoke fails while the
+    // target still reads anything in the schema.
+    if (enabled) return refused.length ? 'refused: ' + JSON.stringify(refused) : 'ok';
+    execute('REVOKE USAGE ON SCHEMA ' + schema + ' FROM' + target);
+    if (refused.length && selectsIn(prefix, true)) {
+        throw new Error('the target still holds SELECT in ' + database + '.' + SCHEMA_NAME +
+            ' after refusals: ' + refused.map(function(r) {
+                return r.kind + ': ' + r.error;
+            }).join('; '));
+    }
+    return 'ok';
+}
+// Whether the target holds SELECT on the relation `name`, or, with `within`, on any relation
+// or future relation whose name starts with it.
+function selectsIn(name, within) {
+    name = name.replace(/"/g, '');
+    var shows = ['SHOW GRANTS TO ROLE ', 'SHOW FUTURE GRANTS TO ROLE '];
+    for (var i = 0; i < (within ? 2 : 1); i++) {
+        var rows = execute(shows[i] + quoted(TARGET));
+        while (rows.next()) {
+            var held = String(rows.getColumnValue('name')).replace(/"/g, '');
+            if (rows.getColumnValue('privilege') === 'SELECT' &&
+                (within ? held.indexOf(name) === 0 : held === name)) return true;
+        }
+    }
+    return false;
 }
 // What one bounded target holds in this database, read and never changed: USAGE and SELECT
 // grants, and the future grants made at schema or database level.

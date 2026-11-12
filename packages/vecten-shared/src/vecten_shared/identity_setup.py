@@ -30,9 +30,9 @@ def postgres_access_helpers():
     )[0]
 
 
-# An install from before the procedures reported a version is version 1; version 2 added
-# READ_GRANTS, version 3 the area schemas and every relation kind.
-ACCESS_VERSION = 3
+# The version the installed procedures must report for every feature this server uses; it
+# changes with their text, and an install that reports none is version 1.
+ACCESS_VERSION = 4
 
 
 def snowflake_access_helper(database, warehouse=None):

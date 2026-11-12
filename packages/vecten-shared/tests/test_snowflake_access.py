@@ -90,16 +90,25 @@ def test_owner_procedure_enforces_boundaries(target, schema, relation, enabled, 
 const fs = require('fs');
 const p = JSON.parse(fs.readFileSync(0, 'utf8'));
 const statements = [];
+// The relation's SELECT as SHOW GRANTS TO ROLE reads it back: held before a revoke.
+let selects = p.enabled === false && p.relation !== null;
 const snowflake = {execute: ({sqlText, binds}) => {
-    if (sqlText.startsWith('SHOW GRANTS')) {
+    if (sqlText.startsWith('SHOW GRANTS ON ROLE')) {
         let first = true;
         return {next: () => {const value = first && p.owned; first = false; return value;},
                 getColumnValue: (key) => ({privilege:'OWNERSHIP',
                     grantee_name:'PROVISIONER', granted_to:'ROLE'})[key]};
     }
+    if (sqlText.startsWith('SHOW GRANTS TO ROLE')) {
+        let first = true;
+        const name = 'D.' + p.schema + '.' + p.relation;
+        return {next: () => {const value = first && selects; first = false; return value;},
+                getColumnValue: (key) => ({privilege:'SELECT', name})[key]};
+    }
     if (sqlText.startsWith('SELECT TABLE_TYPE')) {
         return {next: () => true, getColumnValue: () => 'BASE TABLE'};
     }
+    if (/^(GRANT|REVOKE) SELECT ON TABLE /.test(sqlText)) selects = sqlText.startsWith('GRANT');
     statements.push(sqlText);
     return {};
 }};
@@ -276,18 +285,30 @@ KIND_RUN = r"""
 const fs = require('fs');
 const p = JSON.parse(fs.readFileSync(0, 'utf8'));
 const statements = [];
+const held = p.held.slice(), future = p.future.slice();
 const rows = (list) => {
     let i = -1;
     return {next: () => ++i < list.length, getColumnValue: (key) => list[i][key]};
 };
+const types = 'TABLE|VIEW|MATERIALIZED VIEW|EXTERNAL TABLE|DYNAMIC TABLE|ICEBERG TABLE';
+const single = new RegExp('^(GRANT|REVOKE) SELECT ON (' + types + ') (\\S+) ');
 const snowflake = {execute: ({sqlText}) => {
     if (sqlText.startsWith('SHOW GRANTS ON ROLE')) {
         return rows([{privilege:'OWNERSHIP', granted_to:'ROLE', grantee_name:'PROVISIONER'}]);
     }
     if (sqlText.startsWith('SELECT TABLE_TYPE')) return rows([{1: p.tableType}]);
+    if (sqlText.startsWith('SHOW GRANTS TO ROLE')) return rows(held);
+    if (sqlText.startsWith('SHOW FUTURE GRANTS TO ROLE')) return rows(future);
     const refused = p.refuse.find(part => sqlText.indexOf(part) !== -1);
     if (refused) throw new Error('SQL compilation error: ' + refused + ' is not supported');
     statements.push(sqlText);
+    // A statement on the wrong object type of a relation succeeds and changes nothing.
+    const m = sqlText.match(single);
+    if (m && p.objectType === m[2]) {
+        const name = m[3].replace(/"/g, '');
+        if (m[1] === 'GRANT') held.push({privilege: 'SELECT', granted_on: m[2], name});
+        else held.splice(held.findIndex(g => g.name === name), 1);
+    }
     return rows([]);
 }};
 const arg = v => v === null ? undefined : (typeof v === 'boolean' ? Number(v) : v);
@@ -300,7 +321,15 @@ process.stdout.write(JSON.stringify({value, error, statements}));
 """
 
 
-def _kinds(relation=None, enabled=True, table_type="BASE TABLE", refuse=()):
+def _kinds(
+    relation=None,
+    enabled=True,
+    table_type="BASE TABLE",
+    object_type=None,
+    refuse=(),
+    held=(),
+    future=(),
+):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
@@ -313,7 +342,10 @@ def _kinds(relation=None, enabled=True, table_type="BASE TABLE", refuse=()):
                 relation=relation,
                 enabled=enabled,
                 tableType=table_type,
+                objectType=object_type,
                 refuse=list(refuse),
+                held=list(held),
+                future=list(future),
             )
         ),
         text=True,
@@ -336,15 +368,35 @@ def test_a_schema_grant_covers_every_relation_kind_now_and_in_future(enabled):
             assert statement in output["statements"]
 
 
-def test_a_kind_the_account_refuses_is_reported_and_the_others_still_apply():
-    output = _kinds(enabled=False, refuse=["ICEBERG TABLES"])
+def test_a_kind_the_account_refuses_on_a_grant_is_reported_and_the_others_still_apply():
+    output = _kinds(refuse=["ICEBERG TABLES"])
     assert output["error"] is None, output
     assert output["value"].startswith("refused: ")
     refusals = json.loads(output["value"].removeprefix("refused: "))
     assert [r["kind"] for r in refusals] == ["ALL ICEBERG TABLES", "FUTURE ICEBERG TABLES"]
     assert all("ICEBERG TABLES is not supported" in r["error"] for r in refusals)
     assert any("DYNAMIC TABLES" in s for s in output["statements"])
+
+
+DYNAMIC_FUTURE = {
+    "privilege": "SELECT",
+    "grant_on": "DYNAMIC_TABLE",
+    "name": "D.MARTS.<DYNAMIC_TABLE>",
+}
+
+
+def test_a_revoke_a_kind_refuses_fails_while_the_role_still_holds_a_read_in_the_schema():
+    output = _kinds(enabled=False, refuse=["DYNAMIC TABLES"], future=[DYNAMIC_FUTURE])
+    assert output["error"] is not None, output
+    assert "DYNAMIC TABLES is not supported" in output["error"]
+    assert "still holds" in output["error"]
     assert 'REVOKE USAGE ON SCHEMA "D"."MARTS" FROM ROLE "FINANCE"' in output["statements"]
+
+
+def test_a_revoke_a_kind_refuses_succeeds_once_nothing_is_held_in_the_schema():
+    elsewhere = {"privilege": "SELECT", "granted_on": "TABLE", "name": "D.CORE.ORDERS"}
+    output = _kinds(enabled=False, refuse=["ICEBERG TABLES"], held=[elsewhere])
+    assert output["error"] is None and output["value"] == "ok", output
 
 
 def test_a_refused_table_grant_fails_the_whole_call():
@@ -353,21 +405,53 @@ def test_a_refused_table_grant_fails_the_whole_call():
 
 
 @pytest.mark.parametrize(
-    ("table_type", "refuse", "expected"),
+    ("table_type", "object_type", "refuse", "expected"),
     [
-        ("BASE TABLE", (), "TABLE"),
-        ("VIEW", (), "VIEW"),
-        ("MATERIALIZED VIEW", (), "MATERIALIZED VIEW"),
-        ("EXTERNAL TABLE", (), "EXTERNAL TABLE"),
-        ("BASE TABLE", ("ON TABLE",), "DYNAMIC TABLE"),
-        ("BASE TABLE", ("ON TABLE", "ON DYNAMIC TABLE"), "ICEBERG TABLE"),
+        ("BASE TABLE", "TABLE", (), ["TABLE"]),
+        ("VIEW", "VIEW", (), ["VIEW"]),
+        ("MATERIALIZED VIEW", "MATERIALIZED VIEW", (), ["MATERIALIZED VIEW"]),
+        ("EXTERNAL TABLE", "EXTERNAL TABLE", (), ["EXTERNAL TABLE"]),
+        ("BASE TABLE", "DYNAMIC TABLE", ("ON TABLE",), ["DYNAMIC TABLE"]),
+        ("BASE TABLE", "DYNAMIC TABLE", (), ["TABLE", "DYNAMIC TABLE"]),
+        ("BASE TABLE", "ICEBERG TABLE", (), ["TABLE", "DYNAMIC TABLE", "ICEBERG TABLE"]),
     ],
 )
-def test_a_dataset_grant_names_its_relations_kind(table_type, refuse, expected):
-    output = _kinds(relation="ORDERS", table_type=table_type, refuse=refuse)
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_dataset_grant_names_its_relations_kind_and_reads_it_back(
+    table_type, object_type, refuse, expected, enabled
+):
+    held = (
+        []
+        if enabled
+        else [{"privilege": "SELECT", "granted_on": object_type, "name": "D.MARTS.ORDERS"}]
+    )
+    output = _kinds(
+        relation="ORDERS",
+        enabled=enabled,
+        table_type=table_type,
+        object_type=object_type,
+        refuse=refuse,
+        held=held,
+    )
     assert output["error"] is None and output["value"] == "ok", output
+    verb, direction = ("GRANT", "TO") if enabled else ("REVOKE", "FROM")
     selects = [s for s in output["statements"] if " SELECT ON " in s]
-    assert selects == [f'GRANT SELECT ON {expected} "D"."MARTS"."ORDERS" TO ROLE "FINANCE"']
+    assert selects == [
+        f'{verb} SELECT ON {kind} "D"."MARTS"."ORDERS" {direction} ROLE "FINANCE"'
+        for kind in expected
+    ]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_dataset_grant_no_object_type_changes_fails(enabled):
+    held = (
+        []
+        if enabled
+        else [{"privilege": "SELECT", "granted_on": "TABLE", "name": "D.MARTS.ORDERS"}]
+    )
+    output = _kinds(relation="ORDERS", enabled=enabled, object_type="OTHER", held=held)
+    assert output["error"] is not None, output
+    assert "ORDERS" in output["error"]
 
 
 def test_a_base_table_no_object_type_accepts_fails_with_the_first_refusal():
