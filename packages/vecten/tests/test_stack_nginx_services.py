@@ -138,21 +138,35 @@ def test_every_location_of_a_service_hostname_sets_the_identity_headers_itself(c
             assert '"__Host-vecten-gate=$vecten_gate_session' in body, key
 
 
-def test_the_gate_cookie_is_stripped_by_a_map_that_keeps_every_other_cookie():
+def test_the_gate_cookies_are_stripped_by_maps_that_keep_every_other_cookie():
     text = conf(site())
     assert "map $http_cookie $vecten_cookie_stripped {" in text
-    assert "map $vecten_cookie_stripped $vecten_service_cookie {" in text
+    assert "map $vecten_cookie_stripped $vecten_cookie_stripped_twice {" in text
+    assert "map $vecten_cookie_stripped_twice $vecten_service_cookie {" in text
     assert text.index("map $http_cookie") < text.index("server {")
-    pattern = re.search(r'"~\*(\^.*?)" "\$vecten_cookie_before\$vecten_cookie_after";', text)
-    assert pattern
-    regex = pattern.group(1).replace("(?<", "(?P<")
+    passes = [
+        (re.search(rf'"~\*(\^.*?)" "\$vecten_cookie_{a}\$vecten_cookie_{b}";', text), a, b)
+        for a, b in (("before", "after"), ("head", "tail"))
+    ]
+    assert all(found for found, _, _ in passes)
 
     def strip(cookie):
-        match = re.match(regex, cookie, re.I)
-        out = cookie if not match else match["vecten_cookie_before"] + match["vecten_cookie_after"]
-        return re.sub(r"^;\s*", "", out)
+        for found, a, b in passes:
+            match = re.match(found.group(1).replace("(?<", "(?P<"), cookie, re.I)
+            cookie = (
+                cookie if not match else match[f"vecten_cookie_{a}"] + match[f"vecten_cookie_{b}"]
+            )
+        return re.sub(r"^;\s*", "", cookie)
 
-    gate = "__Host-vecten-gate=abc"
+    gate, state = "__Host-vecten-gate=abc", "__Host-vecten-gate-state=V"
+    assert strip(state) == "" and strip(f"a=1; {state}; b=2") == "a=1; b=2"
+    assert strip(f"{gate}; a=1; {state}") == "a=1"
+    assert strip(f"a=1; {state}; b=2; {gate}") == "a=1; b=2"
+    assert strip("__HOST-vecten-GATE-state=V; a=1") == "a=1"
+    assert strip("x__Host-vecten-gate-state=V; a=1") == "x__Host-vecten-gate-state=V; a=1"
+    # One pass per name: a second cookie of a name stays, and the request is refused.
+    assert strip("__HOST-VECTEN-GATE=decoy; __Host-vecten-gate=REAL") == "__Host-vecten-gate=REAL"
+    assert strip("__Host-vecten-gate-statex=V; a=1") == "__Host-vecten-gate-statex=V; a=1"
     assert strip(gate) == ""
     assert strip(f"{gate}; a=1") == "a=1"
     assert strip(f"a=1; {gate}") == "a=1"
@@ -271,6 +285,7 @@ def test_a_gate_cookie_left_after_the_strip_refuses_the_request():
     assert pattern
     regex = pattern.group(1)
     assert re.search(regex, "__Host-vecten-gate=REAL", re.I)
+    assert re.search(regex, "a=1; __Host-vecten-gate-state=V", re.I)
     assert re.search(regex, "a=1; __host-vecten-gate=b", re.I)
     assert not re.search(regex, "a=1; b=2", re.I)
     assert not re.search(regex, "x__Host-vecten-gate=1", re.I)

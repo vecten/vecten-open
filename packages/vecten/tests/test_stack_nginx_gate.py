@@ -82,7 +82,7 @@ def test_the_gate_paths_go_to_the_mcp_with_the_hostname_and_the_gate_cookies(pat
     assert "proxy_set_header Host mcp.data.acme.com;" in body
     assert (
         'proxy_set_header Cookie "__Host-vecten-gate=$vecten_gate_session; '
-        'vecten-gate-state=$vecten_gate_state";' in body
+        '__Host-vecten-gate-state=$vecten_gate_state";' in body
     )
     assert "if ($vecten_cookie_repeated) {\n            return 400;\n        }" in body
     assert "internal;" not in body
@@ -146,9 +146,12 @@ def test_the_gate_cookies_are_read_by_their_exact_names():
     assert read(session, "a=1; __Host-vecten-gate=S1; b=2") == "S1"
     assert read(session, "__Host-vecten-gate=S1") == "S1"
     assert read(session, "x__Host-vecten-gate=S1") == ""
-    assert read(session, "vecten-gate-state=V") == ""
-    assert read(state, "__Host-vecten-gate=S1; vecten-gate-state=V") == "V"
-    assert read(state, "xvecten-gate-state=V") == ""
+    assert read(session, "__Host-vecten-gate-state=V") == ""
+    assert read(state, "__Host-vecten-gate=S1; __Host-vecten-gate-state=V") == "V"
+    # A sibling hostname can set a cookie of the plain name for the whole domain, never one
+    # with the __Host- prefix, and browsers send it first when its path is longer.
+    assert read(state, "vecten-gate-state=EVIL; __Host-vecten-gate-state=V") == "V"
+    assert read(state, "vecten-gate-state=EVIL") == ""
 
 
 def test_two_portals_share_the_maps_and_the_named_locations_stay_per_server():

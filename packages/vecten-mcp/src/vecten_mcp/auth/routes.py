@@ -1,6 +1,7 @@
 """Browser and OAuth endpoints; authentication failures never echo supplied credentials."""
 
 import base64
+import logging
 import secrets
 from html import escape
 from urllib.parse import urlencode
@@ -13,9 +14,7 @@ from vecten_mcp.auth.gate import (
     HOST_HEADER,
     ROUTE_HEADER,
     STATE_COOKIE,
-    STATE_PATH,
     STATE_SECONDS,
-    VERIFIER,
 )
 from vecten_mcp.auth.identity import OIDCBackend, digest
 from vecten_mcp.auth.limits import RateLimit
@@ -28,8 +27,10 @@ from vecten_mcp.auth.pages import (
     redirect_page,
 )
 from vecten_mcp.auth.service import SESSION_SECONDS, RegistrationError
+from vecten_mcp.failures import describe_error
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+logger = logging.getLogger(__name__)
 
 
 # Routes a person reaches in a browser: a failure there is a page, while the client endpoints
@@ -343,10 +344,13 @@ def auth_routes(service, gate=None):
         state.remove("browser_flows", digest(flow))
         return redirect_page(url)
 
-    def gate_cookie(response, name, value, *, max_age, path):
+    def gate_cookie(response, name, value, *, max_age):
         response.set_cookie(
-            name, value, max_age=max_age, path=path, secure=True, httponly=True, samesite="lax"
+            name, value, max_age=max_age, path="/", secure=True, httponly=True, samesite="lax"
         )
+
+    def gate_cookie_cleared(response, name):
+        response.delete_cookie(name, path="/", secure=True, httponly=True, samesite="lax")
 
     async def gate_start(request):
         # NGINX appends the visited $request_uri after `rd=` unencoded, so the rest of the
@@ -355,15 +359,13 @@ def auth_routes(service, gate=None):
         if raw and not raw.startswith("rd="):
             raise ValueError("invalid gate start")
         rd = raw.removeprefix("rd=") or "/"
-        # Requests a page makes while the person signs in start again; sharing the verifier
-        # keeps the first sign-in's callback valid.
-        verifier = request.cookies.get(STATE_COOKIE, "")
-        if not VERIFIER.fullmatch(verifier):
-            verifier = secrets.token_urlsafe(32)
+        # Always a new verifier: one the browser sent may have been planted by whoever wants
+        # their own code redeemed here.
+        verifier = secrets.token_urlsafe(32)
         response = RedirectResponse(
             gate.start(request.headers.get(HOST_HEADER, ""), rd, verifier), status_code=303
         )
-        gate_cookie(response, STATE_COOKIE, verifier, max_age=STATE_SECONDS, path=STATE_PATH)
+        gate_cookie(response, STATE_COOKIE, verifier, max_age=STATE_SECONDS)
         return response
 
     async def gate_authorize(request):
@@ -381,23 +383,38 @@ def auth_routes(service, gate=None):
             request.cookies.get(STATE_COOKIE, ""),
         )
         response = RedirectResponse(rd, status_code=303)
-        gate_cookie(response, GATE_COOKIE, sid, max_age=SESSION_SECONDS, path="/")
+        gate_cookie(response, GATE_COOKIE, sid, max_age=SESSION_SECONDS)
+        gate_cookie_cleared(response, STATE_COOKIE)
         return response
 
     async def gate_logout(request):
-        gate.logout(request.cookies.get(GATE_COOKIE, ""))
+        sid = request.cookies.get(GATE_COOKIE, "")
+        if request.method == "GET":
+            # Signing out changes state, so it takes a POST carrying this page's token.
+            return page(
+                "Sign out",
+                '<form method="post" action="/_vecten/gate/logout">'
+                f"{hidden('csrf', gate.logout_token(sid))}<button>Sign out</button></form>",
+            )
+        form = await request.form()
+        gate.logout(sid, form.get("csrf", ""))
         response = page(
             "Signed out", '<p>You are signed out of this site.</p><p><a href="/">Sign in</a></p>'
         )
-        response.delete_cookie(GATE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+        gate_cookie_cleared(response, GATE_COOKIE)
         return response
 
     async def gate_verify(request):
-        status, headers = gate.verify(
-            request.cookies.get(GATE_COOKIE, ""),
-            request.headers.get(HOST_HEADER, ""),
-            request.headers.get(ROUTE_HEADER, ""),
-        )
+        try:
+            status, headers = gate.verify(
+                request.cookies.get(GATE_COOKIE, ""),
+                request.headers.get(HOST_HEADER, ""),
+                request.headers.get(ROUTE_HEADER, ""),
+            )
+        except Exception as exc:
+            # NGINX answers 500 for any status but 2xx, 401 and 403, so nobody is admitted.
+            logger.error("gate verify failed: %s", describe_error(exc))
+            status, headers = 500, {}
         return Response(status_code=status, headers={**headers, "Cache-Control": "no-store"})
 
     async def connected(request):
@@ -511,6 +528,7 @@ def auth_routes(service, gate=None):
                     "invalid_client",
                     "invalid_grant",
                     "invalid_target",
+                    "not_provisioned",
                     "unsupported_grant_type",
                     "unsupported_response_type",
                 }

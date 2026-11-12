@@ -135,27 +135,36 @@ IDENTITY_HEADERS = (
 )
 SERVICE_HEALTH_PATH = "/_vecten/health"
 GATE_COOKIE = "__Host-vecten-gate"
+GATE_STATE_COOKIE = "__Host-vecten-gate-state"
+# Either gate cookie by name, in any letter case.
+GATE_COOKIE_NAMES = f"{GATE_COOKIE}(?:-state)?"
 # A header NGINX sets itself is never copied from the client, whatever its letter case, and
 # an empty value sends none; the default ignore_invalid_headers drops underscore spellings.
 IDENTITY_CLEARED = "".join(f'        proxy_set_header {h} "";\n' for h in IDENTITY_HEADERS)
-# The browser sends the gate's host-only cookie to every path of the service's hostname; a
-# service holding it could replay it to the gate. Cookie names compare case-insensitively
-# for the __Host- prefix, and the second map drops a separator the first leaves leading.
+# The browser sends the gate's host-only cookies to every path of the service's hostname; a
+# service holding them could replay them to the gate. Cookie names compare case-insensitively
+# for the __Host- prefix. The first map removes the session cookie, the second the sign-in
+# state, and the third drops a separator left leading.
 SERVICE_MAPS = (
     "map $http_cookie $vecten_cookie_stripped {\n"
     "    default $http_cookie;\n"
     f'    "~*^(?<vecten_cookie_before>.*?)(?:^\\s*|;\\s*){GATE_COOKIE}=[^;]*'
     '(?<vecten_cookie_after>.*)$" "$vecten_cookie_before$vecten_cookie_after";\n'
     "}\n"
-    "map $vecten_cookie_stripped $vecten_service_cookie {\n"
+    "map $vecten_cookie_stripped $vecten_cookie_stripped_twice {\n"
     "    default $vecten_cookie_stripped;\n"
+    f'    "~*^(?<vecten_cookie_head>.*?)(?:^\\s*|;\\s*){GATE_STATE_COOKIE}=[^;]*'
+    '(?<vecten_cookie_tail>.*)$" "$vecten_cookie_head$vecten_cookie_tail";\n'
+    "}\n"
+    "map $vecten_cookie_stripped_twice $vecten_service_cookie {\n"
+    "    default $vecten_cookie_stripped_twice;\n"
     '    "~^;\\s*(?<vecten_cookie_rest>.*)$" $vecten_cookie_rest;\n'
     "}\n"
-    # A service may set a second cookie of that name in another letter case; the request
+    # A service may set a second cookie of either name in another letter case; the request
     # that still holds one after the strip is refused.
     "map $vecten_service_cookie $vecten_cookie_repeated {\n"
     "    default 0;\n"
-    f'    "~*(?:^|;\\s*){GATE_COOKIE}=" 1;\n'
+    f'    "~*(?:^|;\\s*){GATE_COOKIE_NAMES}=" 1;\n'
     "}\n"
     # The location is picked by the normalised path, the client's own is forwarded: these
     # forms would let the service read another route than the one NGINX checked.
@@ -167,7 +176,6 @@ SERVICE_MAPS = (
 
 
 # The gate's cookies, read by their exact names, are the only cookies the MCP is sent.
-GATE_STATE_COOKIE = "vecten-gate-state"
 GATE_MAPS = (
     "map $http_cookie $vecten_gate_session {\n"
     '    default "";\n'
@@ -330,7 +338,7 @@ def _gate_locations(site: ServiceSite, gate: GateUpstream) -> list[str]:
         return []
     if not all(route.key for route in logins):
         raise Failure(ExitCode.INTERNAL, f"a login route on {site.host} has no name")
-    both = "__Host-vecten-gate=$vecten_gate_session; vecten-gate-state=$vecten_gate_state"
+    both = f"{GATE_COOKIE}=$vecten_gate_session; {GATE_STATE_COOKIE}=$vecten_gate_state"
     out = [
         _location(
             f"= {GATE_PATH}/{path}",

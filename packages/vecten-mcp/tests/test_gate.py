@@ -41,6 +41,8 @@ ROUTES = {
     DASH_HOME: GateRoute(DASH, ("default",)),
 }
 PASSWORD = "long-fixture-password"
+GATE = "__Host-vecten-gate"
+STATE = "__Host-vecten-gate-state"
 
 
 class Secrets:
@@ -66,12 +68,14 @@ class Browser:
         self.jars: dict[str, dict[str, str]] = {}
         self.set_cookies: dict[str, list[str]] = {}
 
-    def service(self, host, path, *, method="GET", headers=None, cookies=None):
+    def service(self, host, path, *, method="GET", headers=None, cookies=None, data=None):
         jar = self.jars.setdefault(host, {}) if cookies is None else cookies
         sent = {"X-Vecten-Gate-Host": host, **(headers or {})}
-        if jar:
-            sent["Cookie"] = "; ".join(f"{k}={v}" for k, v in jar.items())
-        response = self.front.request(method, path, headers=sent, follow_redirects=False)
+        # NGINX sends the gate the two cookies it reads by exact name, and no other.
+        forwarded = {k: v for k, v in jar.items() if k in (GATE, STATE)}
+        if forwarded:
+            sent["Cookie"] = "; ".join(f"{k}={v}" for k, v in forwarded.items())
+        response = self.front.request(method, path, headers=sent, data=data, follow_redirects=False)
         self.front.cookies.clear()
         for line in response.headers.get_list("set-cookie"):
             self.set_cookies.setdefault(host, []).append(line)
@@ -149,17 +153,20 @@ def test_first_visit_signs_in_on_the_server_and_lands_on_the_path(gate):
     )
     query = parse_qs(authorize.query)
     assert query["host"] == [PORTAL] and query["rd"] == ["/docs?page=2&q=a%20b"]
-    verifier = browser.jars[PORTAL]["vecten-gate-state"]
+    verifier = browser.jars[PORTAL][STATE]
     assert query["challenge"] == [challenge(verifier)]
     assert verifier not in authorize.query
-    state_cookie = browser.set_cookies[PORTAL][0].lower()
-    assert "path=/_vecten/gate" in state_cookie and "httponly" in state_cookie
-    assert "secure" in state_cookie and "domain" not in state_cookie
+    state_cookie = browser.set_cookies[PORTAL][0]
+    assert state_cookie.startswith(STATE + "=")
+    attributes = {part.strip().lower() for part in state_cookie.split(";")[1:]}
+    assert {"httponly", "secure", "path=/", "samesite=lax"} <= attributes
+    assert not [a for a in attributes if a.startswith("domain")]
 
     landed = browser.sign_in(PORTAL, "ada@acme.com", rd="/docs?page=2&q=a%20b")
     assert landed.status_code == 303 and landed.headers["location"] == "/docs?page=2&q=a%20b"
-    cookie = browser.set_cookies[PORTAL][-1]
-    assert cookie.startswith("__Host-vecten-gate=")
+    # The verifier is spent with the code; the callback clears its cookie.
+    assert STATE not in browser.jars[PORTAL]
+    cookie = next(c for c in browser.set_cookies[PORTAL] if c.startswith(GATE + "="))
     attributes = {part.strip().lower() for part in cookie.split(";")[1:]}
     assert {"httponly", "secure", "path=/", "samesite=lax"} <= attributes
     assert not [a for a in attributes if a.startswith("domain")]
@@ -267,11 +274,11 @@ def test_a_return_path_through_start_is_refused_unless_it_is_a_path(gate):
     assert browser.service(PORTAL, "/gate/start").status_code == 303
 
 
-def _code(browser, host):
+def _code(browser, host, email="ada@acme.com"):
     page = browser.mcp.get(browser.start(host, "/"))
     done = browser.mcp.post(
         "/login",
-        data=dict(flow=hidden(page, "flow"), csrf=hidden(page, "csrf"), email="ada@acme.com",
+        data=dict(flow=hidden(page, "flow"), csrf=hidden(page, "csrf"), email=email,
                   password=PASSWORD),
     )  # fmt: skip
     return urlsplit(unescape(re.search(r'<a href="([^"]+)"', done.text)[1])).query
@@ -303,8 +310,30 @@ def test_a_leaked_callback_url_without_the_starting_browsers_cookie_is_refused(g
     service, browser, _ = gate
     query = _code(browser, PORTAL)
     assert browser.service(PORTAL, "/gate/callback?" + query, cookies={}).status_code == 400
-    other = {"vecten-gate-state": "x" * 43}
+    other = {STATE: "x" * 43}
     assert browser.service(PORTAL, "/gate/callback?" + query, cookies=other).status_code == 400
+    with service.state.transaction() as conn:
+        assert conn.execute(select(gate_sessions)).all() == []
+
+
+def test_start_mints_a_verifier_and_never_takes_one_the_browser_sends(gate):
+    _, browser, _ = gate
+    planted = "p" * 43
+    browser.jars[PORTAL] = {STATE: planted}
+    query = parse_qs(urlsplit(browser.start(PORTAL, "/")).query)
+    assert browser.jars[PORTAL][STATE] != planted
+    assert query["challenge"] == [challenge(browser.jars[PORTAL][STATE])]
+
+
+def test_a_verifier_another_site_planted_cannot_redeem_the_planters_code(gate):
+    # Bob signs in on his own browser and keeps his verifier and code; a sibling hostname
+    # can set a cookie without the __Host- prefix for the whole domain, never one with it.
+    service, attacker, _ = gate
+    query = _code(attacker, PORTAL, "bob@acme.com")
+    planted = attacker.jars[PORTAL][STATE]
+    victim = Browser(attacker.mcp.app)
+    victim.jars[PORTAL] = {"vecten-gate-state": planted}
+    assert victim.service(PORTAL, "/gate/callback?" + query).status_code == 400
     with service.state.transaction() as conn:
         assert conn.execute(select(gate_sessions)).all() == []
 
@@ -327,7 +356,7 @@ def test_a_service_principal_gets_no_gate_session(gate):
         "browser_sessions", digest("robot-browser"), {"principal_id": robot["id"]}, expires_at=1e9
     )
     browser.start(PORTAL, "/")
-    verifier = browser.jars[PORTAL]["vecten-gate-state"]
+    verifier = browser.jars[PORTAL][STATE]
     browser.mcp.cookies.set("vecten_browser", "robot-browser", domain="mcp.data.acme.com")
     refused = browser.mcp.get(
         "/gate/authorize",
@@ -341,6 +370,22 @@ def test_a_service_principal_gets_no_gate_session(gate):
     )
     planted = browser.verify(PORTAL, HOME, cookies={"__Host-vecten-gate": "robot-gate"})
     assert planted.status_code == 401
+
+
+def test_a_person_without_a_warehouse_account_yet_is_refused_a_code(gate):
+    service, browser, _ = gate
+    carl = service.state.invite("carl@acme.com", "Carl", "carl")
+    backend = service.oauth.backend
+    backend.set_password(backend.setup_link("carl@acme.com"), PASSWORD)
+    refused = browser.sign_in(PORTAL, "carl@acme.com")
+    assert refused.status_code == 400 and "admin" in refused.text
+    service.state.put(
+        "browser_sessions", digest("carl-browser"), {"principal_id": carl["id"]}, expires_at=1e9
+    )
+    browser.mcp.cookies.set("vecten_browser", "carl-browser", domain="mcp.data.acme.com")
+    passed = browser.mcp.get(browser.start(PORTAL, "/"), follow_redirects=False)
+    assert passed.status_code == 400
+    assert service.state.scan("gate_codes") == []
 
 
 def test_a_disabled_person_is_sent_to_sign_in_and_cannot(gate):
@@ -398,9 +443,37 @@ def test_verify_refuses_a_route_the_server_does_not_bind_on_that_hostname(gate):
 
 
 def test_verify_is_not_limited_per_address(gate):
-    _, browser, _ = gate
+    service, browser, _ = gate
     browser.sign_in(PORTAL, "ada@acme.com")
+    # Every per-address limiter the server keeps is spent for the address NGINX calls from.
+    address = "testclient"
+    for limiter in (
+        service.oauth.token_limit,
+        service.oauth.registration_limit,
+        service.oauth.backend.address_limit,
+    ):
+        while True:
+            try:
+                limiter.hit(address)
+            except ValueError:
+                break
+    assert browser.front.post("/token", data={"grant_type": "x"}).status_code == 429
     assert {browser.verify(PORTAL, HOME).status_code for _ in range(300)} == {200}
+
+
+def test_a_failing_verify_admits_nobody_and_says_nothing(gate, monkeypatch, caplog):
+    service, browser, _ = gate
+    browser.sign_in(PORTAL, "ada@acme.com")
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("state database unreachable")
+
+    monkeypatch.setattr(service.state, "gate_session", broken)
+    answer = browser.verify(PORTAL, HOME)
+    assert answer.status_code == 500
+    assert not [h for h in answer.headers if h.lower().startswith("x-vecten")]
+    assert answer.headers["cache-control"] == "no-store"
+    assert "gate verify failed" in caplog.text and "unreachable" in caplog.text
 
 
 def test_identity_headers_carry_a_name_outside_ascii_percent_encoded(gate):
@@ -414,16 +487,37 @@ def test_identity_headers_carry_a_name_outside_ascii_percent_encoded(gate):
     assert "x-evil" not in answer.headers
 
 
-def test_logout_ends_the_session_and_clears_the_cookie(gate):
-    _, browser, _ = gate
+def test_logout_asks_first_and_ends_the_gate_and_browser_sessions(gate):
+    service, browser, _ = gate
     browser.sign_in(PORTAL, "ada@acme.com")
+    other = Browser(browser.mcp.app)
+    other.sign_in(PORTAL, "bob@acme.com")
     session = dict(browser.jars[PORTAL])
-    out = browser.service(PORTAL, "/gate/logout")
+    page = browser.service(PORTAL, "/gate/logout")
+    assert page.status_code == 200 and 'method="post"' in page.text
+    assert 'action="/_vecten/gate/logout"' in page.text
+    assert browser.verify(PORTAL, HOME).status_code == 200
+    # Another site can make the browser post, but cannot read the page's token.
+    forged = browser.service(PORTAL, "/gate/logout", method="POST", data={"csrf": "guess"})
+    assert forged.status_code == 400
+    assert browser.verify(PORTAL, HOME).status_code == 200
+    out = browser.service(
+        PORTAL, "/gate/logout", method="POST", data={"csrf": hidden(page, "csrf")}
+    )
     assert out.status_code == 200
-    cleared = browser.set_cookies[PORTAL][-1].lower()
-    assert cleared.startswith("__host-vecten-gate=") and "max-age=0" in cleared
-    assert "secure" in cleared and "path=/" in cleared
+    cleared = next(c for c in browser.set_cookies[PORTAL][::-1] if c.startswith(GATE + "="))
+    assert "max-age=0" in cleared.lower()
+    assert "secure" in cleared.lower() and "path=/" in cleared.lower()
     assert browser.verify(PORTAL, HOME, cookies=session).status_code == 401
+    # Signing in again asks for credentials, so another account can be used.
+    assert browser.mcp.get(browser.start(PORTAL, "/"), follow_redirects=False).status_code == 200
+    assert other.verify(PORTAL, HOME).status_code == 200
+
+
+def test_logout_without_a_session_just_clears_the_cookie(gate):
+    _, browser, _ = gate
+    out = browser.service(PORTAL, "/gate/logout", method="POST", data={})
+    assert out.status_code == 200
 
 
 def test_setting_a_password_ends_the_persons_gate_sessions(gate):

@@ -8,6 +8,7 @@ secret does not also prove: a code needs the verifier from the starting browser'
 and verify answers only for the session id in the gate cookie.
 """
 
+import hmac
 import re
 import secrets
 from dataclasses import dataclass
@@ -17,10 +18,9 @@ from vecten_mcp.auth.identity import challenge, digest
 from vecten_mcp.auth.service import SESSION_SECONDS
 
 GATE_COOKIE = "__Host-vecten-gate"
-STATE_COOKIE = "vecten-gate-state"
-# NGINX forwards only /_vecten/gate/* to the server and never to the service, so a cookie on
-# this path is sent to the gate alone.
-STATE_PATH = "/_vecten/gate"
+# __Host- keeps a sibling hostname from setting it for the whole domain; NGINX strips it from
+# what a service receives, as it strips the gate cookie.
+STATE_COOKIE = "__Host-vecten-gate-state"
 STATE_SECONDS = 600
 CODE_SECONDS = 60
 HOST_HEADER = "x-vecten-gate-host"
@@ -112,6 +112,8 @@ class GateService:
         principal = self.state.principal(principal_id)
         if not principal or not principal["enabled"] or principal["kind"] != "human":
             raise ValueError("access_denied")
+        if not principal["provisioned"]:
+            raise ValueError("not_provisioned")
         code = secrets.token_urlsafe(32)
         self.state.put(
             "gate_codes",
@@ -167,6 +169,21 @@ class GateService:
             "X-Vecten-Admin": "true" if principal["admin"] else "false",
         }
 
-    def logout(self, sid):
-        if sid:
-            self.state.end_gate_session(digest(sid))
+    @staticmethod
+    def logout_token(sid):
+        """The sign-out form's token: only a page the session's own browser read holds it."""
+        return digest("gate-logout:" + sid) if sid else ""
+
+    def logout(self, sid, token):
+        """Ends the gate session and the person's sign-ins on the server's own pages, so the
+        next sign-in asks for credentials; refuses a token the session's page did not hold."""
+        if not sid:
+            return
+        if not hmac.compare_digest(str(token), self.logout_token(sid)):
+            raise ValueError("invalid browser state")
+        session = self.state.gate_session(digest(sid), now=self.oauth.clock())
+        self.state.end_gate_session(digest(sid))
+        if session:
+            for key, row in self.state.scan("browser_sessions"):
+                if row.get("principal_id") == session["principal_id"]:
+                    self.state.remove("browser_sessions", key)

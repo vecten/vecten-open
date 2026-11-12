@@ -189,11 +189,15 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
         assert status == 302
         assert headers["location"] == "/_vecten/gate/start?rd=/docs?x=1&y=%2Fz"
 
-        cookies = "Cookie: a=1; vecten-gate-state=V; __Host-vecten-gate=none\r\n"
+        # A plain-named state cookie, as a sibling hostname could plant it, comes first.
+        cookies = (
+            "Cookie: vecten-gate-state=EVIL; a=1; __Host-vecten-gate-state=V; "
+            "__Host-vecten-gate=none\r\n"
+        )
         status, headers, _ = head(port, ca, "GET", "/_vecten/gate/start?rd=/docs?x=1", cookies)
         assert status == 303
 
-        good = "Cookie: a=1; __Host-vecten-gate=good; b=2\r\n"
+        good = "Cookie: a=1; __Host-vecten-gate=good; __Host-vecten-gate-state=V; b=2\r\n"
         assert head(port, ca, "GET", "/docs", FORGED + good)[0] == 200
         assert head(port, ca, "POST", "/docs/form", good, body="field=1")[0] == 200
         upgrade = request(
@@ -215,6 +219,8 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
         assert head(port, ca, "GET", "/office", good)[0] == 403
         decoy = "Cookie: __HOST-VECTEN-GATE=decoy; __Host-vecten-gate=good\r\n"
         assert head(port, ca, "GET", "/docs", decoy)[0] == 400
+        decoy = "Cookie: __HOST-VECTEN-GATE-STATE=d; __Host-vecten-gate-state=V\r\n"
+        assert head(port, ca, "POST", "/hook", decoy)[0] == 400
         assert head(port, ca, "GET", "/docs/..%2Fbooks", good)[0] == 400
         assert head(port, ca, "GET", "/_vecten/gate/verify/acme.bot.home", good)[0] == 404
         assert len(seen(gate)) == before
@@ -224,7 +230,7 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
     starts = [r for r in asked if r["path"].startswith("/gate/start")]
     assert [r["path"] for r in starts] == ["/gate/start?rd=/docs?x=1"]
     assert starts[0]["headers"]["x-vecten-gate-host"] == HOST
-    assert starts[0]["headers"]["cookie"] == "__Host-vecten-gate=none; vecten-gate-state=V"
+    assert starts[0]["headers"]["cookie"] == ("__Host-vecten-gate=none; __Host-vecten-gate-state=V")
     assert starts[0]["headers"]["host"] == MCP
     checks = [r for r in asked if r["path"] == "/gate/verify"]
     assert {r["headers"]["x-vecten-gate-route"] for r in checks} == {
@@ -251,6 +257,7 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
         assert sent["cookie"] == "a=1; b=2"
         assert "x_vecten_user" not in sent
     hook = received[-1]["headers"]
+    assert hook["cookie"] == "a=1; b=2"
     assert not [h for h in hook if h.replace("_", "-").startswith("x-vecten")], hook
 
 

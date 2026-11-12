@@ -100,9 +100,10 @@ gate_sessions = Table(
 )
 schema_version = Table("schema_version", metadata, Column("version", Integer, primary_key=True))
 SCHEMA_VERSION = 2
-# Each step brings a database from the version before it; create_all has made every table
-# of this release already, so a step only adds what an existing table lacks.
+# Each step brings a database from the version before it. Tables a step adds are made by
+# that step on an existing database, and directly only on a new one.
 MIGRATIONS = {2: lambda conn: gate_sessions.create(conn, checkfirst=True)}
+MIGRATED_TABLES = {"gate_sessions"}
 
 
 class StateStore:
@@ -115,21 +116,19 @@ class StateStore:
         self.engine = create_engine(url, **options)
         if str(url).startswith("sqlite:"):
             event.listen(self.engine, "connect", lambda db, _: db.execute("PRAGMA foreign_keys=ON"))
+        skipped = set(MIGRATED_TABLES)
         if self.engine.dialect.name == "postgresql":
             self.check_audit_scope()
-            metadata.create_all(
-                self.engine,
-                tables=[
-                    table
-                    for table in metadata.sorted_tables
-                    if table.name not in {"audit_log", "access_events"}
-                ],
-            )
-        else:
-            metadata.create_all(self.engine)
+            skipped |= {"audit_log", "access_events"}
+        metadata.create_all(
+            self.engine,
+            tables=[table for table in metadata.sorted_tables if table.name not in skipped],
+        )
         with self.transaction() as conn:
             current = conn.execute(select(schema_version.c.version)).scalar_one_or_none()
             if current is None:
+                for name in sorted(MIGRATED_TABLES):
+                    metadata.tables[name].create(conn, checkfirst=True)
                 conn.execute(insert(schema_version).values(version=SCHEMA_VERSION))
             elif current < SCHEMA_VERSION:
                 for version in range(current + 1, SCHEMA_VERSION + 1):

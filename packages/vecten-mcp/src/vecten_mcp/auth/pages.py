@@ -78,6 +78,7 @@ def consent_page(flow, csrf, client):
 FAILURES = {
     "access_denied": "The sign-in was declined, so nothing was shared with the client.",
     "temporarily_unavailable": "There were too many attempts from here. Wait a minute.",
+    "not_provisioned": "Your account has no access yet. Ask an admin to add you, then try again.",
 }
 # Expired, already used or tampered with: the person cannot tell these apart, nor needs to.
 EXPIRED = "This sign-in can't continue: its link expired, was already used, or sat open too long."
