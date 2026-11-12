@@ -213,9 +213,7 @@ def test_semantic_digest_is_stable_when_extension_environment_moves(
     assert osi_digest(root / "osi") != before
 
 
-def test_the_manifest_reaches_the_record_the_laptop_stack_and_the_read_api(
-    extension, monkeypatch
-):
+def test_the_manifest_reaches_the_record_the_laptop_stack_and_the_read_api(extension, monkeypatch):
     from vecten.extensions import load_manifests
     from vecten.stack.compose import generate_compose
     from vecten_shared import context

@@ -18,6 +18,13 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   Debian packages into that image's project layer, as root before the Python packages, leaving
   no apt lists and returning to the image's user. Entries are validated as package names
   ([#50](https://github.com/vecten/vecten-open/issues/50)).
+- Any extension can declare the secrets it reads and a schema for its settings in a
+  `vecten.manifest` entry point; a project declares its own in `vecten.toml` (`secrets`,
+  `[settings.project]`). A secret's prefix decides where it is delivered (`MCP_` names to the
+  MCP server, others to Airflow), the same way on the laptop and on every VM. Settings live in
+  `[settings.<extension>]` with `env.<env>` overrides, are checked against the schema by
+  `vecten lock`, `up`, `ship` and the MCP server's startup, and are read, with declared secrets,
+  through `vecten_shared.context` ([#49](https://github.com/vecten/vecten-open/issues/49)).
 - Deployed hosts: `dags_paused_at_creation = true` in `deploy/envs/<env>.tfvars` makes that
   environment's new DAGs start paused, `[airflow] allow` in `vecten.toml` limits which networks
   reach `airflow.<domain>` (Airflow's health path stays open for `vecten ship`), and

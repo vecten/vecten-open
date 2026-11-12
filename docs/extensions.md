@@ -169,6 +169,7 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.mcp.auth` | Callable identity backend. Selected by `auth = "company_login"` in the `[mcp]` section of `vecten.toml`; the registry refuses a missing backend at startup. Extensions cannot replace the reserved `password`/`oidc` names. |
 | `vecten.mcp.provisioning` | Callable provisioning hook. The registry invokes the named hook with the owning service's arguments. |
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
+| `vecten.manifest` | A dictionary, or zero-argument factory returning one, with `secrets` and `settings`: what the extension needs, not a part it contributes (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
 
 MCP means Model Context Protocol, the client/server interface for warehouse tools. OAuth login,
 the authenticated transport, warehouse identity services, the [tool audit](mcp-audit.md) and the
@@ -188,6 +189,97 @@ concurrent submission, and await the query before returning from the handler so 
 is present when the invocation is recorded.
 
 No CLI-command or HTTP-route extension hooks are offered yet.
+
+### Secrets and settings
+
+An extension says what it needs in its manifest:
+
+```python
+# acme_resolution/manifest.py
+def manifest():
+    return {
+        "secrets": ["ACME_API_KEY", "MCP_ACME_TOKEN"],
+        "settings": {
+            "properties": {
+                "daily_cap": {"type": "integer", "default": 1000, "minimum": 1},
+                "dry_run": {"type": "boolean", "default": False},
+            },
+            "required": [],
+        },
+    }
+```
+
+```toml
+[project.entry-points."vecten.manifest"]
+acme-resolution = "acme_resolution.manifest:manifest"
+```
+
+`vecten lock` reads every listed extension's manifest and records its secrets and settings
+schema in `extensions.lock.json`, so CI and the hosts know them without installing the
+extension. A malformed `secrets` or `settings` is refused, naming the extension and the key; a
+key this release does not know is reported and ignored, so an extension written for a newer
+release still installs.
+
+**Where a secret is delivered.** The name's prefix decides, as it decides which host may read
+it. An `MCP_` name goes to the MCP server; any other name goes to Airflow and to the CLI's own
+process (`vecten connector run`). A DAG and a tool that call the same API therefore declare two
+names, `ACME_TOKEN` and `MCP_ACME_TOKEN`, and the operator sets both. `DEPLOY_`, `ADMIN_` and
+`SETUP_` names, names the stack manages (such as `LOADER_PASSWORD` and `MCP_SIGNING_KEY`) and
+`AIRFLOW_` names are refused. A name for a component the project does not enable is reported as
+not delivered. `vecten lock`, `extension add` and `vecten next` name each declared secret that is
+not set yet, locally or per environment, with its `vecten secret set` command.
+
+A project's own DAGs and MCP code declare theirs in `vecten.toml`, with the same rules:
+
+```toml
+secrets = ["SLACK_TOKEN", "MCP_CRM_TOKEN"]
+```
+
+**Settings.** Values live in `vecten.toml`, in a table named after the extension, with
+per-environment overrides beside them; `local` is the laptop:
+
+```toml
+[settings.acme-resolution]
+dry_run = false
+
+[settings.acme-resolution.env.staging]
+dry_run = true
+
+[settings.acme-resolution.env.local]
+dry_run = true
+daily_cap = 10
+```
+
+The effective value in an environment is its override, else the table's value, else the
+manifest's default. An override replaces the whole value, with no merge of nested tables.
+`[settings.project]` holds the project's own values the same way, without a schema: they are
+checked only for having a JSON type. TOML dates and times are refused; use strings.
+
+**Checks.** Values are checked against the manifest's schema, which may use `properties` typed
+`string`, `integer`, `number`, `boolean`, `array` or `object`, with `default`, `description`,
+`enum`, `minimum`, `maximum` and `items`, plus `required`; unknown settings are always refused,
+and no setting may be named `env`. `vecten lock` checks the laptop and every environment an
+override names, `vecten up` the laptop, `vecten ship` and `ship --check` the environment
+shipped, and the MCP server every extension's settings before it starts serving. An error
+names `settings.<namespace>.<key>` and the environment, before anything starts. On a VM a change
+takes effect at the next ship; on the laptop at the next read, because `vecten.toml` is mounted.
+
+**Reading them.** DAG code, connector code and MCP tools read through one API in `vecten-shared`:
+
+```python
+from vecten_shared.context import extension, project
+
+acme = extension("acme-resolution")
+acme.settings["daily_cap"]  # the effective value for this environment, read-only
+acme.secret("ACME_API_KEY")  # only names acme's manifest declares, for this component
+acme.env  # "local", "prod", ...
+project().settings["channel"]
+project().secret("SLACK_TOKEN")
+```
+
+`secret()` refuses a name its extension, or the project, did not declare, and a name delivered
+to the other component, on the laptop and on every VM alike, even where the host's cloud identity
+could read it. Connector code may keep using `vecten_platform.sync.secret`.
 
 ### Dependencies per component
 
