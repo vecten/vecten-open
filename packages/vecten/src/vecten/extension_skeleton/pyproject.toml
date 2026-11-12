@@ -1,0 +1,23 @@
+[project]
+name = "__vecten_name__"
+version = "0.1.0"
+description = "__vecten_title__, a Vecten Open extension kept in this project"
+requires-python = ">=3.14"
+dependencies = []
+
+# Packages only one component needs: the Airflow image, the MCP image, or the CLI's own
+# environment (connector runs, local dbt, anything a skill imports).
+[project.optional-dependencies]
+platform = []
+mcp = []
+cli = []
+
+[project.entry-points."vecten.skills"]
+__vecten_name__ = "__vecten_package__:skill"
+
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/__vecten_package__"]
