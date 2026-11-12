@@ -23,7 +23,8 @@ def _functions(*names):
 # defines, so only these reporting built-ins pass. Each also holds no relation name.
 _COMMON = """
 Abs ApproxDistinct ArrayAgg ArraySize Ascii Avg Case Cast Ceil Chr Coalesce Concat Count
-CurrentDate CurrentTimestamp DateAdd DenseRank Exists Exp Explode Extract FirstValue Floor
+CurrentDate CurrentTimestamp CurrentUser DateAdd DenseRank Exists Exp Explode Extract
+FirstValue Floor
 Greatest GroupConcat If Initcap JSONExtract JSONExtractScalar Lag LastValue Lead Least Left
 Length Ln Log LogicalAnd LogicalOr Lower MD5 Max Median Min Ntile Nullif Pad PercentileCont
 PercentileDisc Pow Rank RegexpReplace Repeat Replace Reverse Right Round RowNumber Sign

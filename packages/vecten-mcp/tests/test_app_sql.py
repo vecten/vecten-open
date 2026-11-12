@@ -290,6 +290,7 @@ def test_functions_and_operators_off_the_warehouses_list_are_refused(sql, kind):
         "SELECT concat(region, '-'), length(region), substring(region, 1, 2), trim(region) "
         "FROM marts.orders",
         "SELECT extract(year FROM created_at), current_date FROM marts.orders",
+        "SELECT current_user FROM marts.orders",
         "SELECT region, row_number() OVER (PARTITION BY region ORDER BY amount DESC) "
         "FROM marts.orders",
         "SELECT lag(amount) OVER (ORDER BY created_at), greatest(amount, 0), least(amount, 1) "
