@@ -7,8 +7,17 @@ from vecten_mcp.state import StateStore
 from vecten_shared.identity_setup import ACCESS_VERSION
 
 
+def full(grant):
+    """A grant as `read_grants` returns it: `(role, kind, schema, relation, object)`; a test
+    may name it without the object, which is then the schema or a table."""
+    if len(grant) == 5:
+        return grant
+    return (*grant, "schema" if grant[1] == "usage" else "table")
+
+
 class Adapter:
-    """Holds read grants as `(role, kind, schema, relation)` and applies grants to them."""
+    """Holds read grants and applies grants to them; a schema-level revoke, like READ_GRANT's,
+    reaches only tables and views."""
 
     def __init__(self, held=(), version=ACCESS_VERSION):
         self.held, self.version = set(held), version
@@ -22,20 +31,29 @@ class Adapter:
 
     def read_grants(self, roles):
         self.reads.append(set(roles))
-        return {grant for grant in self.held if grant[0] in roles}
+        return {full(grant) for grant in self.held if grant[0] in roles}
 
     def schema_grant(self, role, schema, grant=True):
         self.ops.append(("schema", role, schema, grant))
         if grant:
             self.held |= {(role, "usage", schema, None), (role, "future", schema, None)}
         else:
-            self.held = {g for g in self.held if not (g[0] == role and g[2] == schema)}
+            self.held = {
+                g
+                for g in self.held
+                if not (
+                    g[0] == role and g[2] == schema and full(g)[4] in {"schema", "table", "view"}
+                )
+            }
 
     def dataset_grant(self, role, source, grant=True):
         self.ops.append(("dataset", role, source, grant))
         schema, relation = source.split(".")[-2:]
         pair = {(role, "usage", schema, None), (role, "select", schema, relation)}
-        self.held = self.held | pair if grant else self.held - {(role, "select", schema, relation)}
+        if grant:
+            self.held |= pair
+        else:
+            self.held = {g for g in self.held if full(g)[:4] != (role, "select", schema, relation)}
 
 
 def service(adapter, *, seeded=True):
@@ -73,7 +91,7 @@ def test_a_grant_outside_the_scope_or_to_an_unmanaged_role_is_never_touched():
     )
     access = service(adapter)
     access.reconcile()
-    assert adapter.reads and all(roles == {"analyst"} for roles in adapter.reads)
+    assert adapter.reads and all(roles <= {"analyst"} for roles in adapter.reads)
     assert not [op for op in adapter.ops if not op[3]]
     assert access.health()["revoked"] == []
 
@@ -84,13 +102,14 @@ def test_every_managed_role_is_read_and_a_hand_grant_in_a_raw_schema_is_revoked(
     access.create_group("finance")
     adapter.held |= {("finance", "select", "raw_hubspot", "deals")}
     access.reconcile()
-    assert adapter.reads[-1] == {"analyst", "finance"}
+    assert {"analyst"} in adapter.reads and {"finance"} in adapter.reads
     assert ("dataset", "finance", "raw_hubspot.deals", False) in adapter.ops
     [entry] = access.health()["revoked"]
     assert entry == {
         "group": "finance",
         "role": "finance",
         "privilege": "SELECT",
+        "object": "table",
         "schema": "raw_hubspot",
         "relation": "deals",
     }
@@ -196,3 +215,107 @@ def test_a_failed_drift_revoke_is_a_failure_naming_the_place():
     assert failure["group"] == "default" and failure["target"] == "staging"
     assert failure["kind"] == "drift" and failure["operation"] == "revoke"
     assert access.health()["revoked"] == []
+
+
+def test_state_from_an_earlier_release_starts_by_reporting_drift():
+    state, adapter = StateStore("sqlite://"), Adapter()
+    earlier = AccessService(state, adapter)
+    earlier.seed_defaults()
+    state.remove("bootstrap", "drift_mode")
+    state.remove("settings", "reconcile_drift")
+    adapter.held |= {("analyst", "select", "staging", "orders")}
+    upgraded = AccessService(state, adapter)
+    upgraded.seed_defaults()
+    upgraded.reconcile()
+    assert state.get("settings", "reconcile_drift") == {"value": "report"}
+    assert not [op for op in adapter.ops if not op[3]]
+    assert [d["relation"] for d in upgraded.health()["drift"]] == ["orders"]
+
+
+def test_a_fresh_state_revokes_and_an_admins_choice_survives_a_restart():
+    state, adapter = StateStore("sqlite://"), Adapter()
+    access = AccessService(state, adapter)
+    access.seed_defaults()
+    assert state.get("settings", "reconcile_drift") is None
+    state.put("settings", "reconcile_drift", {"value": "report"})
+    AccessService(state, adapter).seed_defaults()
+    assert state.get("settings", "reconcile_drift") == {"value": "report"}
+    state.put("settings", "reconcile_drift", {"value": "revoke"})
+    AccessService(state, adapter).seed_defaults()
+    assert state.get("settings", "reconcile_drift") == {"value": "revoke"}
+
+
+def test_a_future_grant_the_procedure_cannot_revoke_stays_listed_as_drift():
+    adapter = Adapter()
+    access = service(adapter)
+    access.revoke("default", "schema", "marts")
+    adapter.held |= {
+        ("analyst", "usage", "marts", None),
+        ("analyst", "future", "marts", None, "table"),
+        ("analyst", "future", "marts", None, "dynamic_table"),
+    }
+    result = access.reconcile()
+    health = access.health()
+    assert {(r["privilege"], r["object"]) for r in health["revoked"]} == {
+        ("USAGE", "schema"),
+        ("FUTURE SELECT", "table"),
+    }
+    assert [(d["privilege"], d["object"]) for d in health["drift"]] == [
+        ("FUTURE SELECT", "dynamic_table")
+    ]
+    [failure] = result["failures"]
+    assert failure["kind"] == "drift" and failure["target"] == "marts"
+    assert "still held" in failure["error"]
+
+
+def test_a_relation_that_cannot_be_revoked_does_not_stop_the_others():
+    class Refusing(Adapter):
+        def dataset_grant(self, role, source, grant=True):
+            if not grant and source.endswith(".broken"):
+                raise RuntimeError("dataset relation does not exist")
+            super().dataset_grant(role, source, grant)
+
+    adapter = Refusing(
+        held={("analyst", "select", "staging", "broken"), ("analyst", "select", "staging", "ok")}
+    )
+    access = service(adapter)
+    result = access.reconcile()
+    health = access.health()
+    assert [r["relation"] for r in health["revoked"]] == ["ok"]
+    assert [d["relation"] for d in health["drift"]] == ["broken"]
+    [failure] = result["failures"]
+    assert failure["target"] == "staging.broken" and "does not exist" in failure["error"]
+
+
+def test_a_quoted_relation_name_is_listed_and_never_revoked_by_another_name():
+    adapter = Adapter(held={("analyst", "select", "staging", '"Orders"')})
+    access = service(adapter)
+    access.reconcile()
+    assert not [op for op in adapter.ops if not op[3]]
+    assert [d["relation"] for d in access.health()["drift"]] == ['"Orders"']
+
+
+def test_one_unreadable_role_does_not_stop_the_others():
+    class OneUnreadable(Adapter):
+        def read_grants(self, roles):
+            if "finance" in roles:
+                raise RuntimeError("finance cannot be read")
+            return super().read_grants(roles)
+
+    adapter = OneUnreadable(held={("analyst", "usage", "staging", None)})
+    access = service(adapter)
+    access.create_group("finance")
+    result = access.reconcile()
+    assert ("schema", "analyst", "staging", False) in adapter.ops
+    [failure] = result["failures"]
+    assert failure["operation"] == "read" and failure["group"] == "finance"
+
+
+def test_database_level_future_grants_are_reported_and_kept():
+    adapter = Adapter(held={("analyst", "future", None, None, "table")})
+    access = service(adapter)
+    access.reconcile()
+    assert not [op for op in adapter.ops if not op[3]]
+    assert access.health()["database_future"] == [
+        {"group": "default", "role": "analyst", "privilege": "FUTURE SELECT", "object": "table"}
+    ]

@@ -523,6 +523,21 @@ def test_drift_listed_in_report_mode_is_an_issue_per_grant():
     assert issues[1].evidence["relation"] == "payroll"
 
 
+def test_a_failed_read_of_a_roles_grants_names_the_read():
+    failure = {"group": "finance", "kind": "drift", "target": "*", "operation": "read"}
+    health = {"checked_at": 1792627200, "failures": [{**failure, "error": "timed out"}]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.title == "Reading the read grants of finance failed"
+    assert "vecten reconcile --env prod" in issue.resolution
+
+
+def test_a_failed_drift_revoke_names_the_place():
+    failure = {"group": "default", "kind": "drift", "target": "marts", "operation": "revoke"}
+    health = {"checked_at": 1792627200, "failures": [{**failure, "error": "still held"}]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.title == "Revoking default's drift on marts failed"
+
+
 def test_revoked_drift_is_not_an_issue():
     health = {"checked_at": 1792627200, "failures": [], "revoked": [DRIFT]}
     assert mcp_issues(context([], admin=admin_with(access_health=health))) == []

@@ -54,11 +54,17 @@ def model_issue(ctx: IssueContext, health: dict[str, Any]) -> Issue | None:
 
 def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> Issue:
     group, kind, target = (str(failure.get(k, "?")) for k in ("group", "kind", "target"))
+    if kind != "drift":
+        title = f"Grant of {kind} {target} to {group} failed"
+    elif failure.get("operation") == "read":
+        title = f"Reading the read grants of {group} failed"
+    else:
+        title = f"Revoking {group}'s drift on {target} failed"
     return Issue(
         id=mcp_issue_id("grant", group, kind, target),
         source="mcp",
         kind="ask",
-        title=cap(f"Grant of {kind} {target} to {group} failed", TITLE_LIMIT),
+        title=cap(title, TITLE_LIMIT),
         resolution=(
             f"The warehouse refused to {failure.get('operation', 'apply')} this grant for the "
             "reason in the evidence. A warehouse administrator fixes that cause; then run "
@@ -90,9 +96,10 @@ def drift_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Is
         ),
         resolution=(
             "A managed role holds a read grant the MCP's state does not, and reconcile_drift is "
-            "report, so it was listed and kept. Record it as a grant if it is wanted; otherwise "
-            "set reconcile_drift to revoke in the admin panel's settings, and the next "
-            f"reconciliation (`vecten reconcile --env {ctx.env}`) revokes it."
+            "report, or the access procedures cannot revoke its kind, so it was listed and kept. "
+            "Record it as a grant if it is wanted; otherwise set reconcile_drift to revoke in "
+            "the admin panel's settings, and the next reconciliation "
+            f"(`vecten reconcile --env {ctx.env}`) revokes what the procedures can."
         ),
         occurrences=1,
         first_seen=None,

@@ -46,12 +46,29 @@ def test_snowflake_version_is_what_read_grant_reports_with_every_argument_null()
     assert connection.calls == [('CALL "D"."VECTEN_ACCESS".READ_GRANT(NULL,NULL,NULL,NULL)', None)]
 
 
-def test_snowflake_procedure_refusing_the_version_call_is_version_one():
+@pytest.mark.parametrize(
+    "message",
+    [
+        "target is not a bounded reader role",
+        "Unknown user-defined function D.VECTEN_ACCESS.READ_GRANT.",
+        "Procedure 'READ_GRANT' does not exist or not authorized.",
+    ],
+)
+def test_snowflake_old_or_missing_procedure_is_version_one(message):
     from snowflake.connector.errors import ProgrammingError
 
-    refused = ProgrammingError(msg="target is not a bounded reader role", errno=100132)
+    refused = ProgrammingError(msg=message, errno=100132)
     adapter, _ = snowflake(lambda sql, params: refused)
     assert adapter.access_version() == 1
+
+
+def test_snowflake_any_other_refusal_of_the_version_call_is_a_failure():
+    from snowflake.connector.errors import ProgrammingError
+
+    refused = ProgrammingError(msg="Warehouse 'W' cannot be resumed", errno=606)
+    adapter, _ = snowflake(lambda sql, params: refused)
+    with pytest.raises(ProgrammingError):
+        adapter.access_version()
 
 
 def test_snowflake_read_grants_calls_read_grants_per_role_and_names_each_grant():
@@ -61,6 +78,9 @@ def test_snowflake_read_grants_calls_read_grants_per_role_and_names_each_grant()
             {"privilege": "USAGE", "granted_on": "SCHEMA", "name": "D.MARTS"},
             {"privilege": "SELECT", "granted_on": "TABLE", "name": "D.MARTS.ORDERS"},
             {"privilege": "SELECT", "granted_on": "VIEW", "name": 'D.RAW_APP."Mixed.Case"'},
+            {"privilege": "SELECT", "granted_on": "TABLE", "name": 'D.RAW_APP."ORDERS"'},
+            {"privilege": "USAGE", "granted_on": "SCHEMA", "name": 'D."marts"'},
+            {"privilege": "SELECT", "granted_on": "DYNAMIC_TABLE", "name": "D.MARTS.LIVE"},
             {"privilege": "USAGE", "granted_on": "DATABASE", "name": "D"},
             {"privilege": "SELECT", "granted_on": "TABLE", "name": "OTHER.MARTS.ORDERS"},
         ],
@@ -68,6 +88,7 @@ def test_snowflake_read_grants_calls_read_grants_per_role_and_names_each_grant()
             {"privilege": "SELECT", "grant_on": "TABLE", "name": "D.MARTS.<TABLE>"},
             {"privilege": "SELECT", "grant_on": "VIEW", "name": "D.MARTS.<VIEW>"},
             {"privilege": "SELECT", "grant_on": "TABLE", "name": "D.<TABLE>"},
+            {"privilege": "SELECT", "grant_on": "DYNAMIC_TABLE", "name": "D.MARTS.<DYNAMIC_TABLE>"},
         ],
     }
 
@@ -76,10 +97,16 @@ def test_snowflake_read_grants_calls_read_grants_per_role_and_names_each_grant()
 
     adapter, connection = snowflake(answers)
     assert adapter.read_grants({"analyst", "finance"}) == {
-        ("analyst", "usage", "marts", None),
-        ("analyst", "select", "marts", "orders"),
-        ("analyst", "select", "raw_app", "mixed.case"),
-        ("analyst", "future", "marts", None),
+        ("analyst", "usage", "marts", None, "schema"),
+        ("analyst", "usage", '"marts"', None, "schema"),
+        ("analyst", "select", "marts", "orders", "table"),
+        ("analyst", "select", "marts", "live", "dynamic_table"),
+        ("analyst", "select", "raw_app", '"Mixed.Case"', "view"),
+        ("analyst", "select", "raw_app", "orders", "table"),
+        ("analyst", "future", "marts", None, "table"),
+        ("analyst", "future", "marts", None, "view"),
+        ("analyst", "future", "marts", None, "dynamic_table"),
+        ("analyst", "future", None, None, "table"),
     }
     assert sorted(connection.calls) == [
         ('CALL "D"."VECTEN_ACCESS".READ_GRANTS(%s)', ("ANALYST",)),
@@ -92,6 +119,40 @@ def test_snowflake_read_grants_refuses_a_reserved_role_before_any_call():
     with pytest.raises(ValueError):
         adapter.read_grants({"admin_x"})
     assert connection.calls == []
+
+
+@pytest.mark.parametrize(
+    ("name", "grant_option", "valid"),
+    [
+        ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "false", True),
+        ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "true", False),
+        ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR, VARCHAR)", "false", False),
+        ("OTHER.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "false", False),
+    ],
+)
+def test_snowflake_scope_bounds_usage_on_read_grants(name, grant_option, valid):
+    class Connection:
+        description = [("privilege",), ("granted_on",), ("name",), ("grant_option",)]
+
+        def cursor(self):
+            return self
+
+        def execute(self, query):
+            self.query = query
+            return self
+
+        def fetchall(self):
+            return [] if "FUTURE" in self.query else [("USAGE", "PROCEDURE", name, grant_option)]
+
+        def close(self):
+            pass
+
+    adapter = SnowflakeAdapter(Connection, None, None, account="a", database="D", warehouse="W")
+    if valid:
+        adapter.check_scope({})
+    else:
+        with pytest.raises(ValueError, match="unexpected grant"):
+            adapter.check_scope({})
 
 
 def test_snowflake_scope_accepts_usage_on_read_grants():
@@ -138,9 +199,10 @@ def test_postgres_reads_the_catalogs_so_no_procedure_version_limits_it():
 
 def test_postgres_read_grants_reads_the_catalog_acls_of_the_given_roles():
     rows = [
-        ("analyst", "usage", "marts", None),
-        ("analyst", "select", "marts", "orders"),
-        ("finance", "future", "core", None),
+        ("analyst", "usage", "marts", None, "schema"),
+        ("analyst", "select", "marts", "orders", "table"),
+        ("finance", "future", "core", None, "table"),
+        ("finance", "future", None, None, "table"),
     ]
     connection = PostgresConnection(rows)
     adapter = PostgresAdapter(lambda: connection, None)
@@ -150,3 +212,4 @@ def test_postgres_read_grants_reads_the_catalog_acls_of_the_given_roles():
     for catalog in ("pg_namespace", "nspacl", "relacl", "pg_default_acl", "defaclacl"):
         assert catalog in statement
     assert "relkind IN ('r','p','v','m','f')" in statement
+    assert "LEFT JOIN pg_catalog.pg_namespace" in statement

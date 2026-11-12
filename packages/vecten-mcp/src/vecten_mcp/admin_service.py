@@ -266,7 +266,14 @@ class AdminService:
             return access.reconcile()
         if operation == "access-health":
             if access is None:
-                return {"checked_at": None, "failures": [], "added": [], "revoked": [], "drift": []}
+                return {
+                    "checked_at": None,
+                    "failures": [],
+                    "added": [],
+                    "revoked": [],
+                    "drift": [],
+                    "database_future": [],
+                }
             return access.health()
         if operation == "settings":
             return self.settings()

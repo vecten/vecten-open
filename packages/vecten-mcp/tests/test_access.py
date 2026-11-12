@@ -67,6 +67,9 @@ def test_group_collision_and_default_deletion_refused():
         service.delete_group("default")
     with pytest.raises(ValueError):
         service.create_group("admin_finance")
+    # READ_GRANT and the Postgres helpers refuse a role named `reader` as a target.
+    with pytest.raises(ValueError, match="reserved"):
+        service.create_group("reader")
     with pytest.raises(ValueError):
         service.grant("missing", "schema", "core")
 
@@ -201,4 +204,5 @@ def test_health_before_any_reconciliation_is_empty():
         "added": [],
         "revoked": [],
         "drift": [],
+        "database_future": [],
     }
