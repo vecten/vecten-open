@@ -119,3 +119,20 @@ def test_the_launcher_imports_the_standard_library_only():
         elif isinstance(node, ast.ImportFrom):
             imported.add((node.module or "").split(".")[0])
     assert imported <= set(sys.stdlib_module_names) | {"__future__"}, imported
+
+
+def test_a_directory_of_that_name_in_the_working_directory_does_not_shadow_the_package(
+    package, tmp_path, monkeypatch
+):
+    work = tmp_path / "work"
+    (work / "acme_sales").mkdir(parents=True)
+    (work / "acme_sales" / "__init__.py").write_text("")
+    (work / "acme_sales" / "app.py").write_text("")
+    monkeypatch.chdir(work)
+    # `python -m` puts the working directory first on sys.path.
+    monkeypatch.syspath_prepend(str(work))
+    monkeypatch.setenv("PORT", "8501")
+    seen = []
+    monkeypatch.setattr(launch.os, "execv", lambda path, argv: seen.append(argv))
+    assert launch.main(["streamlit", "acme_sales/app.py"]) == 0
+    assert seen[0][4] == str((package / "app.py").resolve())

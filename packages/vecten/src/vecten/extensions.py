@@ -721,8 +721,8 @@ def add_extension(root: Path, package: str) -> dict:
     doc = tomlkit.parse((root / "vecten.toml").read_text())
     doc["extensions"] = config.extensions
     name = normalize_name(dist.name)
-    services = _bind_services(doc, config, name, record.get(name))
-    apps = _bind_apps(doc, config, name, record.get(name))
+    services = _bind_services(doc, config, name, record.get(name), record)
+    apps = _bind_apps(doc, config, name, record.get(name), record)
     services["hostnames"] += apps["hostnames"]
     services["binding_notes"] += apps["binding_notes"]
     text = tomlkit.dumps(doc)
@@ -757,7 +757,7 @@ def _free_label(extension: str, service: str, taken: set[str]) -> str:
     raise Failure(ExitCode.CONFIG, f"no free hostname label for {extension}.{service}")
 
 
-def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
+def _bind_services(doc, config: VectenConfig, extension: str, entry, record: dict) -> dict:
     """Bind each declared service the project does not bind yet, from its suggestions.
 
     A bound service keeps its binding as the person left it: an upgrade's new route, or a
@@ -767,7 +767,7 @@ def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
     if entry is None or not entry.services:
         return out
     existing = config.services.get(extension, {})
-    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)))
+    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)), record)
     for name, service in sorted(entry.services.items()):
         key = f"{extension}.{name}"
         if name in existing:
@@ -820,33 +820,45 @@ def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
     return out
 
 
-def _taken_labels(data: dict) -> set[str]:
-    """Hostname labels the file binds; an app without one is served at its own name."""
+def _taken_labels(data: dict, record: dict) -> set[str]:
+    """Hostname labels the file binds; a container app without one is served at its own name,
+    a snowflake app on no host at all."""
     taken = {
         b["hostname"]
         for tables in data.get("services", {}).values()
         for b in tables.values()
         if "hostname" in b
     }
-    for tables in data.get("apps", {}).values():
-        taken |= {b.get("hostname", name) for name, b in tables.items()}
+    for extension, tables in data.get("apps", {}).items():
+        declared = record[extension].apps if extension in record else {}
+        for name, binding in tables.items():
+            app = declared.get(name)
+            if "hostname" in binding or app is None or app.service is not None:
+                taken.add(binding.get("hostname", name))
     return taken
 
 
-def _bind_apps(doc, config: VectenConfig, extension: str, entry) -> dict:
+def _bind_apps(doc, config: VectenConfig, extension: str, entry, record: dict) -> dict:
     """Bind each declared app the project does not bind yet, from its suggestions; a bound app
     keeps its binding as the person left it."""
     out: dict[str, list[str]] = {"hostnames": [], "binding_notes": []}
     if entry is None or not entry.apps:
         return out
     existing = config.apps.get(extension, {})
-    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)))
+    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)), record)
     for name, app in sorted(entry.apps.items()):
         key = f"{extension} app {name}"
         if name in existing:
             continue
         if not config.has("mcp"):
             out["binding_notes"].append(f"{key}: an app needs the mcp component; not bound")
+            continue
+        other = next((e for e, apps in sorted(config.apps.items()) if name in apps), None)
+        if other is not None:
+            out["binding_notes"].append(
+                f"{key}: {other} binds an app {name}, and both would run as "
+                f"svc_app_{name.replace('-', '_')}; not bound"
+            )
             continue
         table = tomlkit.table()
         table["groups"] = list(app.groups)

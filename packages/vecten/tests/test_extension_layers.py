@@ -271,7 +271,7 @@ def test_the_stub_service_and_both_routes_reach_the_record_the_binding_and_compo
     import tomlkit
 
     doc = tomlkit.parse((root / "vecten.toml").read_text())
-    _bind_services(doc, config, "vecten-test-extension", entry)
+    _bind_services(doc, config, "vecten-test-extension", entry, {"vecten-test-extension": entry})
     (root / "vecten.toml").write_text(tomlkit.dumps(doc))
     bound = load_config(root)
     assert set(bound.services["vecten-test-extension"]["portal"].routes) == {"hook", "home"}
@@ -308,7 +308,7 @@ def test_the_stub_apps_reach_the_record_the_binding_compose_and_nginx(extension)
     assert record["vecten-test-extension"].apps == entry.apps
 
     doc = tomlkit.parse((root / "vecten.toml").read_text())
-    _bind_apps(doc, config, "vecten-test-extension", entry)
+    _bind_apps(doc, config, "vecten-test-extension", entry, {"vecten-test-extension": entry})
     (root / "vecten.toml").write_text(tomlkit.dumps(doc))
     bound = load_config(root)
     assert set(bound.apps["vecten-test-extension"]) == {"dashboard", "warehouse"}

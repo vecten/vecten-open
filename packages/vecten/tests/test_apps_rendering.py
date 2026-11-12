@@ -96,11 +96,15 @@ def test_a_container_app_runs_the_launcher_from_the_platform_image(tmp_path):
         "VECTEN_PROJECT_ROOT": "/opt/airflow",
         "PORT": "8501",
         "VECTEN_PUBLIC_URL": "https://overview.localhost:8443",
-        "VECTEN_MCP_URL": "https://mcp.localhost:8443/mcp",
         "ACME_API_KEY": "${ACME_API_KEY:-}",
         "APP_OVERVIEW_CLIENT_ID": "${APP_OVERVIEW_CLIENT_ID:-}",
         "APP_OVERVIEW_CLIENT_SECRET": "${APP_OVERVIEW_CLIENT_SECRET:-}",
     }
+
+
+def test_on_the_laptop_no_mcp_url_is_rendered_since_no_container_reaches_it(tmp_path):
+    doc = generate_compose(config(BOUND), "local", ["platform", "mcp"], stack(tmp_path))
+    assert "VECTEN_MCP_URL" not in doc["services"]["svc-acme-app-overview"]["environment"]
 
 
 def test_on_a_vm_the_app_reads_the_mcp_at_the_environments_hostname(tmp_path):
@@ -300,3 +304,14 @@ def test_a_bundle_whose_apps_run_nowhere_renders_the_stack_of_a_project_without_
     locked(project)
     after = {name: _read(_bundle(project, tmp_path / "b"), name) for name in files}
     assert after == before
+
+
+def test_a_record_naming_an_app_credential_reaches_no_component(tmp_path):
+    from vecten_shared.output import ExitCode, Failure
+
+    stack_dir = stack(tmp_path, secrets=("APP_OVERVIEW_CLIENT_SECRET",))
+    for bound in (None, BOUND):
+        with pytest.raises(Failure) as caught:
+            generate_compose(config(bound), "local", ["platform", "mcp"], stack_dir)
+        assert caught.value.code == ExitCode.CONFIG
+        assert "APP_OVERVIEW_CLIENT_SECRET" in caught.value.message

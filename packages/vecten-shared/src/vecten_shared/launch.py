@@ -76,6 +76,10 @@ def streamlit_argv(path: Path, port: str) -> list[str]:
 
 def main(args: list[str] | None = None) -> int:
     args = sys.argv[1:] if args is None else args
+    # `python -m` puts the working directory first on sys.path, where a directory named like
+    # the package would be found in place of the installed one.
+    if sys.path and Path(sys.path[0] or ".").resolve() == Path.cwd().resolve():
+        del sys.path[0]
     try:
         if len(args) != 2:
             raise LaunchError("usage: python -m vecten_shared.launch streamlit <package>/<path>")

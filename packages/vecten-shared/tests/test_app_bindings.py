@@ -233,3 +233,9 @@ def test_an_apps_service_clashing_with_a_bound_service_is_refused():
         bound_services(
             config({"acme-sales": {"overview": {"groups": ["s"]}}}, services=services), rec
         )
+
+
+@pytest.mark.parametrize("name", ["APP_OVERVIEW_CLIENT_ID", "MCP_APP_OVERVIEW_CLIENT_SECRET"])
+def test_a_connector_may_not_declare_an_app_credential(name):
+    with pytest.raises(ValidationError, match="analytics app"):
+        config({}, connectors=[{"name": "hubspot", "source": "custom", "secrets": [name]}])

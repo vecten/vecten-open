@@ -12,7 +12,8 @@ publishing is a later change with #40 (section 5).
 - [x] 1.2 `vecten_shared.config`: `[apps.<extension>.<app>]` with its refusals (undeclared app, no `mcp` component, empty groups); `extension add` writes bindings and keeps existing ones
 - [x] 1.3 Render a bound container app as the #38 service `svc-<extension>-app-<app>` with one `login` route at `/`, `websocket = true`, its credential names and `VECTEN_MCP_URL`
 - [x] 1.4 `vecten_shared.launch`: standard library only; resolves `entry` inside the installed package, refuses a path outside it, and execs Streamlit with the flags in the spec
-- [x] 1.5 Tests: declaration and binding validation; rendered Compose and NGINX for a container app; byte-identical output without apps; the launcher's argument list and path checks; the stub extension's twelve groups; a Docker-tier test that a minimal Streamlit app from a fixture extension starts under `up`, answers `/_stcore/health`, keeps its WebSocket through NGINX, and that its page makes no request to Streamlit's usage-statistics endpoint
+- [x] 1.5 Tests: declaration and binding validation; rendered Compose and NGINX for a container app; byte-identical output without apps; the launcher's argument list and path checks; the stub extension's twelve groups; a Docker-tier test that a minimal Streamlit app from a fixture extension starts as its generated service from the platform image, answers `/_stcore/health`, keeps its WebSocket (directly), and that its page makes no request to Streamlit's usage-statistics endpoint
+- [ ] 1.6 Docker-tier test of the app under `up` with its WebSocket kept through NGINX: needs the gate (extension-services PR D), since a `login` route answers 503 until the gate serves it
 
 ## 2. Data scoping, admission and audit in the MCP (PR G)
 

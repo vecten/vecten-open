@@ -22,6 +22,7 @@ from pydantic import (
     model_validator,
 )
 
+from vecten_shared.apps import APP_CREDENTIAL
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
 from vecten_shared.declarations import is_toml_time, secret_problem
 from vecten_shared.names import (
@@ -312,6 +313,8 @@ class ConnectorDecl(Strict):
     def _secrets(cls, value: list[str]) -> list[str]:
         for secret in value:
             _checked(secret_name_problem(secret), secret)
+            if APP_CREDENTIAL.fullmatch(secret):
+                raise ValueError(f"{secret} is reserved for an analytics app's client credentials")
         return value
 
     @field_validator("groups")
