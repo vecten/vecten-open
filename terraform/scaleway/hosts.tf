@@ -11,6 +11,7 @@ module "host" {
   compose_plugin_version = local.compose_plugin_version
   buildx_plugin_version  = local.buildx_plugin_version
   certbot_image          = local.certbot_image
+  root_volume_size_gb    = var.root_volume_size_gb
   watch_config = {
     host          = each.key
     components    = tolist(each.value)

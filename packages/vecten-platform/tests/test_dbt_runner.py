@@ -194,3 +194,33 @@ def test_resolve_dependencies_in_process_reports_the_exception(monkeypatch, tmp_
     with pytest.raises(Failure) as exc:
         runner.resolve_dependencies(project_dir=tmp_path, config=_config(), env={}, in_process=True)
     assert exc.value.message == "dbt deps failed: Runtime Error: no profile"
+
+
+CONVENTION = "package:vecten_convention,test_type:singular"
+
+
+def test_the_default_build_is_every_node_less_the_convention_tests():
+    assert runner.BUILD_STEP == runner.build_args() == ("build", "--exclude", CONVENTION)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"select": "tag:intraday"}, ["--select", "tag:intraday", "--exclude", CONVENTION]),
+        ({"select": "a  b\n"}, ["--select", "a", "b", "--exclude", CONVENTION]),
+        ({"select": ["a", "b c"]}, ["--select", "a", "b", "c", "--exclude", CONVENTION]),
+        ({"exclude": "marts"}, ["--exclude", CONVENTION, "marts"]),
+        ({"full_refresh": True}, ["--exclude", CONVENTION, "--full-refresh"]),
+        ({"select": "", "exclude": []}, ["--exclude", CONVENTION]),
+    ],
+)
+def test_build_args_follow_the_run_parameters(kwargs, expected):
+    assert runner.build_args(**kwargs) == ("build", *expected)
+
+
+@pytest.mark.parametrize("value", ["--vars {}", "core -x", ["--full-refresh"]])
+def test_a_selector_that_dbt_would_read_as_a_flag_is_refused(value):
+    with pytest.raises(ValueError, match="does not start with '-'"):
+        runner.build_args(select=value)
+    with pytest.raises(ValueError, match="does not start with '-'"):
+        runner.build_args(exclude=value)

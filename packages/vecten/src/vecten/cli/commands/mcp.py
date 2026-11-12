@@ -212,6 +212,7 @@ def connection(
     json_output: bool = JsonFlag,
 ) -> None:
     def run(ctx: CliContext) -> Result:
+        from vecten.mcp_url import mcp_url
         from vecten_shared.config import load_config, save_config
         from vecten_shared.names import check_env_name
 
@@ -225,7 +226,7 @@ def connection(
             )
         if not config.has("mcp"):
             raise Failure(ExitCode.REFUSED, "the project does not include the mcp component")
-        url = f"https://mcp.{config.deploy.domain}/mcp"
+        url = mcp_url(root, config, env) + "/mcp"
         steps = connection_steps(url)
         lines = [url, *(f"  {step}" for step in steps[1:])]
         facts = config.environments.get(env)

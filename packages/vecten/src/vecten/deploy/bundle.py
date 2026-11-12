@@ -25,7 +25,7 @@ from vecten.deploy.feedback import feedback_manifest
 from vecten.deploy.names import name_prefix
 from vecten.deploy.outputs import outputs_text
 from vecten.deploy.sizing import tier
-from vecten.deploy.tfvars import check_tfvars
+from vecten.deploy.tfvars import DAGS_PAUSED_AT_CREATION, check_tfvars
 from vecten.deploy.vm.apply import HOST_KEYS, PLUGIN_DIRS
 from vecten.github.gh import ToolRunner, get_git
 from vecten.stack.compose import (
@@ -171,6 +171,7 @@ def _render_stack(
     outputs: EnvironmentOutputs,
     components: list[str],
     project: str,
+    tfvars: dict[str, Any],
 ) -> None:
     stack_dir = stage / STACK_DIR
     stack_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +180,15 @@ def _render_stack(
             (stack_dir / "empty" / empty).mkdir(parents=True, exist_ok=True)
     write_extension_dag_loader(stack_dir)
     hosts = vm_hostnames(outputs)
-    doc = generate_compose(config, "vm", components, stack_dir, project=project, hosts=hosts)
+    doc = generate_compose(
+        config,
+        "vm",
+        components,
+        stack_dir,
+        project=project,
+        hosts=hosts,
+        dags_paused_at_creation=tfvars.get(DAGS_PAUSED_AT_CREATION, False),
+    )
     write_text_atomic(stack_dir / "docker-compose.yml", yaml.safe_dump(doc, sort_keys=False))
     write_nginx(
         stack_dir,
@@ -188,6 +197,7 @@ def _render_stack(
         "vm",
         admin_panel=config.mcp.admin_panel,
         admin_allow=config.mcp.admin_allow,
+        airflow_allow=config.airflow.allow,
     )
     write_project_layer(stack_dir, config, PUBLISHED_REGISTRY)
 
@@ -340,7 +350,9 @@ def build_host_bundle(
     with tempfile.TemporaryDirectory(dir=out_dir, prefix=".bundle-") as tmp:
         stage = Path(tmp)
         _copy_content(project_root, stage)
-        _render_stack(stage, config, outputs, host_doc["components"], host_doc["compose_project"])
+        _render_stack(
+            stage, config, outputs, host_doc["components"], host_doc["compose_project"], tfvars
+        )
         _write_ship_files(stage, env, outputs, host_doc)
         lineage, feedback = metadata or prepare_bundle_metadata(
             project_root, config, commit, with_mcp="mcp" in host_doc["components"]

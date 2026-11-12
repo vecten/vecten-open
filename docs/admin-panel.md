@@ -157,7 +157,9 @@ admin_allow = ["203.0.113.0/24", "2001:db8::/32"]
 admin_panel = "off"
 ```
 
-`admin_allow` takes IPv4 or IPv6 networks; a bare address means that one address.
+`admin_allow` takes IPv4 or IPv6 networks; a bare address means that one address. `allow`
+under `[airflow]` does the same for the whole Airflow hostname; see
+[orchestration](orchestration.md#airflow-in-a-deployed-environment).
 `admin_allow` cannot be combined with `admin_panel = "off"`. Either change takes effect the next
 time the bundle is rendered and applied, which `vecten ship --env <env>` does.
 

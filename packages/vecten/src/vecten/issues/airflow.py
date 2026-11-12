@@ -25,6 +25,7 @@ from vecten_shared.issues import (
     airflow_issue_id,
     cap,
     failure_class,
+    is_sync_task,
     redact,
     sync_task_key,
     untrusted,
@@ -42,7 +43,6 @@ FINISHED = ("success", "failed", "skipped")
 # Only a run that succeeded clears a failure; a skipped task never ran its code.
 GREEN = {"success"}
 FAILED = "failed"
-SYNC_TASK = "sync"
 # The sync DAG's `check` task fails whenever an object did, and the dbt DAG's `build` and
 # `convention` tasks fail whenever a node did; the object or node is the issue, not them.
 SUMMARY_TASKS = {"check"}
@@ -72,8 +72,15 @@ class AirflowClient:
         http = httpx.Client(timeout=30, verify=self._verify, transport=TRANSPORT)
         response = self._send(http, "POST", "/auth/token", json=self._login)
         if response.status_code not in (200, 201):
+            # Airflow answers a wrong password with 401, so a 403 here most likely comes from
+            # NGINX refusing an address outside the `[airflow] allow` list.
+            hint = (
+                "; this address may be outside `[airflow] allow` in vecten.toml"
+                if response.status_code == 403
+                else ""
+            )
             raise SourceUnavailable(
-                f"Airflow at {self.base_url} refused the login (HTTP {response.status_code})"
+                f"Airflow at {self.base_url} refused the login (HTTP {response.status_code})" + hint
             )
         http.headers["Authorization"] = f"Bearer {response.json()['access_token']}"
         self._http = http
@@ -164,7 +171,7 @@ class ApiLogs:
 
 
 def task_key(attempt: TaskAttempt) -> str:
-    if attempt.task_id == SYNC_TASK and attempt.map_index >= 0:
+    if is_sync_task(attempt.task_id) and attempt.map_index >= 0:
         return sync_task_key(attempt.rendered_map_index or str(attempt.map_index))
     return attempt.task_id
 
@@ -211,7 +218,7 @@ def _failure(ctx: IssueContext, attempt: TaskAttempt) -> tuple[str, str, str]:
 
 def _title(ctx: IssueContext, attempt: TaskAttempt, key: str, error_class: str) -> str:
     connector = sync_connector(ctx.config, attempt.dag_id)
-    if connector is not None and key.startswith(f"{SYNC_TASK}."):
+    if connector is not None and key.startswith(sync_task_key("")):
         what = f"{connector.name} object {key.split('.', 1)[1]}"
     else:
         what = f"{attempt.dag_id} task {key}"

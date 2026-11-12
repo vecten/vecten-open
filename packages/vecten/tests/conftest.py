@@ -11,6 +11,9 @@ from typer.testing import CliRunner
 
 from vecten.cli.app import app
 from vecten.scaffold import render
+from vecten_shared.provider.local import LOCAL_PG_PORT_ENV
+
+from .docker_util import stack_pg_port
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -46,6 +49,15 @@ def _render_each_answer_set_once(tmp_path_factory):
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(render, "run_copy", run_copy)
         yield
+
+
+@pytest.fixture(autouse=True)
+def _stack_pg_port(request, monkeypatch):
+    """Each Docker test's stack publishes its Postgres on a port of its own, so none depends on
+    55432 being free. `vecten up` and the host-side commands, which the tests run as
+    subprocesses, read the port from the environment they inherit."""
+    if request.node.get_closest_marker("docker"):
+        monkeypatch.setenv(LOCAL_PG_PORT_ENV, str(stack_pg_port()))
 
 
 @pytest.fixture

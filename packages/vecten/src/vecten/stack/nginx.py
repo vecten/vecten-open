@@ -20,19 +20,27 @@ PROXY_HEADERS = """        proxy_http_version 1.1;
 RESOLVER = "resolver 127.0.0.11 valid=10s ipv6=off;\n"
 
 
-def _upstream(url: str) -> str:
-    return f"        set $upstream {url};\n        proxy_pass $upstream;\n"
+def _upstream(url: str, uri: str = "") -> str:
+    return f"        set $upstream {url};\n        proxy_pass $upstream{uri};\n"
 
 
+AIRFLOW_UPSTREAM = "http://airflow-api-server:8080"
 AIRFLOW_PROXY = (
-    _upstream("http://airflow-api-server:8080")
-    + PROXY_HEADERS
-    + "        proxy_set_header Host $http_host;\n"
+    _upstream(AIRFLOW_UPSTREAM) + PROXY_HEADERS + "        proxy_set_header Host $http_host;\n"
     "        proxy_set_header Upgrade $http_upgrade;\n"
     "        proxy_set_header Connection $connection_upgrade;\n"
     "        proxy_read_timeout 300s;\n"
 )
 AIRFLOW_HEALTH_PATH = "/api/v2/monitor/health"
+# NGINX matches a decoded, normalised URI but forwards the one the client sent, so a request
+# that normalises onto the open health path could name another Airflow route. Forwarding the
+# path itself, and reads only, keeps the opening to the health answer.
+AIRFLOW_HEALTH_PROXY = (
+    "        limit_except GET {\n            deny all;\n        }\n"
+    + _upstream(AIRFLOW_UPSTREAM, AIRFLOW_HEALTH_PATH)
+    + PROXY_HEADERS
+    + "        proxy_set_header Host $http_host;\n"
+)
 HOST_KEYS = {"platform": "airflow", "mcp": "mcp"}
 CONNECTION_UPGRADE_MAP = (
     "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
@@ -64,14 +72,33 @@ MCP_PROXY = (
 )
 
 
+def _allow_rules(networks: list[str]) -> str:
+    return "".join(f"        allow {network};\n" for network in networks) + "        deny all;\n"
+
+
 def _admin_location(admin_panel: str, admin_allow: list[str]) -> str:
     # The panel is behind admin login either way; these narrow who reaches the login page.
     if admin_panel == "off":
         return "    location /admin {\n        return 404;\n    }\n"
     if not admin_allow:
         return ""
-    rules = "".join(f"        allow {network};\n" for network in admin_allow)
-    return "    location /admin {\n" + rules + "        deny all;\n" + MCP_PROXY + "    }\n"
+    return "    location /admin {\n" + _allow_rules(admin_allow) + MCP_PROXY + "    }\n"
+
+
+def _airflow_locations(airflow_allow: list[str]) -> str:
+    # Airflow's login guards every path either way; the list narrows who reaches the login.
+    if not airflow_allow:
+        return "    location / {\n" + AIRFLOW_PROXY + "    }\n"
+    # `ship` polls the health path from wherever it runs, a CI runner whose address no list
+    # can name included, and the path answers component states only, without a login.
+    return (
+        f"    location = {AIRFLOW_HEALTH_PATH} {{\n"
+        + AIRFLOW_HEALTH_PROXY
+        + "    }\n    location / {\n"
+        + _allow_rules(airflow_allow)
+        + AIRFLOW_PROXY
+        + "    }\n"
+    )
 
 
 def generate_nginx_conf(
@@ -81,6 +108,7 @@ def generate_nginx_conf(
     *,
     admin_panel: str = "public",
     admin_allow: list[str] | tuple[str, ...] = (),
+    airflow_allow: list[str] | tuple[str, ...] = (),
 ) -> str:
     unknown = [c for c in host_components if c not in HOST_KEYS]
     if unknown:
@@ -108,9 +136,8 @@ def generate_nginx_conf(
             + _tls(host, mode)
             # Airflow's own login guards it: its UI sends its token as `Authorization: Bearer`,
             # which NGINX basic auth would take for missing credentials and challenge again.
-            + "    location / {\n"
-            + AIRFLOW_PROXY
-            + "    }\n}\n"
+            + _airflow_locations(list(airflow_allow))
+            + "}\n"
         )
     if "mcp" in host_components:
         host = _bare(hosts["mcp"])
@@ -133,10 +160,16 @@ def write_nginx(
     *,
     admin_panel: str = "public",
     admin_allow: list[str] | tuple[str, ...] = (),
+    airflow_allow: list[str] | tuple[str, ...] = (),
 ) -> None:
     conf_dir = stack_dir / "nginx" / "conf.d"
     conf_dir.mkdir(parents=True, exist_ok=True)
     conf = generate_nginx_conf(
-        host_components, hosts, mode, admin_panel=admin_panel, admin_allow=admin_allow
+        host_components,
+        hosts,
+        mode,
+        admin_panel=admin_panel,
+        admin_allow=admin_allow,
+        airflow_allow=airflow_allow,
     )
     write_text_atomic(conf_dir / "default.conf", conf)

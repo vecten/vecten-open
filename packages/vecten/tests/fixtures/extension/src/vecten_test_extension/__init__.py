@@ -9,7 +9,11 @@ def write_connector(target):
     (target / "connector.py").write_text("def source():\n    return []\n")
 
 
-connector = {"kind": "custom", "write": write_connector}
+connector = {
+    "kind": "custom",
+    "write": write_connector,
+    "groups": {"daily": {"objects": [], "schedule": "0 6 * * *", "timezone": "Europe/Warsaw"}},
+}
 
 
 def identity(credentials):

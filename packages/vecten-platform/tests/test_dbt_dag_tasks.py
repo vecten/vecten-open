@@ -16,6 +16,7 @@ from vecten_platform.dbt.airflow_dag import (
     freshness_check,
     install_deps,
     mark_built,
+    narrowed,
 )
 from vecten_platform.dbt.artifacts import BUILT_COMMIT_KEY, DirectorySink, run_keys
 from vecten_platform.dbt.runner import DbtRun
@@ -407,6 +408,56 @@ def test_assets_cover_every_connector_group_in_order():
         }
     )
     assert dbt_assets(cfg) == [("hubspot", "crm"), ("hubspot", "default"), ("stripe", "default")]
+
+
+def grouped_config() -> VectenConfig:
+    return VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "a", "scaffold_version": "0.1.0"},
+            "connectors": [
+                {"name": "stripe", "source": "dlt", "groups": {"daily": [], "hourly": []}},
+                {"name": "hubspot", "source": "dlt", "groups": {"daily": [], "weekly": []}},
+            ],
+        }
+    )
+
+
+def test_assets_narrow_to_the_named_groups():
+    cfg = grouped_config()
+    assert dbt_assets(cfg, ["daily"]) == [("hubspot", "daily"), ("stripe", "daily")]
+    assert dbt_assets(cfg, ["stripe.hourly", "hubspot.weekly"]) == [
+        ("hubspot", "weekly"),
+        ("stripe", "hourly"),
+    ]
+    assert dbt_assets(cfg, "daily") == [("hubspot", "daily"), ("stripe", "daily")]
+    assert dbt_assets(cfg, []) == []
+
+
+def test_a_group_no_connector_has_is_refused():
+    with pytest.raises(ValueError, match="no connector has the group dialy, stripe.weekly"):
+        dbt_assets(grouped_config(), ["dialy", "stripe.weekly", "daily"])
+
+
+def test_build_passes_the_run_parameters_to_dbt(project, monkeypatch):
+    calls = fake_dbt(monkeypatch, {"build": (0, results())})
+    build_step(RUN_ID, "tag:intraday", "marts", full_refresh=True)
+    assert calls == [
+        [
+            "build",
+            "--select",
+            "tag:intraday",
+            "--exclude",
+            "package:vecten_convention,test_type:singular",
+            "marts",
+            "--full-refresh",
+        ]
+    ]
+
+
+def test_only_a_selection_or_exclusion_narrows_a_build():
+    assert not narrowed("", "") and not narrowed((), [])
+    assert narrowed("core", "") and narrowed("", ["marts"])
 
 
 class SnowflakeProvider:

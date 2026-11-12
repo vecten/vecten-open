@@ -23,7 +23,7 @@ from vecten.stack.env import ensure_local_env
 from vecten_shared.config import ConnectorDecl, VectenConfig
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
-from vecten_shared.provider.local import LOCAL_PG_PUBLISHED_PORT
+from vecten_shared.provider.local import LOCAL_PG_PORT_ENV, LOCAL_PG_PUBLISHED_PORT
 from vecten_shared.versions import VERSIONS
 
 DEPLOY = {
@@ -185,7 +185,8 @@ def test_airflow_env_is_three_x_local_executor_and_hostname_base_url(tmp_path):
     assert command == "airflow db migrate && exec airflow api-server --proxy-headers"
 
 
-def test_postgres_init_and_log_prefix(tmp_path):
+def test_postgres_init_and_log_prefix(tmp_path, monkeypatch):
+    monkeypatch.delenv(LOCAL_PG_PORT_ENV, raising=False)
     doc = generate_compose(cfg(["platform", "mcp"]), "local", ["platform", "mcp"], tmp_path)
     pg = doc["services"]["postgres"]
     assert any(v.endswith(":/docker-entrypoint-initdb.d:ro") for v in pg["volumes"])
@@ -193,8 +194,7 @@ def test_postgres_init_and_log_prefix(tmp_path):
     assert "log_line_prefix=%m [%p] %u@%d app=%a " in pg["command"]
     assert pg["environment"]["VECTEN_WITH_MCP"] == "true"
     assert "VECTEN_WITH_PLATFORM" not in pg["environment"]
-    assert pg["ports"] == ["127.0.0.1:55432:5432"]
-    assert compose_mod.LOCAL_PG_PUBLISHED_PORT is LOCAL_PG_PUBLISHED_PORT
+    assert pg["ports"] == [f"127.0.0.1:{LOCAL_PG_PUBLISHED_PORT}:5432"] == ["127.0.0.1:55432:5432"]
     assert not hasattr(compose_mod, "LOCAL_PG_PORT")
     write_compose(tmp_path, cfg(["platform", "mcp"]))
     init = tmp_path / STACK_DIR / "pg-init"
@@ -202,6 +202,12 @@ def test_postgres_init_and_log_prefix(tmp_path):
     assert script.is_file() and os.stat(script).st_mode & stat.S_IXUSR
     assert (init / "vecten" / "warehouse_setup.sql").is_file()
     assert not list(init.glob("*.sql"))
+
+
+def test_postgres_publishes_the_port_the_environment_names(tmp_path, monkeypatch):
+    monkeypatch.setenv(LOCAL_PG_PORT_ENV, "23456")
+    doc = generate_compose(cfg(["platform"]), "local", ["platform"], tmp_path)
+    assert doc["services"]["postgres"]["ports"] == ["127.0.0.1:23456:5432"]
 
 
 def test_airflow_api_is_published_on_loopback_in_the_local_stack_only(tmp_path):
@@ -216,16 +222,30 @@ def test_airflow_api_is_published_on_loopback_in_the_local_stack_only(tmp_path):
     assert "ports" not in vm["services"]["airflow-api-server"]
 
 
-def test_dags_start_paused_on_the_laptop_and_scheduled_on_a_vm(tmp_path):
-    local = generate_compose(cfg(["platform", "mcp"]), "local", ["platform", "mcp"], tmp_path)
-    vm = generate_compose(
-        cfg(["platform", "mcp"], deploy=DEPLOY), "vm", ["platform", "mcp"], tmp_path, hosts=VM_HOSTS
-    )
+@pytest.mark.parametrize(
+    ("mode", "setting", "expected"),
+    [
+        # The laptop starts DAGs paused whatever the setting says.
+        ("local", None, "True"),
+        ("local", False, "True"),
+        ("local", True, "True"),
+        # A VM schedules new DAGs unless its environment opts in to pausing them.
+        ("vm", None, "False"),
+        ("vm", False, "False"),
+        ("vm", True, "True"),
+    ],
+)
+def test_dags_start_paused_on_the_laptop_and_scheduled_on_a_vm(tmp_path, mode, setting, expected):
+    kwargs = {} if setting is None else {"dags_paused_at_creation": setting}
+    if mode == "vm":
+        config = cfg(["platform", "mcp"], deploy=DEPLOY)
+        kwargs["hosts"] = VM_HOSTS
+    else:
+        config = cfg(["platform", "mcp"])
+    doc = generate_compose(config, mode, ["platform", "mcp"], tmp_path, **kwargs)
     for name in AIRFLOW_SERVICES:
-        local_env = local["services"][name]["environment"]
-        vm_env = vm["services"][name]["environment"]
-        assert local_env["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "True", name
-        assert vm_env["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "False", name
+        environment = doc["services"][name]["environment"]
+        assert environment["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == expected, name
 
 
 def test_mcp_only_local(tmp_path):

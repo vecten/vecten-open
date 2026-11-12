@@ -37,12 +37,13 @@ def night(day: int) -> datetime:
 
 
 def attempt(day, state, *, dag=DAG, task="sync", obj="deals", map_index=0, run=None):
+    mapped = task == "sync" or task.startswith("sync_stage_")
     return TaskAttempt(
         dag_id=dag,
         task_id=task,
         run_id=run or f"scheduled__2026-10-{day:02d}T02:00:00+00:00",
-        map_index=map_index if task == "sync" else -1,
-        rendered_map_index=obj if task == "sync" else None,
+        map_index=map_index if mapped else -1,
+        rendered_map_index=obj if mapped else None,
         try_number=3 if state == "failed" else 1,
         state=state,
         run_after=night(day),
@@ -196,6 +197,13 @@ def test_the_excerpt_redacts_tokens_and_known_secret_values_and_keeps_text_as_da
 def test_each_object_is_its_own_issue():
     ctx = context([attempt(21, "failed"), attempt(21, "success", obj="companies", map_index=1)])
     assert [i.id for i in airflow_issues(ctx)] == [DEALS_ID]
+
+
+def test_an_object_in_a_stage_is_the_same_issue_as_in_the_parallel_sync():
+    ctx = context([attempt(21, "failed", task="sync_stage_2")])
+    (issue,) = airflow_issues(ctx)
+    assert issue.id == DEALS_ID
+    assert issue.title.startswith("hubspot object deals fails")
 
 
 def test_the_sync_check_task_repeats_the_object_failures_and_is_not_an_issue():

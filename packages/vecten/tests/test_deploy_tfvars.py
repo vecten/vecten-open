@@ -298,3 +298,20 @@ def test_scaleway_accepts_the_rendered_region(tmp_path):
 def test_aws_keeps_its_tfvars_region_unchecked(project):
     replace_line(project, "prod", "region", 'region = "eu-west-3"')
     assert check_tfvars(project, load_config(project), "prod")["region"] == "eu-west-3"
+
+
+def test_dags_paused_at_creation_is_optional_and_a_bool(project):
+    assert "dags_paused_at_creation" not in check_tfvars(project, load_config(project), "prod")
+    path = env_tfvars_path(project, "prod")
+    rendered = path.read_text()
+    path.write_text(rendered + "dags_paused_at_creation = true\n")
+    assert check_tfvars(project, load_config(project), "prod")["dags_paused_at_creation"] is True
+
+
+@pytest.mark.parametrize("value", ['"true"', "1", "[true]"])
+def test_dags_paused_at_creation_refuses_anything_but_true_or_false(project, value):
+    path = env_tfvars_path(project, "prod")
+    path.write_text(path.read_text() + f"dags_paused_at_creation = {value}\n")
+    failure = refusal(project)
+    assert failure.code == ExitCode.CONFIG
+    assert "dags_paused_at_creation" in failure.message and "true or false" in failure.message

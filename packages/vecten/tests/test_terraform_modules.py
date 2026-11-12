@@ -28,6 +28,7 @@ MODULE_ROOTS = ["aws", "scaleway", "snowflake"]
 AGENT = REPO / "packages" / "vecten" / "src" / "vecten" / "deploy" / "vm" / "apply.py"
 OPTIONAL_VARIABLES = {
     "platform_size",
+    "root_volume_size_gb",
     "instance_type_overrides",
     "database_public_cidrs",
     "log_line_prefix",
@@ -399,6 +400,18 @@ def test_rendered_root_leaves_optional_defaults_to_the_module(tmp_path, warehous
         block = re.search(rf'variable "{name}" \{{(.*?)\n\}}', module_variables, re.S)
         assert block, name
         assert re.search(r"nullable\s*=\s*false", block.group(1)), name
+
+
+@pytest.mark.parametrize("cloud", ["aws", "scaleway"])
+def test_rendered_root_declares_the_ship_only_setting_without_passing_it(tmp_path, cloud):
+    # `ship` reads dags_paused_at_creation from the tfvars; the module has no such input.
+    root = (_render if cloud == "aws" else _render_scaleway)(tmp_path, "postgres")
+    (block,) = _blocks((root / "variables.tf").read_text(), 'variable "dags_paused_at_creation"')
+    assert re.search(r"type\s*=\s*bool", block) and re.search(r"default\s*=\s*null", block)
+    main = (root / "main.tf").read_text()
+    assert "dags_paused_at_creation" not in main
+    for module in (AWS, SCALEWAY):
+        assert "dags_paused_at_creation" not in _declared_variables(module / "variables.tf")
 
 
 def test_module_leaves_the_provider_to_the_thin_root(tmp_path):

@@ -35,6 +35,12 @@ def test_a_mapped_sync_failure_is_named_by_object_and_wrapped_class():
     )
 
 
+def test_a_staged_sync_failure_is_keyed_by_object_like_the_parallel_one():
+    exc = ObjectSyncError("hubspot", "deals", "KeyError: 'dealname'")
+    payload = alert_payload(context(exc, task_id="sync_stage_2"))
+    assert payload["issue_id"] == "iss_airflow_sync_hubspot_default_sync.deals_KeyError"
+
+
 def test_the_text_a_chat_webhook_shows_names_dag_task_issue_and_command():
     exc = ObjectSyncError("hubspot", "deals", "KeyError: 'dealname'")
     text = alert_payload(context(exc))["text"]
