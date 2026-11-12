@@ -6,6 +6,11 @@ from pathlib import Path
 
 from vecten_shared.osi.documents import document_sources
 
+BUILT_COMMIT = "dbt/built_commit"
+BUILD_FINISHED = "dbt/build_finished_at"
+# Every record read here; each cloud's MCP host policy grants exactly these keys.
+DBT_RECORDS = (BUILT_COMMIT, BUILD_FINISHED)
+
 
 def content_revision(directory):
     digest = hashlib.sha256()
@@ -32,12 +37,12 @@ def build_covers(marker, commit):
 
 
 def read_built_commit(environ):
-    return _read_dbt_record(environ, "dbt/built_commit")
+    return _read_dbt_record(environ, BUILT_COMMIT)
 
 
 def read_build_finished(environ):
     """When the dbt DAG's last build finished, or None before the first."""
-    return _read_dbt_record(environ, "dbt/build_finished_at")
+    return _read_dbt_record(environ, BUILD_FINISHED)
 
 
 def _read_dbt_record(environ, name):

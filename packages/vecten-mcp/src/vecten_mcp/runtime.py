@@ -28,6 +28,7 @@ class Runtime:
     maintenance_task: object = field(default=None, init=False)
     last_reconcile: float = field(default=0, init=False)
     last_build_finished: object = field(default=None, init=False)
+    build_record_error: object = field(default=None, init=False)
     last_model_check: float = field(default=0, init=False)
     last_audit_maintenance: float = field(default=0, init=False)
 
@@ -102,8 +103,13 @@ class Runtime:
             if self.build_finished:
                 try:
                     finished = self.build_finished()
+                    self.build_record_error = None
                 except Exception as exc:
-                    logger.error("MCP build record unreadable: %s", describe_error(exc))
+                    # Read every 30 seconds, so one failure is logged once until a read succeeds.
+                    error = describe_error(exc)
+                    if error != self.build_record_error:
+                        logger.error("MCP build record unreadable: %s", error)
+                    self.build_record_error = error
             rebuilt = finished is not None and finished != self.last_build_finished
             if (rebuilt or now - self.last_reconcile >= 900) and attempt(self.access.reconcile):
                 self.last_reconcile = now

@@ -136,8 +136,8 @@ run "mcp_role_reads_mcp_and_writes_the_generated_credentials" {
     error_message = "the setup host creates, writes and reads back the generated credentials"
   }
   assert {
-    condition     = one([for s in jsondecode(module.host["mcp"].scope_policy).Statement : s.Resource if s.Sid == "ReadBuiltCommit"]) == ["arn:aws:s3:::vecten-acme-prod-artifacts-123456789012/platform/dbt/built_commit"]
-    error_message = "the MCP role reads the built-commit marker"
+    condition     = one([for s in jsondecode(module.host["mcp"].scope_policy).Statement : s.Resource if s.Sid == "ReadBuiltCommit"]) == ["arn:aws:s3:::vecten-acme-prod-artifacts-123456789012/platform/dbt/built_commit", "arn:aws:s3:::vecten-acme-prod-artifacts-123456789012/platform/dbt/build_finished_at"]
+    error_message = "the MCP role reads the built-commit marker and the build finish time"
   }
   assert {
     condition     = one([for s in jsondecode(module.host["mcp"].scope_policy).Statement : s.Resource if s.Sid == "ComponentObjects"]) == ["arn:aws:s3:::vecten-acme-prod-artifacts-123456789012/mcp/*"]

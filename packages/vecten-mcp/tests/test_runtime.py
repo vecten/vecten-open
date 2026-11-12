@@ -121,6 +121,27 @@ def test_an_unreadable_build_record_leaves_the_schedule_alone(caplog):
     assert "artifact store unavailable" in caplog.text
 
 
+def test_an_unreadable_build_record_is_logged_once_until_it_reads_again(caplog):
+    now, calls, state = [1000], [], {"error": True}
+
+    def record():
+        if state["error"]:
+            raise PermissionError("AccessDenied: platform/dbt/build_finished_at")
+        return "one"
+
+    runtime = _reconciling_runtime(now, calls, record)
+    for _ in range(3):
+        runtime.tick()
+        now[0] += 30
+    assert caplog.text.count("AccessDenied") == 1
+    state["error"] = False
+    runtime.tick()
+    state["error"] = True
+    now[0] += 30
+    runtime.tick()
+    assert caplog.text.count("AccessDenied") == 2
+
+
 def test_only_a_postgres_platform_watches_the_build_record():
     from vecten_mcp.runtime_setup import build_watch
     from vecten_shared.config import VectenConfig
