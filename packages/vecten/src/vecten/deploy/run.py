@@ -48,11 +48,13 @@ from vecten.deploy.guards import (
 from vecten.deploy.shipping import service_report
 from vecten.deploy.snowflake import (
     check_layout,
+    deploy_credentials,
     has_snowflake_root,
     identity_pending,
     identity_pending_note,
     record_layout,
 )
+from vecten.deploy.snowflake_leftovers import read_leftovers
 from vecten.deploy.terraform import PlannedRoot, TerraformRunner, require_terraform
 from vecten.deploy.tfvars import check_tfvars
 from vecten.github.gh import ToolRunner, require_gh
@@ -61,7 +63,7 @@ from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import shared_layout
+from vecten_shared.provider import shared_layout, snowflake_names
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
 from vecten_shared.records import write_text_atomic
 from vecten_shared.services import check_bindings, limits_per_host
@@ -456,7 +458,7 @@ def destroy_env(
         )
     config = load_config(project_root)
     plane = control_plane(config, project_root, env)
-    check_tfvars(project_root, config, env)
+    values = check_tfvars(project_root, config, env)
     state_bucket = require_bootstrapped(config, env)
     _confirmed(env, confirm, prompt)
     require_terraform(terraform)
@@ -471,6 +473,7 @@ def destroy_env(
             f"databases to snapshot; if they hold nothing to keep, rerun with "
             f"--delete-data {env}",
         )
+    kept = _shared_leftovers(plane, config, env, values, delete_data=delete_data is not None)
     done = destroy_environment(
         plane,
         env,
@@ -513,10 +516,40 @@ def destroy_env(
         "env": env,
         "state_bucket": state_bucket,
         **done,
+        **kept,
         "deployed_commit_cleared": recorded_here,
         "facts_cleared": cleared,
         "outputs_left": left,
     }
+
+
+def _shared_leftovers(
+    plane: ControlPlane, config: VectenConfig, env: str, values: dict, *, delete_data: bool
+) -> dict:
+    """What a shared-account environment leaves in Snowflake outside Terraform, read before
+    any Terraform runs: data deletion refuses while any of it stays, printing the statements
+    an administrator runs; a kept database lists it. Empty for the fixed layout, whose account
+    holds this environment alone."""
+    if not (has_snowflake_root(config) and config.has("mcp") and shared_layout(config, env)):
+        return {}
+    account = str(values["snowflake_account"])
+    names = snowflake_names(config, env, account=account)
+    try:
+        found = read_leftovers(deploy_credentials(plane, env, account), names)
+    except Failure as failure:
+        if delete_data:
+            raise
+        return {"kept_in_snowflake": None, "kept_unread": failure.message}
+    if delete_data and found.blocks_data_deletion:
+        statements = found.statements()
+        raise Failure(
+            ExitCode.REFUSED,
+            f"{names.provisioner_role} still owns users or roles, or its user stays, and their "
+            "sign-in policies live in the database --delete-data drops; nothing was destroyed. "
+            "Have an ACCOUNTADMIN run, in order:\n" + "\n".join(statements),
+            details={"statements": statements},
+        )
+    return {} if delete_data else {"kept_in_snowflake": found.kept()}
 
 
 # Facts whose subject lives in the environment's `state` database, which destroy deletes:

@@ -39,8 +39,8 @@
 
 ## 6. Destroy
 
-- [ ] 6.1 With a shared account, `destroy` lists by ownership what stays outside Terraform; `--delete-data` refuses while the provisioner owns a user or role and prints the `DROP` statements; the provisioner user is ACCOUNTADMIN-owned and carries `SERVICE_SIGN_IN`, a policy inside the environment's database, so the printed statements unset that policy and drop the user before the database goes (live check 9.4)
-- [ ] 6.2 Tests: the listing from mocked `SHOW GRANTS`, no name-pattern match, the refusal and the printed statements
+- [x] 6.1 With a shared account, `destroy` lists by ownership what stays outside Terraform; `--delete-data` refuses while the provisioner owns a user or role and prints the `DROP` statements; the provisioner user is ACCOUNTADMIN-owned and carries `SERVICE_SIGN_IN`, a policy inside the environment's database, so the printed statements unset that policy and drop the user before the database goes (live check 9.4)
+- [x] 6.2 Tests: the listing from mocked `SHOW GRANTS`, no name-pattern match, the refusal and the printed statements
 
 ## 7. dbt and #53
 

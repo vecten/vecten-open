@@ -255,6 +255,15 @@ def _destroy_message(data: dict, provisioner_role: str | None) -> str:
             f"the Snowflake database was kept; `vecten destroy --env {data['env']} --confirm "
             f"{data['env']} --delete-data {data['env']}` deletes it"
         )
+    if data.get("kept_in_snowflake"):
+        lines.append(
+            "these stay in Snowflake outside Terraform: " + ", ".join(data["kept_in_snowflake"])
+        )
+    if data.get("kept_unread"):
+        lines.append(
+            f"warning: {data['kept_unread']}; the users and roles {provisioner_role} owns, its "
+            "user and its integration stay in Snowflake"
+        )
     if data["snowflake"] == "kept" and "provisioner_script_run" in data["facts_cleared"]:
         lines.append(
             f"the users and roles {provisioner_role} created stay in Snowflake, and the MCP "
