@@ -3,6 +3,7 @@
 - [x] 1.1 `[deploy] promotion` in `vecten_shared.config`: at least two names, no repeats, `prod` last, each with a tfvars file; absent means `["prod"]`; one helper returns the order and the environment before a given one
 - [x] 1.2 The CLI refuses to write the key while `[project] scaffold_version` predates this release, naming `vecten update`
 - [x] 1.3 Tests: validation, the default, the helper, the refusal
+- [ ] 1.4 `vecten answer deploy.promotion <envs>|none` records or removes the order, refusing what 1.1 and 1.2 refuse, with `vecten.toml` unchanged
 
 ## 2. Commit statuses and the shipped commit
 

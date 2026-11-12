@@ -24,6 +24,30 @@
 - **WHEN** `vecten promote --status --json` runs after `dev` shipped `b71d004` and `prod` last shipped `a3f9c2e`
 - **THEN** the output lists `dev` with `b71d004` and `prod` with `a3f9c2e`, marked as behind `dev`
 
+### Requirement: answer records the promotion order
+
+Inside a project with a deploy layer, `answer deploy.promotion <env>,<env>[,<env>...]` SHALL record the list, in the order given, as `[deploy] promotion` in `vecten.toml`, and `answer deploy.promotion none` SHALL remove the key, so that a push ships `prod` again. It SHALL refuse, with `vecten.toml` unchanged, an order the `shared/deploy` spec's "Promotion order" rejects, naming `deploy.promotion` and the problem, and any order while the project's workflows were rendered by an earlier release, naming `vecten update`. In a project without a deploy layer it SHALL refuse, naming `vecten init --deploy`.
+
+#### Scenario: Record an order
+
+- **WHEN** `answer deploy.promotion dev,prod` runs in a project with `deploy/envs/dev.tfvars` and workflows rendered by this release
+- **THEN** `vecten.toml` holds `promotion = ["dev", "prod"]` under `[deploy]`, and `next` walks `dev` first
+
+#### Scenario: Environment without a tfvars file
+
+- **WHEN** `answer deploy.promotion dev,prod` runs and `deploy/envs/dev.tfvars` does not exist
+- **THEN** the command exits non-zero naming `deploy.promotion` and `deploy/envs/dev.tfvars`, and `vecten.toml` is unchanged
+
+#### Scenario: Workflows older than the order
+
+- **WHEN** `answer deploy.promotion dev,prod` runs in a project whose `[project] scaffold_version` predates promotion
+- **THEN** the command exits non-zero naming `vecten update`, and `vecten.toml` is unchanged
+
+#### Scenario: Remove the order
+
+- **WHEN** `answer deploy.promotion none` runs in a project with `[deploy] promotion = ["dev", "prod"]`
+- **THEN** `vecten.toml` holds no `promotion` key, and the next push ships `prod`
+
 ## MODIFIED Requirements
 
 ### Requirement: ship sends content without Terraform
