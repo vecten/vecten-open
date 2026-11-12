@@ -591,4 +591,4 @@ def test_an_unmarked_app_principal_is_an_issue():
         if i.source == "mcp"
     ]
     assert "svc_app_overview" in issue.title
-    assert "vecten app connect acme-sales.overview --env prod" in issue.resolution
+    assert "vecten app connect acme-sales.overview --env prod --adopt" in issue.resolution

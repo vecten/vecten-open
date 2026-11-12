@@ -316,5 +316,6 @@ def test_an_unmarked_service_named_as_a_bound_apps_principal_is_listed():
         "not marked as the app's principal",
     )
     assert "svc_app_overview" in entry["message"]
+    assert "vecten app connect acme-sales.overview --env <env> --adopt" in entry["message"]
     scopes.mark(service["id"], "acme-sales", "overview")
     assert access.health()["apps"] == []

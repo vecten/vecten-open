@@ -394,7 +394,9 @@ class AppScopes:
                 "message": (
                     f"service principal {p['warehouse_name']} is named as "
                     f"{names[p['warehouse_name']].key}'s principal but is not marked as it, so "
-                    "it is not held to the app's datasets"
+                    "it is not held to the app's datasets; review who uses it, then run "
+                    f"`vecten app connect {names[p['warehouse_name']].key} --env <env> --adopt` "
+                    "or delete it"
                 ),
             }
             for p in self.state.principals()

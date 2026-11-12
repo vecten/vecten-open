@@ -10,6 +10,8 @@ from vecten_mcp.panel.html import form, join, layout, link, tag
 from vecten_mcp.panel.session import PanelSessions
 
 APPS_CLIENT = "vecten-apps-page"
+# The __Host- prefix requires Path=/, which would send the cookie to /mcp and /admin too; with
+# Path=/apps a sibling hostname can plant one, which signs the browser in as the planter only.
 SESSION_COOKIE = "vecten_apps"
 LOGIN_COOKIE = "vecten_apps_login"
 BRAND = "Vecten"

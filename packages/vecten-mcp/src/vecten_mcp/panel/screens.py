@@ -816,7 +816,10 @@ def principal_state(app):
     if not principal["enabled"]:
         return f"{principal['warehouse_name']}, disabled; delete it, then {connect}"
     if not principal["marked"]:
-        return f"{principal['warehouse_name']}, not marked as this app's; {connect}"
+        return (
+            f"{principal['warehouse_name']}, not marked as this app's; review who uses it, then "
+            f"run `vecten app connect {app['app']} --env <env> --adopt`"
+        )
     return principal["warehouse_name"]
 
 

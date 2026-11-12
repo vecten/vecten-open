@@ -85,9 +85,10 @@ def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issu
         title = f"Service principal {name} is not marked as {app}'s principal"
         resolution = (
             f"{name} is named as the principal of {app} but the MCP does not hold it to the "
-            "app's datasets, so it reads everything its groups can. Run "
-            f"`vecten app connect {app} --env {ctx.env}` to make it the app's principal, or "
-            "delete it if nothing uses it."
+            "app's datasets, so it reads everything its groups can. Review who uses it, then run "
+            f"`vecten app connect {app} --env {ctx.env} --adopt` to make it the app's principal "
+            "(its groups become the app's and its credentials are replaced), or delete it if "
+            "nothing uses it."
         )
     elif "source" in entry:
         dataset, source = str(entry.get("dataset", "?")), str(entry.get("source", "?"))

@@ -42,7 +42,7 @@ class Administration:
         """Creates or rotates the principal of bound container app `key` (`<extension>.<app>`):
         named `principal_name(app)`, marked as the app's, a member of exactly its bound groups,
         with new client credentials that replace any earlier ones."""
-        from vecten_mcp.apps import principal_name
+        from vecten_mcp.apps import APP_PRINCIPALS, principal_name
 
         extension, _, name = key.partition(".")
         app = apps.apps.get(name) if apps else None
@@ -69,6 +69,25 @@ class Administration:
                 raise ValueError(f"{target} belongs to a person, not a service principal")
             if found is not None and not found["enabled"]:
                 raise ValueError(f"{target} is disabled; delete it, then connect {key} again")
+            if found is not None:
+                marker = self.state.get(APP_PRINCIPALS, found["id"])
+                if marker is not None and marker != {"extension": app.extension, "app": app.name}:
+                    other = (
+                        f"{marker.get('extension')}.{marker.get('app')}"
+                        if isinstance(marker, dict)
+                        else "another app"
+                    )
+                    raise ValueError(
+                        f"{target} is the principal of {other}; delete it before connecting {key}"
+                    )
+                if marker is None and not adopt:
+                    raise ValueError(
+                        f"{target} exists but is not marked as {key}'s principal; review who "
+                        "uses it, then repeat with --adopt: its groups become "
+                        f"{', '.join(sorted(app.groups))} and its credentials are replaced"
+                    )
+            elif adopt:
+                self._adoptable_for(app, target)
             # The principal holds no client credentials until the last step, so nobody can
             # sign in as it before it is marked and its groups are set.
             principal = found or self._create(
@@ -92,6 +111,25 @@ class Administration:
             "groups": sorted(bound),
             "credentials": credentials,
         }
+
+    def _adoptable_for(self, app, target):
+        """An app principal reads as exactly its bound groups' roles, so an existing warehouse
+        account holding any other role is not adopted as one."""
+        account = self.adapter.inspect_account(target)
+        if account is None:
+            return
+        groups = {*app.groups, "default"}
+        # PUBLIC is every Snowflake user's; `default` is the group a new principal joins first
+        # and leaves when the app is not bound to it.
+        managed = {"public"} | {
+            self.state.group(group)["warehouse_role"].casefold() for group in groups
+        }
+        extra = sorted(role for role in account.roles if role.casefold() not in managed)
+        if extra:
+            raise ValueError(
+                f"warehouse account {target} holds {', '.join(extra)}, beyond the roles of "
+                f"{app.key}'s groups; revoke them before adopting it as the app's principal"
+            )
 
     def _create(self, email, name, kind, override, adopt):
         with self.lock:

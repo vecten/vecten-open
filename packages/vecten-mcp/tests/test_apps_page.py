@@ -192,3 +192,56 @@ def test_without_bound_apps_the_page_lists_none(builtins):
     session.person(builtins, "ana@example.com", admin=False)
     sign_in(builtins.http)
     assert "No analytics app is open to your groups" in builtins.http.get("/apps").text
+
+
+def cookie(http, name):
+    return next(c for c in http.cookies.jar if c.name == name)
+
+
+def test_the_apps_cookie_is_secure(page):
+    sign_in(page.http)
+    assert cookie(page.http, "vecten_apps").secure
+
+
+def test_a_panel_cookie_replayed_as_the_apps_cookie_is_not_a_session(page):
+    session.person(page, "admin@example.com")
+    assert session.panel_login(page.http).status_code == 303
+    value = cookie(page.http, "vecten_panel").value
+    page.http.cookies.clear()
+    page.http.cookies.set("vecten_apps", value, domain="mcp.example", path="/apps")
+    response = page.http.get("/apps", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/apps/login"
+
+
+def test_an_apps_cookie_replayed_as_the_panel_cookie_is_not_a_session(page):
+    session.person(page, "admin@example.com")
+    sign_in(page.http, "admin@example.com")
+    value = cookie(page.http, "vecten_apps").value
+    page.http.cookies.clear()
+    page.http.cookies.set("vecten_panel", value, domain="mcp.example", path="/admin")
+    response = page.http.get("/admin", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/admin/login"
+
+
+def test_an_apps_session_does_not_open_the_panel(page):
+    session.person(page, "admin@example.com")
+    sign_in(page.http, "admin@example.com")
+    response = page.http.get("/admin", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/admin/login"
+
+
+def test_app_text_on_the_page_is_escaped(page):
+    page.runtime.apps.apps["overview"] = BoundApp(
+        "acme-sales",
+        "overview",
+        "<script>alert(1)</script>",
+        "container",
+        ("orders",),
+        ("sales",),
+        description="<script>alert(2)</script>",
+        hostname="sales",
+    )
+    sign_in(page.http)
+    body = page.http.get("/apps").text
+    assert "<script>" not in body
+    assert "&lt;script&gt;alert(1)" in body and "&lt;script&gt;alert(2)" in body

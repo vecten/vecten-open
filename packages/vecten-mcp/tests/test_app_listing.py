@@ -193,13 +193,106 @@ def test_connecting_follows_a_change_of_the_bound_groups(apps):
     assert apps.runtime.state.groups_for(first["principal"]["id"]) == {"sales"}
 
 
-def test_a_principal_named_for_the_app_but_unmarked_is_marked_on_connect(apps):
-    created = apps.runtime.administration.create_service("app overview")
+def refused(apps, data):
+    headers = {"Authorization": "Bearer " + apps.token}
+    response = apps.http.post("/api/admin/apps/connect", headers=headers, json=data)
+    assert response.status_code == 400, response.text
+    return response.json()["error"]
+
+
+def unmarked_service(apps):
+    """A service someone created by hand under the app principal's name, in `finance`."""
+    runtime = apps.runtime
+    created = runtime.administration.create_service("app overview")
     assert created["warehouse_name"] == "svc_app_overview"
-    assert apps.runtime.state.get(APP_PRINCIPALS, created["id"]) is None
-    result = cli(apps, "apps/connect", {"name": "acme-sales.overview"})
+    runtime.access.create_group("finance")
+    runtime.access.membership("finance", created["id"])
+    return created
+
+
+def test_an_unmarked_principal_named_for_the_app_is_refused_without_adopt(apps):
+    created = unmarked_service(apps)
+    oauth, state = apps.runtime.oauth, apps.runtime.state
+    error = refused(apps, {"name": "acme-sales.overview"})
+    assert "svc_app_overview" in error and "--adopt" in error
+    assert state.get(APP_PRINCIPALS, created["id"]) is None
+    assert state.groups_for(created["id"]) == {"default", "finance"}
+    credentials = created["credentials"]
+    oauth.client_credentials(credentials["client_id"], credentials["client_secret"], oauth.resource)
+
+
+def test_an_unmarked_principal_named_for_the_app_is_taken_over_with_adopt(apps):
+    created = unmarked_service(apps)
+    result = cli(apps, "apps/connect", {"name": "acme-sales.overview", "adopt": True})
     assert result["principal"]["id"] == created["id"] and result["created"] is False
-    assert apps.runtime.state.get(APP_PRINCIPALS, created["id"])["app"] == "overview"
+    state = apps.runtime.state
+    assert state.get(APP_PRINCIPALS, created["id"])["app"] == "overview"
+    assert state.groups_for(created["id"]) == {"sales", "default"}
+
+
+def test_a_principal_marked_for_another_app_is_always_refused(apps):
+    created = unmarked_service(apps)
+    marker = {"extension": "acme-other", "app": "overview"}
+    apps.runtime.state.put(APP_PRINCIPALS, created["id"], marker)
+    for data in ({"name": "acme-sales.overview"}, {"name": "acme-sales.overview", "adopt": True}):
+        assert "acme-other.overview" in refused(apps, data)
+    assert apps.runtime.state.get(APP_PRINCIPALS, created["id"]) == marker
+    assert apps.runtime.state.groups_for(created["id"]) == {"default", "finance"}
+
+
+def test_adopting_a_warehouse_account_with_roles_beyond_the_bound_groups_is_refused(apps):
+    from vecten_mcp.warehouse.base import Account
+
+    accounts = apps.adapter.accounts
+    accounts["svc_app_overview"] = Account("svc_app_overview", ("PII_READER",), can_adopt=True)
+    error = refused(apps, {"name": "acme-sales.overview", "adopt": True})
+    assert "PII_READER" in error
+    assert not [
+        p for p in apps.runtime.state.principals() if p["warehouse_name"] == "svc_app_overview"
+    ]
+
+
+def test_adopting_a_warehouse_account_holding_only_bound_group_roles_is_allowed(apps):
+    from vecten_mcp.warehouse.base import Account
+
+    accounts = apps.adapter.accounts
+    accounts["svc_app_overview"] = Account(
+        "svc_app_overview", ("SALES", "ANALYST", "PUBLIC"), can_adopt=True
+    )
+    result = cli(apps, "apps/connect", {"name": "acme-sales.overview", "adopt": True})
+    assert result["created"] is True
+
+
+def test_an_existing_warehouse_account_without_adopt_asks_for_adoption(apps):
+    from vecten_mcp.warehouse.base import Account
+
+    apps.adapter.accounts["svc_app_overview"] = Account("svc_app_overview", (), can_adopt=True)
+    headers = {"Authorization": "Bearer " + apps.token}
+    response = apps.http.post(
+        "/api/admin/apps/connect", headers=headers, json={"name": "acme-sales.overview"}
+    )
+    assert response.status_code == 409
+
+
+def test_the_screen_names_adopt_for_an_unmarked_principal(apps):
+    unmarked_service(apps)
+    page = screens.text(apps.http.get("/admin/apps"))
+    assert "vecten app connect acme-sales.overview --env <env> --adopt" in page
+
+
+def test_app_text_on_the_screen_is_escaped(apps):
+    apps.runtime.apps.apps["overview"] = BoundApp(
+        "acme-sales",
+        "overview",
+        "<script>alert(1)</script>",
+        "container",
+        ("orders",),
+        ("default",),
+        description="<script>alert(2)</script>",
+        hostname="sales",
+    )
+    body = apps.http.get("/admin/apps").text
+    assert "<script>" not in body and "&lt;script&gt;alert(1)" in body
 
 
 @pytest.mark.parametrize(
