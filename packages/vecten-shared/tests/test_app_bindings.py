@@ -239,3 +239,28 @@ def test_an_apps_service_clashing_with_a_bound_service_is_refused():
 def test_a_connector_may_not_declare_an_app_credential(name):
     with pytest.raises(ValidationError, match="analytics app"):
         config({}, connectors=[{"name": "hubspot", "source": "custom", "secrets": [name]}])
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "principal"),
+    [
+        (("acme-sales", "a-b"), ("acme-sales", "a--b"), "svc_app_a_b"),
+        (("acme-sales", "overview"), ("acme-other", "overview-"), "svc_app_overview"),
+    ],
+)
+def test_two_apps_whose_principal_names_collide_are_refused(first, second, principal):
+    apps = {}
+    for (extension, name), label in ((first, "a"), (second, "b")):
+        apps.setdefault(extension, {})[name] = {"groups": ["sales"], "hostname": label}
+    keys = sorted(f"{e}.{n}" for e, n in (first, second))
+    with pytest.raises(ValidationError) as refused:
+        config(apps)
+    message = str(refused.value)
+    assert principal in message and all(key in message for key in keys)
+
+
+def test_an_apps_principal_name_folds_every_run_of_other_characters():
+    from vecten_shared.apps import principal_name
+
+    assert principal_name("a--b") == principal_name("a-b") == "svc_app_a_b"
+    assert principal_name("overview-") == "svc_app_overview"

@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from vecten_shared.apps import APP_CREDENTIAL
+from vecten_shared.apps import APP_CREDENTIAL, principal_name
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
 from vecten_shared.declarations import is_toml_time, secret_problem
 from vecten_shared.names import (
@@ -598,13 +598,13 @@ class VectenConfig(Strict):
                         f"{where}: an app needs the mcp component, which decides who may open "
                         "it and what it reads"
                     )
-                # The app's principal, svc_app_<app>, and its credential names carry the
-                # app's name alone.
-                other = named.setdefault(name, extension)
-                if other != extension:
+                # The app's principal and its credential names carry the app's name alone,
+                # folded into a warehouse name.
+                principal = principal_name(name)
+                other = named.setdefault(principal, f"{extension}.{name}")
+                if other != f"{extension}.{name}":
                     raise ValueError(
-                        f"{where}: {other} binds an app {name} too; both would run as "
-                        f"svc_app_{name.replace('-', '_')}"
+                        f"{where}: {other} is bound too, and both would run as {principal}"
                     )
                 label = binding.hostname
                 if label is None:

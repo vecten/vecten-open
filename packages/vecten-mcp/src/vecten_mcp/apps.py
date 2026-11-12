@@ -10,7 +10,6 @@ query_metrics see a model holding only those, and sql-exec reads only their tabl
 
 import copy
 import dataclasses
-import re
 import time
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
@@ -20,7 +19,10 @@ from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 
 from vecten_mcp.app_sql import relation, sql_problem
 from vecten_mcp.model import source_tables
+from vecten_shared.apps import principal_name
 from vecten_shared.osi.sql_policy import source_sql
+
+__all__ = ["principal_name"]
 
 # Records kind: principal id -> {"extension", "app"} for each app principal.
 APP_PRINCIPALS = "app_principals"
@@ -98,11 +100,6 @@ def app_url(issuer, label):
     name = domain if label == "@" else f"{label}.{domain}"
     port = f":{parts.port}" if parts.port else ""
     return f"https://{name}{port}/"
-
-
-def principal_name(app):
-    """The warehouse name `vecten app connect` gives app `app`'s principal."""
-    return "svc_app_" + re.sub(r"[^a-z0-9]+", "_", app.lower()).strip("_")
 
 
 def scoped_model(model, datasets):

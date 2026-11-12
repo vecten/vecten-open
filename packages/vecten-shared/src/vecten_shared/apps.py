@@ -237,6 +237,12 @@ def colliding_service(services: dict[str, object], apps: dict[str, object]) -> s
     return next((s for s in map(app_service_name, sorted(apps)) if s in services), None)
 
 
+def principal_name(app: str) -> str:
+    """The warehouse name of app `app`'s principal: every run of characters other than
+    lowercase letters and digits becomes one `_`, so `a-b` and `a--b` share it."""
+    return "svc_app_" + re.sub(r"[^a-z0-9]+", "_", app.lower()).strip("_")
+
+
 def credential_names(app: str, host: str) -> tuple[str, str]:
     """The client id and secret names an app's principal is stored under, in its host's scope."""
     stem = ("MCP_" if host == "mcp" else "") + "APP_" + app.upper().replace("-", "_")
