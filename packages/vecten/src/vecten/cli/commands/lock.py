@@ -28,7 +28,7 @@ def lock(
         lines += secrets_message(data["missing_locally"], data["undelivered"])
         if data["unsupported"]:
             lines.append(
-                "manifest keys this release does not support: "
+                "manifest and service keys this release does not support: "
                 + "; ".join(f"{n}: {', '.join(k)}" for n, k in data["unsupported"].items())
             )
         return Result(data=data, message="\n".join(lines))

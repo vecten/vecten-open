@@ -19,12 +19,19 @@ def register(app: typer.Typer) -> None:
                 lines.append("airflow password: AIRFLOW_ADMIN_PASSWORD in .env")
             if res.left_out:
                 lines.append(f"not started: {', '.join(res.left_out)}; {up_mod.SNOWFLAKE_MCP_NOTE}")
+            lines += [f"service {key}: {state}" for key, state in res.services.items()]
+            if res.services:
+                lines.append(
+                    f"services reserve {res.limits['memory_mb']} MB and {res.limits['cpus']:g} CPUs"
+                )
             return Result(
                 data={
                     "profiles": res.profiles,
                     "urls": res.urls,
                     "stack_dir": str(res.stack_dir),
                     "left_out": res.left_out,
+                    "services": res.services,
+                    "limits": res.limits,
                     **res.airflow_api,
                 },
                 message="stack is up\n" + "\n".join(lines),

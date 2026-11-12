@@ -145,3 +145,68 @@ def test_on_a_cloud_the_provider_reads_only_declared_names_of_the_component(
     with pytest.raises(Failure, match="MCP server"):
         handle.secret("MCP_ACME_TOKEN")
     assert FakeCloud.reads == ["ACME_API_KEY"]
+
+
+def _service_project(project, monkeypatch, host="platform"):
+    import tomllib
+
+    from vecten_shared.services import parse_service
+
+    declared = {
+        "command": ["run"],
+        "health": {"command": ["true"]},
+        "components": ["platform", "mcp"],
+    }
+    service = parse_service("acme-resolution", "portal", declared).service
+    record = {
+        "acme-resolution": Extension(
+            "1.0",
+            (),
+            secrets=("ACME_API_KEY", "MCP_ACME_TOKEN"),
+            settings=SCHEMA,
+            services={"portal": service},
+        )
+    }
+    (project / "extensions.lock.json").write_text(record_text(record))
+    doc = tomllib.loads((project / "vecten.toml").read_text())
+    doc["services"] = {"acme-resolution": {"portal": {"host": host}}}
+    (project / "vecten.toml").write_text(tomli_w.dumps(doc))
+    monkeypatch.setenv("VECTEN_COMPONENT", "service")
+    monkeypatch.setenv("VECTEN_SERVICE", "acme-resolution.portal")
+
+
+def test_a_service_reads_its_secrets_from_its_environment_never_a_provider(project, monkeypatch):
+    _service_project(project, monkeypatch)
+    # A service holds no cloud identity, so a provider name in its environment changes nothing.
+    monkeypatch.setenv("VECTEN_PROVIDER", "aws")
+    monkeypatch.setenv("ACME_API_KEY", "from-compose")
+    assert context.extension("acme-resolution").secret("ACME_API_KEY") == "from-compose"
+
+
+def test_a_service_reads_only_what_its_host_receives(project, monkeypatch):
+    _service_project(project, monkeypatch)
+    monkeypatch.setenv("MCP_ACME_TOKEN", "x")
+    with pytest.raises(Failure, match="MCP_ACME_TOKEN.*acme-resolution.portal"):
+        context.extension("acme-resolution").secret("MCP_ACME_TOKEN")
+
+
+def test_a_service_on_the_mcp_host_reads_mcp_names(project, monkeypatch):
+    _service_project(project, monkeypatch, host="mcp")
+    monkeypatch.setenv("MCP_ACME_TOKEN", "tool-token")
+    assert context.extension("acme-resolution").secret("MCP_ACME_TOKEN") == "tool-token"
+
+
+def test_a_service_asking_for_an_undeclared_secret_names_extension_and_secret(project, monkeypatch):
+    _service_project(project, monkeypatch)
+    monkeypatch.setenv("LOADER_PASSWORD", "stack-only")
+    with pytest.raises(
+        Failure, match="acme-resolution does not declare the secret LOADER_PASSWORD"
+    ):
+        context.extension("acme-resolution").secret("LOADER_PASSWORD")
+
+
+def test_a_service_the_project_does_not_bind_is_refused(project, monkeypatch):
+    _service_project(project, monkeypatch)
+    monkeypatch.setenv("VECTEN_SERVICE", "acme-resolution.other")
+    with pytest.raises(Failure, match="acme-resolution.other"):
+        context.extension("acme-resolution")

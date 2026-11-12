@@ -40,3 +40,14 @@ def manifest():
         "secrets": ["FIXTURE_TOKEN", "MCP_FIXTURE_TOKEN"],
         "settings": {"properties": {"greeting": {"type": "string", "default": "hello"}}},
     }
+
+
+portal = {
+    "command": ["python", "-m", "vecten_test_extension.portal"],
+    "port": 8000,
+    "health": {"path": "/healthz"},
+    "routes": {
+        "hook": {"path": "/hooks", "access": "public"},
+        "home": {"path": "/", "access": "login", "groups": ["analyst"]},
+    },
+}

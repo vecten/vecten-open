@@ -1,22 +1,28 @@
 """Install extensions and record portable, credential-free project dependencies."""
 
 import importlib
+import json
 import os
 import re
 import shutil
+import site
 import subprocess
 import sys
+import sysconfig
 import tempfile
+import tomllib
 from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
+from urllib.parse import unquote, urlsplit
 
 import tomlkit
+from pydantic import ValidationError
 
 from vecten import in_repo, locking
 from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
-from vecten_shared.config import VectenConfig, load_config
+from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
 from vecten_shared.declarations import (
     Manifest,
     check_settings,
@@ -32,6 +38,8 @@ from vecten_shared.extensions import (
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
 from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
+from vecten_shared.services import GROUP as SERVICES_GROUP
+from vecten_shared.services import Declaration, check_bindings, parse_service
 from vecten_shared.versions import VERSIONS, normalize_name
 
 
@@ -169,6 +177,10 @@ def base_constraints(kind: str) -> str:
     return result.stdout
 
 
+def site_packages() -> Path:
+    return Path(sysconfig.get_paths()["purelib"])
+
+
 def install_lock(lock: str, root: Path, editable: tuple[str, ...] | list[str] = ()) -> None:
     """Install the CLI lock, then each in-repo extension editable, all without resolving.
 
@@ -183,6 +195,10 @@ def install_lock(lock: str, root: Path, editable: tuple[str, ...] | list[str] = 
         _uv([*install, "--constraint", str(constraints), "-r", str(path)], root)
         for relative in editable:
             _uv([*install, "--editable", str(root / relative)], root)
+    # An editable install is a path file, which Python reads only at start; the manifests and
+    # services this process loads next import from those paths.
+    if editable:
+        site.addsitedir(str(site_packages()))
     importlib.invalidate_caches()
 
 
@@ -421,16 +437,19 @@ def lock_project(
         locks[component] = f"{locking.stamp_line(component, digest)}\n{body}"
     install_lock(locks["cli"], root, [e.source_path for e in record.values() if e.source_path])
     manifests = load_manifests(config)
+    services = load_services(config)
     record = {
         name: replace(
             entry,
             secrets=manifests[name].secrets if name in manifests else (),
             settings=manifests[name].settings if name in manifests else None,
+            services={s: d.service for s, d in services.get(name, {}).items()},
         )
         for name, entry in record.items()
     }
     for env in environments_named(config):
         check_settings(config, record, env)
+    check_bindings(config, record)
     from vecten.extension_skills import skill_artifacts
 
     files = {
@@ -444,9 +463,7 @@ def lock_project(
         "extensions": {name: entry.version for name, entry in sorted(record.items())},
         "divergence": locking.divergence(locks),
         **_secrets_report(root, config, record),
-        "unsupported": {
-            name: list(m.unknown) for name, m in sorted(manifests.items()) if m.unknown
-        },
+        "unsupported": _unsupported(manifests, services),
     }
     return files, report
 
@@ -514,6 +531,89 @@ def load_manifests(config: VectenConfig, candidates=None) -> dict[str, Manifest]
     return found
 
 
+def load_services(
+    config: VectenConfig, candidates=None, only: set[str] | None = None
+) -> dict[str, dict[str, Declaration]]:
+    """Each listed extension's `vecten.services` declarations, by extension and service."""
+    found: dict[str, dict[str, Declaration]] = {}
+    listed = {normalize_name(requirement(r).name) for r in config.extensions}
+    if only is not None:
+        listed &= only
+    points = metadata.entry_points(group=SERVICES_GROUP) if candidates is None else candidates
+    for point in points:
+        dist = getattr(point, "dist", None)
+        if dist is None or normalize_name(dist.name) not in listed:
+            continue
+        name = normalize_name(dist.name)
+        try:
+            value = point.load()
+        except Exception as exc:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: cannot load service {point.name} ({type(exc).__name__})",
+            ) from exc
+        found.setdefault(name, {})[point.name] = parse_service(name, point.name, value)
+    return found
+
+
+def installed_from(name: str, path: Path) -> bool:
+    """Whether Vecten's own environment holds `name` as an editable install of `path`."""
+    try:
+        text = metadata.distribution(name).read_text("direct_url.json")
+        info = json.loads(text or "{}")
+    except metadata.PackageNotFoundError, ValueError:
+        return False
+    url = info.get("url", "") if isinstance(info, dict) else ""
+    if not (info.get("dir_info") or {}).get("editable") or not url.startswith("file://"):
+        return False
+    return Path(unquote(urlsplit(url).path)).resolve() == path.resolve()
+
+
+def refuse_stale_services(
+    root: Path, config: VectenConfig, record: dict[str, locking.Extension]
+) -> None:
+    """Refuse when an in-repo extension's code declares services other than its record holds.
+
+    An in-repo extension is installed editable, so its code can change without a new version
+    or a changed pyproject.toml, which are what make a lock stale. Only this checkout's own
+    editable install shows that code; without one there is nothing to compare.
+    """
+    local = {
+        name
+        for name, entry in record.items()
+        if entry.source_path and installed_from(name, root / entry.source_path)
+    }
+    if not local:
+        return
+    declared = load_services(config, only=local)
+    for name in sorted(local):
+        current = {s: d.service for s, d in declared.get(name, {}).items()}
+        recorded = record[name].services
+        changed = sorted(
+            s for s in set(current) | set(recorded) if current.get(s) != recorded.get(s)
+        )
+        if changed:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: service {', '.join(changed)} differs from "
+                f"{locking.RECORD_FILE}; run `vecten lock`",
+            )
+
+
+def _unsupported(
+    manifests: dict[str, Manifest], services: dict[str, dict[str, Declaration]]
+) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for name, manifest in manifests.items():
+        found.setdefault(name, []).extend(manifest.unknown)
+    for name, declared in services.items():
+        for service, declaration in sorted(declared.items()):
+            found.setdefault(name, []).extend(
+                f"services.{service}.{k}" for k in declaration.unknown
+            )
+    return {name: keys for name, keys in sorted(found.items()) if keys}
+
+
 def lock(root: Path, upgrade: tuple[str, ...] = ()) -> dict:
     files, report = lock_project(root, load_config(root), upgrade=upgrade)
     write_project_files(files)
@@ -568,9 +668,18 @@ def add_extension(root: Path, package: str) -> dict:
     if registration not in config.extensions:
         config.extensions.append(registration)
     files, report = lock_project(root, config, added=dist)
+    record = locking.parse_record(files[root / locking.RECORD_FILE]) or {}
     doc = tomlkit.parse((root / "vecten.toml").read_text())
     doc["extensions"] = config.extensions
-    write_project_files({root / "vecten.toml": tomlkit.dumps(doc), **files})
+    name = normalize_name(dist.name)
+    services = _bind_services(doc, config, name, record.get(name))
+    text = tomlkit.dumps(doc)
+    try:
+        bound = VectenConfig.model_validate(tomllib.loads(text))
+    except ValidationError as exc:
+        raise Failure(ExitCode.CONFIG, f"binding the services of {name}: {exc}") from None
+    check_bindings(bound, record)
+    write_project_files({root / "vecten.toml": text, **files})
     pinned = (
         f"./{in_repo.EXTENSIONS_DIR}/{normalize_name(dist.name)}{extras}"
         if dist.in_repo
@@ -582,7 +691,92 @@ def add_extension(root: Path, package: str) -> dict:
         "unknown_groups": unknown,
         "missing_secrets": report["missing_locally"],
         "undelivered": report["undelivered"],
+        **services,
     }
+
+
+def _free_label(extension: str, service: str, taken: set[str]) -> str:
+    """The service's name when free, else `<extension>-<service>`, numbered when taken too."""
+    base = f"{extension}-{service}"[:60].rstrip("-")
+    candidates = [service, base, *(f"{base}-{n}" for n in range(2, 100))]
+    for label in candidates:
+        if label not in taken and label_problem(label) is None:
+            return label
+    raise Failure(ExitCode.CONFIG, f"no free hostname label for {extension}.{service}")
+
+
+def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
+    """Bind each declared service the project does not bind yet, from its suggestions.
+
+    A bound service keeps its binding as the person left it: an upgrade's new route, or a
+    changed suggestion, is only named, so a route never becomes reachable without a diff.
+    """
+    out: dict[str, list[str]] = {"public_routes": [], "hostnames": [], "binding_notes": []}
+    if entry is None or not entry.services:
+        return out
+    existing = config.services.get(extension, {})
+    taken = {b.hostname for t in config.services.values() for b in t.values() if b.hostname}
+    for name, service in sorted(entry.services.items()):
+        key = f"{extension}.{name}"
+        if name in existing:
+            for route_name, route in sorted(service.routes.items()):
+                bound = existing[name].routes.get(route_name)
+                if bound is None:
+                    out["binding_notes"].append(f"{key} route {route_name}: declared, not bound")
+                elif bound.access != route.access:
+                    out["binding_notes"].append(
+                        f"{key} route {route_name}: bound {bound.access}, suggested {route.access}"
+                    )
+            continue
+        enabled = [c for c in service.components if config.has(c)]
+        if not enabled:
+            out["binding_notes"].append(
+                f"{key}: runs from {', '.join(service.components)}, which the project does not "
+                "enable; not bound"
+            )
+            continue
+        table = tomlkit.table()
+        routes = tomlkit.table(is_super_table=True)
+        for route_name, route in sorted(service.routes.items()):
+            if route.access == "login" and not config.has("mcp"):
+                out["binding_notes"].append(
+                    f"{key} route {route_name}: login needs the mcp component; not bound"
+                )
+                continue
+            route_table = tomlkit.table()
+            route_table["access"] = route.access
+            if route.access == "login":
+                route_table["groups"] = list(route.groups)
+            else:
+                out["public_routes"].append(f"{key} route {route_name}")
+            routes[route_name] = route_table
+        if routes:
+            label = _free_label(extension, name, taken)
+            taken.add(label)
+            table["hostname"] = label
+            if config.deploy is not None:
+                out["hostnames"].append(service_hostname(label, config.deploy.domain))
+        if "platform" not in enabled:
+            table["host"] = enabled[0]
+        if routes:
+            table["routes"] = routes
+        if "services" not in doc:
+            doc["services"] = tomlkit.table(is_super_table=True)
+        if extension not in doc["services"]:
+            doc["services"][extension] = tomlkit.table(is_super_table=True)
+        doc["services"][extension][name] = table
+    return out
+
+
+def services_message(data: dict) -> list[str]:
+    """Lines naming public routes just bound, hostnames needing a deploy, and binding notes."""
+    lines = []
+    if data.get("public_routes"):
+        lines.append("public, reachable by anyone: " + ", ".join(data["public_routes"]))
+    if data.get("hostnames"):
+        lines.append("new hostnames, served after `vecten deploy`: " + ", ".join(data["hostnames"]))
+    lines += data.get("binding_notes", [])
+    return lines
 
 
 def secrets_message(missing: list[str], undelivered: list[str]) -> list[str]:

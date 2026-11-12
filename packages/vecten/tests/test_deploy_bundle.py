@@ -523,3 +523,19 @@ def test_build_output_is_skipped_only_at_an_extension_root(project, tmp_path):
     names = members(build(project, tmp_path / "out"))
     assert "extensions/acme-portal/src/acme_portal/static/dist/app.js" in names
     assert "extensions/acme-portal/src/acme_portal/build/__init__.py" in names
+
+
+def test_the_bundle_build_checks_the_service_bindings(project, tmp_path):
+    from .services_fixtures import with_services
+
+    with_services(project, {"bot": {"host": "mcp"}})
+    with pytest.raises(Failure, match="services.acme.bot.host"):
+        build(project, tmp_path / "out")
+
+
+def test_a_vm_bundle_refuses_services_while_no_agent_isolates_them(project, tmp_path):
+    from .services_fixtures import with_services
+
+    with_services(project, {"bot": {}})
+    with pytest.raises(Failure, match="acme.bot.*instance"):
+        build(project, tmp_path / "out")

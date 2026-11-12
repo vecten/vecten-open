@@ -59,7 +59,7 @@ def test_nothing_left_exits_zero(invoke, tmp_path, monkeypatch):
     monkeypatch.chdir(root)
     result = invoke("next", "--json")
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout) == {"items": [], "ok": True}
+    assert json.loads(result.stdout) == {"items": [], "notes": [], "ok": True}
     result = invoke("next")
     assert result.exit_code == 0
     assert result.stdout == "nothing left to do\n"
@@ -87,3 +87,36 @@ def test_next_exits_three_on_an_unreadable_env(invoke, tmp_path, monkeypatch):
     result = invoke("next", "--json")
     assert result.exit_code == 3, result.output
     assert ".env" in result.output
+
+
+def test_declared_but_unbound_services_and_routes_are_notes_that_block_nothing(
+    invoke, tmp_path, monkeypatch
+):
+    from .services_fixtures import BOT, with_services
+
+    root = render_fixture(tmp_path, "postgres")
+    monkeypatch.chdir(root)
+    worker = {"command": ["run"], "health": {"command": ["true"]}}
+    export = {"path": "/export", "access": "public"}
+    declared = {"bot": {**BOT, "routes": {**BOT["routes"], "admin": export}}, "worker": worker}
+    routes = {"webhook": {"access": "public"}, "admin": {"access": "public"}}
+    with_services(root, {"bot": {"hostname": "bot", "routes": routes}, "worker": {}}, declared)
+    whole = json.loads(invoke("next", "--json").stdout)
+    assert whole["notes"] == []
+    before = whole["items"]
+    bindings = {"bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}}}
+    with_services(root, bindings, declared)
+    doc = json.loads(invoke("next", "--json").stdout)
+    assert doc["notes"] == [
+        "acme.bot route admin is declared but not bound in vecten.toml",
+        "acme.worker is declared but not bound in vecten.toml",
+    ]
+    assert [i["title"] for i in doc["items"]] == [i["title"] for i in before]
+    text = invoke("next").stdout.splitlines()
+    assert "note: acme.worker is declared but not bound in vecten.toml" in text
+
+
+def test_a_project_without_services_has_no_notes(invoke, tmp_path, monkeypatch):
+    root = render_fixture(tmp_path, "postgres")
+    monkeypatch.chdir(root)
+    assert json.loads(invoke("next", "--json").stdout)["notes"] == []

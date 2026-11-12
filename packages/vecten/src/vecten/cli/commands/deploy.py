@@ -11,7 +11,14 @@ from vecten_shared.output import ExitCode, Failure, Result
 
 
 def _facts_message(data: dict) -> str:
-    return " ".join(f"{name}={str(value).lower()}" for name, value in data.items())
+    facts = " ".join(
+        f"{name}={str(value).lower()}" for name, value in data.items() if name != "service_limits"
+    )
+    lines = [
+        f"services on {host} reserve {limit['memory_mb']} MB and {limit['cpus']:g} CPUs"
+        for host, limit in data.get("service_limits", {}).items()
+    ]
+    return "\n".join([facts, *lines])
 
 
 def _ship_message(data: dict) -> str:
