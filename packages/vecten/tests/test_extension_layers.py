@@ -47,7 +47,7 @@ def extension(tmp_path, monkeypatch):
     sys.modules.pop("vecten_test_extension", None)
 
 
-def test_all_ten_groups_land(extension):
+def test_all_eleven_groups_land(extension):
     from vecten.connectors.extensions import extension_connectors
     from vecten.extension_skills import link_extension_skills
     from vecten_mcp.extensions import McpExtensions
@@ -245,3 +245,41 @@ def test_the_manifest_reaches_the_record_the_laptop_stack_and_the_read_api(exten
     assert in_a_dag.settings["greeting"] == "hello"
     monkeypatch.setenv("VECTEN_COMPONENT", "mcp")
     assert context.extension("vecten-test-extension").secret("MCP_FIXTURE_TOKEN") == "tool-token"
+
+
+def test_the_stub_service_and_both_routes_reach_the_record_the_binding_and_compose(
+    extension, monkeypatch
+):
+    from vecten.extensions import _bind_services, load_services
+    from vecten.stack.compose import generate_compose
+    from vecten_shared.config import load_config
+    from vecten_shared.extension_record import Extension, parse_record, record_text
+
+    root, config = extension
+    declared = load_services(config)["vecten-test-extension"]["portal"]
+    assert declared.unknown == ()
+    assert {n: r.access for n, r in declared.service.routes.items()} == {
+        "hook": "public",
+        "home": "login",
+    }
+    entry = Extension("1.0", (), services={"portal": declared.service})
+    (root / "extensions.lock.json").write_text(record_text({"vecten-test-extension": entry}))
+    assert parse_record((root / "extensions.lock.json").read_text())[
+        "vecten-test-extension"
+    ].services == {"portal": declared.service}
+
+    import tomlkit
+
+    doc = tomlkit.parse((root / "vecten.toml").read_text())
+    _bind_services(doc, config, "vecten-test-extension", entry)
+    (root / "vecten.toml").write_text(tomlkit.dumps(doc))
+    bound = load_config(root)
+    assert set(bound.services["vecten-test-extension"]["portal"].routes) == {"hook", "home"}
+    stack = root / ".vecten" / "stack"
+    stack.mkdir(parents=True)
+    compose = generate_compose(bound, "local", ["platform", "mcp"], stack)
+    assert compose["services"]["svc-vecten-test-extension-portal"]["command"] == [
+        "python",
+        "-m",
+        "vecten_test_extension.portal",
+    ]
