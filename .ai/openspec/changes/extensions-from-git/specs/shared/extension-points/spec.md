@@ -79,7 +79,7 @@ The command SHALL refuse:
 - a distribution whose name differs from the name given;
 - a tag of the form `[<prefix>/]v<version>` whose version differs from the version at that commit.
 
-`vecten lock` and every re-lock SHALL keep each recorded commit and never resolve a tag again. Only `extension add` with that extension's source SHALL change its commit.
+`requirements.txt` is the source of truth for the commit. `vecten lock` and every re-lock SHALL keep the commit it records and SHALL never move that commit to where a tag points now. `extension add` with that extension's source is the way to change the commit. When a person edits the commit in `requirements.txt` by hand, `vecten lock` SHALL adopt it only if the tag named in the line's comment points at that commit and names the package's version at that commit; otherwise it SHALL refuse, naming `vecten extension add`, and change no file. A commit recorded without a tag comment is adopted as named.
 
 The only lines that may carry a URL in `requirements.txt` and in the locks SHALL be lines for extensions registered in `vecten.toml`. Each such line SHALL carry a full commit and SHALL agree with `extensions.lock.json`. `up`, `ship` and the image build SHALL refuse records that disagree, naming `vecten extension add`.
 
@@ -104,6 +104,11 @@ The only lines that may carry a URL in `requirements.txt` and in the locks SHALL
 
 - **WHEN** a recorded tag is moved to another commit, and `vecten lock` then runs for an unrelated change
 - **THEN** the git extension's records still hold the recorded commit
+
+#### Scenario: Commit edited by hand
+
+- **WHEN** a person replaces the recorded commit in `requirements.txt` and its comment names a tag that points at a different commit
+- **THEN** `vecten lock` exits non-zero naming the tag, both commits and `vecten extension add`, and no file under the project changes
 
 #### Scenario: Upgrade to a new tag
 
