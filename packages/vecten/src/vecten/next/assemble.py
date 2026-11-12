@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vecten.cli.context import CliContext
 from vecten.intake.answers import read_answers
+from vecten.next.declared import declared_secret_items
 from vecten.next.deploy import (
     deploy_gate_items,
     deploy_prerequisite_items,
@@ -44,6 +45,7 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
         local_loop = [
             *lock_items(root, config),
             *stack_items(root, config),
+            *declared_secret_items(root, config),
             *ingestion_items(root, config),
             *modelling_items(root, config),
             *semantic_items(root, config),
@@ -52,6 +54,7 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
         # The local MCP signs in as the provisioner, which only the administrator's SQL creates.
         local_loop = [
             *lock_items(root, config),
+            *declared_secret_items(root, config),
             *ingestion_items(root, config),
             *modelling_items(root, config),
             *semantic_items(root, config),

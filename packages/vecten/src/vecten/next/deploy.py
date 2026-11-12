@@ -14,6 +14,7 @@ from vecten.deploy.snowflake import (
     secret_set_command,
 )
 from vecten.intake.answers import ANSWER_KEYS, DECLINED, read_answers
+from vecten.next.declared import declared_secret_items
 from vecten.next.existing_warehouse import provisioner_secrets_item
 from vecten.next.gitstate import GitState
 from vecten.next.items import Item
@@ -150,6 +151,7 @@ def deploy_prerequisite_items(
     for name in _uncopied_secrets(root, config, env):
         command = f"vecten secret set {name} --env {env} --from-local"
         items.append(Item("command", f"Copy {name} to {env}", command))
+    items += declared_secret_items(root, config, env)
     if git.has_origin and (git.dirty or git.ahead):
         items.append(PUSH)
     return items

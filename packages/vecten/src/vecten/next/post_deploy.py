@@ -8,6 +8,7 @@ from pathlib import Path
 from vecten.deploy.snowflake import identity_pending
 from vecten.intake.facts import OIDC_REGISTERED_PREFIX
 from vecten.mcp_url import mcp_url
+from vecten.next.declared import declared_secret_items
 from vecten.next.deploy import PUSH
 from vecten.next.gitstate import GitState
 from vecten.next.ingestion import access_apply_items
@@ -91,6 +92,8 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
     # An answer recorded after the deploy changes vecten.toml, which reaches the MCP when
     # the push ships it, so it is pushed before anything else is asked.
     items: list[Item] = [PUSH] if git.dirty or git.ahead else []
+    # An extension added after the deploy can declare secrets the environment does not hold.
+    items += declared_secret_items(root, config, env)
     if not config.has("mcp"):
         return items
     # Nothing below works before the MCP runs, and it cannot start without its identity.
