@@ -81,11 +81,11 @@ is whether an app is a kind of service, or a separate thing that may produce one
 {
     "title": "Sales overview",
     "description": "Weekly bookings by region",
-    "kind": "container",                     # or "snowflake"
-    "runtime": "streamlit",                  # container only; or give "command" and "port"
-    "entry": "acme_sales/app.py",            # a file in the installed package
-    "datasets": ["orders", "customers"],     # Ossie dataset names it reads
-    "groups": ["default"],                   # suggested viewers
+    "kind": "container",  # or "snowflake"
+    "runtime": "streamlit",  # container only; or give "command" and "port"
+    "entry": "acme_sales/app.py",  # a file in the installed package
+    "datasets": ["orders", "customers"],  # Ossie dataset names it reads
+    "groups": ["default"],  # suggested viewers
     "components": ["platform"],
     "memory_mb": 512,
 }

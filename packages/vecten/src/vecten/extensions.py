@@ -22,6 +22,8 @@ from pydantic import ValidationError
 
 from vecten import in_repo, locking
 from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
+from vecten_shared.apps import GROUP as APPS_GROUP
+from vecten_shared.apps import AppDeclaration, colliding_service, parse_app
 from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
 from vecten_shared.declarations import (
     Manifest,
@@ -438,15 +440,25 @@ def lock_project(
     install_lock(locks["cli"], root, [e.source_path for e in record.values() if e.source_path])
     manifests = load_manifests(config)
     services = load_services(config)
+    apps = load_apps(config)
     record = {
         name: replace(
             entry,
             secrets=manifests[name].secrets if name in manifests else (),
             settings=manifests[name].settings if name in manifests else None,
             services={s: d.service for s, d in services.get(name, {}).items()},
+            apps={a: d.app for a, d in apps.get(name, {}).items()},
         )
         for name, entry in record.items()
     }
+    for name, entry in sorted(record.items()):
+        clash = colliding_service(entry.services, entry.apps)
+        if clash:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: service {clash} has the name of app "
+                f"{clash.removeprefix('app-')}'s own service; rename the service",
+            )
     for env in environments_named(config):
         check_settings(config, record, env)
     check_bindings(config, record)
@@ -463,7 +475,7 @@ def lock_project(
         "extensions": {name: entry.version for name, entry in sorted(record.items())},
         "divergence": locking.divergence(locks),
         **_secrets_report(root, config, record),
-        "unsupported": _unsupported(manifests, services),
+        "unsupported": _unsupported(manifests, services, apps),
     }
     return files, report
 
@@ -556,6 +568,31 @@ def load_services(
     return found
 
 
+def load_apps(
+    config: VectenConfig, candidates=None, only: set[str] | None = None
+) -> dict[str, dict[str, AppDeclaration]]:
+    """Each listed extension's `vecten.apps` declarations, by extension and app."""
+    found: dict[str, dict[str, AppDeclaration]] = {}
+    listed = {normalize_name(requirement(r).name) for r in config.extensions}
+    if only is not None:
+        listed &= only
+    points = metadata.entry_points(group=APPS_GROUP) if candidates is None else candidates
+    for point in points:
+        dist = getattr(point, "dist", None)
+        if dist is None or normalize_name(dist.name) not in listed:
+            continue
+        name = normalize_name(dist.name)
+        try:
+            value = point.load()
+        except Exception as exc:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: cannot load app {point.name} ({type(exc).__name__})",
+            ) from exc
+        found.setdefault(name, {})[point.name] = parse_app(name, point.name, value)
+    return found
+
+
 def installed_from(name: str, path: Path) -> bool:
     """Whether Vecten's own environment holds `name` as an editable install of `path`."""
     try:
@@ -586,22 +623,31 @@ def refuse_stale_services(
     if not local:
         return
     declared = load_services(config, only=local)
+    declared_apps = load_apps(config, only=local)
     for name in sorted(local):
-        current = {s: d.service for s, d in declared.get(name, {}).items()}
-        recorded = record[name].services
-        changed = sorted(
-            s for s in set(current) | set(recorded) if current.get(s) != recorded.get(s)
-        )
-        if changed:
-            raise Failure(
-                ExitCode.CONFIG,
-                f"extension {name}: service {', '.join(changed)} differs from "
-                f"{locking.RECORD_FILE}; run `vecten lock`",
+        for kind, current, recorded in (
+            (
+                "service",
+                {s: d.service for s, d in declared.get(name, {}).items()},
+                record[name].services,
+            ),
+            ("app", {a: d.app for a, d in declared_apps.get(name, {}).items()}, record[name].apps),
+        ):
+            changed = sorted(
+                k for k in set(current) | set(recorded) if current.get(k) != recorded.get(k)
             )
+            if changed:
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"extension {name}: {kind} {', '.join(changed)} differs from "
+                    f"{locking.RECORD_FILE}; run `vecten lock`",
+                )
 
 
 def _unsupported(
-    manifests: dict[str, Manifest], services: dict[str, dict[str, Declaration]]
+    manifests: dict[str, Manifest],
+    services: dict[str, dict[str, Declaration]],
+    apps: dict[str, dict[str, AppDeclaration]],
 ) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for name, manifest in manifests.items():
@@ -611,6 +657,9 @@ def _unsupported(
             found.setdefault(name, []).extend(
                 f"services.{service}.{k}" for k in declaration.unknown
             )
+    for name, declared_apps in apps.items():
+        for app, declaration in sorted(declared_apps.items()):
+            found.setdefault(name, []).extend(f"apps.{app}.{k}" for k in declaration.unknown)
     return {name: keys for name, keys in sorted(found.items()) if keys}
 
 

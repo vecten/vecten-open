@@ -726,3 +726,108 @@ def test_a_hostname_needing_deploy_is_named_once_the_project_deploys(
     _edit_config(project, lambda doc: doc.pop("services"))
     out = invoke("extension", "add", "acme-demo").output
     assert "bot.data.acme.com" in out and "vecten deploy" in out
+
+
+OVERVIEW = {
+    "title": "Sales overview",
+    "description": "Weekly bookings",
+    "kind": "container",
+    "runtime": "streamlit",
+    "entry": "acme_demo/app.py",
+    "datasets": ["orders"],
+    "groups": ["default"],
+}
+
+
+def _apps(monkeypatch, apps):
+    from vecten_shared.apps import parse_app
+
+    monkeypatch.setattr(
+        extensions,
+        "load_apps",
+        lambda config, candidates=None, only=None: {
+            "acme-demo": {n: parse_app("acme-demo", n, v) for n, v in apps.items()}
+        },
+    )
+
+
+def _app_point(dist_name, name, load):
+    dist = SimpleNamespace(name=dist_name, version="1.0")
+    return SimpleNamespace(name=name, dist=dist, group="vecten.apps", load=load)
+
+
+def test_the_record_holds_each_app_declaration(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    _apps(monkeypatch, {"overview": OVERVIEW})
+    r = invoke("lock", "--json")
+    assert r.exit_code == 0, r.output
+    entry = json.loads((project / locking.RECORD_FILE).read_text())["extensions"]["acme-demo"]
+    assert entry["apps"]["overview"]["entry"] == "acme_demo/app.py"
+    assert entry["apps"]["overview"]["datasets"] == ["orders"]
+    assert locking.read_record(project)["acme-demo"].apps["overview"].kind == "container"
+
+
+def test_an_unknown_app_key_is_reported(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    _apps(monkeypatch, {"overview": {**OVERVIEW, "theme": "dark"}})
+    r = invoke("lock", "--json")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["unsupported"] == {"acme-demo": ["apps.overview.theme"]}
+
+
+def test_an_app_without_datasets_changes_no_record(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    assert invoke("lock").exit_code == 0
+    before = (project / locking.RECORD_FILE).read_bytes()
+
+    def bad(config, candidates=None, only=None):
+        from vecten_shared.apps import parse_app
+
+        return {
+            "acme-demo": {
+                "overview": parse_app("acme-demo", "overview", OVERVIEW | {"datasets": []})
+            }
+        }
+
+    monkeypatch.setattr(extensions, "load_apps", bad)
+    r = invoke("lock", "--json")
+    assert r.exit_code == ExitCode.CONFIG
+    assert "acme-demo" in r.output and "overview" in r.output and "datasets" in r.output
+    assert (project / locking.RECORD_FILE).read_bytes() == before
+
+
+def test_apps_are_read_per_listed_extension():
+    points = [
+        _app_point("Acme_One", "overview", lambda: OVERVIEW),
+        _app_point("unlisted", "overview", lambda: OVERVIEW),
+    ]
+    found = extensions.load_apps(_config("acme-one"), candidates=points)
+    assert set(found) == {"acme-one"}
+    assert found["acme-one"]["overview"].app.title == "Sales overview"
+
+
+def test_an_app_that_cannot_load_names_its_extension_and_app():
+    def broken():
+        raise ImportError("streamlit")
+
+    points = [_app_point("acme-one", "overview", broken)]
+    with pytest.raises(Failure, match="acme-one.*app overview.*ImportError"):
+        extensions.load_apps(_config("acme-one"), candidates=points)
+
+
+def test_a_service_named_as_an_apps_service_is_refused(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    _services(monkeypatch, BOT)
+    from vecten_shared.services import parse_service
+
+    monkeypatch.setattr(
+        extensions,
+        "load_services",
+        lambda config, candidates=None, only=None: {
+            "acme-demo": {"app-overview": parse_service("acme-demo", "app-overview", BOT)}
+        },
+    )
+    _apps(monkeypatch, {"overview": OVERVIEW})
+    r = invoke("lock")
+    assert r.exit_code == ExitCode.CONFIG
+    assert "service app-overview" in r.output and "app overview" in r.output

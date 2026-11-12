@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from vecten_shared.apps import APP_CREDENTIAL
 from vecten_shared.names import secret_name_problem
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import scope_for
@@ -57,6 +58,8 @@ def secret_problem(name: str) -> str | None:
     if name.startswith(HOST_PREFIXES):
         prefixes = ", ".join(HOST_PREFIXES)
         return f"{name}: names starting with {prefixes} belong to the hosts and the stack"
+    if APP_CREDENTIAL.fullmatch(name):
+        return f"{name} is reserved for an analytics app's client credentials"
     return None
 
 

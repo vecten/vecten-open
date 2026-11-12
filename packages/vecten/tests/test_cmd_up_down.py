@@ -487,6 +487,48 @@ def test_up_refuses_an_in_repo_service_changed_since_the_lock(invoke, workdir, f
     assert fake.calls == []
 
 
+def test_up_refuses_an_in_repo_app_changed_since_the_lock(invoke, workdir, fake, monkeypatch):
+    from vecten import extensions
+    from vecten_shared.apps import parse_app
+    from vecten_shared.output import ExitCode
+
+    from .services_fixtures import with_services
+
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    app = {
+        "title": "Overview",
+        "description": "",
+        "kind": "container",
+        "runtime": "streamlit",
+        "entry": "acme/app.py",
+        "datasets": ["orders"],
+        "groups": ["default"],
+    }
+    with_services(
+        workdir / "p",
+        {},
+        declared={},
+        source_path="extensions/acme",
+        metadata_sha256="0" * 64,
+        apps={"overview": parse_app("acme", "overview", app).app},
+    )
+    changed = {**app, "datasets": ["orders", "customers"]}
+    monkeypatch.setattr(extensions, "load_services", lambda config, candidates=None, only=None: {})
+    monkeypatch.setattr(
+        extensions,
+        "load_apps",
+        lambda config, candidates=None, only=None: {
+            "acme": {"overview": parse_app("acme", "overview", changed)}
+        },
+    )
+    monkeypatch.setattr(extensions, "installed_from", lambda name, path: True)
+    r = invoke("up", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.stdout
+    assert "app overview differs from extensions.lock.json" in r.stdout
+    assert fake.calls == []
+
+
 def test_up_reads_only_in_repo_declarations_and_accepts_an_unchanged_one(
     invoke, workdir, fake, monkeypatch
 ):

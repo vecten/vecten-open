@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from vecten_shared.apps import App, app_from_json, app_to_json
 from vecten_shared.services import Service, name_problem, service_from_json, service_to_json
 
 RECORD_FILE = "extensions.lock.json"
@@ -30,6 +31,8 @@ class Extension:
     build_requires: tuple[str, ...] = ()
     # The `vecten.services` declarations, by service name.
     services: dict[str, Service] = field(default_factory=dict, hash=False)
+    # The `vecten.apps` declarations, by app name.
+    apps: dict[str, App] = field(default_factory=dict, hash=False)
 
 
 def record_text(record: dict[str, Extension]) -> str:
@@ -60,6 +63,11 @@ def record_text(record: dict[str, Extension]) -> str:
                     if entry.services
                     else {}
                 ),
+                **(
+                    {"apps": {app: app_to_json(d) for app, d in sorted(entry.apps.items())}}
+                    if entry.apps
+                    else {}
+                ),
             }
             for name, entry in sorted(record.items())
         },
@@ -78,10 +86,12 @@ def parse_record(text: str) -> dict[str, Extension] | None:
             source = entry.get("source") or {}
             path, digest = source.get("path"), entry.get("metadata_sha256")
             build = entry.get("build_requires", [])
-            services = entry.get("services", {})
+            services, apps = entry.get("services", {}), entry.get("apps", {})
             if not isinstance(services, dict) or any(
                 name_problem("service", service) for service in services
             ):
+                return None
+            if not isinstance(apps, dict):
                 return None
             if (
                 not isinstance(version, str)
@@ -104,6 +114,7 @@ def parse_record(text: str) -> dict[str, Extension] | None:
                 metadata_sha256=digest,
                 build_requires=tuple(build),
                 services={service: service_from_json(value) for service, value in services.items()},
+                apps={app: app_from_json(app, value) for app, value in apps.items()},
             )
         return record
     except ValueError, KeyError, TypeError, AttributeError:

@@ -26,5 +26,8 @@ fixture = "vecten_test_extension:provision"
 fixture = "vecten_test_extension:audit"
 [project.entry-points."vecten.services"]
 portal = "vecten_test_extension:portal"
+[project.entry-points."vecten.apps"]
+dashboard = "vecten_test_extension:dashboard"
+warehouse = "vecten_test_extension:warehouse"
 [project.entry-points."vecten.manifest"]
 fixture = "vecten_test_extension:manifest"

@@ -47,7 +47,7 @@ def extension(tmp_path, monkeypatch):
     sys.modules.pop("vecten_test_extension", None)
 
 
-def test_all_eleven_groups_land(extension):
+def test_all_twelve_groups_land(extension):
     from vecten.connectors.extensions import extension_connectors
     from vecten.extension_skills import link_extension_skills
     from vecten_mcp.extensions import McpExtensions

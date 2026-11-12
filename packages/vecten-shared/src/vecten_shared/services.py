@@ -162,6 +162,11 @@ def parse_service(extension: str, name: str, value: object) -> Declaration:
             ExitCode.CONFIG,
             f"extension {extension}: service {name}: must be a mapping or return one",
         )
+    return service_body(fail, value)
+
+
+def service_body(fail, value: dict) -> Declaration:
+    """A service mapping checked key by key; `fail(key, problem)` names where it came from."""
     command = _strings(value.get("command"))
     if command is None:
         raise fail("command", "a non-empty list of non-empty strings, run in exec form")

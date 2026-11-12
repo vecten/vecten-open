@@ -8,7 +8,7 @@ publishing is a later change with #40 (section 5).
 
 ## 1. App declaration and container apps (PR F)
 
-- [ ] 1.1 `vecten_shared.extensions`: the `vecten.apps` group; declaration parsing per kind; #50's `vecten lock` records it
+- [x] 1.1 `vecten_shared.extensions`: the `vecten.apps` group; declaration parsing per kind; #50's `vecten lock` records it
 - [ ] 1.2 `vecten_shared.config`: `[apps.<extension>.<app>]` with its refusals (undeclared app, no `mcp` component, empty groups); `extension add` writes bindings and keeps existing ones
 - [ ] 1.3 Render a bound container app as the #38 service `svc-<extension>-app-<app>` with one `login` route at `/`, `websocket = true`, its credential names and `VECTEN_MCP_URL`
 - [ ] 1.4 `vecten_shared.launch`: standard library only; resolves `entry` inside the installed package, refuses a path outside it, and execs Streamlit with the flags in the spec
