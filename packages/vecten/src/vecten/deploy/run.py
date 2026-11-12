@@ -45,6 +45,7 @@ from vecten.deploy.guards import (
     require_deployed,
     require_on_default_branch,
 )
+from vecten.deploy.shipping import service_report
 from vecten.deploy.snowflake import has_snowflake_root, identity_pending, identity_pending_note
 from vecten.deploy.terraform import PlannedRoot, TerraformRunner, require_terraform
 from vecten.deploy.tfvars import check_tfvars
@@ -333,7 +334,9 @@ def _deploy(
     }
     if identity_pending(config, env):
         return {**data, "hosts": [], "ship_skipped": identity_pending_note(env)}
-    return {**data, "hosts": plane.ship_hosts(project_root, config, env, outputs, commit)}
+    hosts = plane.ship_hosts(project_root, config, env, outputs, commit)
+    report = service_report(config, read_extension_record(project_root) or {}, outputs)
+    return {**data, "hosts": hosts, **report}
 
 
 def ship_env(
@@ -368,7 +371,8 @@ def ship_env(
         return {**data, "ship_skipped": identity_pending_note(env)}
     outputs = fetch_outputs(plane)
     hosts = plane.ship_hosts(project_root, config, env, outputs, commit)
-    return {"env": env, "dispatched": False, "commit": commit, "hosts": hosts}
+    report = service_report(config, read_extension_record(project_root) or {}, outputs)
+    return {"env": env, "dispatched": False, "commit": commit, "hosts": hosts, **report}
 
 
 def _confirmed(env: str, confirm: str | None, prompt: Callable[[], str] | None) -> None:

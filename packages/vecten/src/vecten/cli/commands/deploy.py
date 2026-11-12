@@ -33,7 +33,19 @@ def _ship_message(data: dict) -> str:
         )
     if data.get("ship_skipped"):
         return f"shipped nothing: {data['ship_skipped']}"
-    return f"shipped {data['commit'][:8]} to {', '.join(data['hosts'])}"
+    return "\n".join(
+        [f"shipped {data['commit'][:8]} to {', '.join(data['hosts'])}", *_service_lines(data)]
+    )
+
+
+def _service_lines(data: dict) -> list[str]:
+    lines = [f"service {key}: {state}" for key, state in data.get("services", {}).items()]
+    if data.get("waiting_routes"):
+        lines.append(
+            f"routes waiting for `vecten deploy --env {data['env']}`: "
+            + ", ".join(data["waiting_routes"])
+        )
+    return lines
 
 
 def ship(
@@ -128,7 +140,11 @@ def bootstrap(
 
 def _deploy_message(data: dict) -> str:
     return "\n".join(
-        [_deployed_message(data), *(f"warning: {w}" for w in data.get("warnings", []))]
+        [
+            _deployed_message(data),
+            *_service_lines(data),
+            *(f"warning: {w}" for w in data.get("warnings", [])),
+        ]
     )
 
 

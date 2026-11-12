@@ -23,6 +23,7 @@ from .deploy_fixtures import (
     render_aws,
     set_facts,
 )
+from .services_fixtures import locked
 
 
 @pytest.fixture
@@ -531,23 +532,6 @@ def test_the_bundle_build_checks_the_service_bindings(project, tmp_path):
     with_services(project, {"bot": {"host": "mcp"}})
     with pytest.raises(Failure, match="services.acme.bot.host"):
         build(project, tmp_path / "out")
-
-
-def locked(root):
-    """Stamps every lock fresh for the project's `acme==1.0` and its record."""
-    from vecten import locking
-    from vecten_shared.extension_record import read_record
-
-    (root / "requirements.txt").write_text("acme==1.0\n")
-    config, record = load_config(root), read_record(root)
-    for component in locking.components(config):
-        roots = locking.roots(config, locking.read_pins(root), record, component)
-        digest = locking.inputs_hash(component, [*roots, *locking.metadata_markers(record)])
-        body = "".join(f"{r}\n" for r in roots)
-        (root / locking.LOCK_FILES[component]).write_text(
-            locking.stamp_line(component, digest) + "\n" + body
-        )
-    return root
 
 
 def host_json(bundle):

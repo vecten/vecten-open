@@ -55,7 +55,7 @@
 
 ### Requirement: Ship reports services without rolling back for them
 
-After the component polls, `ship` SHALL poll `https://<hostname>/_vecten/health` for each served service hostname that has a health path, and SHALL report each bound service as `healthy`, `unhealthy`, `waiting for deploy` or `not routed`, in its output and with `--json`. A service's state SHALL NOT fail the ship or restore the previous bundle. `ship` SHALL also report named volumes of services no longer bound on the host.
+After the component polls, `ship` SHALL poll `https://<hostname>/_vecten/health` for each served service hostname that has a health path, and SHALL report each bound service as `healthy`, `unhealthy`, `waiting for deploy`, `not routed` (no hostname bound) or `served` (its hostname is served and it declares a health command, which only Compose runs), in its output and with `--json`. A service's state SHALL NOT fail the ship or restore the previous bundle. `ship` SHALL also report named volumes of services no longer bound on the host.
 
 #### Scenario: Unhealthy portal
 

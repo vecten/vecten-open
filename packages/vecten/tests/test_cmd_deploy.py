@@ -1167,3 +1167,22 @@ def test_a_scaleway_plan_passes_the_bound_hostnames(invoke, scw):
     assert r.exit_code == 0, r.stdout
     plan = FakeTerraform.call("plan")
     assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
+
+
+def test_a_deploy_reports_its_services_after_shipping(invoke, actions, project, monkeypatch):
+    from vecten.deploy import shipping
+
+    from .services_fixtures import locked
+
+    _bind_hostnames(project)
+    locked(project)
+    outputs = copy.deepcopy(STANDARD_OUTPUTS)
+    outputs["hosts"]["platform"]["service_hostnames"] = ["bot.data.acme.com"]
+    monkeypatch.setattr(FakeTerraform, "outputs", outputs)
+    monkeypatch.setattr(shipping, "fetch_response", lambda url: (200, "ok"))
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["services"] == {"acme.bot": "healthy", "acme.portal": "waiting for deploy"}
+    text = invoke("deploy", "--env", "prod")
+    assert "service acme.bot: healthy" in text.stdout
+    assert "routes waiting for `vecten deploy --env prod`: acme.portal.app" in text.stdout
