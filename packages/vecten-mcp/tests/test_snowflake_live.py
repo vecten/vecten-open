@@ -176,12 +176,7 @@ def account():
         names = _names()
         audience = names.audience
         script = provisioner_script(
-            "snowflake",
-            database=DATABASE,
-            issuer=ISSUER,
-            account=ACCOUNT,
-            public_key=public_body(provisioner_key),
-            warehouse=WAREHOUSE,
+            "snowflake", issuer=ISSUER, public_key=public_body(provisioner_key), names=names
         )
         for statement in _statements(script):
             if statement.upper().startswith("ALTER SECURITY INTEGRATION"):

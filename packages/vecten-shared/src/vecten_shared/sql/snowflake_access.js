@@ -1,3 +1,5 @@
+// The procedure's wrapper defines database, warehouse, analystRole, provisionerRole,
+// loaderRole and suffix from the environment's Snowflake names.
 function quoted(value) {
     if (typeof value !== 'string' || value.length === 0 || value.indexOf('\u0000') !== -1) {
         throw new Error('invalid identifier');
@@ -13,7 +15,8 @@ if (enabled === null || typeof TARGET !== 'string' ||
     !/^[A-Z][A-Z0-9_]{0,62}$/.test(TARGET) ||
     /^(ADMIN_|SVC_|PG_)/.test(TARGET) ||
     ['PUBLIC','ACCOUNTADMIN','SECURITYADMIN','SYSADMIN','USERADMIN',
-     'ORGADMIN','PROVISIONER','IMPERSONATOR','LOADER','WAREHOUSE_OWNER'].indexOf(TARGET) !== -1) {
+     'ORGADMIN','IMPERSONATOR','WAREHOUSE_OWNER',
+     provisionerRole,loaderRole].indexOf(TARGET) !== -1) {
     throw new Error('target is not a bounded reader role');
 }
 if (typeof SCHEMA_NAME !== 'string' ||
@@ -21,13 +24,13 @@ if (typeof SCHEMA_NAME !== 'string' ||
      !/^RAW_[A-Z0-9_]+$/.test(SCHEMA_NAME))) {
     throw new Error('schema is outside the approved convention');
 }
-if (TARGET !== 'ANALYST') {
+if (TARGET !== analystRole) {
     var grants = execute('SHOW GRANTS ON ROLE ' + quoted(TARGET));
     var owned = false;
     while (grants.next()) {
         if (grants.getColumnValue('privilege') === 'OWNERSHIP' &&
             grants.getColumnValue('granted_to') === 'ROLE' &&
-            grants.getColumnValue('grantee_name') === 'PROVISIONER') owned = true;
+            grants.getColumnValue('grantee_name') === provisionerRole) owned = true;
     }
     if (!owned) throw new Error('target is not owned by provisioner');
 }
