@@ -113,6 +113,7 @@ def test_settings_list_every_key_with_its_default(builtins):
         "session_idle_seconds": 900,
         "row_cap": 500,
         "statement_timeout_seconds": 30,
+        "reconcile_drift": "revoke",
     }
     assert set(SETTINGS) == set(values)
     assert all(
@@ -129,6 +130,8 @@ def test_settings_list_every_key_with_its_default(builtins):
         ("row_cap", 10001),
         ("statement_timeout_seconds", True),
         ("session_idle_seconds", 29),
+        ("reconcile_drift", "ignore"),
+        ("reconcile_drift", 1),
         ("unknown", 1),
     ],
 )
@@ -151,6 +154,19 @@ def test_retention_setting_is_saved(builtins):
         write=True,
     )
     assert builtins.runtime.state.get("settings", "audit_retention_days") == {"value": 30}
+
+
+@pytest.mark.parametrize("value", ["report", "revoke"])
+def test_reconcile_drift_takes_report_or_revoke(builtins, value):
+    caller = admin_caller(builtins)
+    builtins.runtime.admin_service.call(
+        caller,
+        "settings/set",
+        {"key": "reconcile_drift", "value": value},
+        surface="api",
+        write=True,
+    )
+    assert builtins.runtime.state.get("settings", "reconcile_drift") == {"value": value}
 
 
 def test_model_read_names_where_definitions_live_and_their_usage(builtins):

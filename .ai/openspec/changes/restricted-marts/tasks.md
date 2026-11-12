@@ -18,8 +18,8 @@ ship before areas.
 - [x] 1.3 `identity_setup.provisioner_script`: Snowflake grants `ANALYST` only database and warehouse `USAGE`; Postgres grants `analyst` only `CONNECT`
 - [x] 1.4 `warehouse_setup.sql`: the `analyst` `USAGE` and default privileges run only when `with_mcp` is false; `vm/apply.py` and its byte-identical copy unchanged
 - [x] 1.5 `snowflake_access.js`: a version constant; new `READ_GRANTS(TARGET)` returning the target's read grants and schema-level future grants in the database, with the same target bounds as `READ_GRANT`; `READER` added to the refused targets
-- [ ] 1.6 `AccessService.reconcile`: read actual grants per managed role (Snowflake through `READ_GRANTS`, Postgres from `relacl`, `nspacl` and `pg_default_acl`), revoke undesired ones in scope, honour `reconcile_drift`, log each, and record added, revoked and drift lists in access health
-- [ ] 1.7 `check_scope` accepts USAGE on `READ_GRANTS`; the startup check compares the procedure's version and limits features when it is older
+- [x] 1.6 `AccessService.reconcile`: read actual grants per managed role (Snowflake through `READ_GRANTS`, Postgres from `relacl`, `nspacl` and `pg_default_acl`), revoke undesired ones in scope, honour `reconcile_drift`, log each, and record added, revoked and drift lists in access health
+- [x] 1.7 `check_scope` accepts USAGE on `READ_GRANTS`; the startup check compares the procedure's version and limits features when it is older
 - [ ] 1.8 `next` reports the provisioner-script rerun while the installed version is older
 - [ ] 1.9 unit: setup SQL and script text for both warehouses with and without the MCP; reconciliation against a fake adapter (revoke of an undesired schema grant, untouched grant outside scope, report mode, revokes before grants); `READ_GRANTS` bounds
 - [ ] 1.10 docker: Postgres stack: revoke `marts` from default, ship again, `analyst` holds nothing on `marts`; a hand grant in `marts` is revoked; a grant in another schema stays

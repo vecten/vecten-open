@@ -1,5 +1,7 @@
 """Snowflake users keep their own credentials; MCP sessions use External OAuth."""
 
+import json
+import re
 from contextlib import contextmanager
 
 from vecten_mcp.warehouse.base import Account, check_account
@@ -7,6 +9,14 @@ from vecten_mcp.warehouse.base import Account, check_account
 
 def quote(name):
     return '"' + name.upper().replace('"', '""') + '"'
+
+
+def name_parts(name):
+    """The parts of a dotted name as SHOW GRANTS prints it, each in lower case."""
+    return [
+        part[1:-1].replace('""', '"').lower() if part.startswith('"') else part.lower()
+        for part in re.findall(r'"(?:[^"]|"")*"|[^.]+', name)
+    ]
 
 
 class SnowflakeAdapter:
@@ -155,6 +165,51 @@ class SnowflakeAdapter:
                 (role.upper(), schema.upper(), relation.upper() if relation else None, grant),
             )
 
+    def access_version(self):
+        """The installed procedures' version: READ_GRANT reports it when every argument is
+        NULL, and an install from before that refuses the call."""
+        from snowflake.connector.errors import ProgrammingError
+
+        with self.control() as cursor:
+            try:
+                answer = cursor.execute(
+                    f'CALL {quote(self.database)}."VECTEN_ACCESS".READ_GRANT(NULL,NULL,NULL,NULL)'
+                ).fetchone()[0]
+            except ProgrammingError:
+                return 1
+        match = re.fullmatch(r"vecten-access (\d+)", str(answer))
+        return int(match.group(1)) if match else 1
+
+    def read_grants(self, roles):
+        """`(role, kind, schema, relation)` for every USAGE, SELECT and schema-level future
+        SELECT the roles hold in this database, read through READ_GRANTS."""
+        for role in roles:
+            if role != "analyst":
+                check_account(role)
+        held = set()
+        with self.control() as cursor:
+            for role in sorted(roles):
+                answer = cursor.execute(
+                    f'CALL {quote(self.database)}."VECTEN_ACCESS".READ_GRANTS(%s)',
+                    (role.upper(),),
+                ).fetchone()[0]
+                answer = answer if isinstance(answer, dict) else json.loads(answer)
+                for grant in answer.get("grants", []):
+                    parts = name_parts(grant["name"])
+                    if parts[0] != self.database.lower():
+                        continue
+                    if grant["privilege"] == "USAGE" and grant["granted_on"] == "SCHEMA":
+                        held.add((role, "usage", parts[1], None))
+                    elif grant["privilege"] == "SELECT" and len(parts) == 3:
+                        held.add((role, "select", parts[1], parts[2]))
+                # A database-level future grant (two parts) reaches schemas that hold no
+                # schema-level one; it is the account's, outside this scope.
+                for grant in answer.get("future", []):
+                    parts = name_parts(grant["name"])
+                    if parts[0] == self.database.lower() and len(parts) == 3:
+                        held.add((role, "future", parts[1], None))
+        return held
+
     def check_scope(self, registry):
         with self.control() as cursor:
             rows = cursor.execute("SHOW GRANTS TO ROLE PROVISIONER").fetchall()
@@ -207,6 +262,7 @@ class SnowflakeAdapter:
                             self.database.upper() + ".VECTEN_ACCESS." + signature
                             for signature in (
                                 "READ_GRANT(VARCHAR,VARCHAR,VARCHAR,BOOLEAN)",
+                                "READ_GRANTS(VARCHAR)",
                                 "SOURCE_EXISTS(VARCHAR,VARCHAR)",
                             )
                         }

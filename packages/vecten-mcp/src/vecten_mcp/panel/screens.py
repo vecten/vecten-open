@@ -814,6 +814,8 @@ def settings(ctx):
     def editor(key, spec):
         if isinstance(spec["default"], bool):
             control = select("value", [("true", "on"), ("false", "off")], flag(values[key]))
+        elif "choices" in spec:
+            control = select("value", [(c, c) for c in spec["choices"]], values[key])
         else:
             control = field(
                 "Value",
@@ -856,6 +858,10 @@ def settings_set(ctx):
         if raw not in {"true", "false"}:
             raise ValueError("choose on or off")
         value = raw == "true"
+    elif "choices" in spec:
+        if raw not in spec["choices"]:
+            raise ValueError("choose " + " or ".join(spec["choices"]))
+        value = raw
     else:
         if not raw.isdecimal():
             raise ValueError("enter a whole number")

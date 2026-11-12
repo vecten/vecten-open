@@ -3,6 +3,7 @@ import pytest
 from vecten_mcp.access import AccessService
 from vecten_mcp.identity import Identity
 from vecten_mcp.state import StateStore
+from vecten_shared.identity_setup import ACCESS_VERSION
 
 
 class Adapter:
@@ -23,6 +24,12 @@ class Adapter:
 
     def schema_grant(self, role, schema, grant=True):
         self.ops.append(("schema", role, schema, grant))
+
+    def access_version(self):
+        return ACCESS_VERSION
+
+    def read_grants(self, roles):
+        return set()
 
 
 def test_group_grant_reconcile_and_deny_union():
@@ -191,4 +198,7 @@ def test_health_before_any_reconciliation_is_empty():
     assert AccessService(StateStore("sqlite://"), Adapter()).health() == {
         "checked_at": None,
         "failures": [],
+        "added": [],
+        "revoked": [],
+        "drift": [],
     }

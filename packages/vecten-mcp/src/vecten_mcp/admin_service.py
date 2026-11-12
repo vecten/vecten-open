@@ -103,6 +103,16 @@ SETTINGS = {
         "maximum": 3600,
         "description": "Seconds a warehouse statement may run.",
     },
+    "reconcile_drift": {
+        "default": "revoke",
+        "minimum": None,
+        "maximum": None,
+        "choices": ("revoke", "report"),
+        "description": (
+            "What reconciliation does with a read grant a managed role holds and the state "
+            "does not: revoke it, or only list it in access health."
+        ),
+    },
 }
 DBT_MARTS = "dbt/models/marts/"
 
@@ -255,7 +265,9 @@ class AdminService:
         if operation == "reconcile":
             return access.reconcile()
         if operation == "access-health":
-            return access.health() if access else {"checked_at": None, "failures": []}
+            if access is None:
+                return {"checked_at": None, "failures": [], "added": [], "revoked": [], "drift": []}
+            return access.health()
         if operation == "settings":
             return self.settings()
         if operation == "settings/set":
@@ -276,8 +288,10 @@ class AdminService:
         spec = SETTINGS.get(key)
         if spec is None:
             raise ValueError("unknown setting or invalid value")
-        if type(value) is not type(spec["default"]) or (
-            spec["minimum"] is not None and not spec["minimum"] <= value <= spec["maximum"]
+        if (
+            type(value) is not type(spec["default"])
+            or (spec["minimum"] is not None and not spec["minimum"] <= value <= spec["maximum"])
+            or value not in spec.get("choices", (value,))
         ):
             raise ValueError("setting is outside the permitted range")
         pools = getattr(self.runtime, "pools", None)
