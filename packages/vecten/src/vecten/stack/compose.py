@@ -303,6 +303,22 @@ SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
 SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
 
 
+def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str]:
+    """Only the extension's own names its host may read: no cloud key, no stack variable."""
+    entry = record.get(bound.extension)
+    return sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+
+
+def host_services(
+    config: VectenConfig, record: dict[str, Extension], components: list[str]
+) -> tuple[list[str], str]:
+    """What a VM's agent needs for the services it runs: the secret names it reads and hands
+    to Compose, and the bridge it keeps off the metadata address, or empty for no service."""
+    placed = [b for b in bound_services(config, record) if b.host in components]
+    names = sorted({n for bound in placed for n in service_secret_names(bound, record)})
+    return names, SERVICES_BRIDGE if placed else ""
+
+
 def _literal(value: str) -> str:
     # Compose interpolates `$` in every string, so a declared value keeps its own text this way.
     return value.replace("$", "$$")
@@ -336,9 +352,7 @@ def _service(
         environment["PORT"] = str(declared.port)
     if bound.binding.hostname is not None:
         environment["VECTEN_PUBLIC_URL"] = _public_url(mode, bound.binding.hostname, hosts)
-    # Only the extension's own names its host may read: no cloud key, no stack variable.
-    entry = project_record(stack_dir).get(bound.extension)
-    secrets = sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+    secrets = service_secret_names(bound, project_record(stack_dir))
     for secret in secrets:
         if secret in environment:
             raise Failure(

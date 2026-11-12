@@ -1195,6 +1195,11 @@ def test_load_host_gives_an_older_release_its_aws_values(agent, tmp_path):
     assert host["bucket"] == out["bucket"] and host["secret_prefix"] == out["secret_prefix"]
 
 
+def test_load_host_gives_a_release_from_before_services_no_service(agent, tmp_path):
+    host = agent.load_host(stage(tmp_path / "releases", outputs("standard"), "platform"))
+    assert host["service_secrets"] == [] and host["service_network"] == ""
+
+
 def test_rollback_onto_a_release_from_before_the_cloud_keys(agent, tmp_path):
     out = outputs("standard")
     releases = tmp_path / "releases"

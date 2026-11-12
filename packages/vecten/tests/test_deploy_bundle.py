@@ -533,9 +533,77 @@ def test_the_bundle_build_checks_the_service_bindings(project, tmp_path):
         build(project, tmp_path / "out")
 
 
-def test_a_vm_bundle_refuses_services_while_no_agent_isolates_them(project, tmp_path):
+def locked(root):
+    """Stamps every lock fresh for the project's `acme==1.0` and its record."""
+    from vecten import locking
+    from vecten_shared.extension_record import read_record
+
+    (root / "requirements.txt").write_text("acme==1.0\n")
+    config, record = load_config(root), read_record(root)
+    for component in locking.components(config):
+        roots = locking.roots(config, locking.read_pins(root), record, component)
+        digest = locking.inputs_hash(component, [*roots, *locking.metadata_markers(record)])
+        body = "".join(f"{r}\n" for r in roots)
+        (root / locking.LOCK_FILES[component]).write_text(
+            locking.stamp_line(component, digest) + "\n" + body
+        )
+    return root
+
+
+def host_json(bundle):
+    return json.loads(read(bundle, ".vecten/ship/host.json"))
+
+
+def test_a_host_without_services_carries_empty_isolation_keys(project, tmp_path):
+    host = host_json(build(project, tmp_path / "out"))
+    assert host["service_secrets"] == [] and host["service_network"] == ""
+
+
+def test_a_host_running_a_service_names_its_bridge_and_its_secrets(project, tmp_path):
+    from vecten.stack.compose import SERVICES_BRIDGE
+
     from .services_fixtures import with_services
 
-    with_services(project, {"bot": {}})
-    with pytest.raises(Failure, match="acme.bot.*instance"):
-        build(project, tmp_path / "out")
+    with_services(project, {"bot": {}}, secrets=("ACME_BOT_TOKEN", "MCP_ACME_TOKEN"))
+    locked(project)
+    bundle = build(project, tmp_path / "platform")
+    host = host_json(bundle)
+    assert host["service_network"] == SERVICES_BRIDGE
+    # Only the names the platform host may read; MCP_ names belong to the MCP host's scope.
+    assert host["service_secrets"] == ["ACME_BOT_TOKEN"]
+    compose = yaml.safe_load(read(bundle, ".vecten/stack/docker-compose.yml"))
+    assert "svc-acme-bot" in compose["services"]
+    other = host_json(build(project, tmp_path / "mcp", host="mcp"))
+    assert other["service_secrets"] == [] and other["service_network"] == ""
+
+
+def test_a_service_on_the_mcp_host_gets_its_mcp_secrets_there(project, tmp_path):
+    from .services_fixtures import BOT, with_services
+
+    with_services(
+        project,
+        {"bot": {"host": "mcp"}},
+        declared={"bot": {**BOT, "components": ["platform", "mcp"]}},
+        secrets=("ACME_BOT_TOKEN", "MCP_ACME_TOKEN"),
+    )
+    locked(project)
+    mcp = host_json(build(project, tmp_path / "mcp", host="mcp"))
+    assert mcp["service_network"] == "vecten-services"
+    assert mcp["service_secrets"] == ["MCP_ACME_TOKEN"]
+    platform = host_json(build(project, tmp_path / "platform"))
+    assert platform["service_secrets"] == [] and platform["service_network"] == ""
+
+
+def test_one_vm_under_minimal_reads_each_service_secret_from_its_hosts_scope(tmp_path):
+    from .services_fixtures import BOT, with_services
+
+    root = render_aws(tmp_path / "proj", profile="minimal")
+    with_services(
+        root,
+        {"bot": {}, "admin": {"host": "mcp"}},
+        declared={"bot": BOT, "admin": {**BOT, "components": ["mcp"]}},
+        secrets=("ACME_BOT_TOKEN", "MCP_ACME_TOKEN"),
+    )
+    host = host_json(build(locked(root), tmp_path / "out", host="main", outputs=minimal_outputs()))
+    assert host["service_network"] == "vecten-services"
+    assert host["service_secrets"] == ["ACME_BOT_TOKEN", "MCP_ACME_TOKEN"]

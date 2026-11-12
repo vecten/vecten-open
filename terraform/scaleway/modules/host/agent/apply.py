@@ -94,12 +94,16 @@ HOST_KEYS = (
     "airflow_parallelism",
     "mcp_pool_cap",
     "plugin_dir",
+    "service_secrets",
+    "service_network",
 )
 LEGACY_HOST_DEFAULTS = {
     "private_package_index": False,
     "cloud": "aws",
     "project_id": "",
     "plugin_dir": PLUGIN_DIRS["aws"],
+    "service_secrets": [],
+    "service_network": "",
 }
 LEGACY_OUTPUT_KEYS = ("bucket", "secret_prefix")
 # What the watcher needs before any release exists on the host; user data writes it.
