@@ -21,10 +21,10 @@ def _relock(root, name: str, dependencies: list[str]) -> bool:
     from vecten import extensions as project_extensions
     from vecten import locking
 
-    if not any((root / f).is_file() for f in locking.LOCK_FILES.values()):
+    # A connector without dependencies changes no lock's inputs, so whatever state the locks
+    # are in, fresh or an earlier release's, adding it gives no reason to resolve again.
+    if not dependencies or not any((root / f).is_file() for f in locking.LOCK_FILES.values()):
         return False
-    if not dependencies and not locking.lock_problems(root, load_config(root)):
-        return True
     try:
         project_extensions.lock(root)
     except Failure as failure:
