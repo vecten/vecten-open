@@ -170,9 +170,8 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
             f"{rel} sets warehouse = {values['warehouse']!r}; vecten.toml says "
             f"{config.warehouse.kind!r}: {SECOND_WAREHOUSE}",
         )
-    # Each environment of a platform-built Snowflake names its own account; `prod`'s is the
-    # one vecten.toml names. Over an existing warehouse every environment uses its locator's.
-    if snowflake and (env == "prod" or not has_snowflake_root(config)):
+    # Each environment names its own Snowflake account; `prod`'s is the one vecten.toml names.
+    if snowflake and env == "prod":
         found, expected = values["snowflake_account"], config.warehouse.account
         if not expected:
             raise Failure(
