@@ -97,6 +97,15 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   grant. A revoke the warehouse refuses while the role still reads in the schema fails and
   stays recorded, so every reconciliation retries it
   ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- A group's warehouse role can be named at creation (`vecten group add finance --role
+  fin_readers`, or the panel), and a group named like an existing role is refused naming
+  `--role` and `vecten group bind`. A group can bind a role the client already has:
+  `vecten group bind <group> <role>` prints the review statement and the grant nesting it
+  under the group's role for an administrator to run, `--confirm` records it once the grant is
+  in place, and `vecten group unbind` forgets it and prints the revoke. The server never
+  grants, alters or drops a bound role; access health and `vecten issues` report a confirmed
+  binding whose grant is gone. Policies on a bound role use `IS_ROLE_IN_SESSION`, not
+  `CURRENT_ROLE()` ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
 ### Changed
 

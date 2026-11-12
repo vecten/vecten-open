@@ -60,13 +60,13 @@ ship before areas.
 
 ## 5. Group roles: chosen names and bound roles
 
-- [ ] 5.1 `AccessService.create_group(name, role=None)`: override, reserved prefixes, refusal on an existing role naming both ways out
-- [ ] 5.2 Binding: state for bindings; admin API bind (prints the statement), confirm (checks the grant through `SHOW GRANTS TO ROLE <group role>` or `pg_auth_members`), unbind; access health for missing bindings; delete group leaves the bound role
-- [ ] 5.3 Panel and `vecten group add --role`, `vecten group bind|unbind`
+- [x] 5.1 `AccessService.create_group(name, role=None)`: override, reserved prefixes, refusal on an existing role naming both ways out
+- [x] 5.2 Binding: state for bindings; admin API bind (prints the statement), confirm (checks the grant through `SHOW GRANTS TO ROLE <group role>` or `pg_auth_members`), unbind; access health for missing bindings; delete group leaves the bound role
+- [x] 5.3 Panel and `vecten group add --role`, `vecten group bind|unbind`
 - [ ] 5.4 Under #34's shared layout (if merged first): refuse a bound role holding privileges on another environment's database of the project
-- [ ] 5.5 `docs/mcp-identity.md`: bound roles, `IS_ROLE_IN_SESSION` rather than `CURRENT_ROLE()`
-- [ ] 5.6 unit: name override and refusals; bind, confirm and unbind flows against fake adapters
-- [ ] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it
+- [x] 5.5 `docs/mcp-identity.md`: bound roles, `IS_ROLE_IN_SESSION` rather than `CURRENT_ROLE()`
+- [x] 5.6 unit: name override and refusals; bind, confirm and unbind flows against fake adapters
+- [x] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it
 - [ ] 5.8 live: Snowflake bound role: a member reads through it; `SHOW GRANTS TO ROLE PROVISIONER` unchanged; the startup check passes
 
 ## 6. Release checks

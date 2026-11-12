@@ -36,7 +36,7 @@ Afterwards you land on the overview. The first admins are the addresses listed u
 | Screen | What you can do there | Same action elsewhere |
 | --- | --- | --- |
 | Overview | Model status, questions and refusals in the last seven days, open gaps | `model_health`, `usage` tools |
-| Users and groups | Create, adopt, disable and delete people and services; set or clear the admin flag; create and delete groups; add and remove members | `vecten user`, `vecten service`, `vecten group` |
+| Users and groups | Create, adopt, disable and delete people and services; set or clear the admin flag; create and delete groups, naming their warehouse role; add and remove members; bind, confirm and unbind an existing role | `vecten user`, `vecten service`, `vecten group` |
 | Grants and deny lists | Grant or revoke a dataset, convention schema or restricted area per group; edit each group's column deny list; reconcile grants now | `vecten grant`, `list_grants` tool |
 | Model | Read the loaded model, its health, usage per field and metric, and open gaps | `describe`, `model_health`, `usage_view` tools |
 | Usage | The analytics views below, over a chosen number of days | `usage_view` tool |
@@ -54,6 +54,11 @@ page shows the account's roles and last login. On Postgres, an account the [prov
 create first needs one `GRANT ... WITH ADMIN OPTION` statement, which the page prints for an
 administrator to run. **Adopt existing account** binds it without touching its credentials.
 Deleting an adopted principal later removes the server's grants and keeps the account.
+
+**Create group** takes a name and, optionally, the warehouse role to create for it. **Bind
+role** shows the statement that reviews an existing role and the one that nests it under the
+group's role; once an administrator ran it, **Confirm** records the binding. **Unbind** forgets
+it and shows the revoke to run. See [group roles and bound roles](mcp-identity.md#group-roles-and-bound-roles).
 
 **Create service principal** creates `svc_<name>` and shows its client id and secret once.
 Copy the secret immediately: it is never stored in readable form and cannot be shown again.

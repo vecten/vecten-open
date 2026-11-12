@@ -53,8 +53,10 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 Identity commands are described in the [MCP identity guide](mcp-identity.md):
 `vecten user add`, `vecten user list`, `vecten user disable`, `vecten user delete`,
 `vecten user set-admin`, and `vecten user password-link` manage people through the admin API.
-`vecten group add`, `vecten group list`, `vecten group delete`, `vecten group add-member`, and
-`vecten group remove-member` manage group membership. `vecten service add`,
+`vecten group add` (with `--role` to name the group's warehouse role), `vecten group list`,
+`vecten group delete`, `vecten group add-member`, and `vecten group remove-member` manage
+groups and membership; `vecten group bind` and `vecten group unbind` bind a role the warehouse
+already has to a group. `vecten service add`,
 `vecten service list`, `vecten service disable`, and `vecten service delete` manage services.
 `vecten mcp provisioner-script` prints administrator-run setup SQL, and
 `vecten mcp introspect` drafts a semantic model from catalog metadata.

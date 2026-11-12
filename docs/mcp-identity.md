@@ -149,6 +149,45 @@ this grant, and services cannot receive MCP admin rights. Vecten creates no pass
 individual warehouse accounts: Postgres uses a NOLOGIN role; Snowflake uses a PERSON or
 SERVICE user authenticated through External OAuth.
 
+### Group roles and bound roles
+
+Each group maps to a warehouse role the provisioner creates and owns, named after the group
+unless `vecten group add finance --role fin_readers` (or the panel's group form) names it. A
+role name follows the warehouse-name rules and may not start with `admin_`, `svc_`, `pg_` or
+`p_` (kept for one reader role per person). When a role of that name already exists, creation
+is refused and names both ways out: another role name, or binding the existing role.
+
+A group can read through a role the client already has, such as `FINANCE_ANALYST` with its
+own grants and row access policies, by binding it:
+
+1. `vecten group bind finance finance_analyst` records the binding as pending and prints two
+   statements: one an administrator runs to review what the role reads (on Snowflake
+   `SHOW GRANTS TO ROLE "FINANCE_ANALYST";`, which the provisioner cannot run for a role it
+   does not own), and the grant that nests it under the group's role: on Snowflake
+   `GRANT ROLE "FINANCE_ANALYST" TO ROLE "FINANCE";`, on Postgres
+   `GRANT "finance_analyst" TO "finance" WITH INHERIT TRUE;`.
+2. An administrator runs the grant.
+3. `vecten group bind finance finance_analyst --confirm` checks that the group's role holds
+   the bound role (`SHOW GRANTS TO ROLE` on Snowflake, `pg_auth_members` with inherit on
+   Postgres) and records it.
+
+`vecten group unbind finance` forgets the binding and prints the revoke for an administrator
+to run. Each reconciliation checks every confirmed binding, and access health and
+`vecten issues` list one whose grant is gone.
+
+The server never owns, grants, alters or drops a bound role, and never targets it with a
+dataset, schema or area grant or with drift revocation: `READ_GRANT` refuses it as a target,
+and deleting the group drops only the group's own role. The provisioner holds no membership in
+it, so its startup check is unchanged. The default group, system roles (`ACCOUNTADMIN`,
+`SYSADMIN`, `PUBLIC` and the like), Postgres's predefined `pg_` roles, the roles setup
+creates, and any role the server manages cannot be bound. What a bound role reads, including
+outside the environment's database, is the client's to set, and the warehouse enforces it.
+
+A person's session runs under the group's role (or, with one reader role per person, their
+own), never the bound role, so a policy keyed on `CURRENT_ROLE()` does not match a bound role.
+Key row access and masking policies on `IS_ROLE_IN_SESSION('FINANCE_ANALYST')`, which matches
+a role inherited through the role hierarchy.
+
 ## Access and enforcement
 
 Groups map to warehouse roles. Every principal starts in the `default` group, mapped to
