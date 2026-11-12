@@ -214,7 +214,8 @@ def manifest():
 acme-resolution = "acme_resolution.manifest:manifest"
 ```
 
-`vecten lock` reads every listed extension's manifest and records its secrets and settings
+The entry's name is free; a distribution declares at most one. `vecten lock` reads every listed
+extension's manifest and records its secrets and settings
 schema in `extensions.lock.json`, so CI and the hosts know them without installing the
 extension. A malformed `secrets` or `settings` is refused, naming the extension and the key; a
 key this release does not know is reported and ignored, so an extension written for a newer
@@ -223,9 +224,11 @@ release still installs.
 **Where a secret is delivered.** The name's prefix decides, as it decides which host may read
 it. An `MCP_` name goes to the MCP server; any other name goes to Airflow and to the CLI's own
 process (`vecten connector run`). A DAG and a tool that call the same API therefore declare two
-names, `ACME_TOKEN` and `MCP_ACME_TOKEN`, and the operator sets both. `DEPLOY_`, `ADMIN_` and
-`SETUP_` names, names the stack manages (such as `LOADER_PASSWORD` and `MCP_SIGNING_KEY`) and
-`AIRFLOW_` names are refused. A name for a component the project does not enable is reported as
+names, `ACME_TOKEN` and `MCP_ACME_TOKEN`, and the operator sets both. Refused: `DEPLOY_`,
+`ADMIN_` and `SETUP_` names, which no host may read; names starting with `AWS_`, `SCW_`,
+`VECTEN_` or `AIRFLOW_`, which the hosts and the stack set themselves; process names such as
+`PATH`; and every credential the stack manages, such as `LOADER_PASSWORD`, `MCP_SIGNING_KEY` and
+the warehouse administrator's login. A name for a component the project does not enable is reported as
 not delivered. `vecten lock`, `extension add` and `vecten next` name each declared secret that is
 not set yet, locally or per environment, with its `vecten secret set` command.
 

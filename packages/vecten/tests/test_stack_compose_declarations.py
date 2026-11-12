@@ -94,3 +94,15 @@ def test_a_declared_name_colliding_with_a_stack_variable_is_refused(tmp_path):
 def test_platform_secrets_unite_connectors_the_project_and_extensions():
     c = config(connectors=[{"name": "crm", "source": "rest", "secrets": ["CRM_TOKEN"]}])
     assert platform_secrets(c, RECORD) == ["ACME_API_KEY", "CRM_TOKEN", "SLACK_TOKEN"]
+
+
+def test_on_a_vm_a_connector_secret_cannot_shadow_the_hosts_own_variables(tmp_path):
+    c = config(
+        extensions=[],
+        secrets=[],
+        connectors=[{"name": "crm", "source": "rest", "secrets": ["VECTEN_BUNDLE_LINEAGE"]}],
+    )
+    with pytest.raises(Failure, match="VECTEN_BUNDLE_LINEAGE"):
+        generate_compose(
+            c, "vm", ["platform"], stack(tmp_path, None), project="acme", hosts=VM_HOSTS
+        )

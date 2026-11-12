@@ -249,14 +249,6 @@ def _airflow_common(
         "RUNTIME__DLTHUB_TELEMETRY": "false",
         ARTIFACT_DIR_VAR: DEFAULT_ARTIFACT_DIR,
     }
-    stack_names = {*common["environment"], *runtime_env}
-    for secret in platform_secrets(config, project_record(stack_dir)):
-        if secret in stack_names:
-            raise Failure(
-                ExitCode.CONFIG,
-                f"declared secret {secret} collides with a stack variable; rename the secret",
-            )
-    _add_secrets(runtime_env, platform_secrets(config, project_record(stack_dir)), "declared")
     common["environment"] |= runtime_env
     if mode == "vm":
         cloud = _cloud(config)
@@ -282,6 +274,16 @@ def _airflow_common(
         # The passwords file is 0600 and owned by the host user, so Airflow must run as that
         # uid; the official image supports an arbitrary uid only with gid 0.
         common["user"] = f"{os.getuid()}:0"
+    # Checked against every variable the stack sets, the VM's included: the agent hands secrets
+    # to Compose after the stack's own values, so a colliding name would replace them.
+    secrets = platform_secrets(config, project_record(stack_dir))
+    for secret in secrets:
+        if secret in common["environment"] or secret in SCALEWAY_RUNTIME_VARS:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"declared secret {secret} collides with a stack variable; rename the secret",
+            )
+    _add_secrets(common["environment"], secrets, "declared")
     return common
 
 

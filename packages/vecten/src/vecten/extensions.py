@@ -27,7 +27,6 @@ from vecten_shared.extensions import (
     DECLARATION_GROUPS,
     GROUPS,
     requirement,
-    selected_entry_points,
 )
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
@@ -420,8 +419,15 @@ def _secrets_report(root: Path, config: VectenConfig, record: dict) -> dict:
 def load_manifests(config: VectenConfig, candidates=None) -> dict[str, Manifest]:
     """Each listed extension's manifest, read from the environment running the CLI."""
     found: dict[str, Manifest] = {}
-    for point in selected_entry_points(config, "vecten.manifest", candidates):
-        name = normalize_name(point.dist.name)
+    listed = {normalize_name(requirement(r).name) for r in config.extensions}
+    # A manifest's entry name carries no meaning, so two extensions may share it; one
+    # distribution may still declare only one manifest.
+    points = metadata.entry_points(group="vecten.manifest") if candidates is None else candidates
+    for point in points:
+        dist = getattr(point, "dist", None)
+        if dist is None or normalize_name(dist.name) not in listed:
+            continue
+        name = normalize_name(dist.name)
         if name in found:
             raise Failure(
                 ExitCode.CONFIG,

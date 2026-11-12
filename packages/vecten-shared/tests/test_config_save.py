@@ -59,3 +59,16 @@ def test_a_new_file_holds_the_whole_configuration(tmp_path):
     other.mkdir()
     save_config(other, config)
     assert load_config(other) == config
+
+
+def test_a_save_tomlkit_would_corrupt_falls_back_to_a_valid_file(tmp_path):
+    written = WRITTEN + (
+        '\n[environments.prod]\ndeployed_commit = "abc"\n\n[warehouse]\nkind = "postgres"\n'
+        '\n[environments.prod.cloud_ids]\nproject = "p1"\n'
+    )
+    (tmp_path / "vecten.toml").write_text(written)
+    config = load_config(tmp_path)
+    config.environments["prod"].deployed_commit = None
+    config.environments["prod"].first_user_added = True
+    save_config(tmp_path, config)
+    assert load_config(tmp_path) == config

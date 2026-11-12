@@ -148,10 +148,11 @@ def deploy_prerequisite_items(
     if provisioner is not None:
         items.append(provisioner)
     items += snowflake_deploy_secret_items(root, config, env)
-    for name in _uncopied_secrets(root, config, env):
+    uncopied = _uncopied_secrets(root, config, env)
+    for name in uncopied:
         command = f"vecten secret set {name} --env {env} --from-local"
         items.append(Item("command", f"Copy {name} to {env}", command))
-    items += declared_secret_items(root, config, env)
+    items += declared_secret_items(root, config, env, skip=uncopied)
     if git.has_origin and (git.dirty or git.ahead):
         items.append(PUSH)
     return items

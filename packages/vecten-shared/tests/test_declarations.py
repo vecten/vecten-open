@@ -201,3 +201,62 @@ def test_environments_to_check_are_local_and_every_named_override():
         }
     )
     assert d.environments_named(c) == ["dev", "local", "prod", "staging"]
+
+
+# --- review fixes ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_REGION",
+        "SCW_SECRET_KEY",
+        "VECTEN_ARTIFACT_URL",
+        "VECTEN_SCW_ACCESS_KEY",
+        "PATH",
+        "PYTHONPATH",
+        "WAREHOUSE_ADMIN_PASSWORD",
+        "WAREHOUSE_ADMIN_PRIVATE_KEY",
+        "MCP_PROVISIONER_PRIVATE_KEY",
+        "SNOWFLAKE_LOADER_PRIVATE_KEY",
+    ],
+)
+def test_names_the_stack_or_its_hosts_use_cannot_be_declared(name):
+    assert d.secret_problem(name) is not None
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"properties": {"cap": {"type": "integer", "minimum": "5"}}},
+        {"properties": {"cap": {"type": "string", "enum": "ab"}}},
+        {"properties": {"cap": {"type": "integer"}}, "required": [["cap"]]},
+        {"properties": {"cap": {"type": "array", "items": {"$ref": "https://evil.example/x"}}}},
+        {"properties": {"cap": {"type": "integer", "default": "many"}}},
+        {"properties": {"cap": {"type": "number", "default": float("inf")}}},
+        {"properties": {1: {"type": "integer"}}},
+    ],
+)
+def test_a_settings_schema_that_is_not_valid_json_schema_is_refused_at_lock(settings):
+    with pytest.raises(Failure) as caught:
+        d.parse_manifest("acme", {"settings": settings})
+    assert caught.value.code == ExitCode.CONFIG
+    assert "acme" in caught.value.message and "settings" in caught.value.message
+
+
+def test_array_items_use_the_same_keyword_subset():
+    schema = {"properties": {"tags": {"type": "array", "items": {"type": "string"}}}}
+    assert d.parse_manifest("acme", {"settings": schema}).settings == schema
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_a_setting_with_no_json_number_is_refused_on_load(tmp_path, value):
+    with pytest.raises(Failure, match="settings.acme"):
+        _load(tmp_path, extensions=["acme"], settings={"acme": {"cap": value}})
+
+
+def test_settings_without_a_record_entry_name_vecten_lock():
+    c = config(settings={"acme": {"daily_cap": 5}})
+    with pytest.raises(Failure, match="vecten lock"):
+        d.check_settings(c, {}, "local")

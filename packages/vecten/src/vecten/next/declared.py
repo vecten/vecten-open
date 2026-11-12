@@ -5,6 +5,7 @@ Reads `vecten.toml`, `extensions.lock.json`, `.env` and the `secret set --env` r
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 
 from vecten.next.items import Item
@@ -25,11 +26,14 @@ def _declared(root: Path, config: VectenConfig) -> dict[str, str]:
     return {n: o for n, o in sorted(owners.items()) if config.has(component_for(n))}
 
 
-def declared_secret_items(root: Path, config: VectenConfig, env: str | None = None) -> list[Item]:
+def declared_secret_items(
+    root: Path, config: VectenConfig, env: str | None = None, skip: Iterable[str] = ()
+) -> list[Item]:
     """Locally (`env` None), names missing from `.env`; for `env`, names it has not received.
 
-    A name set locally is left to the deploy step that copies local secrets to `env`.
+    `skip` holds names another item already offers to copy to `env`.
     """
+    skipped = set(skip)
     values = read_env_values(LocalProvider(root, inside_compose=False).env_file)
     local = {name for name, value in values.items() if value}
     items = []
@@ -38,12 +42,13 @@ def declared_secret_items(root: Path, config: VectenConfig, env: str | None = No
             items.append(
                 Item("command", f"Set {name}, which {owner} declares", f"vecten secret set {name}")
             )
-        elif env is not None and name not in local and name not in recorded_secret_names(root, env):
+        elif env is not None and name not in skipped | recorded_secret_names(root, env):
+            copy = " --from-local" if name in local else ""
             items.append(
                 Item(
                     "command",
                     f"Set {name} in {env}, which {owner} declares",
-                    f"vecten secret set {name} --env {env}",
+                    f"vecten secret set {name} --env {env}{copy}",
                 )
             )
     return items

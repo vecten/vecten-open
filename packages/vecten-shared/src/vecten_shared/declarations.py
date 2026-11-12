@@ -8,13 +8,20 @@ extension's manifest declares, as recorded in `extensions.lock.json`.
 from __future__ import annotations
 
 import datetime
+import json
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from vecten_shared.names import secret_name_problem
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import scope_for
-from vecten_shared.stack_secrets import DEPLOYMENT_MANAGED, STACK_MANAGED
+from vecten_shared.stack_secrets import (
+    DEPLOYMENT_MANAGED,
+    HOST_PREFIXES,
+    PROCESS_NAMES,
+    STACK_MANAGED,
+)
 
 if TYPE_CHECKING:
     from vecten_shared.config import VectenConfig
@@ -45,8 +52,11 @@ def secret_problem(name: str) -> str | None:
     scope = scope_for(name)
     if scope in _UNREADABLE_SCOPES:
         return f"{name} is in the {scope} scope, which no host may read"
-    if name in STACK_MANAGED or name in DEPLOYMENT_MANAGED or name.startswith("AIRFLOW_"):
+    if name in STACK_MANAGED or name in DEPLOYMENT_MANAGED or name in PROCESS_NAMES:
         return f"the stack manages {name}; declare a name of your own"
+    if name.startswith(HOST_PREFIXES):
+        prefixes = ", ".join(HOST_PREFIXES)
+        return f"{name}: names starting with {prefixes} belong to the hosts and the stack"
     return None
 
 
@@ -59,11 +69,32 @@ def _manifest_failure(extension: str, key: str, problem: str) -> Failure:
     return Failure(ExitCode.CONFIG, f"extension {extension}: manifest {key}: {problem}")
 
 
+def _check_property(fail, name: str, spec: object) -> None:
+    if not isinstance(spec, dict) or spec.get("type") not in SETTING_TYPES:
+        raise fail(f"{name}: type must be one of {', '.join(SETTING_TYPES)}")
+    if set(spec) - PROPERTY_KEYS:
+        raise fail(f"{name}: unsupported keywords {', '.join(sorted(set(spec) - PROPERTY_KEYS))}")
+    if "items" in spec:
+        _check_property(fail, f"{name}.items", spec["items"])
+
+
 def check_schema(extension: str, schema: object) -> dict[str, Any]:
-    """The settings schema, if it stays inside the subset Vecten validates."""
+    """The settings schema, if it stays inside the subset Vecten validates.
+
+    The schema is recorded as JSON and checked again in every runtime, so it must survive a
+    JSON round trip, be valid JSON Schema, and give every default a value its property accepts.
+    """
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import SchemaError
 
     def fail(problem: str) -> Failure:
         return _manifest_failure(extension, "settings", problem)
+
+    try:
+        if json.loads(json.dumps(schema, allow_nan=False)) != schema:
+            raise ValueError("keys must be strings")
+    except (TypeError, ValueError) as exc:
+        raise fail(f"not plain JSON ({exc})") from None
 
     if not isinstance(schema, dict) or set(schema) - SCHEMA_KEYS:
         raise fail(f"a JSON Schema object with only {', '.join(sorted(SCHEMA_KEYS))}")
@@ -77,14 +108,18 @@ def check_schema(extension: str, schema: object) -> dict[str, Any]:
     for name, spec in properties.items():
         if name == ENV_KEY:
             raise fail("a setting may not be named env, which holds per-environment overrides")
-        if not isinstance(spec, dict) or spec.get("type") not in SETTING_TYPES:
-            raise fail(f"{name}: type must be one of {', '.join(SETTING_TYPES)}")
-        if set(spec) - PROPERTY_KEYS:
-            extra = ", ".join(sorted(set(spec) - PROPERTY_KEYS))
-            raise fail(f"{name}: unsupported keywords {extra}")
+        _check_property(fail, name, spec)
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise fail(exc.message) from None
     required = schema.get("required", [])
-    if not isinstance(required, list) or not set(required) <= set(properties):
+    if not set(required) <= set(properties):
         raise fail("required must list declared properties")
+    for name, spec in properties.items():
+        if "default" in spec:
+            for error in Draft202012Validator(spec).iter_errors(spec["default"]):
+                raise fail(f"{name}: default {spec['default']!r}: {error.message}")
     return schema
 
 
@@ -109,8 +144,10 @@ def parse_manifest(extension: str, value: object) -> Manifest:
 
 
 def is_toml_time(value: object) -> bool:
-    """Whether `value` holds a TOML date or time anywhere, which has no JSON type."""
+    """Whether `value` holds anything without a JSON type: a TOML date or time, inf or nan."""
     if isinstance(value, datetime.date | datetime.time):
+        return True
+    if isinstance(value, float) and not math.isfinite(value):
         return True
     if isinstance(value, dict):
         return any(is_toml_time(v) for v in value.values())
@@ -163,6 +200,12 @@ def check_settings(config: VectenConfig, record: dict[str, Extension], env: str)
         if namespace not in listed:
             continue
         entry = record.get(namespace)
+        if entry is None and config.settings.get(namespace):
+            raise Failure(
+                ExitCode.CONFIG,
+                f"settings.{namespace}: {namespace} is not in extensions.lock.json yet; "
+                "run `vecten lock`",
+            )
         if entry is None or entry.settings is None:
             if config.settings.get(namespace):
                 raise Failure(

@@ -426,4 +426,17 @@ def test_a_secret_set_locally_is_left_to_the_copy_item(tmp_path):
     root = render_fixture(tmp_path, "postgres")
     _declare(root, secrets=("ACME_API_KEY",))
     (root / ".env").write_text("ACME_API_KEY=x\n")
-    assert declared_secret_items(root, load_config(root), "prod") == []
+    items = declared_secret_items(root, load_config(root), "prod", skip=["ACME_API_KEY"])
+    assert items == []
+
+
+def test_a_deployed_environment_is_asked_for_a_secret_set_only_locally(tmp_path):
+    from vecten.next.declared import declared_secret_items
+
+    root = render_fixture(tmp_path, "postgres")
+    _declare(root, secrets=("ACME_API_KEY",))
+    (root / ".env").write_text("ACME_API_KEY=x\n")
+    items = declared_secret_items(root, load_config(root), "prod", skip=())
+    assert [i.resolution for i in items] == [
+        "vecten secret set ACME_API_KEY --env prod --from-local"
+    ]

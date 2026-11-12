@@ -340,3 +340,29 @@ def test_extension_add_names_the_secrets_to_set(invoke, project, fakes, monkeypa
     assert data["missing_secrets"] == ["ACME_API_KEY"]
     r = invoke("extension", "add", "acme-demo")
     assert "vecten secret set ACME_API_KEY" in r.output
+
+
+def test_two_extensions_may_name_their_manifest_entry_point_alike():
+    from vecten_shared.config import VectenConfig
+
+    def point(dist_name, secrets):
+        dist = SimpleNamespace(name=dist_name, version="1.0")
+        return SimpleNamespace(
+            name="manifest",
+            dist=dist,
+            group="vecten.manifest",
+            load=lambda: {"secrets": secrets},
+        )
+
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "a", "scaffold_version": "0.1.0"},
+            "extensions": ["acme-one", "acme-two"],
+        }
+    )
+    found = extensions.load_manifests(
+        config, candidates=[point("acme-one", ["ONE_TOKEN"]), point("acme-two", ["TWO_TOKEN"])]
+    )
+    assert found["acme-one"].secrets == ("ONE_TOKEN",)
+    assert found["acme-two"].secrets == ("TWO_TOKEN",)

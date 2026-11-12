@@ -414,7 +414,9 @@ class VectenConfig(Strict):
             if namespace != PROJECT_SETTINGS and namespace not in listed:
                 raise ValueError(f"{where}: no extension of that name is listed in extensions")
             if is_toml_time(table):
-                raise ValueError(f"{where}: a TOML date or time has no JSON type; use a string")
+                raise ValueError(
+                    f"{where}: a TOML date or time, inf or nan has no JSON type; use a string"
+                )
             overrides = table.get("env", {})
             if not isinstance(overrides, dict):
                 raise ValueError(f"{where}.env: a table of environments, such as env.prod")
@@ -507,7 +509,15 @@ def save_config(project_root: Path, config: VectenConfig) -> None:
         return
     changed = config.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
     _merge(doc, data, changed)
-    write_text_atomic(path, tomlkit.dumps(doc))
+    text = tomlkit.dumps(doc)
+    # tomlkit can emit a table twice when a file declares one table's parts apart; such a file
+    # no longer loads, so the whole configuration is written afresh instead, without comments.
+    try:
+        if VectenConfig.model_validate(tomllib.loads(text)) != config:
+            raise ValueError("the edited file reads back differently")
+    except tomllib.TOMLDecodeError, ValueError, ValidationError:
+        text = tomli_w.dumps(data)
+    write_text_atomic(path, text)
 
 
 def parse_warehouse_locator(url: str) -> WarehouseSection:

@@ -26,5 +26,15 @@ DEPLOYMENT_MANAGED: frozenset[str] = frozenset(
         "MCP_ADMIN_SETUP_TOKEN",
         "MCP_OIDC_CLIENT_SECRET",
         "ALERT_WEBHOOK_URL",
+        # The warehouse administrator's login stays on the laptop, and the keys below sign in
+        # as the loader and the provisioner; no extension code may hold them.
+        "WAREHOUSE_ADMIN_PASSWORD",
+        "WAREHOUSE_ADMIN_PRIVATE_KEY",
+        "SNOWFLAKE_LOADER_PRIVATE_KEY",
+        "MCP_PROVISIONER_PRIVATE_KEY",
     }
 )
+# Names the hosts and the stack set in every container's environment. A declared secret of the
+# same name would replace the host's own cloud identity, region or bundle facts.
+HOST_PREFIXES = ("AWS_", "SCW_", "VECTEN_", "AIRFLOW_")
+PROCESS_NAMES = frozenset({"PATH", "HOME", "PYTHONPATH", "LD_PRELOAD", "LD_LIBRARY_PATH"})
