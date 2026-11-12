@@ -455,11 +455,25 @@ def _fetch_recorded(
         and (entry.git.url, entry.git.commit, entry.git.subdirectory)
         == (source.url, pinned.commit, source.subdirectory)
     )
-    # Whether the host answers without a credential is asked once per recorded commit.
-    public = entry.git.public if same else git_sources.resolve(source, credentials).public
+    if same:
+        public = entry.git.public
+    elif pinned.tag is None:
+        public = git_sources.resolve(source, credentials).public
+    else:
+        # A commit edited into requirements.txt is adopted only where its tag vouches for it.
+        tagged = git_sources.resolve(replace(source, ref=pinned.tag), credentials)
+        if tagged.commit != pinned.commit:
+            raise Failure(
+                ExitCode.REFUSED,
+                f"{locking.PINS_FILE}: {name}: the tag {pinned.tag} points at {tagged.commit}, "
+                f"not at {pinned.commit}; record the source with `vecten extension add`",
+            )
+        public = tagged.public
     copy = git_extensions.fetch_copy(
         source, pinned.commit, pinned.tag, public, credentials, fetched
     )
+    if not same:
+        git_extensions.check_tag_version(copy)
     if same and copy.source_sha256 != entry.source_sha256:
         raise Failure(
             ExitCode.REFUSED,

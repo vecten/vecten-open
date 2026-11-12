@@ -20,15 +20,15 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 
 @dataclass(frozen=True)
 class GitOrigin:
-    """Where a git-sourced extension comes from: the commit `extension add` resolved."""
+    """Where a git-sourced extension comes from: the commit `requirements.txt` records."""
 
     # https://<host>/<repository>, never with user information.
     url: str
     commit: str
     subdirectory: str | None
-    # The tag `extension add` resolved to `commit`, or None when a commit was named.
+    # The tag that pointed at `commit` when it was recorded, or None when a commit was named.
     tag: str | None
-    # Whether the host answered without a credential when the source was added.
+    # Whether the host answered without a credential when `commit` was recorded.
     public: bool
 
     def as_json(self) -> dict[str, Any]:

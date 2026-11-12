@@ -338,7 +338,17 @@ def test_the_token_reaches_no_argument_record_output_or_build_environment(
     captured = capfd.readouterr()
     calls = served.uv()
     assert calls, "uv was never run"
-    shown = [r.output, captured.out, captured.err, *(json.dumps(c) for c in calls)]
+    # What the test runner's own environment holds is not vecten's doing; what vecten passed
+    # to uv is: its arguments, its input and every variable it set or changed.
+    passed = [
+        {
+            "args": c["args"],
+            "input": c["input"],
+            "env": {k: v for k, v in c["env"].items() if os.environ.get(k) != v},
+        }
+        for c in calls
+    ]
+    shown = [r.output, captured.out, captured.err, *(json.dumps(c) for c in passed)]
     shown += [text.decode() for text in _records(served.root).values()]
     for text in shown:
         assert _leaks(served.token, text) == []
@@ -608,6 +618,42 @@ def test_lock_follows_a_commit_edited_in_requirements(invoke, served):
     for name in locking.LOCK_FILES.values():
         assert _lock_lines(served.root, name) == [line]
     assert locking.git_problems(served.root, load_config(served.root)) == []
+
+
+@pytest.mark.parametrize(
+    ("commit_of", "tag", "says"),
+    [
+        ("acme-resolution/v1.4.0", "acme-resolution/v1.2.0", "points at"),
+        ("acme-resolution/v1.3.0", "acme-resolution/v1.3.0", "1.2.9"),
+    ],
+    ids=["tag-elsewhere", "version-differs"],
+)
+def test_lock_refuses_an_edited_commit_its_tag_does_not_vouch_for(
+    invoke, served, commit_of, tag, says
+):
+    assert _add(invoke, served, "acme-resolution/v1.2.0").exit_code == 0
+    commit = served.commits.commits[commit_of]
+    line = (
+        f"{NAME} @ git+{served.server.url}/{REPOSITORY}@{commit}#subdirectory={SUBDIRECTORY}"
+        f"  # tag {tag}"
+    )
+    (served.root / "requirements.txt").write_text(line + "\n")
+    before = _records(served.root)
+    r = invoke("lock", "--json")
+    assert r.exit_code != 0
+    error = json.loads(r.stdout)["error"]
+    assert says in error and tag in error
+    assert _records(served.root) == before
+
+
+def test_lock_adopts_an_edited_commit_named_without_a_tag(invoke, served):
+    assert _add(invoke, served, "acme-resolution/v1.2.0").exit_code == 0
+    new = served.commits.commits["acme-resolution/v1.4.0"]
+    line = f"{NAME} @ git+{served.server.url}/{REPOSITORY}@{new}#subdirectory={SUBDIRECTORY}"
+    (served.root / "requirements.txt").write_text(line + "\n")
+    assert invoke("lock").exit_code == 0
+    entry = json.loads((served.root / locking.RECORD_FILE).read_text())["extensions"][NAME]
+    assert (entry["source"]["commit"], entry["source"]["tag"]) == (new, None)
 
 
 @pytest.mark.parametrize(
