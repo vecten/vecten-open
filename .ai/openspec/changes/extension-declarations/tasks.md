@@ -21,12 +21,12 @@ The three groups below are three pull requests, in this order (design, "Migratio
 
 ## 2. Operating-system packages (#50, pull request 2)
 
-- [ ] 2.1 Test then implement: `system` entries validated as Debian package names with an optional `=version` before any Dockerfile is written; a shell metacharacter is refused
-- [ ] 2.2 The generated `airflow.Dockerfile` and `mcp.Dockerfile` run `USER root`, `apt-get update && apt-get install -y --no-install-recommends … && rm -rf /var/lib/apt/lists/*`, then return to `airflow` or `app`, before the Python install
-- [ ] 2.3 Unit test of both generated Dockerfiles with and without `system`; the file without it is byte-identical to today's
-- [ ] 2.4 Docker-tier test: a layer with one small package holds it, has no apt lists, and runs as the image's user
-- [ ] 2.5 Docs: `docs/extensions.md` (or the dependencies page) on OS packages, the two Debian releases, pinning, and why an extension cannot add them
-- [ ] 2.6 Changelog
+- [x] 2.1 Test then implement: `system` entries validated as Debian package names with an optional `=version` before any Dockerfile is written; a shell metacharacter is refused
+- [x] 2.2 The generated `airflow.Dockerfile` and `mcp.Dockerfile` run `USER root`, `apt-get update && apt-get install -y --no-install-recommends … && rm -rf /var/lib/apt/lists/*`, then return to `airflow` or `app`, before the Python install
+- [x] 2.3 Unit test of both generated Dockerfiles with and without `system`; the file without it is byte-identical to today's
+- [x] 2.4 Docker-tier test: a layer with one small package holds it, has no apt lists, and runs as the image's user
+- [x] 2.5 Docs: `docs/extensions.md` (or the dependencies page) on OS packages, the two Debian releases, pinning, and why an extension cannot add them
+- [x] 2.6 Changelog
 
 ## 3. Manifest, secrets and settings (#49, pull request 3)
 

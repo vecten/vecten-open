@@ -83,3 +83,45 @@ def test_saving_keeps_declared_dependencies(tmp_path):
     config = _load(tmp_path, dependencies={"platform": {"python": ["polars>=1,<2"]}})
     save_config(tmp_path, config)
     assert load_config(tmp_path).dependencies.python("platform") == ["polars>=1,<2"]
+
+
+def test_system_packages_are_kept_per_image(tmp_path):
+    config = _load(
+        tmp_path,
+        dependencies={
+            "platform": {"system": ["libgomp1", "libpq5=15.8-0+deb12u1"]},
+            "mcp": {"system": ["fonts-dejavu-core"]},
+        },
+    )
+    assert config.dependencies.system("platform") == ["libgomp1", "libpq5=15.8-0+deb12u1"]
+    assert config.dependencies.system("mcp") == ["fonts-dejavu-core"]
+    assert config.dependencies.system("cli") == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "libgomp1; curl evil.example",
+        "libgomp1 && rm -rf /",
+        "$(id)",
+        "`id`",
+        "LibGomp1",
+        "-o APT::Get::AllowUnauthenticated=true",
+        "libgomp1=1.0 extra",
+        "libgomp1\nrm",
+        "",
+        "a",
+    ],
+)
+def test_a_system_entry_that_is_not_a_debian_package_name_is_refused(tmp_path, entry):
+    with pytest.raises(Failure) as caught:
+        _load(tmp_path, dependencies={"platform": {"system": [entry]}})
+    assert caught.value.code == ExitCode.CONFIG
+    assert "dependencies.platform" in caught.value.message
+
+
+def test_system_packages_for_the_cli_are_refused(tmp_path):
+    with pytest.raises(Failure) as caught:
+        _load(tmp_path, dependencies={"cli": {"system": ["libgomp1"]}})
+    assert caught.value.code == ExitCode.CONFIG
+    assert "laptop" in caught.value.message

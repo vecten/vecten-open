@@ -282,7 +282,12 @@ class PackagesSection(Strict):
     private_index: bool = False
 
 
-class ComponentDependencies(Strict):
+# A Debian package name, optionally `=<version>`. Entries reach an `apt-get install` line of a
+# generated Dockerfile, so nothing that a shell or apt would read as more than a name passes.
+_DEBIAN_PACKAGE = re.compile(r"[a-z0-9][a-z0-9+.-]+(=[A-Za-z0-9][A-Za-z0-9.+~:-]*)?")
+
+
+class _PythonDependencies(Strict):
     python: list[str] = Field(default_factory=list)
 
     @field_validator("python")
@@ -294,14 +299,45 @@ class ComponentDependencies(Strict):
         return value
 
 
+class CliDependencies(_PythonDependencies):
+    @model_validator(mode="before")
+    @classmethod
+    def _no_system(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "system" in value:
+            raise ValueError(
+                "system: Vecten does not install operating-system packages on the laptop; "
+                "install them yourself, and list the image's in [dependencies.platform] or "
+                "[dependencies.mcp]"
+            )
+        return value
+
+
+class ComponentDependencies(_PythonDependencies):
+    system: list[str] = Field(default_factory=list)
+
+    @field_validator("system")
+    @classmethod
+    def _system(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            if not _DEBIAN_PACKAGE.fullmatch(entry):
+                raise ValueError(
+                    f"{entry!r} is not a Debian package name, optionally with =<version>"
+                )
+        return value
+
+
 class DependenciesSection(Strict):
     platform: ComponentDependencies | None = None
     mcp: ComponentDependencies | None = None
-    cli: ComponentDependencies | None = None
+    cli: CliDependencies | None = None
 
     def python(self, component: str) -> list[str]:
         section = getattr(self, component)
         return list(section.python) if section is not None else []
+
+    def system(self, component: str) -> list[str]:
+        section = getattr(self, component)
+        return list(getattr(section, "system", [])) if section is not None else []
 
 
 class VectenConfig(Strict):

@@ -95,6 +95,29 @@ Entries are names with optional extras and a version range; URLs, paths, pip opt
 markers are refused, and so is a section for a component the project does not enable. Edit the
 section, then run `vecten lock`.
 
+**Operating-system packages.** A Python package that needs a system library, such as
+`libgomp1`, gets it from `system` in the image's section:
+
+```toml
+[dependencies.platform]
+python = ["lightgbm>=4,<5"]
+system = ["libgomp1"]
+```
+
+Each image's project layer installs these with `apt-get` as root, before the Python packages,
+removes apt's package lists, and switches back to the image's own user (`airflow` or `app`),
+on the laptop and on every VM alike. Entries are Debian package names, optionally pinned as
+`name=version`; anything else, such as a shell character or an apt option, is refused when
+`vecten.toml` loads. `[dependencies.cli]` takes no `system`: Vecten does not install packages
+on your laptop. The Airflow and MCP base images are both Debian-based but may follow different
+Debian releases, so a package can be named or versioned differently in each; check with
+`docker run --rm --entrypoint cat <image> /etc/os-release`. An unpinned package installs the
+release's current version at build time, so two builds of one commit can differ; pin with
+`=version` when that matters. A package that a later base image's release drops makes the
+layer build fail on the VM, and the ship keeps the previous release running. Extensions cannot
+add system packages: one that needs a library says so in its documentation, and the project
+lists it here, so no package install adds root build steps the project did not write.
+
 **Keeping pins.** Each lock is resolved starting from the committed one, so an existing pin
 stays while it still satisfies the inputs: adding one package moves nothing else unless the
 resolution needs it. `vecten lock --upgrade httpx` lets one package move in every lock; repeat
