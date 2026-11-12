@@ -3,7 +3,7 @@
 import pytest
 from sqlglot import exp
 
-from vecten_mcp.app_sql import REFUSED_FUNCTIONS, relation, sql_problem
+from vecten_mcp.app_sql import FUNCTIONS, relation, sql_problem
 
 POSTGRES = frozenset(
     {relation("marts.orders", "postgres"), relation("marts.customers", "postgres")}
@@ -208,14 +208,12 @@ def _subclasses(cls):
 
 def test_sqlglot_functions_that_could_name_a_relation_were_reviewed():
     """A SQLGlot upgrade that adds a function class with one of these words fails here, so
-    someone decides whether it reads a relation by name before an app may call it."""
+    someone decides whether it reads a relation by name; none of them is permitted to apps."""
     words = ("read", "file", "scan", "identifier", "table", "stage", "query", "predict", "url")
     named = {
-        cls.__name__
-        for cls in _subclasses(exp.Func)
-        if any(word in cls.__name__.lower() for word in words)
+        cls for cls in _subclasses(exp.Func) if any(word in cls.__name__.lower() for word in words)
     }
-    assert named == {
+    assert {cls.__name__ for cls in named} == {
         "DynamicIdentifier",
         "GenerateTable",
         "JSONTable",
@@ -227,11 +225,96 @@ def test_sqlglot_functions_that_could_name_a_relation_were_reviewed():
         "ToFile",
         "XMLTable",
     }
-    assert {cls.__name__ for cls in REFUSED_FUNCTIONS} >= {
-        "DynamicIdentifier",
-        "GenerateTable",
-        "Predict",
-        "ReadCSV",
-        "ReadParquet",
-        "ToFile",
-    }
+    for kind in BOTH:
+        assert not named & FUNCTIONS[kind]
+
+
+@pytest.mark.parametrize(
+    ("sql", "kind"),
+    [
+        ("SELECT * FROM marts.orders, LATERAL TABLE('marts.payroll')", "snowflake"),
+        ("SELECT * FROM marts.orders, LATERAL TABLE(?)", "snowflake"),
+        ("SELECT * FROM marts.orders, LATERAL TABLE($v)", "snowflake"),
+        ("SELECT * FROM marts.orders CROSS JOIN LATERAL marts.payroll", "postgres"),
+        ('SELECT * FROM marts.orders, LATERAL "payroll"', "postgres"),
+        ("SELECT * FROM marts.orders, LATERAL payroll", "postgres"),
+        ("SELECT * FROM marts.orders, LATERAL marts.payroll", "snowflake"),
+    ],
+)
+def test_only_a_subquery_or_a_row_generating_function_follows_lateral(sql, kind):
+    assert problem(sql, kind) is not None
+
+
+@pytest.mark.parametrize(
+    ("sql", "kind"),
+    [
+        ("SELECT * FROM marts.orders AS o, LATERAL (SELECT 1) AS x", "postgres"),
+        ("SELECT * FROM marts.orders AS o, LATERAL unnest(o.tags) AS t", "postgres"),
+        (
+            "SELECT f.value FROM marts.orders AS o, LATERAL FLATTEN(input => o.items) AS f",
+            "snowflake",
+        ),
+    ],
+)
+def test_lateral_subqueries_and_row_functions_over_declared_tables_are_read(sql, kind):
+    assert problem(sql, kind) is None
+
+
+@pytest.mark.parametrize(
+    ("sql", "kind"),
+    [
+        # SQLGlot knows these names; the warehouse would resolve them as functions a schema
+        # may define, so they are not on the warehouse's list.
+        ("SELECT OBJECT_ID('marts.payroll')", "postgres"),
+        ("SELECT CHECK_XML(amount) FROM marts.orders", "snowflake"),
+        ("SELECT REG_DOMAIN(region) FROM marts.orders", "postgres"),
+        ("SELECT CODE_POINTS_TO_STRING(amount) FROM marts.orders", "snowflake"),
+        ("SELECT CURRENT_REGION()", "snowflake"),
+        ("SELECT 1 OPERATOR(pg_catalog.+) 2", "postgres"),
+        ("SELECT amount OPERATOR(marts.+) 1 FROM marts.orders", "postgres"),
+    ],
+)
+def test_functions_and_operators_off_the_warehouses_list_are_refused(sql, kind):
+    assert problem(sql, kind) is not None
+
+
+@pytest.mark.parametrize("kind", BOTH)
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT count(DISTINCT id), avg(amount), min(amount), max(amount) FROM marts.orders",
+        "SELECT CASE WHEN amount > 10 THEN 'big' ELSE 'small' END FROM marts.orders",
+        "SELECT CAST(amount AS INT), nullif(region, ''), lower(region), upper(region) "
+        "FROM marts.orders",
+        "SELECT round(amount, 2), abs(amount), floor(amount), ceil(amount) FROM marts.orders",
+        "SELECT concat(region, '-'), length(region), substring(region, 1, 2), trim(region) "
+        "FROM marts.orders",
+        "SELECT extract(year FROM created_at), current_date FROM marts.orders",
+        "SELECT region, row_number() OVER (PARTITION BY region ORDER BY amount DESC) "
+        "FROM marts.orders",
+        "SELECT lag(amount) OVER (ORDER BY created_at), greatest(amount, 0), least(amount, 1) "
+        "FROM marts.orders",
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY amount) FROM marts.orders",
+        "SELECT sum(amount) FILTER (WHERE region = 'eu') FROM marts.orders",
+    ],
+)
+def test_common_reporting_functions_are_on_both_lists(sql, kind):
+    if "FILTER" in sql and kind == "snowflake":
+        pytest.skip("Snowflake has no aggregate FILTER clause")
+    assert problem(sql, kind) is None
+
+
+def test_snowflake_reporting_functions_are_on_its_list():
+    for sql in (
+        "SELECT iff(amount > 1, 'a', 'b'), dateadd(day, 1, created_at) FROM marts.orders",
+        "SELECT datediff(day, created_at, current_date), to_varchar(amount) FROM marts.orders",
+    ):
+        assert problem(sql, "snowflake") is None, sql
+
+
+@pytest.mark.parametrize(
+    ("sql", "kind"),
+    [("SELECT * FROM marts.orders..payroll", "snowflake"), ("SELECT * FROM ((", "postgres")],
+)
+def test_sql_the_parser_cannot_read_is_a_refusal_not_a_failure(sql, kind):
+    assert isinstance(problem(sql, kind), str)
