@@ -11,6 +11,7 @@ import yaml
 
 from vecten.stack.images import BUILD_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
+from vecten_shared.apps import APP_CREDENTIAL, credential_names
 from vecten_shared.config import APEX, VectenConfig, service_hostname, stack_project_name
 from vecten_shared.declarations import component_for, secret_problem
 from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
@@ -103,7 +104,15 @@ def _project_mounts(stack_dir: Path) -> list[str]:
 
 def _declared(config: VectenConfig, record: dict[str, Extension]) -> set[str]:
     names = set(config.secrets)
-    for entry in record.values():
+    for name, entry in record.items():
+        # The record is a committed file; an app's credential names reach its service only.
+        for secret in entry.secrets:
+            if APP_CREDENTIAL.fullmatch(secret):
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"{RECORD_FILE}: {name}: {secret} is reserved for an analytics app's "
+                    "client credentials",
+                )
         names.update(entry.secrets)
     return names
 
@@ -315,6 +324,8 @@ def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str
         problem = secret_problem(name)
         if problem:
             raise Failure(ExitCode.CONFIG, f"{RECORD_FILE}: {bound.extension}: {problem}")
+    if bound.app is not None:
+        names = sorted([*names, *credential_names(bound.app, bound.host)])
     return names
 
 
@@ -390,6 +401,10 @@ def _service(
         environment["PORT"] = str(declared.port)
     if bound.binding.hostname is not None:
         environment["VECTEN_PUBLIC_URL"] = _public_url(mode, bound.binding.hostname, hosts)
+    # On the laptop mcp.localhost resolves to the app's own container and its certificate is
+    # self-signed, so no URL there would reach the MCP.
+    if bound.app is not None and mode != "local":
+        environment["VECTEN_MCP_URL"] = f"https://{hosts['mcp']}/mcp"
     secrets = service_secret_names(bound, project_record(stack_dir))
     for secret in secrets:
         if secret in environment:

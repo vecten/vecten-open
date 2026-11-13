@@ -1134,6 +1134,16 @@ def test_plan_only_passes_each_bound_hostname_with_its_host_component(invoke, ac
     assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
 
 
+def test_plan_only_passes_a_bound_container_apps_hostname(invoke, actions, project):
+    from .services_fixtures import with_apps
+
+    with_apps(project, {"overview": {"groups": ["default"]}})
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = FakeTerraform.call("plan")
+    assert json.loads(_var(plan, "service_hostnames")) == {"overview": "platform"}
+
+
 def test_a_project_without_hostnames_passes_no_service_hostnames(invoke, actions, project):
     r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
     assert r.exit_code == 0, r.stdout

@@ -1,0 +1,137 @@
+name: vecten-acme-prod
+services:
+  airflow-api-server:
+    build:
+      context: ./build
+      dockerfile: airflow.Dockerfile
+    image: vecten-acme-prod-airflow:0.1.0
+    profiles: &id001
+    - platform
+    environment: &id002
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'False'
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW_DATABASE_URL}
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+      AIRFLOW__API__BASE_URL: https://airflow.data.acme.com
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_ADMIN_USER}:admin
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json.generated
+      VECTEN_PROVIDER: ${VECTEN_PROVIDER}
+      VECTEN_ENV: ${VECTEN_ENV}
+      VECTEN_COMPONENT: platform
+      FORWARDED_ALLOW_IPS: '*'
+      LOADER_PASSWORD: ${LOADER_PASSWORD}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      VECTEN_PROJECT_ROOT: /opt/airflow
+      VECTEN_INSIDE_COMPOSE: '1'
+      VECTEN_DLT_DIR: /tmp/vecten-dlt
+      DLT_DATA_DIR: /tmp/vecten-dlt/data
+      RUNTIME__DLTHUB_TELEMETRY: 'false'
+      VECTEN_ARTIFACT_DIR: /opt/airflow/artifacts
+      AWS_REGION: ${AWS_REGION}
+      AWS_DEFAULT_REGION: ${AWS_REGION}
+      VECTEN_ENVIRONMENT_FILE: /opt/vecten-env/environment.json
+      VECTEN_BUNDLE_COMMIT: ${VECTEN_BUNDLE_COMMIT}
+      VECTEN_ARTIFACT_URL: ${VECTEN_ARTIFACT_URL}
+      VECTEN_BUNDLE_LINEAGE: /opt/airflow/build-lineage.json
+      AIRFLOW__CORE__PARALLELISM: ${AIRFLOW_PARALLELISM}
+      AIRFLOW__LOGGING__REMOTE_LOGGING: 'True'
+      AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: ${AIRFLOW_REMOTE_BASE_LOG_FOLDER}
+      AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: aws_default
+      HUBSPOT_API_KEY: ${HUBSPOT_API_KEY:-}
+    volumes: &id003
+    - ../../orchestration/dags:/opt/airflow/dags/project
+    - ../../dbt:/opt/airflow/dbt
+    - ../../connectors:/opt/airflow/connectors
+    - ../../vecten.toml:/opt/airflow/vecten.toml:ro
+    - ./extension_dags.py:/opt/airflow/dags/vecten_extensions.py:ro
+    - ../../osi:/opt/airflow/osi:ro
+    - airflow-logs:/opt/airflow/logs
+    - airflow-artifacts:/opt/airflow/artifacts
+    - ../ship/build-lineage.json:/opt/airflow/build-lineage.json:ro
+    - /run/vecten/airflow_passwords.json:/opt/airflow/simple_auth_manager_passwords.json.generated
+    - ../environments/${VECTEN_ENV}.json:/opt/vecten-env/environment.json:ro
+    restart: unless-stopped
+    depends_on: {}
+    command:
+    - bash
+    - -c
+    - airflow db migrate && exec airflow api-server --proxy-headers
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - --fail
+      - http://localhost:8080/api/v2/monitor/health
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+  airflow-scheduler:
+    image: vecten-acme-prod-airflow:0.1.0
+    profiles: *id001
+    environment: *id002
+    volumes: *id003
+    restart: unless-stopped
+    pull_policy: never
+    command: scheduler
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+  airflow-dag-processor:
+    image: vecten-acme-prod-airflow:0.1.0
+    profiles: *id001
+    environment: *id002
+    volumes: *id003
+    restart: unless-stopped
+    pull_policy: never
+    command: dag-processor
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+  airflow-triggerer:
+    image: vecten-acme-prod-airflow:0.1.0
+    profiles: *id001
+    environment: *id002
+    volumes: *id003
+    restart: unless-stopped
+    pull_policy: never
+    command: triggerer
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+  log-cleaner:
+    image: alpine:3.24
+    profiles:
+    - platform
+    command:
+    - /bin/sh
+    - -c
+    - while true; do find /opt/airflow/logs -type f -mtime +"${AIRFLOW_LOG_RETENTION_DAYS:-14}"
+      -delete; find /opt/airflow/logs -type d -empty -delete; sleep 86400; done
+    volumes:
+    - airflow-logs:/opt/airflow/logs
+    restart: unless-stopped
+  nginx:
+    image: nginx:1.30-alpine
+    profiles:
+    - platform
+    - mcp
+    - local
+    ports:
+    - 443:443
+    - 80:80
+    volumes:
+    - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    - /etc/letsencrypt:/etc/letsencrypt:ro
+    - /var/www/certbot:/var/www/certbot:ro
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  airflow-logs: {}
+  airflow-artifacts: {}

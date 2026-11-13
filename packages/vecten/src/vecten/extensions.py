@@ -22,6 +22,8 @@ from pydantic import ValidationError
 
 from vecten import in_repo, locking
 from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
+from vecten_shared.apps import GROUP as APPS_GROUP
+from vecten_shared.apps import AppDeclaration, colliding_service, parse_app
 from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
 from vecten_shared.declarations import (
     Manifest,
@@ -438,15 +440,25 @@ def lock_project(
     install_lock(locks["cli"], root, [e.source_path for e in record.values() if e.source_path])
     manifests = load_manifests(config)
     services = load_services(config)
+    apps = load_apps(config)
     record = {
         name: replace(
             entry,
             secrets=manifests[name].secrets if name in manifests else (),
             settings=manifests[name].settings if name in manifests else None,
             services={s: d.service for s, d in services.get(name, {}).items()},
+            apps={a: d.app for a, d in apps.get(name, {}).items()},
         )
         for name, entry in record.items()
     }
+    for name, entry in sorted(record.items()):
+        clash = colliding_service(entry.services, entry.apps)
+        if clash:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: service {clash} has the name of app "
+                f"{clash.removeprefix('app-')}'s own service; rename the service",
+            )
     for env in environments_named(config):
         check_settings(config, record, env)
     check_bindings(config, record)
@@ -463,7 +475,7 @@ def lock_project(
         "extensions": {name: entry.version for name, entry in sorted(record.items())},
         "divergence": locking.divergence(locks),
         **_secrets_report(root, config, record),
-        "unsupported": _unsupported(manifests, services),
+        "unsupported": _unsupported(manifests, services, apps),
     }
     return files, report
 
@@ -556,6 +568,31 @@ def load_services(
     return found
 
 
+def load_apps(
+    config: VectenConfig, candidates=None, only: set[str] | None = None
+) -> dict[str, dict[str, AppDeclaration]]:
+    """Each listed extension's `vecten.apps` declarations, by extension and app."""
+    found: dict[str, dict[str, AppDeclaration]] = {}
+    listed = {normalize_name(requirement(r).name) for r in config.extensions}
+    if only is not None:
+        listed &= only
+    points = metadata.entry_points(group=APPS_GROUP) if candidates is None else candidates
+    for point in points:
+        dist = getattr(point, "dist", None)
+        if dist is None or normalize_name(dist.name) not in listed:
+            continue
+        name = normalize_name(dist.name)
+        try:
+            value = point.load()
+        except Exception as exc:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: cannot load app {point.name} ({type(exc).__name__})",
+            ) from exc
+        found.setdefault(name, {})[point.name] = parse_app(name, point.name, value)
+    return found
+
+
 def installed_from(name: str, path: Path) -> bool:
     """Whether Vecten's own environment holds `name` as an editable install of `path`."""
     try:
@@ -586,22 +623,31 @@ def refuse_stale_services(
     if not local:
         return
     declared = load_services(config, only=local)
+    declared_apps = load_apps(config, only=local)
     for name in sorted(local):
-        current = {s: d.service for s, d in declared.get(name, {}).items()}
-        recorded = record[name].services
-        changed = sorted(
-            s for s in set(current) | set(recorded) if current.get(s) != recorded.get(s)
-        )
-        if changed:
-            raise Failure(
-                ExitCode.CONFIG,
-                f"extension {name}: service {', '.join(changed)} differs from "
-                f"{locking.RECORD_FILE}; run `vecten lock`",
+        for kind, current, recorded in (
+            (
+                "service",
+                {s: d.service for s, d in declared.get(name, {}).items()},
+                record[name].services,
+            ),
+            ("app", {a: d.app for a, d in declared_apps.get(name, {}).items()}, record[name].apps),
+        ):
+            changed = sorted(
+                k for k in set(current) | set(recorded) if current.get(k) != recorded.get(k)
             )
+            if changed:
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"extension {name}: {kind} {', '.join(changed)} differs from "
+                    f"{locking.RECORD_FILE}; run `vecten lock`",
+                )
 
 
 def _unsupported(
-    manifests: dict[str, Manifest], services: dict[str, dict[str, Declaration]]
+    manifests: dict[str, Manifest],
+    services: dict[str, dict[str, Declaration]],
+    apps: dict[str, dict[str, AppDeclaration]],
 ) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for name, manifest in manifests.items():
@@ -611,6 +657,9 @@ def _unsupported(
             found.setdefault(name, []).extend(
                 f"services.{service}.{k}" for k in declaration.unknown
             )
+    for name, declared_apps in apps.items():
+        for app, declaration in sorted(declared_apps.items()):
+            found.setdefault(name, []).extend(f"apps.{app}.{k}" for k in declaration.unknown)
     return {name: keys for name, keys in sorted(found.items()) if keys}
 
 
@@ -672,7 +721,10 @@ def add_extension(root: Path, package: str) -> dict:
     doc = tomlkit.parse((root / "vecten.toml").read_text())
     doc["extensions"] = config.extensions
     name = normalize_name(dist.name)
-    services = _bind_services(doc, config, name, record.get(name))
+    services = _bind_services(doc, config, name, record.get(name), record)
+    apps = _bind_apps(doc, config, name, record.get(name), record)
+    services["hostnames"] += apps["hostnames"]
+    services["binding_notes"] += apps["binding_notes"]
     text = tomlkit.dumps(doc)
     try:
         bound = VectenConfig.model_validate(tomllib.loads(text))
@@ -705,7 +757,7 @@ def _free_label(extension: str, service: str, taken: set[str]) -> str:
     raise Failure(ExitCode.CONFIG, f"no free hostname label for {extension}.{service}")
 
 
-def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
+def _bind_services(doc, config: VectenConfig, extension: str, entry, record: dict) -> dict:
     """Bind each declared service the project does not bind yet, from its suggestions.
 
     A bound service keeps its binding as the person left it: an upgrade's new route, or a
@@ -715,7 +767,7 @@ def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
     if entry is None or not entry.services:
         return out
     existing = config.services.get(extension, {})
-    taken = {b.hostname for t in config.services.values() for b in t.values() if b.hostname}
+    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)), record)
     for name, service in sorted(entry.services.items()):
         key = f"{extension}.{name}"
         if name in existing:
@@ -765,6 +817,68 @@ def _bind_services(doc, config: VectenConfig, extension: str, entry) -> dict:
         if extension not in doc["services"]:
             doc["services"][extension] = tomlkit.table(is_super_table=True)
         doc["services"][extension][name] = table
+    return out
+
+
+def _taken_labels(data: dict, record: dict) -> set[str]:
+    """Hostname labels the file binds; a container app without one is served at its own name,
+    a snowflake app on no host at all."""
+    taken = {
+        b["hostname"]
+        for tables in data.get("services", {}).values()
+        for b in tables.values()
+        if "hostname" in b
+    }
+    for extension, tables in data.get("apps", {}).items():
+        declared = record[extension].apps if extension in record else {}
+        for name, binding in tables.items():
+            app = declared.get(name)
+            if "hostname" in binding or app is None or app.service is not None:
+                taken.add(binding.get("hostname", name))
+    return taken
+
+
+def _bind_apps(doc, config: VectenConfig, extension: str, entry, record: dict) -> dict:
+    """Bind each declared app the project does not bind yet, from its suggestions; a bound app
+    keeps its binding as the person left it."""
+    out: dict[str, list[str]] = {"hostnames": [], "binding_notes": []}
+    if entry is None or not entry.apps:
+        return out
+    existing = config.apps.get(extension, {})
+    taken = _taken_labels(tomllib.loads(tomlkit.dumps(doc)), record)
+    for name, app in sorted(entry.apps.items()):
+        key = f"{extension} app {name}"
+        if name in existing:
+            continue
+        if not config.has("mcp"):
+            out["binding_notes"].append(f"{key}: an app needs the mcp component; not bound")
+            continue
+        other = next((e for e, apps in sorted(config.apps.items()) if name in apps), None)
+        if other is not None:
+            out["binding_notes"].append(
+                f"{key}: {other} binds an app {name}, and both would run as "
+                f"svc_app_{name.replace('-', '_')}; not bound"
+            )
+            continue
+        table = tomlkit.table()
+        table["groups"] = list(app.groups)
+        if app.service is not None:
+            if not any(config.has(c) for c in app.service.components):
+                out["binding_notes"].append(
+                    f"{key}: runs from {', '.join(app.service.components)}, which the project "
+                    "does not enable; not bound"
+                )
+                continue
+            label = _free_label(extension, name, taken)
+            taken.add(label)
+            table["hostname"] = label
+            if config.deploy is not None:
+                out["hostnames"].append(service_hostname(label, config.deploy.domain))
+        if "apps" not in doc:
+            doc["apps"] = tomlkit.table(is_super_table=True)
+        if extension not in doc["apps"]:
+            doc["apps"][extension] = tomlkit.table(is_super_table=True)
+        doc["apps"][extension][name] = table
     return out
 
 

@@ -116,6 +116,21 @@ def test_declared_but_unbound_services_and_routes_are_notes_that_block_nothing(
     assert "note: acme.worker is declared but not bound in vecten.toml" in text
 
 
+def test_a_declared_but_unbound_app_is_a_note(invoke, tmp_path, monkeypatch):
+    from .services_fixtures import OVERVIEW, with_apps
+
+    root = render_fixture(tmp_path, "postgres")
+    monkeypatch.chdir(root)
+    finance = {**OVERVIEW, "kind": "snowflake", "runtime": None}
+    finance = {k: v for k, v in finance.items() if v is not None}
+    with_apps(root, {}, {"overview": OVERVIEW, "finance": finance})
+    doc = json.loads(invoke("next", "--json").stdout)
+    assert doc["notes"] == [
+        "acme app finance is declared but not bound in vecten.toml",
+        "acme app overview is declared but not bound in vecten.toml",
+    ]
+
+
 def test_a_project_without_services_has_no_notes(invoke, tmp_path, monkeypatch):
     root = render_fixture(tmp_path, "postgres")
     monkeypatch.chdir(root)

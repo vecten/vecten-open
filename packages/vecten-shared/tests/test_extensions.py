@@ -26,7 +26,7 @@ def ep(name="demo", package="Acme_Demo", version="1.2", value=None):
     )
 
 
-def test_eleven_groups():
+def test_twelve_groups():
     assert set(GROUPS) == {
         "vecten.connectors",
         "vecten.dbt_packages",
@@ -38,6 +38,7 @@ def test_eleven_groups():
         "vecten.mcp.audit_sinks",
         "vecten.skills",
         "vecten.services",
+        "vecten.apps",
         "vecten.manifest",
     }
 
