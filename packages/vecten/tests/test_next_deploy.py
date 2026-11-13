@@ -317,6 +317,18 @@ def test_deploy_items_never_copy_the_warehouse_admin_password(tmp_path, url):
 
 
 @pytest.mark.parametrize("url", [POSTGRES_URL, SNOWFLAKE_URL])
+def test_deploy_items_never_copy_the_git_credential(tmp_path, url):
+    root = render_mcp_only_deploy(tmp_path, url)
+    config = load_config(root)
+    (root / ".env").write_text(
+        "GIT_CREDENTIALS=https://u:t@example.com\nMCP_GIT_CREDENTIALS=https://u:t@example.com\n"
+        + LOCAL_PROVISIONER_ENV[url]
+    )
+    config.environments["prod"].bootstrapped = True
+    assert deploy_prerequisite_items(root, config, "prod", CLEAN) == [PROVISIONER_SECRETS[url]]
+
+
+@pytest.mark.parametrize("url", [POSTGRES_URL, SNOWFLAKE_URL])
 def test_provisioner_script_item_names_the_deployed_env(tmp_path, url):
     root = render_mcp_only_deploy(tmp_path, url)
     (root / ".env").write_text(LOCAL_PROVISIONER_ENV[url])

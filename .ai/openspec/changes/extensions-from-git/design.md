@@ -44,10 +44,13 @@ Decision 3 was resolved to shipping source.
 `<name>[extras] @ git+https://<host>/<path>@<full commit>[#subdirectory=<dir>]  # tag <tag>`; the
 comment is ignored by pip and uv. Every lock holds the same line. `extensions.lock.json` mirrors it:
 `source` (URL without credentials, `commit`, `subdirectory`, `tag`, and `public`, true when
-`extension add` resolved the ref with no credential), `source_sha256` (Decision 4) and
-`build_requires` pinned exactly. `vecten lock` writes them together; `up`, `ship` and the image build
-refuse any mismatch. Only `extension add` with that extension's source changes its commit; no re-lock
-resolves a tag again. `vecten.toml` keeps names and extras.
+the host answered with no credential when the commit was recorded), `source_sha256` (Decision 4)
+and `build_requires` pinned exactly. `vecten lock` writes them together; `up`, `ship` and the image
+build refuse any mismatch. `extension add` with that extension's source is the way to change its
+commit, and no re-lock moves a commit to where a tag points now. A commit edited into
+`requirements.txt` by hand is adopted by `vecten lock` only when the tag its comment names points at
+that commit and names the package's version there; a commit without a tag comment is adopted as
+named. `vecten.toml` keeps names and extras.
 
 ### Decision 2: Fetch, then build with no credential in reach (*Accepted*)
 

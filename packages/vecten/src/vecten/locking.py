@@ -32,6 +32,7 @@ __all__ = [
     "Extension",
     "components",
     "divergence",
+    "git_problems",
     "inputs_hash",
     "lock_problems",
     "lock_state",
@@ -68,13 +69,23 @@ def components(config: VectenConfig) -> list[str]:
 
 
 def read_pins(root: Path) -> dict[str, str]:
-    """Exact pins from `requirements.txt`, by normalised name; other lines are ignored."""
+    """Exact pins and git source lines from `requirements.txt`, by normalised name; other
+    lines are ignored. A git source's line is kept as written, with its `# tag` comment."""
+    from vecten import git_extensions
+
     path = root / PINS_FILE
     if not path.is_file():
         return {}
     found = {}
     for line in path.read_text(encoding="utf-8").splitlines():
-        req = parse_requirement(line.strip()) if line.strip() and not line.startswith("#") else None
+        if not line.strip() or line.startswith("#"):
+            continue
+        if git_extensions.is_source(line):
+            name = git_extensions.line_name(line)
+            if name is not None:
+                found[name] = line.strip()
+            continue
+        req = parse_requirement(line.strip())
         if req is not None:
             found[normalize_name(req.name)] = str(req)
     return found
@@ -105,6 +116,14 @@ def roots(
             return None
         name = normalize_name(req.name)
         entry = record.get(name)
+        if entry is not None and entry.git is not None:
+            from vecten import git_extensions
+
+            if pins.get(name) != git_extensions.line_for(name, req.extras, entry.git):
+                return None
+            extras = set(req.extras) | ({component} & set(entry.extras))
+            found.add(git_extensions.root_line(name, extras, entry.git))
+            continue
         if entry is not None and entry.source_path:
             # uv resolves the path against its working directory, the project root.
             extras = set(req.extras) | ({component} & set(entry.extras))
@@ -222,6 +241,64 @@ def lock_problems(root: Path, config: VectenConfig) -> list[str]:
     for component in components(config):
         if lock_state(root, config, component) != "fresh":
             problems.append(LOCK_FILES[component])
+    return problems
+
+
+def _source_lines(text: str) -> dict[str | None, list[str]]:
+    from vecten import git_extensions
+
+    found: dict[str | None, list[str]] = {}
+    for line in text.splitlines():
+        if line.strip() and not line.startswith("#") and git_extensions.is_source(line):
+            found.setdefault(git_extensions.line_name(line), []).append(line.strip())
+    return found
+
+
+def git_problems(root: Path, config: VectenConfig) -> list[str]:
+    """How `requirements.txt`, the locks and the record disagree about git sources.
+
+    Only a registered extension may carry a URL, a full commit of a `git+https` source with no
+    user information, the same line in `requirements.txt` and every lock, agreeing with the
+    record. A refusal names the extension and the file, never the URL.
+    """
+    from vecten import git_extensions
+    from vecten_shared.output import Failure
+
+    record = read_record(root) or {}
+    registered = {}
+    for registration in config.extensions:
+        req = parse_requirement(registration)
+        if req is not None:
+            registered[normalize_name(req.name)] = req
+    files = [PINS_FILE, *(LOCK_FILES[c] for c in components(config))]
+    problems = []
+    expected = {
+        name: git_extensions.line_for(name, registered[name].extras, entry.git)
+        for name, entry in record.items()
+        if entry.git is not None and name in registered
+    }
+    for file in files:
+        path = root / file
+        lines = _source_lines(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        for name, found in sorted(lines.items(), key=lambda item: item[0] or ""):
+            shown = name or "a line"
+            if name not in registered:
+                problems.append(f"{file}: {shown} comes from a URL but is not registered")
+                continue
+            if len(found) > 1:
+                problems.append(f"{file}: {name} has more than one line")
+            for line in found:
+                try:
+                    git_extensions.parse_line(line, file)
+                except Failure as failure:
+                    problems.append(failure.message)
+                    continue
+                if name not in expected:
+                    problems.append(f"{file}: {name} comes from git, but {RECORD_FILE} says not")
+                elif line != expected[name]:
+                    problems.append(f"{file}: the git source of {name} differs from {RECORD_FILE}")
+        for name in sorted(set(expected) - set(lines)):
+            problems.append(f"{file}: {name} lacks the git source {RECORD_FILE} records")
     return problems
 
 

@@ -2,7 +2,12 @@ import typer
 
 from vecten.cli.context import CliContext
 from vecten.cli.runner import JsonFlag, run_command
-from vecten.extensions import add_extension, secrets_message, services_message
+from vecten.extensions import (
+    add_extension,
+    secrets_message,
+    services_message,
+    source_changes,
+)
 from vecten_shared.output import Result
 
 extension = typer.Typer(help="Install and register Python extensions.")
@@ -13,9 +18,12 @@ def add(package: str, json_output: bool = JsonFlag) -> None:
     def run(ctx: CliContext) -> Result:
         data = add_extension(ctx.require_project(), package)
         message = f"installed {data['package']}"
+        if data.get("source", {}).get("tag"):
+            message += f" (tag {data['source']['tag']})"
+        changes = source_changes(data)
         if data["unknown_groups"]:
             message += "; unknown extension groups: " + ", ".join(data["unknown_groups"])
-        lines = [message, *secrets_message(data["missing_secrets"], data["undelivered"])]
+        lines = [message, *changes, *secrets_message(data["missing_secrets"], data["undelivered"])]
         lines += services_message(data)
         return Result(data=data, message="\n".join(lines))
 

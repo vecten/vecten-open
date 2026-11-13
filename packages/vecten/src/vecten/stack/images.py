@@ -253,6 +253,13 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
                 "[dependencies] Python requirements install only from locks; run `vecten lock`",
             )
     else:
+        problems = locking.git_problems(root, config)
+        if problems:
+            raise Failure(
+                ExitCode.REFUSED,
+                "; ".join(problems) + "; record each git source again with "
+                "`vecten extension add` and its tag",
+            )
         for component, kind in RUNTIME:
             if component not in config.components:
                 continue
