@@ -224,6 +224,30 @@ class AppScopes:
             return SNOWFLAKE_UNPUBLISHED
         return f"extensions.lock.json declares no app {app.name} for {app.extension}"
 
+    def app_of(self, principal_id):
+        """(True, the bound app or None) for an app principal; (False, None) otherwise. A
+        marker naming an app the running bundle does not bind gives no app."""
+        marker = self.state.get(APP_PRINCIPALS, principal_id)
+        if marker is None:
+            return False, None
+        if not isinstance(marker, dict):
+            return True, None
+        bound = self.apps.get(marker.get("app"))
+        if bound is None or bound.key != f"{marker.get('extension')}.{marker.get('app')}":
+            return True, None
+        return True, bound
+
+    def query_groups(self, principal_id, groups):
+        """The groups whose roles an app principal queries with: its groups that its app
+        admits now, so a bound group that cannot read every declared dataset, and any other
+        group, never feeds the app. None for any other principal, which keeps its groups."""
+        marked, app = self.app_of(principal_id)
+        if not marked:
+            return None
+        if app is None:
+            return set()
+        return set(groups) & self.admitted(app.name)
+
     def scope(self, principal_id):
         """The scope of an app principal, or None for any other principal. A principal whose
         app is no longer bound, or whose record is malformed, has a scope with no datasets."""
@@ -375,6 +399,36 @@ class AppScopes:
                     )
                 entries.append(entry)
         entries.extend(self._unmarked())
+        entries.extend(self._regrouped())
+        return entries
+
+    def _regrouped(self):
+        """An app principal whose groups are not its app's bound groups, as after a binding
+        changed: `vecten app connect --groups-only` sets them again."""
+        entries = []
+        for principal_id, _ in self.state.scan(APP_PRINCIPALS):
+            marked, app = self.app_of(principal_id)
+            principal = self.state.principal(principal_id)
+            if not marked or app is None or principal is None:
+                continue
+            groups = sorted(self.state.groups_for(principal_id))
+            if set(groups) == set(app.groups):
+                continue
+            entries.append(
+                {
+                    "app": app.key,
+                    "principal_id": principal_id,
+                    "warehouse_name": principal["warehouse_name"],
+                    "reason": "groups differ from the binding",
+                    "groups": groups,
+                    "bound": sorted(app.groups),
+                    "message": (
+                        f"{principal['warehouse_name']} is in {', '.join(groups) or 'no group'} "
+                        f"but vecten.toml binds {app.key} to {', '.join(sorted(app.groups))}; "
+                        f"run `vecten app connect {app.key} --env <env> --groups-only`"
+                    ),
+                }
+            )
         return entries
 
     def _unmarked(self):

@@ -592,3 +592,65 @@ def test_an_unmarked_app_principal_is_an_issue():
     ]
     assert "svc_app_overview" in issue.title
     assert "vecten app connect acme-sales.overview --env prod --adopt" in issue.resolution
+
+
+def test_an_app_principal_in_other_groups_than_the_binding_is_an_issue():
+    entry = {
+        "app": "acme-sales.overview",
+        "principal_id": "p1",
+        "warehouse_name": "svc_app_overview",
+        "reason": "groups differ from the binding",
+        "groups": ["default", "sales"],
+        "bound": ["sales"],
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "svc_app_overview" in issue.title and "groups" in issue.title
+    assert "vecten app connect acme-sales.overview --env prod --groups-only" in issue.resolution
+    assert "--adopt" not in issue.resolution
+
+
+@pytest.mark.parametrize(
+    ("reason", "title", "fix"),
+    [
+        ("role sync failed", "could not set", "vecten reconcile --env prod"),
+        ("warehouse roles beyond the admitted groups", "holds warehouse roles", "REVOKE"),
+    ],
+)
+def test_an_app_principals_warehouse_roles_are_an_issue(reason, title, fix):
+    entry = {
+        "app": "acme-sales.overview",
+        "principal_id": "p1",
+        "warehouse_name": "svc_app_overview",
+        "reason": reason,
+        "roles": ["pii_reader"],
+        "error": "permission denied",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert title in issue.title and "svc_app_overview" in issue.title
+    assert fix in issue.resolution and "pii_reader" in issue.resolution
+    assert "--adopt" not in issue.resolution
+
+
+def test_a_failed_sync_and_extra_roles_of_one_principal_are_two_issues():
+    base = {"app": "acme-sales.overview", "principal_id": "p1", "warehouse_name": "svc_app_x"}
+    entries = [
+        {**base, "reason": "role sync failed", "roles": ["a"]},
+        {**base, "reason": "warehouse roles beyond the admitted groups", "roles": ["b"]},
+    ]
+    health = {"checked_at": 1792627200, "failures": [], "apps": entries}
+    issues = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert len({i.id for i in issues}) == 2

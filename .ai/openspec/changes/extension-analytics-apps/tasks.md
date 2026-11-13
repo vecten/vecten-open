@@ -35,8 +35,8 @@ publishing is a later change with #40 (section 5).
 
 ## 4. Docs and end-to-end proof (PR I)
 
-- [ ] 4.1 New `docs/analytics-apps.md`: the group, the kinds, the binding, the data model (one view per admitted group, the row cap, the consistency check), the Streamlit recipe and an MCP client sketch, `app connect`
-- [ ] 4.2 `docs/extensions.md` table row; `docs/admin-panel.md` Analytics screen; `docs/GLOSSARY.md` ("Analytics app", "App principal"); `CHANGELOG.md`
+- [x] 4.1 New `docs/analytics-apps.md`: the group, the kinds, the binding, the data model (one view shared by every admitted viewer: the union of the admitted groups' roles; the row cap; the consistency check), the Streamlit recipe and an MCP client sketch, `app connect`
+- [x] 4.2 `docs/extensions.md` table row; `docs/admin-panel.md` Analytics screen; `docs/GLOSSARY.md` ("Analytics app", "App principal"); `CHANGELOG.md`
 - [ ] 4.3 **[deploy]** On AWS with a Snowflake warehouse and on Scaleway with Postgres: a Streamlit template app is shipped, `vecten deploy` creates its hostname, a member of its group opens it through the gate and sees data read as `svc_app_<app>`, a person outside it is refused, and the audit names the viewer
 - [ ] 4.4 **[deploy]** With #51's restricted area: a finance dashboard bound to `["finance", "default"]` admits finance members only and access health names `default`
 

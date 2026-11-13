@@ -372,3 +372,267 @@ def test_the_analytics_screen_is_in_the_menu(apps):
 def test_the_analytics_screen_without_apps_says_how_to_bind_one(surfaces):
     page = screens.text(surfaces.http.get("/admin/apps"))
     assert "No analytics app is bound" in page and "vecten.toml" in page
+
+
+def connected(apps):
+    return cli(apps, "apps/connect", {"name": "acme-sales.overview"})["principal"]
+
+
+def member_grants(apps, name):
+    return [(op[1], op[3]) for op in apps.adapter.operations if op[0] == "member" and op[2] == name]
+
+
+def test_an_app_principal_may_join_no_group_outside_its_binding(apps):
+    principal = connected(apps)
+    apps.runtime.access.create_group("finance")
+    headers = {"Authorization": "Bearer " + apps.token}
+    data = {"group": "finance", "id": principal["id"], "member": True}
+    response = apps.http.post("/api/admin/groups/member", headers=headers, json=data)
+    assert response.status_code == 400
+    assert "acme-sales.overview" in response.json()["error"]
+    assert "finance" not in apps.runtime.state.groups_for(principal["id"])
+
+
+def test_an_app_principal_may_leave_a_group_and_rejoin_a_bound_one(apps):
+    principal = connected(apps)
+    access = apps.runtime.access
+    access.membership("sales", principal["id"], False)
+    access.membership("sales", principal["id"], True)
+    assert apps.runtime.state.groups_for(principal["id"]) == {"sales", "default"}
+
+
+def test_the_warehouse_grants_an_app_principal_its_admitted_groups_roles_only(apps):
+    principal = connected(apps)
+    grants = member_grants(apps, "svc_app_overview")
+    # default is admitted through its schema grant; sales holds no grant on orders.
+    assert ("analyst", True) in grants
+    assert ("sales", True) not in grants
+    apps.runtime.access.grant("sales", "dataset", "orders")
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", True)
+    before = len(member_grants(apps, "svc_app_overview"))
+    apps.runtime.access.revoke("sales", "dataset", "orders")
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")[before:]
+    assert apps.runtime.state.groups_for(principal["id"]) == {"sales", "default"}
+
+
+def test_an_app_principal_whose_groups_differ_from_the_binding_is_in_access_health(apps):
+    principal = connected(apps)
+    apps.runtime.apps.apps["overview"] = BoundApp(
+        "acme-sales", "overview", "Sales overview", "container", ("orders",), ("sales",)
+    )
+    entry = next(
+        f
+        for f in api_read(apps, "access-health")["apps"]
+        if f.get("reason") == "groups differ from the binding"
+    )
+    assert entry["principal_id"] == principal["id"]
+    assert (entry["groups"], entry["bound"]) == (["default", "sales"], ["sales"])
+    assert "vecten app connect acme-sales.overview --env <env> --groups-only" in entry["message"]
+
+
+def test_connecting_with_groups_only_resyncs_without_rotating(apps):
+    oauth = apps.runtime.oauth
+    first = cli(apps, "apps/connect", {"name": "acme-sales.overview"})
+    apps.runtime.apps.apps["overview"] = BoundApp(
+        "acme-sales", "overview", "Sales overview", "container", ("orders",), ("sales",)
+    )
+    result = cli(apps, "apps/connect", {"name": "acme-sales.overview", "rotate": False})
+    assert result["credentials"] is None and result["groups"] == ["sales"]
+    assert apps.runtime.state.groups_for(first["principal"]["id"]) == {"sales"}
+    credentials = first["credentials"]
+    oauth.client_credentials(credentials["client_id"], credentials["client_secret"], oauth.resource)
+
+
+def test_groups_only_needs_an_existing_principal(apps):
+    error = refused(apps, {"name": "acme-sales.overview", "rotate": False})
+    assert "no principal" in error
+
+
+def test_adopting_an_unmarked_principal_whose_account_holds_other_roles_is_refused(apps):
+    from vecten_mcp.warehouse.base import Account
+
+    created = unmarked_service(apps)
+    apps.adapter.accounts["svc_app_overview"] = Account(
+        "svc_app_overview", ("ANALYST", "FINANCE", "PII_READER"), can_adopt=True
+    )
+    error = refused(apps, {"name": "acme-sales.overview", "adopt": True})
+    assert "PII_READER" in error and "FINANCE" not in error
+    assert apps.runtime.state.get(APP_PRINCIPALS, created["id"]) is None
+
+
+def failing_revoke(apps, monkeypatch, role):
+    adapter = apps.adapter
+    original = adapter.membership
+
+    def membership(target, name, grant=True):
+        if target == role and not grant and name == "svc_app_overview":
+            raise RuntimeError("warehouse refused the revoke")
+        return original(target, name, grant)
+
+    monkeypatch.setattr(adapter, "membership", membership)
+    return original
+
+
+def flip_to_sales(apps):
+    access = apps.runtime.access
+    access.grant("sales", "dataset", "orders")
+    access.revoke("default", "schema", "marts")
+    assert apps.runtime.apps.admitted("overview") == {"sales"}
+
+
+def admit_only(apps, *groups):
+    from vecten_mcp.apps import ADMISSION
+
+    apps.runtime.state.put(
+        ADMISSION,
+        "acme-sales.overview",
+        {"admitted": list(groups), "excluded": [], "checked_at": 0},
+    )
+
+
+def test_a_role_whose_revoke_failed_stays_recorded_and_is_revoked_later(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    original = failing_revoke(apps, monkeypatch, "analyst")
+    # One sync moves the principal from default's role to sales'; the revoke fails.
+    admit_only(apps, "sales")
+    with pytest.raises(RuntimeError):
+        access.sync_app_roles(pid)
+    assert access.held_roles(pid) == {"analyst", "sales"}
+    monkeypatch.setattr(apps.adapter, "membership", original)
+    admit_only(apps, "default")
+    before = len(member_grants(apps, "svc_app_overview"))
+    access.sync_app_roles(pid)
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")[before:]
+    assert access.held_roles(pid) == {"analyst"}
+
+
+def failing_grant(apps, monkeypatch, role, failures):
+    """The first `failures` grants of `role` to the app principal fail; returns the grant
+    attempts of `role`."""
+    adapter, attempts = apps.adapter, []
+    original = adapter.membership
+
+    def membership(target, name, grant=True):
+        if target == role and grant and name == "svc_app_overview":
+            attempts.append(target)
+            if len(attempts) <= failures:
+                raise RuntimeError("warehouse unavailable")
+        return original(target, name, grant)
+
+    monkeypatch.setattr(adapter, "membership", membership)
+    return attempts
+
+
+def sync_failure(apps, pid):
+    from vecten_mcp.access import APP_ROLES
+
+    return (apps.runtime.state.get(APP_ROLES, pid) or {}).get("failed")
+
+
+def test_a_grant_that_failed_is_retried_until_it_succeeds(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    attempts = failing_grant(apps, monkeypatch, "sales", failures=2)
+    admit_only(apps, "default", "sales")
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            access.sync_app_roles(pid)
+        assert sync_failure(apps, pid) is not None
+    access.sync_app_roles(pid)
+    assert len(attempts) == 3
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", True)
+    assert sync_failure(apps, pid) is None
+    assert access.held_roles(pid) == {"analyst", "sales"}
+
+
+def test_a_role_whose_grant_failed_is_revoked_once_it_is_not_wanted(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    failing_grant(apps, monkeypatch, "sales", failures=1)
+    admit_only(apps, "default", "sales")
+    with pytest.raises(RuntimeError):
+        access.sync_app_roles(pid)
+    admit_only(apps, "default")
+    before = len(member_grants(apps, "svc_app_overview"))
+    access.sync_app_roles(pid)
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")[before:]
+    assert access.held_roles(pid) == {"analyst"}
+    assert sync_failure(apps, pid) is None
+
+
+def test_a_grant_that_keeps_failing_does_not_block_a_revoke(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    admit_only(apps, "default", "sales")
+    access.sync_app_roles(pid)
+    failing_grant(apps, monkeypatch, "sales", failures=99)
+    admit_only(apps, "sales")
+    with pytest.raises(RuntimeError):
+        access.sync_app_roles(pid)
+    assert ("analyst", False) in member_grants(apps, "svc_app_overview")
+    assert access.held_roles(pid) == {"sales"}
+    assert sync_failure(apps, pid) is not None
+
+
+def test_a_failed_role_sync_during_admission_is_logged(apps, monkeypatch, caplog):
+    connected(apps)
+    failing_revoke(apps, monkeypatch, "analyst")
+    flip_to_sales(apps)
+    assert "roles not synced" in caplog.text
+
+
+def connected_id(apps):
+    return next(
+        p["id"]
+        for p in apps.runtime.state.principals()
+        if p["warehouse_name"] == "svc_app_overview"
+    )
+
+
+def test_a_failed_role_sync_is_in_access_health(apps, monkeypatch):
+    connected(apps)
+    failing_revoke(apps, monkeypatch, "analyst")
+    flip_to_sales(apps)
+    entry = next(
+        f for f in api_read(apps, "access-health")["apps"] if f.get("reason") == "role sync failed"
+    )
+    assert entry["app"] == "acme-sales.overview" and "analyst" in entry["roles"]
+    assert "vecten reconcile" in entry["message"]
+
+
+def test_deleting_an_app_principal_revokes_every_recorded_role(apps, monkeypatch):
+    connected(apps)
+    failing_revoke(apps, monkeypatch, "analyst")
+    flip_to_sales(apps)
+    monkeypatch.undo()
+    before = len(apps.adapter.operations)
+    apps.runtime.administration.delete_principal(connected_id(apps))
+    revoked = {
+        op[1] for op in apps.adapter.operations[before:] if op[0] == "member" and op[3] is False
+    }
+    assert revoked == {"analyst", "sales"}
+
+
+def test_deleting_a_group_revokes_its_role_from_an_app_principal(apps):
+    connected(apps)
+    apps.runtime.access.grant("sales", "dataset", "orders")
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", True)
+    apps.runtime.access.delete_group("sales")
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")
+
+
+def test_warehouse_roles_beyond_the_admitted_groups_are_in_access_health(apps):
+    connected(apps)
+    from vecten_mcp.warehouse.base import Account
+
+    apps.adapter.accounts["svc_app_overview"] = Account(
+        "svc_app_overview", ("ANALYST", "PII_READER", "PUBLIC")
+    )
+    entry = next(
+        f
+        for f in api_read(apps, "access-health")["apps"]
+        if f.get("reason") == "warehouse roles beyond the admitted groups"
+    )
+    assert entry["roles"] == ["PII_READER"]
+    assert "REVOKE" in entry["message"] or "revoke" in entry["message"]

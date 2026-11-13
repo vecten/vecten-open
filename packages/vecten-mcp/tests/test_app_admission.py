@@ -3,6 +3,8 @@
 import asyncio
 import json
 
+import pytest
+
 from vecten_mcp.access import AccessService
 from vecten_mcp.apps import ADMISSION, AppScopes, BoundApp, read_bound_apps
 from vecten_mcp.identity import Identity
@@ -32,6 +34,48 @@ OVERVIEW = BoundApp(
 SOURCES = {"revenue": "marts_finance.revenue", "orders": "marts.orders"}
 
 
+@pytest.fixture(autouse=True)
+def stores_closed(monkeypatch):
+    """Fails a test that leaves a state store open: its sqlite connection would otherwise be
+    finalized, with a ResourceWarning, during whichever test runs next on the worker."""
+    opened, closed = [], set()
+    create, close = StateStore.__init__, StateStore.close
+
+    def tracked_init(self, url):
+        create(self, url)
+        opened.append(self)
+
+    def tracked_close(self):
+        close(self)
+        closed.add(id(self))
+
+    monkeypatch.setattr(StateStore, "__init__", tracked_init)
+    monkeypatch.setattr(StateStore, "close", tracked_close)
+    yield opened
+    for store in opened:
+        if id(store) not in closed:
+            store.close()
+            pytest.fail("a state store was left open")
+
+
+# The stores a test opens through `store()`; each test's teardown closes them.
+OPEN = []
+
+
+def store():
+    state = StateStore("sqlite://")
+    OPEN.append(state)
+    return state
+
+
+@pytest.fixture(autouse=True)
+def close_stores(stores_closed):
+    # Set up after the check, so torn down before it.
+    yield
+    while OPEN:
+        OPEN.pop().close()
+
+
 class Adapter:
     def __init__(self):
         self.fail = False
@@ -51,7 +95,7 @@ class Adapter:
 
 
 def setup(*apps, kind="postgres", database=None):
-    state = StateStore("sqlite://")
+    state = store()
     adapter = Adapter()
     access = AccessService(state, adapter)
     access.seed_defaults()
@@ -156,7 +200,7 @@ def test_a_dataset_the_model_lacks_admits_no_group_and_is_a_model_warning():
 
 
 def test_model_health_lists_a_declared_dataset_the_model_lacks(tmp_path):
-    state = StateStore("sqlite://")
+    state = store()
     osi = tmp_path / "osi"
     osi.mkdir()
     field = {"dialects": [{"dialect": "ANSI_SQL", "expression": "amount"}]}
@@ -214,7 +258,8 @@ def test_the_server_computes_admission_when_it_starts():
     access.model_changed(SOURCES)
     scopes = AppScopes(state, {"overview": OVERVIEW}, kind="postgres")
     runtime = Runtime(state, None, None, None, None, access=access)
-    runtime.apps = scopes
+    # As the runtime's setup wires them: the grants' service recomputes the apps' admission.
+    runtime.apps = access.apps = scopes
 
     async def start():
         runtime.start()
