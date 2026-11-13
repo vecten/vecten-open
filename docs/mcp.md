@@ -32,7 +32,7 @@ groups, grants, audit, gaps) in a private Postgres database, `mcp_state`, never 
 | Discovery | `describe`, `search` | What datasets, columns and metrics exist and what they mean, from the semantic model |
 | Answers | `query_metrics`, `sql-exec`, `verify_receipt` | Compile a metric question into SQL and run it; run one read-only statement; check a receipt against the audit |
 | Feedback | `report_feedback`, `list_gaps`, `read_gap`, `set_gap_status` | Report an answer as wrong; see, read and resolve the gaps that reports create |
-| Administration | `list_users`, `list_groups`, `list_grants`, `usage`, `usage_view`, `model_health`, `connected_clients`, `search_audit`, `read_audit_row`, `read_settings` | Read-only views for people with the admin flag: who has access, what is asked, whether the shipped model is current, what the audit holds |
+| Administration | `list_users`, `list_groups`, `list_grants`, `usage`, `usage_view`, `model_health`, `connected_clients`, `search_audit`, `read_audit_row`, `read_settings`, `list_apps` | Read-only views for people with the admin flag: who has access, what is asked, whether the shipped model is current, what the audit holds |
 
 Everyone signed in can use the discovery, answer and feedback tools; warehouse grants still
 decide what data a query returns. The admin tools are visible only to people with the admin

@@ -23,7 +23,7 @@ from pydantic import ValidationError
 from vecten import in_repo, locking
 from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
 from vecten_shared.apps import GROUP as APPS_GROUP
-from vecten_shared.apps import AppDeclaration, colliding_service, parse_app
+from vecten_shared.apps import AppDeclaration, colliding_service, parse_app, principal_name
 from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
 from vecten_shared.declarations import (
     Manifest,
@@ -853,11 +853,20 @@ def _bind_apps(doc, config: VectenConfig, extension: str, entry, record: dict) -
         if not config.has("mcp"):
             out["binding_notes"].append(f"{key}: an app needs the mcp component; not bound")
             continue
-        other = next((e for e, apps in sorted(config.apps.items()) if name in apps), None)
+        principal = principal_name(name)
+        other = next(
+            (
+                (e, bound)
+                for e, apps in sorted(config.apps.items())
+                for bound in sorted(apps)
+                if principal_name(bound) == principal
+            ),
+            None,
+        )
         if other is not None:
             out["binding_notes"].append(
-                f"{key}: {other} binds an app {name}, and both would run as "
-                f"svc_app_{name.replace('-', '_')}; not bound"
+                f"{key}: {other[0]} binds an app {other[1]}, and both would run as "
+                f"{principal}; not bound"
             )
             continue
         table = tomlkit.table()

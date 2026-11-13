@@ -27,11 +27,11 @@ publishing is a later change with #40 (section 5).
 
 ## 3. Listing and app connect (PR H)
 
-- [ ] 3.1 Admin API read operation and admin tool for the app list
-- [ ] 3.2 Panel "Analytics" screen, read-only, naming the binding
-- [ ] 3.3 `/apps` page for signed-in people, filtered by admitted groups
-- [ ] 3.4 `vecten app connect`: create or rotate the principal, set groups, store credentials (cloud scope by host, `.env` for local), never print the secret; `next` items
-- [ ] 3.5 Tests: admin API and tool parity; panel rendering with a container app and an unpublished Snowflake app; `/apps` filtering; `app connect` against a fake admin API and fake secrets store (creation, rotation, refusals, no secret in output)
+- [x] 3.1 Admin API read operation and admin tool for the app list
+- [x] 3.2 Panel "Analytics" screen, read-only, naming the binding
+- [x] 3.3 `/apps` page for signed-in people, filtered by admitted groups
+- [x] 3.4 `vecten app connect`: create or rotate the principal, set groups, store credentials (cloud scope by host, `.env` for local), never print the secret; `next` items
+- [x] 3.5 Tests: admin API and tool parity; panel rendering with a container app and an unpublished Snowflake app; `/apps` filtering; `app connect` against a fake admin API and fake secrets store (creation, rotation, refusals, no secret in output)
 
 ## 4. Docs and end-to-end proof (PR I)
 

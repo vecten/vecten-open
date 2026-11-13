@@ -267,7 +267,7 @@ def test_bound_apps_come_from_the_bundles_vecten_toml_and_record(tmp_path):
             "extensions": ["acme-sales"],
             "apps": {
                 "acme-sales": {
-                    "overview": {"groups": ["sales", "finance"]},
+                    "overview": {"groups": ["sales", "finance"], "hostname": "sales"},
                     "retired": {"groups": ["default"]},
                 }
             },
@@ -281,9 +281,12 @@ def test_bound_apps_come_from_the_bundles_vecten_toml_and_record(tmp_path):
         kind="container",
         datasets=("orders", "customers"),
         groups=("sales", "finance"),
+        version="1.0",
+        hostname="sales",
     )
-    # A binding the record does not declare reads nothing.
+    # A binding the record does not declare reads nothing and is served nowhere.
     assert apps["retired"].datasets == ()
+    assert apps["retired"].hostname is None
 
 
 def test_a_dataset_grant_still_applied_to_the_old_table_admits_no_one_after_a_move():
@@ -313,5 +316,6 @@ def test_an_unmarked_service_named_as_a_bound_apps_principal_is_listed():
         "not marked as the app's principal",
     )
     assert "svc_app_overview" in entry["message"]
+    assert "vecten app connect acme-sales.overview --env <env> --adopt" in entry["message"]
     scopes.mark(service["id"], "acme-sales", "overview")
     assert access.health()["apps"] == []

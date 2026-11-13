@@ -165,6 +165,7 @@ Admin reads return a `data` envelope. They share a service with corresponding ad
 | `read_audit_row` | `row_id` | One audit row and its request chain |
 | `list_grants` | `{}` | `grants` per group and each group's `denied` columns |
 | `read_settings` | `{}` | Every deployment setting with its current value, defaults filled in |
+| `list_apps` | `{}` | Each bound analytics app: title, URL, bound and admitted groups, datasets, state, its principal and access-health failures |
 
 `set_gap_status` is the one admin mutation tool. Pass `gap_id` and `status` (`open`, `triaged`,
 `dismissed` or `resolved`); it returns the updated gap directly. This changes tracking status,

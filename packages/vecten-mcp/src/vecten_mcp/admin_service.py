@@ -28,6 +28,7 @@ READS = frozenset(
         "audit",
         "audit/read",
         "audit-status",
+        "apps",
     }
 )
 WRITES = frozenset(
@@ -50,6 +51,7 @@ WRITES = frozenset(
         "settings/set",
         "reconcile",
         "gaps/status",
+        "apps/connect",
     }
 )
 # Admin sessions read warehouse data and gap evidence that can carry instructions, so the
@@ -70,6 +72,7 @@ TOOL_OPERATIONS = frozenset(
         "grants",
         "denied",
         "settings",
+        "apps",
     }
 )
 SETTINGS = {
@@ -260,6 +263,13 @@ class AdminService:
             return self.settings()
         if operation == "settings/set":
             return self.set_setting(data["key"], data["value"])
+        if operation == "apps":
+            apps = getattr(runtime, "apps", None)
+            return apps.listing(auth.issuer) if apps else []
+        if operation == "apps/connect":
+            return admin.connect_app(
+                getattr(runtime, "apps", None), data["name"], adopt=data.get("adopt") is True
+            )
         if operation == "audit-status":
             if not runtime.audit:
                 raise RuntimeError("audit service unavailable")
