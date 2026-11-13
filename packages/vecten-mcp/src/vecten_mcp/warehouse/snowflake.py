@@ -57,6 +57,15 @@ class SnowflakeAdapter:
             return None
         return name[: len(name) - len(suffix)].lower()
 
+    def _project_role(self, name):
+        """Whether `name`, in any case, ends in the suffix `_<BASE>_<ENV>` of an environment of
+        this project: in a shared account Vecten names every role of every environment so, and
+        an environment's name holds no `_`. Always False in the fixed layout, which has none."""
+        if not self.names.suffix:
+            return False
+        base = self.names.suffix[1:].rsplit("_", 1)[0]
+        return re.fullmatch(rf".+_{re.escape(base)}_[A-Z][A-Z0-9]*", name.upper()) is not None
+
     def _policy(self):
         names = self.names
         return ".".join(
@@ -151,6 +160,12 @@ class SnowflakeAdapter:
         from snowflake.connector.errors import ProgrammingError
 
         check_account(role)
+        if self._project_role(role):
+            raise ValueError(
+                f"role {role} already ends in an environment's suffix, and this environment "
+                f"names it {self._role(role)}; name the group's role without one "
+                "(vecten group add <group> --role <role>)"
+            )
         with self.control() as cursor:
             try:
                 cursor.execute(f"CREATE ROLE {quote(self._role(role))}")
@@ -188,8 +203,15 @@ class SnowflakeAdapter:
         )
 
     def bound_role_problem(self, bound, managed):
-        # PROVISIONER cannot read a role it does not own; the review statement is the check.
-        return None
+        """Why `bound` may not be bound, from its name: in a shared account a role ending in an
+        environment's suffix is Vecten's, this environment's reserved and `managed` roles
+        among them. PROVISIONER cannot read the grants of a role it neither owns nor holds, so
+        the review statement is the check of what `bound` reaches."""
+        if not self._project_role(bound):
+            return None
+        if bound.upper().endswith(self.names.suffix):
+            return f"{bound.upper()} is a role Vecten manages in this environment"
+        return f"{bound.upper()} belongs to another environment of this project"
 
     def granted_roles(self, role):
         """The roles granted to the group's role, as SHOW GRANTS prints their names."""
