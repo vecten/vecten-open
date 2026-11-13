@@ -36,8 +36,8 @@ Afterwards you land on the overview. The first admins are the addresses listed u
 | Screen | What you can do there | Same action elsewhere |
 | --- | --- | --- |
 | Overview | Model status, questions and refusals in the last seven days, open gaps | `model_health`, `usage` tools |
-| Users and groups | Create, adopt, disable and delete people and services; set or clear the admin flag; create and delete groups; add and remove members | `vecten user`, `vecten service`, `vecten group` |
-| Grants and deny lists | Grant or revoke a dataset or convention schema per group; edit each group's column deny list; reconcile grants now | `vecten grant`, `list_grants` tool |
+| Users and groups | Create, adopt, disable and delete people and services; set or clear the admin flag; create and delete groups, naming their warehouse role; add and remove members; bind, confirm and unbind an existing role | `vecten user`, `vecten service`, `vecten group` |
+| Grants and deny lists | Grant or revoke a dataset, convention schema or restricted area per group; edit each group's column deny list; reconcile grants now | `vecten grant`, `list_grants` tool |
 | Model | Read the loaded model, its health, usage per field and metric, and open gaps | `describe`, `model_health`, `usage_view` tools |
 | Usage | The analytics views below, over a chosen number of days | `usage_view` tool |
 | Gaps | List gaps by status, read their evidence, set a status, confirm an unreviewed fix | `list_gaps`, `read_gap`, `set_gap_status` tools; confirming has no tool |
@@ -57,13 +57,19 @@ create first needs one `GRANT ... WITH ADMIN OPTION` statement, which the page p
 administrator to run. **Adopt existing account** binds it without touching its credentials.
 Deleting an adopted principal later removes the server's grants and keeps the account.
 
+**Create group** takes a name and, optionally, the warehouse role to create for it. **Bind
+role** shows the statement that reviews an existing role and the one that nests it under the
+group's role; once an administrator ran it, **Confirm** records the binding. **Unbind** forgets
+it and shows the revoke to run. See [group roles and bound roles](mcp-identity.md#group-roles-and-bound-roles).
+
 **Create service principal** creates `svc_<name>` and shows its client id and secret once.
 Copy the secret immediately: it is never stored in readable form and cannot be shown again.
 
 ### Grants and deny lists
 
 A grant gives a group read access to one dataset, translated to `GRANT SELECT` on its source,
-or to one convention schema (`core`, `marts`, `staging`, `snapshots` or `raw_<source>`).
+or to one convention schema (`core`, `marts`, `staging`, `snapshots` or `raw_<source>`), or to
+a restricted area `vecten.toml` declares, which covers both `core_<area>` and `marts_<area>`.
 Grants are desired state. The server reconciles them every fifteen minutes and whenever the
 model changes, and **Reconcile now** runs a reconciliation immediately.
 

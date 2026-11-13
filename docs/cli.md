@@ -39,7 +39,7 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 | `group` | `vecten group` manages MCP groups and their members. | v0.1 |
 | `service` | `vecten service` manages independent service principals and issues client credentials. | v0.1 |
 | `app` | `vecten app connect <extension>.<app> --env <env>` creates or rotates a bound container app's principal `svc_app_<app>` in the app's bound groups and stores its client id and secret under the app's credential names, in the secrets store scope of the app's host or, for `--env local`, in `.env`; it never prints the secret. `--groups-only` sets an existing principal's groups to the binding without rotating, `--adopt` takes over an unmarked principal or an existing warehouse account. | v0.1 |
-| `grant` | `vecten grant` records dataset or schema access for a group; see the current Postgres limitations in the identity guide. | v0.1 |
+| `grant` | `vecten grant` records dataset, schema or area (`--area`) access for a group; see the current Postgres limitations in the identity guide. | v0.1 |
 | `revoke` | `vecten revoke` removes a desired group grant. | v0.1 |
 | `reconcile` | `vecten reconcile` reapplies desired warehouse grants. | v0.1 |
 | `deny` | `vecten deny` stores per-group column metadata exclusions for later semantic discovery tools. | v0.1 |
@@ -54,8 +54,10 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 Identity commands are described in the [MCP identity guide](mcp-identity.md):
 `vecten user add`, `vecten user list`, `vecten user disable`, `vecten user delete`,
 `vecten user set-admin`, and `vecten user password-link` manage people through the admin API.
-`vecten group add`, `vecten group list`, `vecten group delete`, `vecten group add-member`, and
-`vecten group remove-member` manage group membership. `vecten service add`,
+`vecten group add` (with `--role` to name the group's warehouse role), `vecten group list`,
+`vecten group delete`, `vecten group add-member`, and `vecten group remove-member` manage
+groups and membership; `vecten group bind` and `vecten group unbind` bind a role the warehouse
+already has to a group. `vecten service add`,
 `vecten service list`, `vecten service disable`, and `vecten service delete` manage services.
 `vecten mcp provisioner-script` prints administrator-run setup SQL, and
 `vecten mcp introspect` drafts a semantic model from catalog metadata.

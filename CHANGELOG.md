@@ -142,6 +142,42 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `--vars` given by hand. `vecten update` moves an existing project's
   `docs/schema-convention.md` and `convention_version` to version 2
   ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- Area grants: `vecten grant --area <area> --group <group>`, the admin panel and the admin API's
+  `grant` with kind `area` grant a group both of an area's schemas, applied and revoked
+  together, each with its own future or default grant, so a mart dbt rebuilds there is readable
+  by the granted groups and no one else before any reconciliation. A grant of an area with no
+  `[areas.<area>]` entry is refused naming it. Schema grants accept a declared area's schemas,
+  and reconciliation's drift pass covers them. `next` asks for an area's `access.groups`
+  (answered with `vecten answer access.<area>`) and, after deploy, reports the command that
+  grants each declared group the area. Snowflake's `READ_GRANT` and the Postgres helpers accept
+  schemas matching `(core|marts)_<area>` by pattern; on Postgres the setup `ship` runs creates
+  every declared area's schemas as `loader` before it installs the helpers. An area removed
+  from `vecten.toml` has its grants revoked and forgotten. The access procedures are version
+  4: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, grants that reach an area
+  are refused and drift is neither listed nor revoked, while every other grant keeps
+  reconciling ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- Read grants on Snowflake cover every relation kind a mart can be: a schema or area grant
+  grants and revokes `SELECT` on all and future tables, views, materialized views, dynamic
+  tables, external tables and Iceberg tables, and a dataset grant names its relation's kind,
+  read back through `SHOW GRANTS`. On a grant, a kind the account refuses is a failure in
+  access health carrying Snowflake's message, the other kinds still apply, and
+  `vecten grant` exits with code 5 naming the refusals; a refusal on tables or views fails the
+  grant. A revoke the warehouse refuses while the role still reads in the schema fails and
+  stays recorded, so every reconciliation retries it
+  ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- A group's warehouse role can be named at creation (`vecten group add finance --role
+  fin_readers`, or the panel), and a group named like an existing role is refused naming
+  `--role` and `vecten group bind`. A group can bind a role the client already has:
+  `vecten group bind <group> <role>` prints the review statement and the grant nesting it
+  under the group's role for an administrator to run, `--confirm` records it once the grant is
+  in place, and `vecten group unbind` forgets it and prints the revoke. The server never
+  grants, alters or drops a bound role; Postgres refuses a role reaching a superuser-like
+  attribute, a predefined `pg_` role or a managed role, and Snowflake prints a recursive
+  review of the role's grants. Access health and `vecten issues` report a confirmed binding
+  whose grant is gone and any other role nested under a group's role. While a role is bound,
+  the startup check refuses `USAGE` on a group role held by `PROVISIONER`. Policies on a bound
+  role use `IS_ROLE_IN_SESSION` (Snowflake) or `pg_has_role` (Postgres), not
+  `CURRENT_ROLE()` ([#51](https://github.com/vecten/vecten-open/issues/51)).
 
 ### Changed
 

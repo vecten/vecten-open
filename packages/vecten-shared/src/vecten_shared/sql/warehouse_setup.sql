@@ -25,6 +25,14 @@ SELECT format('DO $check$ BEGIN RAISE EXCEPTION %L; END $check$',
 FROM (VALUES ('with_airflow', :'with_airflow'), ('with_mcp_state', :'with_mcp_state'),
              ('with_warehouse', :'with_warehouse'), ('with_mcp', :'with_mcp')) AS flags (name, value)
 WHERE value NOT IN ('true', 'false') \gexec
+-- The declared restricted areas, comma-separated; each becomes core_<area> and marts_<area>.
+\if :{?areas}
+\else
+\set areas ''
+\endif
+SELECT format('DO $check$ BEGIN RAISE EXCEPTION %L; END $check$',
+              'areas must be comma-separated names matching [a-z][a-z0-9]*, got: ' || :'areas')
+WHERE :'areas' !~ '^([a-z][a-z0-9]{0,56}(,[a-z][a-z0-9]{0,56})*)?$' \gexec
 
 -- RDS's master is CREATEROLE without superuser: from Postgres 16 it holds ADMIN OPTION on the
 -- roles it creates but no SET, which CREATE DATABASE ... OWNER and SET ROLE need. Each owner
@@ -217,6 +225,11 @@ CREATE SCHEMA IF NOT EXISTS staging AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS snapshots AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS core AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS marts AUTHORIZATION loader;
+-- An area's schemas exist before the helpers are installed below, so the first area grant
+-- finds a helper; no role is granted anything in them here.
+SELECT format('CREATE SCHEMA IF NOT EXISTS %I AUTHORIZATION loader', layer || '_' || area)
+FROM unnest(string_to_array(:'areas', ',')) AS area
+CROSS JOIN unnest(ARRAY['core', 'marts']) AS layer \gexec
 -- With the MCP, the default group's grants in its state are the only source of analyst's
 -- reads, applied by its reconciliation, so a revoke made there survives the next ship.
 SELECT 'GRANT USAGE ON SCHEMA core, marts TO analyst' WHERE :'with_mcp' = 'false' \gexec
@@ -259,7 +272,8 @@ BEGIN
         SELECT n.oid AS schema_oid, n.nspname, r.oid AS owner_oid, r.rolname
         FROM pg_catalog.pg_namespace n CROSS JOIN pg_catalog.pg_roles r
         WHERE (n.nspname IN ('core','marts','staging','snapshots')
-               OR n.nspname ~ '^raw_[a-zA-Z0-9_]+$')
+               OR n.nspname ~ '^raw_[a-zA-Z0-9_]+$'
+               OR n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$')
         AND (r.oid=n.nspowner
              OR EXISTS (SELECT FROM pg_catalog.pg_class c
                         WHERE c.relnamespace=n.oid AND c.relowner=r.oid)

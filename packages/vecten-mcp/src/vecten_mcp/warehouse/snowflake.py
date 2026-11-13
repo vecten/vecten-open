@@ -4,7 +4,7 @@ import json
 import re
 from contextlib import contextmanager
 
-from vecten_mcp.warehouse.base import Account, check_account
+from vecten_mcp.warehouse.base import Account, RoleExists, check_account
 
 
 def quote(name):
@@ -148,9 +148,62 @@ class SnowflakeAdapter:
             )
 
     def create_group(self, role):
+        from snowflake.connector.errors import ProgrammingError
+
         check_account(role)
         with self.control() as cursor:
-            cursor.execute(f"CREATE ROLE {quote(self._role(role))}")
+            try:
+                cursor.execute(f"CREATE ROLE {quote(self._role(role))}")
+            except ProgrammingError as exc:
+                if "already exists" in str(exc.msg):
+                    raise RoleExists(role) from None
+                raise
+
+    def bind_statement(self, bound, role, grant=True):
+        """What an administrator runs to nest `bound` under the group's role: PROVISIONER
+        neither owns nor holds `bound`, so it cannot grant it."""
+        if grant:
+            return f"GRANT ROLE {quote(bound)} TO ROLE {quote(self._role(role))};"
+        return f"REVOKE ROLE {quote(bound)} FROM ROLE {quote(self._role(role))};"
+
+    def review_statement(self, bound):
+        """Every grant `bound` holds, through every role nested under it, for an administrator
+        to read: PROVISIONER cannot see a hierarchy it does not own."""
+        name = "'" + bound.upper().replace("'", "''") + "'"
+        return (
+            "-- Run as ACCOUNTADMIN. ACCOUNT_USAGE lags up to two hours. A row granted on\n"
+            "-- ACCOUNT, or a role such as ACCOUNTADMIN, SECURITYADMIN, SYSADMIN or USERADMIN,\n"
+            "-- makes the role unsafe to bind.\n"
+            "WITH RECURSIVE reach (role) AS (\n"
+            f"  SELECT {name}\n"
+            "  UNION ALL\n"
+            "  SELECT g.name FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES g\n"
+            "  JOIN reach r ON g.grantee_name = r.role\n"
+            "  WHERE g.granted_on = 'ROLE' AND g.privilege = 'USAGE' AND g.deleted_on IS NULL\n"
+            ")\n"
+            "SELECT g.grantee_name, g.privilege, g.granted_on, g.name\n"
+            "FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES g\n"
+            "JOIN reach r ON g.grantee_name = r.role WHERE g.deleted_on IS NULL\n"
+            "ORDER BY 1, 3, 4;"
+        )
+
+    def bound_role_problem(self, bound, managed):
+        # PROVISIONER cannot read a role it does not own; the review statement is the check.
+        return None
+
+    def granted_roles(self, role):
+        """The roles granted to the group's role, as SHOW GRANTS prints their names."""
+        check_account(role)
+        with self.control() as cursor:
+            rows = cursor.execute(f"SHOW GRANTS TO ROLE {quote(self._role(role))}").fetchall()
+            columns = [c[0].lower() for c in cursor.description]
+        grants = [dict(zip(columns, row, strict=True)) for row in rows]
+        return {
+            g["name"] for g in grants if g["granted_on"] == "ROLE" and g["privilege"] == "USAGE"
+        }
+
+    def holds_role(self, role, bound):
+        return bound.upper() in {name.upper() for name in self.granted_roles(role)}
 
     def drop_account(self, name):
         check_account(name)
@@ -214,19 +267,25 @@ class SnowflakeAdapter:
             parts.insert(0, self.database)
         if parts[0].upper() != self.database.upper():
             raise ValueError("dataset must belong to the configured database")
-        self._grant(role, parts[1], parts[2], grant)
+        return self._grant(role, parts[1], parts[2], grant)
 
     def schema_grant(self, role, schema, grant=True):
-        self._grant(role, schema, None, grant)
+        return self._grant(role, schema, None, grant)
 
     def _grant(self, role, schema, relation, grant):
+        """`<shape> <kind>: <warehouse message>` for each relation kind READ_GRANT reports the
+        account refused; the other kinds were applied."""
         if role != self.DEFAULT_ROLE:
             check_account(role)
         with self.control() as cursor:
-            cursor.execute(
+            row = cursor.execute(
                 f"CALL {self._access()}.READ_GRANT(%s,%s,%s,%s)",
                 (self._role(role), schema.upper(), relation.upper() if relation else None, grant),
-            )
+            ).fetchone()
+        answer = str(row[0]) if row else ""
+        if not answer.startswith("refused: "):
+            return []
+        return [f"{r['kind']}: {r['error']}" for r in json.loads(answer.removeprefix("refused: "))]
 
     def _access(self):
         return f"{quote(self.database)}.{quote(self.names.access_schema)}"
@@ -282,7 +341,10 @@ class SnowflakeAdapter:
                         held.add((role, "future", schema, None, kind))
         return held
 
-    def check_scope(self, registry):
+    def check_scope(self, registry, bound=False):
+        """Refuse any grant the provisioner role holds outside its stated set. While a group
+        binds a role, USAGE on a group role would let the provisioner read through that role,
+        so only OWNERSHIP of group roles is accepted."""
         provisioner = quote(self.names.provisioner_role)
         access = self.database.upper() + "." + self.names.access_schema.upper()
         policy = self.names.authentication_policy
@@ -309,7 +371,13 @@ class SnowflakeAdapter:
                             name.upper() == self.names.analyst_role.upper()
                             or registered(name, {"group"})
                         )
-                        and privilege in {"OWNERSHIP", "USAGE"}
+                        and (
+                            privilege == "OWNERSHIP"
+                            or (
+                                privilege == "USAGE"
+                                and (not bound or name.upper() == self.names.analyst_role.upper())
+                            )
+                        )
                     )
                     or (
                         kind == "USER"

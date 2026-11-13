@@ -11,6 +11,7 @@ import pytest
 from vecten_mcp.access import AccessService
 from vecten_mcp.apps import AppScopes, BoundApp
 from vecten_mcp.panel.people import APPS_CLIENT
+from vecten_shared.identity_setup import ACCESS_VERSION
 
 spec = importlib.util.spec_from_file_location(
     "apps_page_session_fixture", Path(__file__).with_name("test_panel_session.py")
@@ -64,11 +65,21 @@ class Adapter:
     def schema_grant(self, role, schema, grant=True):
         pass
 
+    def access_version(self):
+        return ACCESS_VERSION
+
+    def read_grants(self, roles):
+        return set()
+
+    def granted_roles(self, role):
+        return set()
+
 
 @pytest.fixture
 def page(builtins):
     runtime = builtins.runtime
-    runtime.access = AccessService(runtime.state, Adapter())
+    # marts_finance is the declared area finance's schema.
+    runtime.access = AccessService(runtime.state, Adapter(), areas={"finance"})
     access = runtime.access
     access.datasets = {"orders": "marts.orders", "revenue": "marts_finance.revenue"}
     for group in ("sales", "finance", "marketing"):

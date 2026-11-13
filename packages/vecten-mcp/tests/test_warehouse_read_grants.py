@@ -67,6 +67,14 @@ def test_snowflake_version_is_what_read_grant_reports_with_every_argument_null()
     assert connection.calls == [('CALL "D"."VECTEN_ACCESS".READ_GRANT(NULL,NULL,NULL,NULL)', None)]
 
 
+def test_a_snowflake_install_of_the_previous_release_is_older_than_this_server():
+    # Versions 2 and 3 were installed by builds before this procedure text: version 2
+    # refuses area schemas, version 3 counts a refused revoke as done.
+    for installed in (2, 3):
+        adapter, _ = snowflake(lambda sql, params, v=installed: f"vecten-access {v}")
+        assert adapter.access_version() == installed < ACCESS_VERSION
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -266,3 +274,14 @@ def test_postgres_read_grants_reads_the_catalog_acls_of_the_given_roles():
         assert catalog in statement
     assert "relkind IN ('r','p','v','m','f')" in statement
     assert "LEFT JOIN pg_catalog.pg_namespace" in statement
+
+
+def test_snowflake_schema_grant_returns_the_kinds_read_grant_reports_refused():
+    refusals = [{"kind": "ALL ICEBERG TABLES", "error": "unsupported feature 'ICEBERG'"}]
+    adapter, _ = snowflake(lambda sql, params: "refused: " + json.dumps(refusals))
+    assert adapter.schema_grant("finance", "marts") == [
+        "ALL ICEBERG TABLES: unsupported feature 'ICEBERG'"
+    ]
+    adapter, _ = snowflake(lambda sql, params: "ok")
+    assert adapter.schema_grant("finance", "marts") == []
+    assert adapter.dataset_grant("finance", "D.MARTS.ORDERS") == []
