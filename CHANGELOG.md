@@ -141,6 +141,46 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   next midnight.
 - `vecten dbt` on a Snowflake project without `--env` now names `--env` alongside
   `vecten dbt-build-local` in its refusal.
+- With the `mcp` component, the MCP's state is the only owner of the default group's reads
+  on `core` and `marts`: the Snowflake module, the provisioner script and the Postgres setup
+  SQL no longer grant `analyst` anything on a schema, and the MCP's first reconciliation
+  applies the grants it seeded. A revoke of `marts` from the default group now survives
+  `deploy`, `ship` and a rerun of the provisioner script
+  ([#51](https://github.com/vecten/vecten-open/issues/51)). Without the `mcp` component the
+  deploy grants them as before.
+- Reconciliation converges in both directions: it reads the read grants (`USAGE` on a schema,
+  current and future `SELECT`) that `analyst` and every group role hold in the convention and
+  `raw_` schemas, and revokes those the state does not hold. Access health lists every grant
+  added, revoked or found drifting, and the database-level future grants of those roles;
+  `vecten issues` reports drift that was kept and an outdated install of the access
+  procedures. The setting `reconcile_drift` (`revoke` or `report`) is in the admin panel's
+  settings: a new deployment starts with `revoke`, and a deployment whose MCP state an earlier
+  release created starts with `report`.
+
+  **Upgrading.** Snowflake deployments with the MCP: `vecten deploy` forgets the old
+  `analyst_schema` and `analyst_future` resources without revoking them (the plan destroys
+  nothing); then an ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and the
+  run is confirmed with `--confirm-run`, which installs `VECTEN_ACCESS.READ_GRANTS` and the new
+  `READ_GRANT`. Until then the MCP keeps applying grants but reads no drift, and
+  `vecten issues` names the step. Postgres deployments need nothing beyond the next ship, and
+  an existing Postgres warehouse needs no rerun; there the drift report starts at once.
+
+  After the upgrade nothing is revoked: the deployment is in `report` mode. Read the drift in
+  access health or `vecten issues`, record every grant you want to keep with `vecten grant`
+  (a schema grant, or a dataset grant for a relation the semantic model has as a dataset),
+  then set `reconcile_drift` to `revoke`. A grant that cannot be recorded is revoked from then
+  on: `SELECT` on a relation that is not a dataset, a grant on a single relation of `staging`,
+  `snapshots` or a `raw_` schema that is not a dataset. A dbt `grants:` config or a post-hook
+  that grants is revoked on every pass and granted again by every build, so remove it first.
+  Grants in other schemas or databases, and grants to roles the MCP does not manage, are never
+  touched.
+
+  **Rolling back.** After the provisioner script was rerun, an earlier release's MCP refuses to
+  start beside `USAGE` on the new procedure. Before starting it, an ACCOUNTADMIN runs
+  `REVOKE USAGE ON PROCEDURE <DATABASE>.VECTEN_ACCESS.READ_GRANTS(VARCHAR) FROM ROLE
+  PROVISIONER;` (or drops the procedure). The earlier release's grants come back with it:
+  its Terraform resources grant `ANALYST` `USAGE` and future `SELECT` on `CORE` and `MARTS`
+  again.
 
 ### Fixed
 

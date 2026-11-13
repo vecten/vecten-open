@@ -33,8 +33,8 @@ existing-warehouse script.
 Snowflake External OAuth (issuer, audience, role scope, query identity and key rotation) is
 exercised against a real account by the `snowflake_live` test tier, which the maintainers run
 before a release; unit tests and generated SQL are not that verification.
-The generated Snowflake setup SQL includes `analyst` database, compute warehouse, and core/marts
-table access, plus the provisioner's table SELECT grant options. It installs an owner-rights
+The generated Snowflake setup SQL grants `analyst` database and compute warehouse usage only,
+plus the provisioner's table SELECT grant options on core/marts. It installs an owner-rights
 procedure in the configured database's `VECTEN_ACCESS` schema. The procedure accepts only
 `ANALYST` or provisioner-owned reader roles and convention schemas, and can grant/revoke only
 read privileges. Run setup under an administrator authorized to manage existing and future
@@ -141,8 +141,20 @@ SERVICE user authenticated through External OAuth.
 Groups map to warehouse roles. Every principal starts in the `default` group, mapped to
 `analyst`. `core` and `marts` are literal schema names for modelled warehouse tables. Managed
 warehouse setup creates them; existing warehouse setup uses the administrator-run SQL described
-below. Setup grants `analyst` access to those two schemas; raw ingestion schemas,
-`staging`, and `snapshots` have no default grant. Memberships combine the permissions of all
+below. The MCP records the default group's grants on those two schemas once, at its first
+start, and its reconciliation applies them; no deploy, ship or setup script grants `analyst`
+anything on a schema while `mcp` is a component, so revoking `marts` from the default group
+holds. Without the MCP, setup grants `analyst` the two schemas. Raw ingestion schemas,
+`staging`, and `snapshots` have no default grant.
+
+Reconciliation also reads the read grants `analyst` and every group role hold in the
+convention and `raw_<source>` schemas (on Snowflake through the owner-rights
+`VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and revokes those the
+state does not hold. The `reconcile_drift` setting, `revoke` by default, can be set to
+`report` to list them in access health without revoking; an MCP state created by an earlier
+release starts at `report`. A grant in any other schema, or to a
+role the MCP does not manage, is left alone. While the installed procedures are older than the
+MCP, this step is skipped and access health names `vecten mcp provisioner-script`. Memberships combine the permissions of all
 assigned groups. Removing a grant from one group does not remove access provided by another.
 
 Use `vecten group`, `vecten grant`, `vecten revoke`, and `vecten reconcile` for group membership

@@ -217,9 +217,13 @@ CREATE SCHEMA IF NOT EXISTS staging AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS snapshots AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS core AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS marts AUTHORIZATION loader;
-GRANT USAGE ON SCHEMA core, marts TO analyst;
-ALTER DEFAULT PRIVILEGES FOR ROLE loader IN SCHEMA core GRANT SELECT ON TABLES TO analyst;
-ALTER DEFAULT PRIVILEGES FOR ROLE loader IN SCHEMA marts GRANT SELECT ON TABLES TO analyst;
+-- With the MCP, the default group's grants in its state are the only source of analyst's
+-- reads, applied by its reconciliation, so a revoke made there survives the next ship.
+SELECT 'GRANT USAGE ON SCHEMA core, marts TO analyst' WHERE :'with_mcp' = 'false' \gexec
+SELECT 'ALTER DEFAULT PRIVILEGES FOR ROLE loader IN SCHEMA core GRANT SELECT ON TABLES TO analyst'
+WHERE :'with_mcp' = 'false' \gexec
+SELECT 'ALTER DEFAULT PRIVILEGES FOR ROLE loader IN SCHEMA marts GRANT SELECT ON TABLES TO analyst'
+WHERE :'with_mcp' = 'false' \gexec
 SELECT 'GRANT USAGE ON SCHEMA core, marts TO provisioner' WHERE :'with_mcp' = 'true' \gexec
 SELECT 'ALTER DEFAULT PRIVILEGES FOR ROLE loader IN SCHEMA core GRANT SELECT ON TABLES TO provisioner WITH GRANT OPTION'
 WHERE :'with_mcp' = 'true' \gexec

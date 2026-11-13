@@ -121,6 +121,59 @@ def test_terraform_test_passes(root):
     _init_and_test(TERRAFORM / root)
 
 
+@pytest.mark.terraform
+@pytest.mark.parametrize(
+    ("test_file", "run", "prefix"),
+    [
+        ("upgrade.tftest.hcl", "the_upgrade_forgets_them_without_revoking", ""),
+        (
+            "upgrade_child.tftest.hcl",
+            "the_upgrade_forgets_them_inside_the_child_module",
+            "module.snowflake.",
+        ),
+    ],
+    ids=["root", "child"],
+)
+def test_snowflake_upgrade_forgets_the_analyst_grants_without_revoking(
+    tmp_path, test_file, run, prefix
+):
+    """`terraform test` cannot assert on planned actions, so the upgrade file's verbose plan is
+    read here: every earlier ANALYST grant leaves state, and nothing is destroyed, with the
+    module as the root and as a thin root's child."""
+    if shutil.which("terraform") is None:
+        pytest.skip("terraform is not installed")
+    module = tmp_path / "snowflake"
+    shutil.copytree(SNOWFLAKE, module, ignore=shutil.ignore_patterns(".terraform*"))
+    env = _terraform_env()
+    steps = [
+        ["init", "-backend=false", "-input=false"],
+        ["test", f"-filter=tests/{test_file}", "-verbose"],
+    ]
+    for args in steps:
+        done = subprocess.run(
+            ["terraform", f"-chdir={module}", *args, "-no-color"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+    plan = done.stdout.split(f'run "{run}"', 1)[1]
+    kept = r"# (\S+) will no longer be managed by Terraform, but will not be destroyed"
+    forgotten = set(re.findall(kept, plan))
+    assert forgotten == {
+        f'{prefix}snowflake_grant_privileges_to_account_role.analyst_schema["CORE"]',
+        f'{prefix}snowflake_grant_privileges_to_account_role.analyst_schema["MARTS"]',
+        *(
+            f'{prefix}snowflake_grant_privileges_to_account_role.analyst_future["{schema}/{kind}"]'
+            for schema in ("CORE", "MARTS")
+            for kind in ("TABLES", "VIEWS")
+        ),
+    }
+    assert re.search(r"Plan: \d+ to add, 0 to change, 0 to destroy\.", plan), plan
+    assert "will be destroyed" not in plan
+
+
 ROOT_TEST = """
 mock_provider "aws" {
   override_data {

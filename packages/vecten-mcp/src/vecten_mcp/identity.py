@@ -14,6 +14,7 @@ RESERVED = {
     "airflow",
     "mcp_state",
     "warehouse_owner",
+    "reader",
 }
 
 

@@ -5,6 +5,29 @@ from contextlib import contextmanager
 from psycopg import sql
 
 from vecten_mcp.warehouse.base import Account, check_account
+from vecten_shared.identity_setup import ACCESS_VERSION
+
+READ_GRANTS = """
+WITH managed AS (SELECT oid, rolname FROM pg_catalog.pg_roles WHERE rolname = ANY(%s))
+SELECT m.rolname, 'usage', n.nspname, NULL, 'schema'
+FROM pg_catalog.pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+JOIN managed m ON m.oid = a.grantee
+WHERE a.privilege_type = 'USAGE'
+UNION ALL
+SELECT m.rolname, 'select', n.nspname, c.relname,
+       CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'partitioned table'
+                      WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view'
+                      ELSE 'foreign table' END
+FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(c.relacl) a JOIN managed m ON m.oid = a.grantee
+WHERE a.privilege_type = 'SELECT' AND c.relkind IN ('r','p','v','m','f')
+UNION ALL
+SELECT m.rolname, 'future', n.nspname, NULL, 'table'
+FROM pg_catalog.pg_default_acl d LEFT JOIN pg_catalog.pg_namespace n
+  ON n.oid = d.defaclnamespace
+CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN managed m ON m.oid = a.grantee
+WHERE a.privilege_type = 'SELECT' AND d.defaclobjtype = 'r'
+"""
 
 
 def identifier(name):
@@ -212,6 +235,19 @@ class PostgresAdapter:
                     ),
                     (role, grant, relation),
                 )
+
+    def access_version(self):
+        # The catalogs are read directly and drift is revoked through the owner helpers,
+        # whose behaviour no installed version changes.
+        return ACCESS_VERSION
+
+    def read_grants(self, roles):
+        """`(role, kind, schema, relation, object kind)` for every USAGE, SELECT and default
+        SELECT the roles hold, from the catalogs every role may read; a default privilege set
+        for the whole database has no schema."""
+        with self.control() as conn:
+            rows = conn.execute(READ_GRANTS, (sorted(roles),)).fetchall()
+        return {tuple(row) for row in rows}
 
     def check_scope(self, registry):
         registry = set(registry)

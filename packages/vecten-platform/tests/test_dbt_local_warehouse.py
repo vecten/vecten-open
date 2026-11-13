@@ -61,6 +61,23 @@ def test_snowflake_emulation_keeps_sqlglot_warnings_quiet(tmp_path, caplog):
     assert logging.getLogger("sqlglot").level == before
 
 
+def test_snowflake_emulation_accepts_copy_grants(tmp_path):
+    # dbt-snowflake's `copy_grants: true` adds COPY GRANTS to every rebuild, and
+    # `dbt-build-local` runs the same project against the emulation.
+    with snowflake_emulation(tmp_path):
+        cur = _fakesnow_connect("PUBLIC").cursor()
+        cur.execute("create schema WAREHOUSE.MARTS")
+        cur.execute("create or replace table WAREHOUSE.MARTS.T as (select 1 as id)")
+        cur.execute(
+            "create or replace transient table WAREHOUSE.MARTS.T copy grants as (select 2 as id)"
+        )
+        cur.execute(
+            "create or replace view WAREHOUSE.MARTS.V copy grants as "
+            "(select id from WAREHOUSE.MARTS.T)"
+        )
+        assert cur.execute("select id from WAREHOUSE.MARTS.V").fetchall() == [(2,)]
+
+
 def test_postgres_target_needs_docker(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: None)
     with pytest.raises(Failure) as exc:

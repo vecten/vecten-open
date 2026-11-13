@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+from collections import defaultdict
 from threading import RLock
 
 from sqlalchemy import delete, insert, select
@@ -12,11 +13,27 @@ from vecten_mcp.apps import APP_PRINCIPALS
 from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import warehouse_name
 from vecten_mcp.state import groups, memberships
+from vecten_shared.identity_setup import ACCESS_VERSION
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
 # the last sync failure until a sync succeeds}.
 APP_ROLES = "app_roles"
+
+CONVENTION_SCHEMAS = frozenset({"core", "marts", "staging", "snapshots"})
+PRIVILEGES = {"usage": "USAGE", "select": "SELECT", "future": "FUTURE SELECT"}
+OUTDATED_FIX = (
+    "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
+    "--confirm-run: until then read grants the state does not hold are neither listed nor "
+    "revoked."
+)
+
+
+def in_scope(schema):
+    """The schemas whose read grants the state database owns for every managed role: the
+    convention's, and every `raw_` schema, a prefix the convention keeps for loaded sources
+    and the bound READ_GRANT and the Postgres helpers already accept."""
+    return schema in CONVENTION_SCHEMAS or schema.startswith("raw_")
 
 
 class AccessService:
@@ -172,10 +189,17 @@ class AccessService:
         return set(record["roles"]) if record else None
 
     def seed_defaults(self):
-        # Setup SQL creates these grants. Record them once so revoke is effective,
-        # without reintroducing an administrator's later revocation on restart.
+        # No setup grants these: the first reconciliation applies them. Recording them once
+        # keeps an administrator's later revocation from coming back on restart.
         with self.lock, self.state.transaction() as conn:
-            if self.state.get("bootstrap", "default_grants", conn=conn):
+            earlier = bool(self.state.get("bootstrap", "default_grants", conn=conn))
+            if not self.state.get("bootstrap", "drift_mode", conn=conn):
+                # A state an earlier release seeded may sit beside hand-made grants nobody
+                # recorded: they are listed until an admin chooses to revoke them.
+                if earlier and not self.state.get("settings", "reconcile_drift", conn=conn):
+                    self.state.put("settings", "reconcile_drift", {"value": "report"}, conn=conn)
+                self.state.put("bootstrap", "drift_mode", {"seeded": True}, conn=conn)
+            if earlier:
                 return
             for target in ("core", "marts"):
                 row = {"group": "default", "kind": "schema", "target": target}
@@ -338,6 +362,7 @@ class AccessService:
 
     def reconcile(self):
         failures, blocked, reconciled = [], set(), 0
+        report = {"added": [], "revoked": [], "drift": [], "database_future": []}
 
         def failed(key, row, operation, exc):
             blocked.add(key)
@@ -372,6 +397,7 @@ class AccessService:
                         self.state.remove("applied_grants", key)
                     except Exception as exc:
                         failed(key, old, "revoke", exc)
+            held, outdated = self._converge(desired, report, failures)
             for key, row in desired.items():
                 if key in blocked or (
                     row["kind"] == "dataset" and row["target"] not in self.datasets
@@ -379,23 +405,171 @@ class AccessService:
                     continue
                 try:
                     source = self._source(row["kind"], row["target"])
+                    role = self.require_group(row["group"])["warehouse_role"]
+                    pieces = self._pieces(role, row["kind"], source)
+                    absent = key not in applied if held is None else not pieces <= _folded(held)
                     self._apply(row, source, True)
                     self.state.put("applied_grants", key, dict(row, source=source))
                     reconciled += 1
+                    if absent:
+                        report["added"].append(dict(row))
+                        logger.info("Granted %s %s to %s", row["kind"], row["target"], row["group"])
                 except Exception as exc:
                     failed(key, row, "grant", exc)
-        self.state.put(
-            "access_health", "reconciliation", {"checked_at": time.time(), "failures": failures}
-        )
+        health = {"checked_at": time.time(), "failures": failures, **report}
+        if outdated:
+            health["outdated"] = outdated
+        self.state.put("access_health", "reconciliation", health)
         self.admit()
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
+    def _pieces(self, role, kind, source):
+        """The read grants, as `read_grants` names them without the object kind, that one
+        desired grant consists of."""
+        if kind == "schema":
+            return {(role, "usage", source, None), (role, "future", source, None)}
+        schema, relation = source.lower().split(".")[-2:]
+        return {(role, "usage", schema, None), (role, "select", schema, relation)}
+
+    def _read(self, roles, failures):
+        """What each role holds, read one role at a time so one unreadable role leaves the
+        others' drift handled, and the roles that could be read."""
+        held, readable = set(), set()
+        for role in sorted(roles):
+            try:
+                held |= set(self.adapter.read_grants({role}))
+                readable.add(role)
+            except Exception as exc:
+                failures.append(self._read_failure(exc, roles[role]))
+        return held, readable
+
+    def _converge(self, desired, report, failures):
+        """Revoke, or list under `report`, the read grants managed roles hold that the state
+        does not; returns what they held after it, or None when it could not be read."""
+        try:
+            installed = self.adapter.access_version()
+        except Exception as exc:
+            failures.append(self._read_failure(exc, "*"))
+            return None, None
+        if installed < ACCESS_VERSION:
+            outdated = {"installed": installed, "required": ACCESS_VERSION, "fix": OUTDATED_FIX}
+            logger.warning("Access procedures are version %s; %s", installed, OUTDATED_FIX)
+            return None, outdated
+        roles = {row["warehouse_role"]: row["name"] for row in self.list_groups()}
+        held, readable = self._read(roles, failures)
+        if not readable:
+            return None, None
+        whole, datasets = set(), defaultdict(set)
+        for row in desired.values():
+            group = self.state.group(row["group"])
+            if group is None or (row["kind"] == "dataset" and row["target"] not in self.datasets):
+                continue
+            source = self._source(row["kind"], row["target"])
+            if row["kind"] == "schema":
+                whole.add((group["warehouse_role"], source))
+            else:
+                schema, relation = source.lower().split(".")[-2:]
+                datasets[(group["warehouse_role"], schema)].add(relation)
+        places = defaultdict(list)
+        for grant in sorted(held, key=lambda g: tuple(map(str, g))):
+            role, kind, schema, relation, _ = grant
+            if role not in roles:
+                continue
+            if schema is None:
+                report["database_future"].append(_entry(roles, grant, place=False))
+                continue
+            if not in_scope(schema) or (role, schema) in whole:
+                continue
+            allowed = datasets.get((role, schema), set())
+            if (kind == "usage" and allowed) or (kind == "select" and relation.lower() in allowed):
+                continue
+            places[(role, schema)].append(grant)
+        mode = (self.state.get("settings", "reconcile_drift") or {}).get("value", "revoke")
+        if mode == "report":
+            for grants in places.values():
+                for grant in grants:
+                    report["drift"].append(_entry(roles, grant))
+                    logger.info("Drift: %s holds %s", grant[0], _named(_entry(roles, grant)))
+            return held, None
+        failed, touched = set(), set()
+
+        def failure(role, target, exc):
+            failed.add((role, target))
+            failures.append(
+                {
+                    "group": roles[role],
+                    "kind": "drift",
+                    "target": target,
+                    "operation": "revoke",
+                    "error": exc if isinstance(exc, str) else describe_error(exc),
+                }
+            )
+            logger.warning("Revoking drift on %s from %s failed: %s", target, role, exc)
+
+        for (role, schema), grants in places.items():
+            touched.add(role)
+            # A schema-level revoke takes the dataset grants in the schema with it; the grant
+            # pass that follows applies them again.
+            if any(kind != "select" for _, kind, *_ in grants):
+                try:
+                    self.adapter.schema_grant(role, schema, False)
+                except Exception as exc:
+                    failure(role, schema, exc)
+                continue
+            for _, _, _, relation, _ in grants:
+                # A quoted name the warehouse prints is a case-sensitive object that a
+                # revoke by its unquoted name would miss or confuse with another.
+                if '"' in relation:
+                    continue
+                try:
+                    self.adapter.dataset_grant(role, f"{schema}.{relation}", False)
+                except Exception as exc:
+                    failure(role, f"{schema}.{relation}", exc)
+        # What a revoke removed is read back: a kind the procedures do not cover stays.
+        after, reread = self._read({role: roles[role] for role in touched}, failures)
+        held = {grant for grant in held if grant[0] not in reread} | after
+        for (role, schema), grants in places.items():
+            kept = [g for g in grants if g in held]
+            for grant in grants:
+                entry = _entry(roles, grant)
+                if grant in kept:
+                    report["drift"].append(entry)
+                else:
+                    report["revoked"].append(entry)
+                    logger.info(
+                        "Revoked %s from %s: the state does not hold it", _named(entry), role
+                    )
+            noted = (role, schema) in failed or any(
+                (role, f"{schema}.{g[3]}") in failed or '"' in (g[3] or "") for g in kept
+            )
+            if kept and not noted:
+                names = ", ".join(_named(_entry(roles, g)) for g in kept)
+                failure(role, schema, f"still held after the revoke: {names}")
+        return held, None
+
+    @staticmethod
+    def _read_failure(exc, group):
+        failure = {
+            "group": group,
+            "kind": "drift",
+            "target": "*",
+            "operation": "read",
+            "error": describe_error(exc),
+        }
+        logger.warning("Reading the read grants of %s failed: %s", group, failure["error"])
+        return failure
+
     def health(self):
-        """The last reconciliation's failures, which `vecten issues` reports, and with bound
-        apps each bound group an app does not admit."""
+        """The last reconciliation's failures and the grants it added, revoked or found
+        drifting, which `vecten issues` reports, and with bound apps each bound group an app
+        does not admit."""
         health = self.state.get("access_health", "reconciliation") or {
             "checked_at": None,
             "failures": [],
+            "added": [],
+            "revoked": [],
+            "drift": [],
+            "database_future": [],
         }
         if self.apps is not None and self.apps.apps:
             health = {**health, "apps": self.apps.health() + self.app_role_health()}
@@ -420,3 +594,20 @@ class AccessService:
         for group in self.state.groups_for(principal_id):
             denied.update((self.state.get("denied", group) or {}).get("columns", []))
         return denied
+
+
+def _folded(held):
+    """Warehouse names compared as the state spells them: dataset sources are matched
+    without regard to case."""
+    return {(r, k, s.lower(), n.lower() if n else n) for r, k, s, n, _ in held if s}
+
+
+def _entry(roles, grant, *, place=True):
+    role, kind, schema, relation, kind_of = grant
+    entry = {"group": roles[role], "role": role, "privilege": PRIVILEGES[kind], "object": kind_of}
+    return {**entry, "schema": schema, "relation": relation} if place else entry
+
+
+def _named(entry):
+    place = entry["schema"] + ("." + entry["relation"] if entry["relation"] else "")
+    return f"{entry['privilege']} on {place}"

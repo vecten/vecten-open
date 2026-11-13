@@ -18,8 +18,11 @@ locals {
     { ANALYST = ["USAGE"], LOADER = ["USAGE", "CREATE SCHEMA"] },
     local.with_mcp ? { PROVISIONER = ["USAGE"] } : {},
   )
-  analyst_future = {
-    for pair in setproduct(local.analyst_schemas, ["TABLES", "VIEWS"]) :
+  # With the MCP, its state database is the only owner of the analyst role's reads, so a
+  # revoke made there holds; without it, nothing else grants them.
+  analyst_default_schemas = local.with_mcp ? toset([]) : local.analyst_schemas
+  analyst_default_future = {
+    for pair in setproduct(local.analyst_default_schemas, ["TABLES", "VIEWS"]) :
     "${pair[0]}/${pair[1]}" => { schema = pair[0], objects = pair[1] }
   }
 }
@@ -145,8 +148,27 @@ resource "snowflake_grant_privileges_to_account_role" "database" {
   }
 }
 
-resource "snowflake_grant_privileges_to_account_role" "analyst_schema" {
-  for_each = local.analyst_schemas
+# State written by earlier releases holds the analyst role's reads under these addresses.
+# Forgetting them keeps the grants in Snowflake: with the MCP its reconciliation owns them from
+# here, and without it the resources below take them over with an idempotent GRANT.
+removed {
+  from = snowflake_grant_privileges_to_account_role.analyst_schema
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = snowflake_grant_privileges_to_account_role.analyst_future
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "snowflake_grant_privileges_to_account_role" "analyst_default_schema" {
+  for_each = local.analyst_default_schemas
 
   account_role_name = snowflake_account_role.this["ANALYST"].name
   privileges        = ["USAGE"]
@@ -158,8 +180,8 @@ resource "snowflake_grant_privileges_to_account_role" "analyst_schema" {
 
 # Future grants are set before ownership moves to the loader role, whose dbt runs then create
 # the tables and views the analyst role reads.
-resource "snowflake_grant_privileges_to_account_role" "analyst_future" {
-  for_each = local.analyst_future
+resource "snowflake_grant_privileges_to_account_role" "analyst_default_future" {
+  for_each = local.analyst_default_future
 
   account_role_name = snowflake_account_role.this["ANALYST"].name
   privileges        = ["SELECT"]
@@ -184,8 +206,8 @@ resource "snowflake_grant_ownership" "schema" {
   }
 
   depends_on = [
-    snowflake_grant_privileges_to_account_role.analyst_schema,
-    snowflake_grant_privileges_to_account_role.analyst_future,
+    snowflake_grant_privileges_to_account_role.analyst_default_schema,
+    snowflake_grant_privileges_to_account_role.analyst_default_future,
     snowflake_grant_account_role.sysadmin,
     snowflake_grant_account_role.deployer,
   ]
