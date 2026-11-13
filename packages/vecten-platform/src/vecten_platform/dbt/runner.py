@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +55,8 @@ BUILD_STEP = build_args()
 CONVENTION_STEP = ("test", "--select", _CONVENTION_TESTS)
 _BUILD_STEPS = (BUILD_STEP, CONVENTION_STEP)
 _FAILED_STATUSES = {"error", "fail", "runtime error"}
+# The convention tests read the areas `vecten.toml` declares from this dbt var.
+AREAS_VAR = "vecten_areas"
 # `dbt_project.yml` reads its `osi-paths` entry from this variable and falls back to `../osi`.
 OSI_PATH_VAR = "VECTEN_OSI_PATH"
 TAIL_CHARS = 2000
@@ -158,9 +160,22 @@ def dbt_step(
     return run_dbt(args, project_dir=project_dir, env=env)
 
 
-def run_build(*, project_dir: Path, env: dict[str, str], in_process: bool) -> list[DbtRun]:
+def area_vars(areas: Iterable[str]) -> tuple[str, ...]:
+    """The `--vars` that pass the declared areas to dbt; none for a project without areas.
+
+    Every dbt step vecten runs for a project passes the same vars, since dbt re-parses the
+    whole project when they change.
+    """
+    names = sorted(areas)
+    return ("--vars", json.dumps({AREAS_VAR: names})) if names else ()
+
+
+def run_build(
+    *, project_dir: Path, env: dict[str, str], in_process: bool, areas: Iterable[str] = ()
+) -> list[DbtRun]:
     runs: list[DbtRun] = []
     for args in _BUILD_STEPS:
+        args = (*args, *area_vars(areas))
         run = dbt_step(list(args), project_dir=project_dir, env=env, in_process=in_process)
         runs.append(run)
         if run.returncode != 0:

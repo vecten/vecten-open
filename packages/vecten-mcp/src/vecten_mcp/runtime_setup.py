@@ -202,6 +202,19 @@ def model_database(config, adapter):
     return dataset_database(config), adapter.names.database
 
 
+def build_watch(config):
+    """What tells the MCP a dbt build replaced relations, or None where it need not know.
+
+    Postgres has no equivalent of Snowflake's COPY GRANTS, so a rebuilt relation drops its
+    per-relation grants until the next reconciliation.
+    """
+    if config.warehouse.kind != "postgres" or not config.has("platform"):
+        return None
+    from vecten_shared.osi.revision import read_build_finished
+
+    return lambda: read_build_finished(os.environ)
+
+
 def configured_runtime(root, config, extensions):
     import psycopg
 
@@ -283,7 +296,9 @@ def configured_runtime(root, config, extensions):
     if idle_setting:
         pools.idle_timeout = idle_setting["value"]
     admin = Administration(state, adapter, oauth, access, pools=pools)
-    runtime = Runtime(state, oauth, extensions, adapter, pools, admin, access)
+    runtime = Runtime(
+        state, oauth, extensions, adapter, pools, admin, access, build_finished=build_watch(config)
+    )
     from vecten_mcp.auth.gate import GateService
 
     runtime.gate = GateService.from_config(oauth, config)

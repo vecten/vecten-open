@@ -1,4 +1,5 @@
-"""Where the dbt DAG keeps what outlives a run: each run's results and the commit last built."""
+"""Where the dbt DAG keeps what outlives a run: each run's results, the commit last built and
+when the last build finished."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from typing import Protocol
 from vecten_shared.records import write_text_atomic
 
 BUILT_COMMIT_KEY = "dbt/built_commit"
+BUILD_FINISHED_KEY = "dbt/build_finished_at"
 ARTIFACT_DIR_VAR = "VECTEN_ARTIFACT_DIR"
 ARTIFACT_URL_VAR = "VECTEN_ARTIFACT_URL"
 DEFAULT_ARTIFACT_DIR = "/opt/airflow/artifacts"

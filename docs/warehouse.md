@@ -56,7 +56,7 @@ existing one share the same CLI, but the latter has no connectors or dbt project
 
 ## Modelling
 
-dbt models the raw data into the schema convention, version 1, which every project carries as
+dbt models the raw data into the schema convention, version 2, which every project carries as
 `docs/schema-convention.md`. A project with the `platform` component has this layout:
 
     dbt/models/staging/   staging_<source>_<entity>: raw columns cast to types, plus _loaded_at and _source
@@ -64,6 +64,12 @@ dbt models the raw data into the schema convention, version 1, which every proje
     dbt/models/core/      one table per entity, a singular noun (company, deal), with a tested primary key
     dbt/models/marts/     domain-prefixed tables (sales_pipeline) with a primary key; each one is a dataset in osi/
     osi/                  the Apache Ossie semantic model, JSON, read by dbt and by the MCP
+
+A restricted area, declared in `vecten.toml` as `[areas.<area>]`, adds `dbt/models/core_<area>/`
+and `dbt/models/marts_<area>/`, built into schemas of those names that no role reads until an
+admin grants the area to a group. Their models follow the core and marts rules, and each mart
+there is a dataset. Version 2 is a superset of version 1: a project without areas passes it
+unchanged.
 
 The tests that enforce the convention, the identity macros and dbt's time spine ship in the
 `vecten_convention` dbt package inside `vecten-platform`. `vecten dbt-build-local`, `vecten dbt`

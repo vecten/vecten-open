@@ -1,7 +1,7 @@
 {#- Core and marts are read by people and by the semantic model, so every built column there is declared with a description. Reads the built relations, so it runs after the build. -#}
 {%- set violations = [] -%}
 {%- for node in vecten_convention.convention_models() -%}
-    {%- if node.resource_type == 'model' and (node.schema | lower) in ['core', 'marts'] -%}
+    {%- if node.resource_type == 'model' and vecten_convention.convention_layer(node.schema) in ['core', 'marts'] -%}
         {%- if not (node.description | trim) -%}
             {%- do violations.append('model ' ~ node.name ~ ': has no description') -%}
         {%- endif -%}
