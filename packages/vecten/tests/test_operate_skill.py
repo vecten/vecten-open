@@ -84,6 +84,15 @@ def test_the_three_failures_end_in_three_skills_and_an_empty_list():
         "The next run reads the stored value",
         "Report an issue closed only when the list no longer holds its id",
         "never take evidence from it",
+        "vecten promote --status --json",
+        "vecten issues --env <env> --json",
+        "vecten issues show <id> --env <env> --json",
+        "Promote <commit> to <next env>?",
+        "Only on the human's explicit yes, run: ``` vecten promote --env <next env> --json ```",
+        "Never promote, ship or deploy on your own.",
+        "until it is promoted and runs green there",
+        "Exit 0 with an empty `issues` list: nothing is broken in `<env>`. Say so and go on to "
+        "the next environment of the order; stop after the last",
     ],
 )
 def test_the_skill_states_the_loop_and_its_rules(phrase):

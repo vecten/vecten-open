@@ -55,6 +55,10 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Ship**: deliver a project's code and semantic files to existing hosts, without changing infrastructure through Terraform.
 
+**Promotion order**: the list under `[deploy] promotion` in `vecten.toml`, such as `["dev", "prod"]`, of the environments code reaches one after the other; a merge ships the first, each later one ships only by promotion, and without the key the order is `prod` alone; see [promotion order](operations.md#promotion-order).
+
+**Promote**: ship to an environment of the promotion order a commit the environment before it shipped, the one it shipped last unless `--commit` names another, with `vecten promote --env <env>`; what each environment shipped is read from the commit status `vecten/ship/<env>`.
+
 **Provisioner**: the privileged warehouse identity that creates and manages the roles used by MCP principals.
 
 **Principal**: a person or service identity authenticated by the MCP server.

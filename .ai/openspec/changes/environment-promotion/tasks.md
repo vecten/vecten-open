@@ -3,6 +3,7 @@
 - [x] 1.1 `[deploy] promotion` in `vecten_shared.config`: at least two names, no repeats, `prod` last, each with a tfvars file; absent means `["prod"]`; one helper returns the order and the environment before a given one
 - [x] 1.2 The CLI refuses to write the key while `[project] scaffold_version` predates this release, naming `vecten update`
 - [x] 1.3 Tests: validation, the default, the helper, the refusal
+- [x] 1.4 `vecten answer deploy.promotion <envs>|none` records or removes the order, refusing what 1.1 and 1.2 refuse, with `vecten.toml` unchanged
 
 ## 2. Commit statuses and the shipped commit
 
@@ -32,18 +33,20 @@
 
 ## 6. `next`
 
-- [ ] 6.1 `vecten.next.assemble` walks the order instead of `ENV = "prod"`; prerequisites, gate and post-deploy items name the walked environment; the gate of a later environment says it ships what the environment before it shipped
-- [ ] 6.2 Key renewal and handover items for every environment with facts
-- [ ] 6.3 Tests: no order gives today's items; `dev` first; `prod` once `dev` is clear; a `dev` key renewal while walking `prod`
+- [x] 6.1 `vecten.next.assemble` walks the order instead of `ENV = "prod"`; prerequisites, gate and post-deploy items name the walked environment; the gate of a later environment says it ships what the environment before it shipped
+- [x] 6.2 Key renewal and handover items for every environment with facts
+- [x] 6.3 Tests: no order gives today's items; `dev` first; `prod` once `dev` is clear; a `dev` key renewal while walking `prod`
 
 ## 7. Skills and docs
 
-- [ ] 7.1 `operate` skill: the order from `promote --status`, issues per environment, the promotion `ask`; re-render the plugin and `docs/agent-guide.md` with `uv run vecten dev render-plugin --repo .`
-- [ ] 7.2 `guide` skill: the promotion order in the deploy walk-through
-- [ ] 7.3 `docs/operations.md`: the order, `promote`, statuses, rollback by `--commit`, required reviewers as an option where the plan offers them
-- [ ] 7.4 Runbook template: adopting an order, and what a promoted run reads from where
-- [ ] 7.5 `docs/GLOSSARY.md`: "Promotion order" and "Promote"
-- [ ] 7.6 `CHANGELOG.md` under `[Unreleased]`
+- [x] 7.1 `operate` skill: the order from `promote --status`, issues per environment, the promotion `ask`; re-render the plugin and `docs/agent-guide.md` with `uv run vecten dev render-plugin --repo .`
+- [x] 7.2 `guide` skill: the promotion order in the deploy walk-through
+- [x] 7.3 `docs/operations.md`: the order, `promote`, statuses, rollback by `--commit`, required reviewers as an option where the plan offers them
+- [x] 7.4 Runbook template: adopting an order, and what a promoted run reads from where
+- [x] 7.5 `docs/GLOSSARY.md`: "Promotion order" and "Promote"
+- [x] 7.6 `CHANGELOG.md` under `[Unreleased]`
+
+Note: snowflake-shared-account tasks 3.3 and 3.4 give each environment its own Snowflake account: `check_tfvars` compares `snowflake_account` with `[warehouse] account` for `prod` only, and `ship` hands every host its environment's account, which the runtime and dbt connect to. On a Snowflake warehouse the platform builds, the guide (7.2) and the runbook (7.4) therefore set `dev`'s account in its tfvars: an account of its own with fixed names, or `prod`'s in a shared account.
 
 ## 8. Proven only on a real repository and two deployed environments
 

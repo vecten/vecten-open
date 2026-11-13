@@ -167,5 +167,5 @@ The workflows pin the `vecten` version they were rendered with. An order declare
 ## Migration Plan
 
 - **Existing projects.** Nothing changes until `[deploy] promotion` is set. `vecten update` re-renders `ship.yml`, `deploy-platform.yml` and `terraform-apply.yml`. Without an order the new `ship.yml` ships `prod` on every push, as before, and also sets the `vecten/ship/prod` status.
-- **Adopting an order.** Bootstrap and deploy the first environment (for example `dev`) as today. Set `[deploy] promotion = ["dev", "prod"]` and push: from that push on, merges ship `dev`, and `vecten promote --env prod` ships `prod`. The first promotion needs one push shipped to `dev` after `vecten update`, because only those ships set a status.
-- **Rollback.** Remove `[deploy] promotion` and push: merges ship `prod` again.
+- **Adopting an order.** Bootstrap and deploy the first environment (for example `dev`) as today. Set `[deploy] promotion = ["dev", "prod"]` with `vecten answer deploy.promotion dev,prod` and push: from that push on, merges ship `dev`, and `vecten promote --env prod` ships `prod`. The first promotion needs one push shipped to `dev` after `vecten update`, because only those ships set a status.
+- **Rollback.** Remove `[deploy] promotion` with `vecten answer deploy.promotion none` and push: merges ship `prod` again.

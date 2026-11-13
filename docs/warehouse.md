@@ -176,10 +176,14 @@ dbt compiles, such as `run_query` in a model or macro, or Jinja passed to `show 
 `--env prod` as a guard against accidents, not as a permission boundary. Anyone who can run it
 can also read the `LOADER` key.
 
-Any other environment runs every dbt command. That is the way to a scratch or CI database on
-Snowflake: deploy another environment, in its own Snowflake account because one account serves
-one environment, and run `vecten dbt --env <name> build` there. CI that needs no real Snowflake
-keeps running `vecten dbt-build-local --check` on the emulation.
+Any other environment runs every dbt command, with `vecten dbt --env <name> build`; that is
+the way to a scratch or CI database on Snowflake. Each environment names its Snowflake account
+in `snowflake_account` in `deploy/envs/<env>.tfvars`, and its hosts, the MCP and dbt connect to
+that account; `[warehouse] account` names `prod`'s. With fixed names one account holds one
+environment, so a second environment on a Snowflake warehouse the platform builds names an
+account of its own; with `shared_account = true` under `[warehouse]` it may name `prod`'s, and
+every account-level name it gets ends in `_<BASE>_<ENV>`. CI that needs no real Snowflake keeps
+running `vecten dbt-build-local --check` on the emulation.
 
 A Postgres warehouse is deployed on the environment's private network, which the laptop cannot
 reach, so `--env` on a Postgres project exits 4. The dbt DAG builds it, and
