@@ -21,6 +21,14 @@ class AccessService:
         self.invalidate = invalidate or (lambda pid: None)
         self.datasets = {}
         self.lock = RLock()
+        # The bound apps whose admitted groups follow these grants (AppScopes), or None.
+        self.apps = None
+
+    def admit(self):
+        # Under the grant lock, so a computation from older grants never lands after a newer one.
+        with self.lock:
+            if self.apps is not None:
+                self.apps.admit(self.datasets)
 
     def seed_defaults(self):
         # Setup SQL creates these grants. Record them once so revoke is effective,
@@ -47,6 +55,7 @@ class AccessService:
             conn.execute(insert(groups).values(name=name, warehouse_role=role))
             self.adapter.create_group(role)
             self.state.put("provisioner_registry", role, {"kind": "group"}, conn=conn)
+        self.admit()
         return {"name": name, "warehouse_role": role}
 
     def delete_group(self, name):
@@ -70,6 +79,7 @@ class AccessService:
                 conn.execute(delete(groups).where(groups.c.name == name))
                 self.state.remove("provisioner_registry", group["warehouse_role"], conn=conn)
                 self.state.remove("denied", name, conn=conn)
+            self.admit()
         return {"deleted": name}
 
     def require_group(self, name):
@@ -128,6 +138,7 @@ class AccessService:
             key = self._key(group, kind, target)
             self.state.put("grants", key, row)
             self.state.put("applied_grants", key, dict(row, source=source))
+            self.admit()
         return row
 
     def revoke(self, group, kind, target):
@@ -200,14 +211,19 @@ class AccessService:
         self.state.put(
             "access_health", "reconciliation", {"checked_at": time.time(), "failures": failures}
         )
+        self.admit()
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
     def health(self):
-        """The last reconciliation's failures, which `vecten issues` reports."""
-        return self.state.get("access_health", "reconciliation") or {
+        """The last reconciliation's failures, which `vecten issues` reports, and with bound
+        apps each bound group an app does not admit."""
+        health = self.state.get("access_health", "reconciliation") or {
             "checked_at": None,
             "failures": [],
         }
+        if self.apps is not None and self.apps.apps:
+            health = {**health, "apps": self.apps.health()}
+        return health
 
     def model_changed(self, datasets):
         with self.lock:

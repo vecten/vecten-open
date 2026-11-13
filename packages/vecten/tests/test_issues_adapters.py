@@ -529,3 +529,66 @@ def test_a_not_ready_model_is_found_by_its_id():
     ctx = context([], admin=admin_with(model_health=NOT_READY))
     shown = find(ctx, "iss_mcp_model")
     assert shown is not None and shown.evidence["status"] == "error"
+
+
+APP_EXCLUSION = {
+    "app": "acme-sales.finance",
+    "group": "default",
+    "dataset": "revenue",
+    "source": "marts_finance.revenue",
+    "message": "group default may open acme-sales.finance but cannot read marts_finance.revenue",
+}
+
+
+def test_a_group_an_app_does_not_admit_is_an_issue_naming_the_app_and_table():
+    health = {"checked_at": 1792627200, "failures": [], "apps": [APP_EXCLUSION]}
+    ctx = context([], admin=admin_with(access_health=health))
+    [issue] = [i for i in collect(ctx).issues if i.source == "mcp"]
+    assert "acme-sales.finance" in issue.title and "default" in issue.title
+    assert "marts_finance.revenue" in issue.resolution
+    assert "vecten grant revenue --group default --env prod" in issue.resolution
+    assert find(ctx, issue.id) is not None
+
+
+def test_a_bound_group_that_does_not_exist_is_an_issue():
+    entry = {"app": "acme-sales.finance", "group": "sales", "reason": "no such group"}
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "sales" in issue.title and "does not exist" in issue.resolution
+
+
+def test_an_app_dataset_the_model_lacks_is_an_issue():
+    entry = {
+        "app": "acme-sales.finance",
+        "group": "finance",
+        "dataset": "revenue",
+        "reason": "not in the model",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "revenue" in issue.resolution and "osi/" in issue.resolution
+
+
+def test_an_unmarked_app_principal_is_an_issue():
+    entry = {
+        "app": "acme-sales.overview",
+        "principal_id": "p1",
+        "warehouse_name": "svc_app_overview",
+        "reason": "not marked as the app's principal",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "svc_app_overview" in issue.title
+    assert "vecten app connect acme-sales.overview --env prod" in issue.resolution

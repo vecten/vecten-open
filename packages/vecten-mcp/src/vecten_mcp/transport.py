@@ -65,10 +65,20 @@ class AuthorizedMCP(MCPServer):
         return self.runtime.oauth.resolve(access.token)
 
     def allowed_tools(self, resolved):
-        return self.runtime.extensions.tools_for(
+        allowed = self.runtime.extensions.tools_for(
             resolved.groups,
             admin=is_admin(resolved),
         )
+        apps = getattr(self.runtime, "apps", None)
+        if apps is not None and apps.scope(resolved.principal["id"]) is not None:
+            from vecten_mcp.tools import APP_HANDLERS
+
+            allowed = {
+                name: handler
+                for name, handler in allowed.items()
+                if APP_HANDLERS.get(name) is handler
+            }
+        return allowed
 
     async def list_tools(self):
         resolved = self.resolved()
