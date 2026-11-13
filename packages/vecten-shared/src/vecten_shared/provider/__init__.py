@@ -204,6 +204,12 @@ def shared_base(config: VectenConfig) -> str:
     return _identifier(config.warehouse.database or config.project.name)
 
 
+def recorded_base(config: VectenConfig, env: str) -> str | None:
+    """The `BASE` a shared environment's first deploy recorded; None for any other."""
+    facts = config.environments.get(env)
+    return facts.snowflake_base if facts and facts.snowflake_shared_account else None
+
+
 def _shared_suffix(config: VectenConfig, env: str) -> str:
     if "-" in env:
         raise Failure(
@@ -212,7 +218,9 @@ def _shared_suffix(config: VectenConfig, env: str) -> str:
             f"account cannot carry, since `_` separates the project from the environment in "
             f"them; name it {env.replace('-', '')!r}",
         )
-    base = config.warehouse.database or config.project.name
+    # Terraform created the deployed environment's objects under the recorded base, whatever
+    # [warehouse] database says now; deploy and ship refuse the difference.
+    base = recorded_base(config, env) or config.warehouse.database or config.project.name
     suffix = "_" + _identifier(f"{base}_{env}")
     if not _SUFFIX.fullmatch(suffix):
         raise Failure(

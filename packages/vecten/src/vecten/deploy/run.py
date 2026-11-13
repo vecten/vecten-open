@@ -379,6 +379,9 @@ def ship_env(
     # The settings this commit would ship are checked before any host or cloud is touched.
     check_settings(config, read_extension_record(project_root) or {}, env)
     check_bindings(config, read_extension_record(project_root) or {})
+    # Deploy's refusal of a changed Snowflake layout or base also holds here, before the
+    # check, so the ship workflow's gate refuses before any host is reached.
+    check_layout(project_root, config, env)
     if check:
         found = check_facts(config, env)
         export_facts(found)
