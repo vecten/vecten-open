@@ -191,16 +191,25 @@ by its lower-case name. In a shared Snowflake account, binding refuses every rol
 ends in `_<BASE>_<ENV>` for any environment of the project, in any case: this environment's own
 roles (`LOADER_ACME_DEV`, `MARKETING_ACME_DEV`) and every other environment's
 (`ANALYST_ACME_PROD`). A group's role named with such an ending is refused as well, since the
-environment adds its own suffix to it. The provisioner cannot read a Snowflake role it does not
-own, so beyond its name the review is the check: a bound role that holds privileges on another
-environment's database is the administrator's to refuse.
+environment adds its own suffix to it.
+
+On Snowflake, binding checks a role by its name only. The provisioner cannot read the
+privileges of a role it neither owns nor holds, so it cannot check what a bound role reaches:
+the administrator's review is the check. In a shared account the review's header names what
+else makes a role unsafe to bind: a grant on another environment's database (`ACME_PROD`) or on
+anything in it, or `USAGE` on a role named `*_<BASE>_<ENV>`. Binding accepts such a role, for
+example `FINANCE_ANALYST` with `SELECT` on `ACME_PROD`, or the role Terraform deploys with; the
+administrator refuses it. The review lists every grant through the role's hierarchy with each
+object's database, and ends with `SHOW GRANTS TO ROLE`, which also shows the grants of the last
+two hours that `ACCOUNT_USAGE` does not list yet.
 
 The provisioner owns each group's role, and an owner can grant itself the roles it owns, so it
 can reach whatever a bound role reaches. A bound role must therefore never hold account-level
 privileges or roles such as `ACCOUNTADMIN`, `SECURITYADMIN`, `SYSADMIN` or `USERADMIN`. While a
 binding exists, the MCP's startup check refuses `USAGE` on a group role held by `PROVISIONER`.
 What a bound role reads, including outside the environment's database, is the client's to set,
-and the warehouse enforces it.
+and the warehouse enforces it; in a shared account, another environment's database is the
+exception above.
 
 A person's session runs under the group's role (or, with one reader role per person, their
 own), never the bound role, so a policy keyed on `CURRENT_ROLE()` does not match a bound role.

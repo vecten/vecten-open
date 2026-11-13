@@ -179,3 +179,27 @@ def test_postgres_scope_takes_the_bound_flag():
     import inspect
 
     assert "bound" in inspect.signature(PostgresAdapter.check_scope).parameters
+
+
+def _header(review):
+    return "\n".join(line for line in review.splitlines() if line.startswith("--"))
+
+
+def test_a_shared_account_review_names_what_else_makes_the_role_unsafe():
+    adapter, _ = snowflake([], shared_account=True)
+    review = adapter.review_statement("finance_analyst")
+    header = " ".join(line.removeprefix("--").strip() for line in _header(review).splitlines())
+    # The provisioner cannot read the bound role's grants, so the administrator refuses these.
+    assert "on ACCOUNT" in header and "ACCOUNTADMIN" in header
+    assert "USAGE on a role named *_ACME_<ENV>" in header
+    assert "a database named ACME_<ENV> other than ACME_DEV" in header
+    assert "TABLE_CATALOG" in header and "g.table_catalog" in review
+    # ACCOUNT_USAGE lags; SHOW GRANTS reads the grants made since, one role at a time.
+    assert review.rstrip().endswith('SHOW GRANTS TO ROLE "FINANCE_ANALYST";')
+
+
+def test_the_fixed_layout_review_names_no_other_environment():
+    adapter, _ = snowflake([])
+    review = adapter.review_statement("finance_analyst")
+    assert "<ENV>" not in review and "SHOW GRANTS" not in review
+    assert "on\n-- ACCOUNT" in review or "on ACCOUNT" in review
