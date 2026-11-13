@@ -41,20 +41,20 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 
 ## 4. Ship, images and workflows
 
-- [ ] 4.1 `vecten.deploy.bundle`: fetch each git source in CI, check `source_sha256`, write the source to `extensions/<name>/` in every host bundle beside in-repo extensions; refuse a mismatch before any host changes. `vecten.stack.up`: the same from a fetched copy under `.vecten/`, never in the project tree.
-- [ ] 4.2 `vecten.stack.images`: verify each git-sourced directory's `source_sha256` against the bundled `extensions.lock.json`, then install it through `project-extensions`' in-repo step; unchanged for projects without git sources.
-- [ ] 4.3 Rendered `deploy-platform.yml`, `ship.yml`, `terraform-apply.yml`: optional secrets passed by name, the App token step, `GIT_CREDENTIALS` only on the `vecten ship` step; `actions/create-github-app-token` pinned in the versions table.
-- [ ] 4.4 Laptop dispatch checks (Decision 13).
-- [ ] 4.5 Tests: rendered workflows (only the `vecten` step gets the credential); byte-identical bundles for projects without git sources; `docker` tier: both images from a bundled git source, no layer holds the token or the fetched source tree, a tampered source fails the build naming both hashes.
+- [x] 4.1 `vecten.deploy.bundle`: fetch each git source in CI, check `source_sha256`, write the source to `extensions/<name>/` in every host bundle beside in-repo extensions; refuse a mismatch before any host changes. `vecten.stack.up`: the same from a fetched copy under `.vecten/`, never in the project tree.
+- [x] 4.2 `vecten.stack.images`: verify each git-sourced directory's `source_sha256` against the bundled `extensions.lock.json`, then install it through `project-extensions`' in-repo step; unchanged for projects without git sources.
+- [x] 4.3 Rendered `deploy-platform.yml`, `ship.yml`, `terraform-apply.yml`: optional secrets passed by name, the App token step, `GIT_CREDENTIALS` only on the `vecten ship` step; `actions/create-github-app-token` pinned in the versions table.
+- [x] 4.4 Laptop dispatch checks (Decision 13).
+- [x] 4.5 Tests: rendered workflows (only the `vecten` step gets the credential); byte-identical bundles for projects without git sources; `docker` tier: both images from a bundled git source, no layer holds the token or the fetched source tree, a tampered source fails the build naming both hashes.
 - [ ] 4.6 **[private repo]** `extension add` from a private monorepo with two extensions under subdirectories and prefixed tags, then `vecten up`.
 - [ ] 4.7 **[deploy]** AWS and Scaleway sandboxes: ship with an App token and with `VECTEN_GIT_CREDENTIALS`; no VM secret store, host file or container holds a git credential; an arm64 VM builds the source an amd64 runner bundled; a promotion of the same commit fetches again with the CI credential; a revoked token fails the ship in CI before any host changes.
 
 ## 5. `vecten extension sync`
 
-- [ ] 5.1 The command (Decision 14) and its tests, including in-repo extensions.
+- [x] 5.1 The command (Decision 14) and its tests, including in-repo extensions.
 
 ## 6. Documentation and archive
 
-- [ ] 6.1 `docs/extensions-private-git.md` (Decision 16); `docs/extensions.md` links it.
-- [ ] 6.2 `docs/cli.md`, `docs/GLOSSARY.md` ("Git source"), changelog.
+- [x] 6.1 `docs/extensions-private-git.md` (Decision 16); `docs/extensions.md` links it.
+- [x] 6.2 `docs/cli.md`, `docs/GLOSSARY.md` ("Git source"), changelog.
 - [ ] 6.3 Agree the final text of "Extensions are pip dependencies everywhere" with `project-extensions`, and archive.

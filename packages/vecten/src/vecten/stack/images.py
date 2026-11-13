@@ -9,6 +9,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from vecten_shared.config import VectenConfig
+from vecten_shared.extension_record import RECORD_FILE
 from vecten_shared.extensions import requirement
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
@@ -20,6 +21,8 @@ LOCAL_MCP = "vecten-mcp"
 # Docker sends the whole build context to the daemon, so the context is a directory of its
 # own holding the layer's inputs and none of the stack's secrets.
 BUILD_DIR = "build"
+# The directory, beside the build context, where `up` keeps the git sources it fetched.
+SOURCES_DIR = "sources"
 BASE_CONSTRAINTS_SCRIPT = (
     "from importlib.metadata import distributions; "
     "print('\\n'.join(sorted(d.metadata['Name'] + '==' + d.version for d in distributions())))"
@@ -69,12 +72,16 @@ def project_requirements(config: VectenConfig) -> list[str]:
     return sorted(reqs)
 
 
-def lock_lines(path: Path, wanted: list[Requirement]) -> list[str]:
+def lock_lines(
+    path: Path, wanted: list[Requirement], sources: frozenset[str] = frozenset()
+) -> list[str]:
+    """The index pins `path` holds, every one of `wanted` among them; a line of `sources`, a git
+    source the record holds, is left to the install from its bundled source."""
     try:
         lines = [
             line
             for line in path.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
+            if line.strip() and not line.startswith("#") and line not in sources
         ]
         parsed = [Requirement(line) for line in lines]
         if any(
@@ -115,7 +122,21 @@ def _in_repo_extensions(root: Path) -> list:
     return sorted(local, key=lambda e: e.source_path)
 
 
+def _git_sources(config: VectenConfig, record: dict) -> dict[str, str]:
+    """The record line of each registered git-sourced extension, by name, as
+    `requirements.txt` and every lock hold it; the build gets its source under `sources`."""
+    from vecten import git_extensions
+
+    registered = git_extensions.registered_sources(config, record)
+    return {
+        name: git_extensions.line_for(name, extras, entry.git)
+        for name, (extras, entry) in registered.items()
+    }
+
+
 RUNTIME = (("platform", "airflow"), ("mcp", "mcp"))
+SOURCES = "/tmp/sources"
+VERIFY = f"python -m vecten_shared.git_sources verify {SOURCES} /tmp/{RECORD_FILE} && "
 
 
 def _legacy_lines(
@@ -231,6 +252,7 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     root = stack_dir.parent.parent
     runtime = {}
     legacy = None
+    record = locking.read_record(root) or {}
     records = [locking.PINS_FILE, locking.RECORD_FILE, *locking.LOCK_FILES.values()]
     records_exist = any((root / name).exists() for name in records)
     if not records_exist:
@@ -253,13 +275,10 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
                 "[dependencies] Python requirements install only from locks; run `vecten lock`",
             )
     else:
-        problems = locking.git_problems(root, config)
-        if problems:
-            raise Failure(
-                ExitCode.REFUSED,
-                "; ".join(problems) + "; record each git source again with "
-                "`vecten extension add` and its tag",
-            )
+        from vecten import git_extensions
+
+        git_extensions.refuse_git_problems(root, config)
+        sources = frozenset(_git_sources(config, record).values())
         for component, kind in RUNTIME:
             if component not in config.components:
                 continue
@@ -267,10 +286,10 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
             state = locking.lock_state(root, config, component)
             if state == "unstamped" and not (root / locking.RECORD_FILE).exists():
                 legacy = legacy if legacy is not None else _legacy_lines(root, config, reqs)
-                runtime[kind] = lock_lines(root / name, legacy[1])
+                runtime[kind] = lock_lines(root / name, legacy[1], sources)
             elif state == "fresh":
                 # The stamp proves the inputs are unchanged, not that the body still pins them.
-                runtime[kind] = lock_lines(root / name, _wanted(root, config, component))
+                runtime[kind] = lock_lines(root / name, _wanted(root, config, component), sources)
             else:
                 raise Failure(
                     ExitCode.REFUSED,
@@ -282,13 +301,21 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     # in-repo extension's name is never looked up on an index.
     closure = bool(runtime) and legacy is None
     local = _in_repo_extensions(root) if closure else []
+    fetched = list(_git_sources(config, record)) if closure else []
     build_dir.mkdir(parents=True, exist_ok=True)
     constraints = build_dir / BUILD_CONSTRAINTS
-    if local:
-        build = sorted({line for entry in local for line in entry.build_requires})
+    if local or fetched:
+        entries = [*local, *(record[name] for name in fetched)]
+        build = sorted({line for entry in entries for line in entry.build_requires})
         write_text_atomic(constraints, "".join(f"{line}\n" for line in build))
     else:
         constraints.unlink(missing_ok=True)
+    # The build checks each bundled source against the record the bundle carries.
+    bundled_record = build_dir / RECORD_FILE
+    if fetched:
+        write_text_atomic(bundled_record, (root / RECORD_FILE).read_text(encoding="utf-8"))
+    else:
+        bundled_record.unlink(missing_ok=True)
     write_text_atomic(build_dir / "requirements.txt", "".join(f"{r}\n" for r in reqs))
     pins = {"airflow": f'"apache-airflow=={VERSIONS.airflow_version}" ', "mcp": ""}
     for kind, pin in pins.items():
@@ -313,11 +340,25 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         )
         no_deps = "--no-deps " if closure else ""
         copies = f"COPY {source} /tmp/requirements.txt\n"
-        extra = ""
-        if local:
+        extra = verify = ""
+        if local or fetched:
             copies += f"COPY {BUILD_CONSTRAINTS} /tmp/{BUILD_CONSTRAINTS}\n"
-            mount += "--mount=type=bind,from=extensions,target=/tmp/extensions,rw "
-            paths = " ".join(f"/tmp/extensions/{e.source_path.split('/', 1)[1]}" for e in local)
+            paths = " ".join(
+                [
+                    *(f"/tmp/extensions/{e.source_path.split('/', 1)[1]}" for e in local),
+                    *(f"{SOURCES}/{name}" for name in fetched),
+                ]
+            )
+            if local:
+                mount += "--mount=type=bind,from=extensions,target=/tmp/extensions,rw "
+            if fetched:
+                # Bind mounts, so neither the source tree nor the record stays in a layer.
+                mount += (
+                    f"--mount=type=bind,from=sources,target={SOURCES},rw "
+                    f"--mount=type=bind,source={RECORD_FILE},"
+                    f"target=/tmp/{RECORD_FILE} "
+                )
+                verify = VERIFY
             extra = (
                 f" && {secret}pip install --no-cache-dir --no-deps "
                 f"--build-constraint /tmp/{BUILD_CONSTRAINTS} {paths} && pip check"
@@ -325,7 +366,7 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         # Keep every package supplied by the base image; a changed base must never be silently
         # downgraded to satisfy a lock generated against a different environment.
         install = (
-            copies + f"RUN {mount}python -c {shlex.quote(BASE_CONSTRAINTS_SCRIPT)} "
+            copies + f"RUN {mount}{verify}python -c {shlex.quote(BASE_CONSTRAINTS_SCRIPT)} "
             "> /tmp/vecten-base-constraints.txt "
             f"&& {{ {secret}pip install --no-cache-dir {no_deps}{pin}"
             "--constraint /tmp/vecten-base-constraints.txt "
@@ -337,6 +378,6 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         write_text_atomic(
             build_dir / f"{kind}.Dockerfile",
             f"FROM {base_image(kind, registry)}\n"
-            f"{_system_step(config, kind)}{install if lines or local else ''}"
+            f"{_system_step(config, kind)}{install if lines or local or fetched else ''}"
             f"{volume_step(config, root, kind)}",
         )

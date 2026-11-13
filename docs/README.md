@@ -27,6 +27,7 @@ are for running, building on and looking things up.
 - [Installing and writing extensions](extensions.md): connectors, tools and identity backends as packages.
 - [Extension services](services.md): bots, portals and dashboards on their own hostnames: access, the sign-in gate, isolation, volumes and health.
 - [Analytics apps](analytics-apps.md): dashboards an extension declares, who may open them and what data they read.
+- [Extensions from a private git repository](extensions-private-git.md): a team's shared extensions by tag, with the credential only on laptops and in CI.
 - [The agent guide](agent-guide.md): the `guide` skill's text, rendered from the package.
 - [Skill evaluations](skill-evaluations.md): the harness, the runs and the results.
 

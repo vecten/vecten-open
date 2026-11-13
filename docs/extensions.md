@@ -37,6 +37,19 @@ while the known groups remain usable.
 are described under [Dependencies and locks](#dependencies-and-locks). Repeat `extension add`
 with a new version to upgrade: registration stays unchanged and the records change.
 
+An extension comes from one of three sources: a package index, as above; a folder of the
+project, described under [Extensions in the project](#extensions-in-the-project); or a tag or
+commit of a separate git repository reached over HTTPS, such as a team's own repository of shared
+extensions:
+
+```sh
+vecten extension add 'acme-resolution @ git+https://github.com/acme/extensions@acme-resolution/v1.2.0#subdirectory=extensions/acme-resolution'
+```
+
+[Extensions from a private git repository](extensions-private-git.md) covers that repository's
+layout, releases and tags, the git credential on a laptop and in CI, upgrades and what a
+reviewer checks.
+
 A successful command installs the CLI lock into the environment running Vecten. If several
 projects share that environment, their dependencies are shared too: adding an extension in
 one project can change versions used by another. Use a separate virtual environment per
@@ -44,11 +57,15 @@ project. Installation failures or failures while linking resources can leave tha
 environment changed; the command does not attempt to uninstall packages or restore earlier
 versions. Project record writes are restored if writing those records fails.
 
-On another laptop or in CI, install the committed CLI lock into the project's environment:
+On another laptop or in CI, install the committed CLI lock into the environment running
+Vecten, with the project's in-repo and git-sourced extensions and their skill links:
 
 ```sh
-uv pip install --python /path/to/project/venv/bin/python -r requirements.lock
+vecten extension sync
 ```
+
+It changes no record. It refuses a stale lock, naming `vecten lock`, and a git source whose
+records disagree, naming `vecten extension add`.
 
 Machine-local skill links point into that environment's installed packages. Re-run the same
 `extension add` after moving/recreating the environment to rebuild the links. Do not commit
@@ -119,11 +136,11 @@ these records together, or changes none of them:
 
 | File | What it holds |
 |---|---|
-| `requirements.txt` | One exact pin per extension, such as `acme-resolution==1.2.0`. |
+| `requirements.txt` | One exact pin per extension, such as `acme-resolution==1.2.0`; a `./extensions/<name>` line per in-repo extension; a git source's URL at its full commit with a `# tag` comment. |
 | `requirements.lock` | The CLI's environment, for any operating system on Python 3.14: each extension with its `cli` extra, the connectors' dependencies, `[dependencies.cli] python` and the release's `vecten`. |
 | `requirements-airflow.lock` | The Airflow image, for Linux, against the packages its base image installs: each extension with its `platform` extra, the connectors' dependencies and `[dependencies.platform] python`. |
 | `requirements-mcp.lock` | The MCP image, for Linux, against its base image: each extension with its `mcp` extra, the connectors' dependencies and `[dependencies.mcp] python`. |
-| `extensions.lock.json` | Each extension's version and the extras its wheel provides. |
+| `extensions.lock.json` | Each extension's version and the extras its wheel provides; for a git source, also its origin, its `source_sha256` and its pinned build requirements. |
 
 Only enabled components get an image lock. Before writing them, the command installs the new
 `requirements.lock` into the environment running Vecten; it adds and upgrades packages there
