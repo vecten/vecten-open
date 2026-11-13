@@ -33,11 +33,11 @@ def register(app: typer.Typer) -> None:
         def run(ctx: CliContext) -> Result:
             if is_access_key(key):
                 root = ctx.require_project()
-                connector = key[len(ACCESS_PREFIX) :]
-                groups = set_access(root, connector, value)
+                name = key[len(ACCESS_PREFIX) :]
+                groups = set_access(root, name, value)
                 return Result(
                     data={"key": key, "value": groups, "file": CONFIG_FILE},
-                    message=f"recorded access.groups = {groups} for {connector} in {CONFIG_FILE}",
+                    message=f"recorded access.groups = {groups} for {name} in {CONFIG_FILE}",
                 )
             if is_mcp_key(key):
                 recorded = set_mcp_fact(ctx.require_project(), key, value)

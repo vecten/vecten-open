@@ -36,9 +36,22 @@ before a release; unit tests and generated SQL are not that verification.
 The generated Snowflake setup SQL grants `analyst` database and compute warehouse usage only,
 plus the provisioner's table SELECT grant options on core/marts. It installs an owner-rights
 procedure in the configured database's `VECTEN_ACCESS` schema. The procedure accepts only
-`ANALYST` or provisioner-owned reader roles and convention schemas, and can grant/revoke only
-read privileges. Run setup under an administrator authorized to manage existing and future
-grants; that authority is kept on the procedure owner, never granted to provisioner.
+`ANALYST` or provisioner-owned reader roles, and the convention schemas, `RAW_<SOURCE>`
+schemas and schemas matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$` (restricted areas, matched by
+pattern, so declaring an area needs no rerun), and can grant/revoke only read privileges.
+
+A schema or area grant covers tables, views, materialized views, dynamic tables, external
+tables and Iceberg tables, each with its current and future grants. On a grant, a kind the
+account refuses is listed in access health with Snowflake's message while the others apply;
+on a revoke, a refusal fails the call while the role still reads anything in the schema, and
+the revoke is retried on every reconciliation. A dataset grant takes its relation's object
+type from `INFORMATION_SCHEMA.TABLES`, trying a base table as a table, a dynamic table and an
+Iceberg table in turn, and counts a statement only once `SHOW GRANTS` reads the change back.
+On Postgres the helpers cover tables, partitioned tables, views, materialized views and
+foreign tables.
+
+Run setup under an administrator authorized to manage existing and future grants; that
+authority is kept on the procedure owner, never granted to provisioner.
 See Snowflake's [owner-rights procedure rules](https://docs.snowflake.com/en/developer-guide/stored-procedure/stored-procedures-rights)
 and [grant authority requirements](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#access-control-requirements).
 
@@ -136,6 +149,61 @@ this grant, and services cannot receive MCP admin rights. Vecten creates no pass
 individual warehouse accounts: Postgres uses a NOLOGIN role; Snowflake uses a PERSON or
 SERVICE user authenticated through External OAuth.
 
+### Group roles and bound roles
+
+Each group maps to a warehouse role the provisioner creates and owns, named after the group
+unless `vecten group add finance --role fin_readers` (or the panel's group form) names it. A
+role name follows the warehouse-name rules and may not start with `admin_`, `svc_`, `pg_` or
+`p_` (kept for one reader role per person). When a role of that name already exists, creation
+is refused and names both ways out: another role name, or binding the existing role.
+
+A group can read through a role the client already has, such as `FINANCE_ANALYST` with its
+own grants and row access policies, by binding it:
+
+1. `vecten group bind finance finance_analyst` records the binding as pending and prints two
+   statements for an administrator. The review lists every grant the role holds, through
+   every role nested under it: on Snowflake a recursive query over
+   `SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES`, which lags by up to two hours. The grant nests
+   the role under the group's role: on Snowflake `GRANT ROLE "FINANCE_ANALYST" TO ROLE
+   "FINANCE";`, on Postgres `GRANT "finance_analyst" TO "finance" WITH INHERIT TRUE, SET
+   FALSE;`.
+2. An administrator reviews the role and runs the grant.
+3. `vecten group bind finance finance_analyst --confirm` checks that the group's role holds
+   the bound role (`SHOW GRANTS TO ROLE` on Snowflake, `pg_auth_members` with inherit on
+   Postgres) and records it. Binding a confirmed role again prints its grant and keeps the
+   record.
+
+`vecten group unbind finance` forgets the binding and prints the revoke for an administrator
+to run. Each reconciliation reads the roles granted to every group's role. Access health and
+`vecten issues` list a confirmed binding whose grant is gone, and every other role nested
+under a group's role, including an unbound one until its revoke has run.
+
+The server never owns, grants, alters or drops a bound role, and never targets it with a
+dataset, schema or area grant or with drift revocation: `READ_GRANT` and the Postgres helpers
+refuse it as a target, and deleting the group drops only the group's own role. The default
+group, system roles (`ACCOUNTADMIN`, `SYSADMIN`, `PUBLIC` and the like), Postgres's predefined
+`pg_` roles, the roles setup creates, any role the server manages, and a role bound to another
+group cannot be bound, nor can a group's role be named after a bound role. On Postgres, binding
+and confirming also refuse a role that has, or is a member at any depth of a role that has,
+`SUPERUSER`, `BYPASSRLS`, `CREATEROLE`, `CREATEDB` or `REPLICATION`, a predefined `pg_` role,
+`rds_superuser`, `cloudsqlsuperuser`, `azure_pg_admin` or a managed role. Postgres binds a role
+by its lower-case name. The provisioner cannot read a Snowflake role it does not own, so there
+the review is the check.
+
+The provisioner owns each group's role, and an owner can grant itself the roles it owns, so it
+can reach whatever a bound role reaches. A bound role must therefore never hold account-level
+privileges or roles such as `ACCOUNTADMIN`, `SECURITYADMIN`, `SYSADMIN` or `USERADMIN`. While a
+binding exists, the MCP's startup check refuses `USAGE` on a group role held by `PROVISIONER`.
+What a bound role reads, including outside the environment's database, is the client's to set,
+and the warehouse enforces it.
+
+A person's session runs under the group's role (or, with one reader role per person, their
+own), never the bound role, so a policy keyed on `CURRENT_ROLE()` does not match a bound role.
+On Snowflake, key row access and masking policies on `IS_ROLE_IN_SESSION('FINANCE_ANALYST')`,
+which matches a role inherited through the role hierarchy. On Postgres, a row-level security
+policy uses `pg_has_role(current_user, 'finance_analyst', 'USAGE')`, which follows inherited
+memberships the same way.
+
 ## Access and enforcement
 
 Groups map to warehouse roles. Every principal starts in the `default` group, mapped to
@@ -148,21 +216,42 @@ holds. Without the MCP, setup grants `analyst` the two schemas. Raw ingestion sc
 `staging`, and `snapshots` have no default grant.
 
 Reconciliation also reads the read grants `analyst` and every group role hold in the
-convention and `raw_<source>` schemas (on Snowflake through the owner-rights
-`VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and revokes those the
-state does not hold. The `reconcile_drift` setting, `revoke` by default, can be set to
-`report` to list them in access health without revoking; an MCP state created by an earlier
-release starts at `report`. A grant in any other schema, or to a
-role the MCP does not manage, is left alone. While the installed procedures are older than the
-MCP, this step is skipped and access health names `vecten mcp provisioner-script`. Memberships combine the permissions of all
-assigned groups. Removing a grant from one group does not remove access provided by another.
+convention and `raw_<source>` schemas and the schemas of declared areas (on Snowflake through
+the owner-rights `VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and
+revokes those the state does not hold. The `reconcile_drift` setting, `revoke` by default, can
+be set to `report` to list them in access health without revoking; an MCP state created by an
+earlier release starts at `report`. A grant in any other schema, or to a role the MCP does not
+manage, is left alone. While the installed procedures are older than the MCP, this step is
+skipped, grants that reach an area are refused and wait, and access health names
+`vecten mcp provisioner-script`. Memberships combine the permissions of all assigned groups. Removing a grant from one group does not remove access provided by another.
 
 Use `vecten group`, `vecten grant`, `vecten revoke`, and `vecten reconcile` for group membership
 and desired grants. A dataset grant names one dataset in the semantic model under `osi/`;
 a schema grant covers an entire schema. This implementation accepts only the literal schemas
-`core`, `marts`, `staging`, `snapshots`, and names beginning with `raw_`, such as
-`raw_hubspot`; it rejects arbitrary other schema names. Desired grants are reconciled every fifteen
-minutes, on a semantic-model update, and on demand. The default setup grants are recorded once,
+`core`, `marts`, `staging`, `snapshots`, names beginning with `raw_`, such as
+`raw_hubspot`, and the schemas of an area `vecten.toml` declares; it rejects arbitrary other
+schema names.
+
+An area grant (`vecten grant --area finance --group finance`) is a schema grant on both
+`core_finance` and `marts_finance`, applied and revoked together; one that fails on the second
+schema is rolled back on the first. It is refused for an area with no `[areas.<area>]` entry,
+and an area removed from `vecten.toml` has its grants revoked and forgotten, so declaring it
+again starts with none. Each granted schema carries its own future or default grant, so a
+relation dbt rebuilds there is readable by the granted groups and no group without the grant,
+with no reconciliation in between. No group reads an area until it is granted, with these
+exceptions, which the warehouse and not the MCP decides:
+
+- a dataset grant on a mart in the area, which reaches that one relation;
+- a future grant an administrator made for the whole database, which reaches every schema
+  without a schema-level one; access health lists those it finds on managed roles;
+- `loader`, which owns the area's schemas and builds them, and the roles above it: on
+  Snowflake `SYSADMIN` and the deploy role, on Postgres the master that sets its role.
+
+On Postgres the setup that `ship` runs creates every declared area's schemas as `loader` and
+installs their helpers; over an existing warehouse, rerun the printed script once dbt has
+created them.
+
+Desired grants are reconciled every fifteen minutes, on a semantic-model update, and on demand. The default setup grants are recorded once,
 so an administrator's later revocation is not undone merely by restarting MCP. See the
 schema-grant limitations above before relying on these operations. Reconciliation
 attempts independent grants even when another grant fails. Its Boolean `complete` field is

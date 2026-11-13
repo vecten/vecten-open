@@ -31,6 +31,9 @@ class Adapter:
     def read_grants(self, roles):
         return set()
 
+    def granted_roles(self, role):
+        return set()
+
 
 def test_group_grant_reconcile_and_deny_union():
     state = StateStore("sqlite://")
@@ -205,4 +208,6 @@ def test_health_before_any_reconciliation_is_empty():
         "revoked": [],
         "drift": [],
         "database_future": [],
+        "missing_bindings": [],
+        "unbound_roles": [],
     }

@@ -240,7 +240,7 @@ reach is the client's to set, and that the warehouse enforces it.
 
 | Option | Consequences |
 |---|---|
-| **A. Derived from the group's name, overridable at creation (`vecten group create finance --role fin_readers`)** | A group can be created when its name matches an existing role. The override passes the same identifier checks and reserved prefixes (`admin_`, `svc_`, `pg_`, and `p_` for #4). The state keeps the unprefixed name, and #34's adapter adds the environment prefix. |
+| **A. Derived from the group's name, overridable at creation (`vecten group add finance --role fin_readers`)** | A group can be created when its name matches an existing role. The override passes the same identifier checks and reserved prefixes (`admin_`, `svc_`, `pg_`, and `p_` for #4). The state keeps the unprefixed name, and #34's adapter adds the environment prefix. |
 | B. Always derived | Creation fails when a role of that name exists, with no way round except renaming the group. |
 
 **Accepted: A.** When the derived name exists, creation refuses and names both ways

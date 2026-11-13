@@ -365,6 +365,7 @@ class EnvironmentFacts(Strict):
     deployed_commit: str | None = None
     first_user_added: bool = False
     connector_access_applied: list[str] = Field(default_factory=list)
+    area_access_applied: list[str] = Field(default_factory=list)
     provisioner_script_run: bool = False
     provisioner_secrets_set: bool = False
     connection_shown: bool = False
@@ -529,6 +530,14 @@ class VectenConfig(Strict):
                 raise ValueError("[warehouse] shared_account needs a Snowflake warehouse")
             if not self.has("platform"):
                 raise ValueError("[warehouse] shared_account needs the platform component")
+        return self
+
+    @model_validator(mode="after")
+    def _applied_areas_are_declared(self) -> VectenConfig:
+        # The MCP forgets the grants of an area that left this file, so `next` seeds a later
+        # declaration of the same name again.
+        for facts in self.environments.values():
+            facts.area_access_applied = [a for a in facts.area_access_applied if a in self.areas]
         return self
 
     @model_validator(mode="after")

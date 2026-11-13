@@ -67,7 +67,8 @@ dbt models the raw data into the schema convention, version 2, which every proje
 
 A restricted area, declared in `vecten.toml` as `[areas.<area>]`, adds `dbt/models/core_<area>/`
 and `dbt/models/marts_<area>/`, built into schemas of those names that no role reads until an
-admin grants the area to a group. Their models follow the core and marts rules, and each mart
+admin grants the area to a group (`vecten grant --area <area> --group <group>`, or the admin
+panel). Their models follow the core and marts rules, and each mart
 there is a dataset. Version 2 is a superset of version 1: a project without areas passes it
 unchanged.
 

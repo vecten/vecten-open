@@ -18,8 +18,13 @@ DONE = {
     "groups/create": "Group created.",
     "groups/delete": "Group deleted.",
     "groups/member": "Membership saved.",
+    "groups/confirm": "Binding confirmed.",
     "grant": "Grant saved.",
     "revoke": "Grant revoked.",
+    "revoke-refused": (
+        "Revoke recorded, but the warehouse refused the revoke; every reconciliation retries "
+        "it, and access health shows why."
+    ),
     "denied/set": "Deny list saved.",
     "reconcile": "Grants reconciled.",
     "gaps/status": "Gap status saved.",
@@ -155,12 +160,32 @@ def users(ctx):
     grouped = {}
     for row in members:
         grouped.setdefault(row["group_name"], []).append(names.get(row["principal_id"], "?"))
+
+    def binding(g):
+        if "bound_role" not in g:
+            return ""
+        actions = [
+            form(f"/admin/groups/{g['name']}/unbind", ctx.csrf, button="Unbind", class_="inline")
+        ]
+        if g["binding"] == "pending":
+            actions.insert(
+                0,
+                form(
+                    f"/admin/groups/{g['name']}/confirm",
+                    ctx.csrf,
+                    button="Confirm",
+                    class_="inline",
+                ),
+            )
+        return join(f"{g['bound_role']} ({g['binding']})", *actions)
+
     groups_table = table(
-        ("Group", "Warehouse role", "Members", ""),
+        ("Group", "Warehouse role", "Bound role", "Members", ""),
         [
             (
                 g["name"],
                 g["warehouse_role"],
+                binding(g),
                 ", ".join(sorted(grouped.get(g["name"], []))),
                 ""
                 if g["name"] == "default"
@@ -186,7 +211,15 @@ def users(ctx):
         "/admin/groups/create",
         ctx.csrf,
         field("Group name", "name", pattern="[a-z][a-z0-9_]*"),
+        field("Warehouse role (the group name if empty)", "role", required=False),
         button="Create group",
+    )
+    bind_role = form(
+        "/admin/groups/bind",
+        ctx.csrf,
+        select("group", [g["name"] for g in groups if g["name"] != "default"], label="Group"),
+        field("Existing warehouse role", "role"),
+        button="Bind role",
     )
     return page(
         ctx,
@@ -206,6 +239,13 @@ def users(ctx):
         groups_table,
         create_group,
         membership,
+        h2("Bind an existing role"),
+        hint(
+            "The group's members read through a role the warehouse already has. The server "
+            "prints the statement; an administrator runs it, then confirms here. The server "
+            "never grants, alters or drops the bound role."
+        ),
+        bind_role,
     )
 
 
@@ -290,8 +330,40 @@ def principal_action(operation):
 
 
 def groups_create(ctx):
-    ctx.call("groups/create", {"name": ctx.form.get("name", "")}, write=True)
+    data = {"name": ctx.form.get("name", ""), "role": ctx.form.get("role", "") or None}
+    ctx.call("groups/create", data, write=True)
     return done("/admin/users", "groups/create")
+
+
+def groups_bind(ctx):
+    data = {"group": ctx.form.get("group", ""), "role": ctx.form.get("role", "")}
+    bound = ctx.call("groups/bind", data, write=True)
+    return page(
+        ctx,
+        "Bind an existing role",
+        tag("p", f"Review what {bound['bound_role']} reads, as an administrator:"),
+        pre(bound["review"]),
+        tag("p", "Then an administrator runs this statement in the warehouse:"),
+        pre(bound["statement"]),
+        form(f"/admin/groups/{bound['group']}/confirm", ctx.csrf, button="Confirm binding"),
+        link("/admin/users", "Back"),
+    )
+
+
+def groups_confirm(ctx):
+    ctx.call("groups/confirm", {"group": ctx.param("group")}, write=True)
+    return done("/admin/users", "groups/confirm")
+
+
+def groups_unbind(ctx):
+    unbound = ctx.call("groups/unbind", {"group": ctx.param("group")}, write=True)
+    return page(
+        ctx,
+        "Binding forgotten",
+        tag("p", "An administrator runs this statement to remove the grant:"),
+        pre(unbound["statement"]),
+        link("/admin/users", "Back"),
+    )
 
 
 def groups_delete(ctx):
@@ -338,8 +410,8 @@ def access(ctx):
         "/admin/access/grant",
         ctx.csrf,
         select("group", groups, label="Group"),
-        select("kind", ["dataset", "schema"], label="Kind"),
-        field("Dataset or schema", "target"),
+        select("kind", ["dataset", "schema", "area"], label="Kind"),
+        field("Dataset, schema or area", "target"),
         hidden("action", "grant"),
         button="Grant",
     )
@@ -365,7 +437,10 @@ def access(ctx):
         ctx,
         "Grants and deny lists",
         h2("Grants"),
-        hint("Grants are reconciled every fifteen minutes, on model change and on demand."),
+        hint(
+            "Grants are reconciled every fifteen minutes, on model change and on demand. "
+            "An area grant covers both of its schemas, core_<area> and marts_<area>."
+        ),
         grants_table,
         grant_form,
         form("/admin/access/reconcile", ctx.csrf, button="Reconcile now"),
@@ -381,7 +456,11 @@ def access(ctx):
 def access_grant(ctx):
     operation = "revoke" if ctx.form.get("action") == "revoke" else "grant"
     data = {k: ctx.form.get(k, "") for k in ("group", "kind", "target")}
-    ctx.call(operation, data, write=True)
+    result = ctx.call(operation, data, write=True) or {}
+    failures = (result.get("reconciliation") or {}).get("failures", [])
+    mine = (data["group"], data["kind"], data["target"], "revoke")
+    if any((f["group"], f["kind"], f["target"], f["operation"]) == mine for f in failures):
+        return done("/admin/access", "revoke-refused")
     return done("/admin/access", operation)
 
 
@@ -944,6 +1023,9 @@ SCREENS = [
     ("/admin/services/create", services_create, ["POST"]),
     ("/admin/groups/create", groups_create, ["POST"]),
     ("/admin/groups/member", groups_member, ["POST"]),
+    ("/admin/groups/bind", groups_bind, ["POST"]),
+    ("/admin/groups/{group}/confirm", groups_confirm, ["POST"]),
+    ("/admin/groups/{group}/unbind", groups_unbind, ["POST"]),
     ("/admin/groups/{group}/delete", groups_delete, ["POST"]),
     ("/admin/access", access, ["GET"]),
     ("/admin/access/grant", access_grant, ["POST"]),

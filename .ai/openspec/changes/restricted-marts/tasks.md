@@ -42,31 +42,31 @@ ship before areas.
 - [x] 3.2 `vecten_convention`: naming, description and primary-key tests treat `core_<area>` as core and `marts_<area>` as marts; the naming test fails undeclared areas; the declared list arrives as a dbt var from `vecten-platform`
 - [x] 3.3 `vecten_shared.osi.generate`: marts in `marts_<area>` become datasets; `vecten.next.modelling` described layers include areas
 - [x] 3.4 `docs/schema-convention.md` template: version 2 and the area rules; the `model` skill's rule for `core_<area>`; then `uv run vecten dev render-plugin --repo .` and commit the plugin and `docs/agent-guide.md`
-- [ ] 3.5 MCP: `AccessService` area grants (kind `area`, two schemas, applied and revoked together), `_source` accepting declared area schemas; admin API, panel and `vecten grant --area`
-- [ ] 3.6 `snowflake_access.js`: area pattern; Postgres helper installer pattern; setup SQL creates declared areas' schemas as `loader` (host config carries the list)
+- [x] 3.5 MCP: `AccessService` area grants (kind `area`, two schemas, applied and revoked together), `_source` accepting declared area schemas; admin API, panel and `vecten grant --area`
+- [x] 3.6 `snowflake_access.js`: area pattern; Postgres helper installer pattern; setup SQL creates declared areas' schemas as `loader` (host config carries the list)
 - [ ] 3.7 `next`: `ask` for missing `access.groups`; post-deploy `command` item seeding the grant; report relations in convention schemas and areas that no model builds
-- [ ] 3.8 unit: config validation; convention tests on fixture projects (version-1 project passes, undeclared area fails, area mart becomes a dataset); MCP area grant translation; `next` items
-- [ ] 3.9 docker: Postgres: area granted to `finance`, rebuilt mart readable by `finance` and refused for default, with no reconciliation in between
+- [x] 3.8 unit: config validation; convention tests on fixture projects (version-1 project passes, undeclared area fails, area mart becomes a dataset); MCP area grant translation; `next` items
+- [x] 3.9 docker: Postgres: area granted to `finance`, rebuilt mart readable by `finance` and refused for default, with no reconciliation in between
 - [ ] 3.10 live: the same on Snowflake, plus an area built before any grant is unreadable by every group role
 - [ ] 3.11 deploy: declare an area, ship, grant, rebuild on a sandbox of each cloud
 - [x] 3.12 Glossary: "Restricted area"; "Mart" covers `marts_<area>`
 
 ## 4. Every relation kind
 
-- [ ] 4.1 `snowflake_access.js`: per-kind `ALL`/`FUTURE` grants and revokes; single-relation kind from 0.2; `READ_GRANTS` covers the same kinds
-- [ ] 4.2 `check_scope` and the Postgres adapter's relation lookup unchanged except where 4.1 needs
-- [ ] 4.3 unit: generated statements per kind; refusal surfaced in access health
-- [ ] 4.4 live: a dynamic table and a materialized view in a granted schema are readable; a dataset grant on each works
+- [x] 4.1 `snowflake_access.js`: per-kind `ALL`/`FUTURE` grants and revokes; single-relation kind from 0.2; `READ_GRANTS` covers the same kinds
+- [x] 4.2 `check_scope` and the Postgres adapter's relation lookup unchanged except where 4.1 needs
+- [x] 4.3 unit: generated statements per kind; refusal surfaced in access health
+- [ ] 4.4 live: a dynamic table and a materialized view in a granted schema are readable; a dataset grant on each works, and its revoke removes it (read back with `SHOW GRANTS TO ROLE`)
 
 ## 5. Group roles: chosen names and bound roles
 
-- [ ] 5.1 `AccessService.create_group(name, role=None)`: override, reserved prefixes, refusal on an existing role naming both ways out
-- [ ] 5.2 Binding: state for bindings; admin API bind (prints the statement), confirm (checks the grant through `SHOW GRANTS TO ROLE <group role>` or `pg_auth_members`), unbind; access health for missing bindings; delete group leaves the bound role
-- [ ] 5.3 Panel and `vecten group create --role`, `vecten group bind|unbind`
+- [x] 5.1 `AccessService.create_group(name, role=None)`: override, reserved prefixes, refusal on an existing role naming both ways out
+- [x] 5.2 Binding: state for bindings; admin API bind (prints the statement), confirm (checks the grant through `SHOW GRANTS TO ROLE <group role>` or `pg_auth_members`), unbind; access health for missing bindings; delete group leaves the bound role
+- [x] 5.3 Panel and `vecten group add --role`, `vecten group bind|unbind`
 - [ ] 5.4 Under #34's shared layout (if merged first): refuse a bound role holding privileges on another environment's database of the project
-- [ ] 5.5 `docs/mcp-identity.md`: bound roles, `IS_ROLE_IN_SESSION` rather than `CURRENT_ROLE()`
-- [ ] 5.6 unit: name override and refusals; bind, confirm and unbind flows against fake adapters
-- [ ] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it
+- [x] 5.5 `docs/mcp-identity.md`: bound roles, `IS_ROLE_IN_SESSION` rather than `CURRENT_ROLE()`
+- [x] 5.6 unit: name override and refusals; bind, confirm and unbind flows against fake adapters
+- [x] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it
 - [ ] 5.8 live: Snowflake bound role: a member reads through it; `SHOW GRANTS TO ROLE PROVISIONER` unchanged; the startup check passes
 
 ## 6. Release checks

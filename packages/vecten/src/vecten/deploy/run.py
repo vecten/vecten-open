@@ -629,7 +629,13 @@ def _shared_leftovers(
 
 # Facts whose subject lives in the environment's `state` database, which destroy deletes:
 # a new deploy starts with an empty one.
-STATE_FACTS = ("first_user_added", "admin_link_issued", "connector_access_applied")
+STATE_FACTS = (
+    "first_user_added",
+    "admin_link_issued",
+    "connector_access_applied",
+    "area_access_applied",
+)
+ACCESS_FACTS = ("connector_access_applied", "area_access_applied")
 
 
 def _clear_state_facts(config: VectenConfig, env: str) -> list[str]:
@@ -645,5 +651,5 @@ def _clear_state_facts(config: VectenConfig, env: str) -> list[str]:
         names.append("provisioner_script_run")
     cleared = [name for name in names if getattr(facts, name)]
     for name in cleared:
-        setattr(facts, name, [] if name == "connector_access_applied" else False)
+        setattr(facts, name, [] if name in ACCESS_FACTS else False)
     return cleared

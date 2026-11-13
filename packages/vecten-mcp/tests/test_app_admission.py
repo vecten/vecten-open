@@ -14,6 +14,7 @@ from vecten_mcp.state import StateStore
 from vecten_shared.apps import parse_app
 from vecten_shared.config import VectenConfig
 from vecten_shared.extension_record import RECORD_FILE, Extension, record_text
+from vecten_shared.identity_setup import ACCESS_VERSION
 
 FINANCE = BoundApp(
     extension="acme-sales",
@@ -93,11 +94,21 @@ class Adapter:
     def schema_grant(self, role, schema, grant=True):
         pass
 
+    def access_version(self):
+        return ACCESS_VERSION
+
+    def read_grants(self, roles):
+        return set()
+
+    def granted_roles(self, role):
+        return set()
+
 
 def setup(*apps, kind="postgres", database=None):
     state = store()
     adapter = Adapter()
-    access = AccessService(state, adapter)
+    # marts_finance is the declared area finance's schema.
+    access = AccessService(state, adapter, areas={"finance"})
     access.seed_defaults()
     access.create_group("finance")
     scopes = AppScopes(state, {app.name: app for app in apps}, kind=kind, database=database)
@@ -279,6 +290,8 @@ def test_access_health_without_bound_apps_keeps_its_shape():
         "revoked",
         "drift",
         "database_future",
+        "missing_bindings",
+        "unbound_roles",
     }
 
 

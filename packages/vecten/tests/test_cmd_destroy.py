@@ -394,17 +394,23 @@ STATE_FACTS = {
     "first_user_added": True,
     "admin_link_issued": True,
     "connector_access_applied": ["hubspot"],
+    "area_access_applied": ["finance"],
 }
 
 
 def test_destroy_clears_the_facts_the_state_database_held(invoke, project, monkeypatch):
+    from vecten_shared.config import AreaDecl, save_config
+
+    config = load_config(project)
+    config.areas = {"finance": AreaDecl()}
+    save_config(project, config)
     set_facts(project, provisioner_script_run=True, **STATE_FACTS)
     with cloud(project, monkeypatch):
         r = invoke("destroy", "--env", "prod", "--confirm", "prod", "--json")
     assert r.exit_code == 0, r.stdout
     facts = load_config(project).environments["prod"]
     assert not facts.first_user_added and not facts.admin_link_issued
-    assert facts.connector_access_applied == []
+    assert facts.connector_access_applied == [] and facts.area_access_applied == []
     # Over Postgres the provisioner lives in the warehouse the destroy snapshotted.
     assert facts.provisioner_script_run
     assert doc(r)["facts_cleared"] == list(STATE_FACTS)
