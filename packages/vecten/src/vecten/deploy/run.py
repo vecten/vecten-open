@@ -865,16 +865,23 @@ def promote_env(
     repository = deploy.github_repository
     branch = default_branch(gh, project_root, repository)
     # The promoted commit is on the default branch, which this checkout may trail.
-    fetch_default_branch(git, project_root, branch)
+    warnings = []
     if commit is None:
+        # GitHub names the commit; its files are read from this checkout's objects, which
+        # may hold it already.
+        try:
+            fetch_default_branch(git, project_root, branch)
+        except Failure as exc:
+            warnings.append(f"{exc.message}; promote reads the commit from this checkout")
         promoted = newest_shipped(gh, project_root, repository, branch, previous)
     else:
+        fetch_default_branch(git, project_root, branch)
         promoted = given_commit(git, project_root, commit)
         require_commit_on_default_branch(project_root, git, branch, promoted)
         require_shipped_by(gh, project_root, repository, promoted, env, previous)
     # The run ships the promoted commit's git sources, which CI fetches as a ship's own.
     shipped = read_commit_files(git, project_root, promoted, config.environments)
-    warnings = require_ci_git_credential(project_root, config, env, gh, shipped)
+    warnings += require_ci_git_credential(project_root, config, env, gh, shipped)
     followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git, commit=promoted)
     result = {"env": env, "promotes_from": previous, "dispatched": True, **followed}
     return {**result, "warnings": warnings} if warnings else result

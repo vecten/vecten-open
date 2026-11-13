@@ -369,3 +369,28 @@ def test_a_promoted_commit_whose_needed_values_cannot_be_read_is_refused(
     error = doc(r)["error"]
     assert f"vecten.toml at {SHIPPED[:8]}" in error and key in error
     assert gh.named("workflow", "run") == []
+
+
+def test_promote_goes_on_from_this_checkout_when_the_fetch_fails(invoke, project, monkeypatch):
+    git = FakeGit(head=HEAD, answers={("fetch",): (128, "")})
+    gh = use(monkeypatch, FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}), git)
+    r = invoke("promote", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    [dispatch] = gh.named("workflow", "run")
+    assert f"commit={SHIPPED}" in dispatch
+    [warning] = doc(r)["warnings"]
+    assert "git fetch origin main" in warning and "this checkout" in warning
+
+
+@pytest.mark.parametrize("command", ["promote", "deploy"])
+def test_a_promoted_commit_this_checkout_lacks_is_refused_with_the_fetch(
+    invoke, project, monkeypatch, command
+):
+    git = FakeGit(head=HEAD, missing={SHIPPED})
+    gh = use(monkeypatch, FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}), git)
+    r = invoke(command, "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    error = doc(r)["error"]
+    assert f"git fetch origin {SHIPPED}" in error and "--unshallow" in error
+    assert "invalid object name" not in error
+    assert gh.named("workflow", "run") == []

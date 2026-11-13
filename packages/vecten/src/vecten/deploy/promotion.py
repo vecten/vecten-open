@@ -307,7 +307,14 @@ def _where(commit: str) -> str:
 
 
 def show_commit_file(git: ToolRunner, project_root: Path, commit: str, path: str) -> str:
-    """The text of `path` at `commit`, `FETCHED` or a full commit id."""
+    """The text of `path` at `commit`, `FETCHED` or a full commit id, refusing a commit this
+    checkout does not hold, as a shallow clone or a failed fetch leaves it."""
+    if git.run(["cat-file", "-e", f"{commit}^{{commit}}"], project_root).returncode != 0:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"commit {commit} is not in this checkout; fetch it with `git fetch origin "
+            f"{commit}` (or `git fetch --unshallow` in a shallow clone) and run again",
+        )
     return _git(git, project_root, "show", f"{commit}:{path}")
 
 
