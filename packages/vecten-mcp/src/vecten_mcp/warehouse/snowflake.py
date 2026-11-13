@@ -57,6 +57,15 @@ class SnowflakeAdapter:
             return None
         return name[: len(name) - len(suffix)].lower()
 
+    def _project_role(self, name):
+        """Whether `name`, in any case, ends in the suffix `_<BASE>_<ENV>` of an environment of
+        this project: in a shared account Vecten names every role of every environment so, and
+        an environment's name holds no `_`. Always False in the fixed layout, which has none."""
+        if not self.names.suffix:
+            return False
+        base = self.names.suffix[1:].rsplit("_", 1)[0]
+        return re.fullmatch(rf".+_{re.escape(base)}_[A-Z][A-Z0-9]*", name.upper()) is not None
+
     def _policy(self):
         names = self.names
         return ".".join(
@@ -151,6 +160,12 @@ class SnowflakeAdapter:
         from snowflake.connector.errors import ProgrammingError
 
         check_account(role)
+        if self._project_role(role):
+            raise ValueError(
+                f"role {role} already ends in an environment's suffix, and this environment "
+                f"names it {self._role(role)}; name the group's role without one "
+                "(vecten group add <group> --role <role>)"
+            )
         with self.control() as cursor:
             try:
                 cursor.execute(f"CREATE ROLE {quote(self._role(role))}")
@@ -168,28 +183,54 @@ class SnowflakeAdapter:
 
     def review_statement(self, bound):
         """Every grant `bound` holds, through every role nested under it, for an administrator
-        to read: PROVISIONER cannot see a hierarchy it does not own."""
+        to read: PROVISIONER cannot see a hierarchy it does not own, so in a shared account
+        the header also names the grants that reach another environment or Vecten's roles."""
         name = "'" + bound.upper().replace("'", "''") + "'"
-        return (
+        header = (
             "-- Run as ACCOUNTADMIN. ACCOUNT_USAGE lags up to two hours. A row granted on\n"
             "-- ACCOUNT, or a role such as ACCOUNTADMIN, SECURITYADMIN, SYSADMIN or USERADMIN,\n"
             "-- makes the role unsafe to bind.\n"
-            "WITH RECURSIVE reach (role) AS (\n"
+        )
+        columns, recent = "g.grantee_name, g.privilege, g.granted_on, g.name", ""
+        if self.names.suffix:
+            base = self.names.suffix[1:].rsplit("_", 1)[0]
+            header += (
+                "-- This account holds every environment of the project, so USAGE on a\n"
+                f"-- role named *_{base}_<ENV> (any environment, this one's included)\n"
+                "-- makes it unsafe too, as does a grant on a database named\n"
+                f"-- {base}_<ENV> other than {self.names.database}, or on anything in one\n"
+                "-- (its TABLE_CATALOG).\n"
+            )
+            columns += ", g.table_catalog"
+            recent = (
+                "\n-- The grants made since ACCOUNT_USAGE caught up: run this, then the same\n"
+                "-- for every ROLE it lists.\n"
+                f"SHOW GRANTS TO ROLE {quote(bound)};"
+            )
+        return (
+            header + "WITH RECURSIVE reach (role) AS (\n"
             f"  SELECT {name}\n"
             "  UNION ALL\n"
             "  SELECT g.name FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES g\n"
             "  JOIN reach r ON g.grantee_name = r.role\n"
             "  WHERE g.granted_on = 'ROLE' AND g.privilege = 'USAGE' AND g.deleted_on IS NULL\n"
             ")\n"
-            "SELECT g.grantee_name, g.privilege, g.granted_on, g.name\n"
+            f"SELECT {columns}\n"
             "FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES g\n"
             "JOIN reach r ON g.grantee_name = r.role WHERE g.deleted_on IS NULL\n"
-            "ORDER BY 1, 3, 4;"
+            "ORDER BY 1, 3, 4;" + recent
         )
 
     def bound_role_problem(self, bound, managed):
-        # PROVISIONER cannot read a role it does not own; the review statement is the check.
-        return None
+        """Why `bound` may not be bound, from its name: in a shared account a role ending in an
+        environment's suffix is Vecten's, this environment's reserved and `managed` roles
+        among them. PROVISIONER cannot read the grants of a role it neither owns nor holds, so
+        the review statement is the check of what `bound` reaches."""
+        if not self._project_role(bound):
+            return None
+        if bound.upper().endswith(self.names.suffix):
+            return f"{bound.upper()} is a role Vecten manages in this environment"
+        return f"{bound.upper()} belongs to another environment of this project"
 
     def granted_roles(self, role):
         """The roles granted to the group's role, as SHOW GRANTS prints their names."""

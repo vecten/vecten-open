@@ -1,12 +1,23 @@
 """A group's role can be named at creation, and a group can bind a role the client already has,
 which the server prints the statement for, records once it is in place, and never manages."""
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.base import RoleExists
 from vecten_shared.identity_setup import ACCESS_VERSION
+
+_spec = importlib.util.spec_from_file_location(
+    "groups_warehouse_fakes", Path(__file__).with_name("warehouse_fakes.py")
+)
+fakes = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = fakes
+_spec.loader.exec_module(fakes)
 
 
 class Adapter:
@@ -302,3 +313,66 @@ def test_deleting_a_group_whose_revoke_fails_leaves_no_applied_record():
     access.delete_group("finance")
     assert not [r for _, r in access.state.scan("applied_grants") if r["group"] == "finance"]
     assert access.reconcile()["complete"]
+
+
+# A shared Snowflake account: project acme's environment dev, whose names end in _ACME_DEV.
+
+
+def snowflake_service(*, shared_account):
+    adapter, cursor = fakes.snowflake([], shared_account=shared_account)
+    access = service(adapter)
+    access.create_group("finance")
+    access.create_group("marketing")
+    return access, cursor
+
+
+ANOTHER_ENVIRONMENTS = ["ANALYST_ACME_PROD", "loader_acme_staging", "Finance_Acme_Prod"]
+OWN_RESERVED = [
+    f"{name}_ACME_DEV" for name in ("analyst", "loader", "provisioner", "reader", "mcp_state")
+]
+
+
+@pytest.mark.parametrize(
+    "bound",
+    [*ANOTHER_ENVIRONMENTS, *OWN_RESERVED, "loader_acme_dev", "MARKETING_ACME_DEV"],
+)
+def test_a_shared_account_refuses_binding_a_role_of_any_environment_of_the_project(bound):
+    access, cursor = snowflake_service(shared_account=True)
+    before = list(cursor.statements)
+    with pytest.raises(ValueError, match="cannot be bound"):
+        access.bind("finance", bound)
+    assert access.state.get("bindings", "finance") is None
+    # The refusal comes from the name alone; nothing ran against the warehouse for it.
+    assert cursor.statements == before
+
+
+def test_a_shared_account_binds_a_client_role():
+    access, _ = snowflake_service(shared_account=True)
+    assert access.bind("finance", "FINANCE_ANALYST")["confirmed"] is False
+    assert access.bind("marketing", "ACME_DEV_READERS")["bound_role"] == "ACME_DEV_READERS"
+
+
+@pytest.mark.parametrize("role", ["analyst_acme_prod", "team_acme_dev"])
+def test_a_shared_account_refuses_a_group_role_named_with_an_environments_suffix(role):
+    access, cursor = snowflake_service(shared_account=True)
+    with pytest.raises(ValueError, match="_ACME_"):
+        access.create_group("team", role=role)
+    assert access.state.group("team") is None
+    assert not any(role.upper() in sql for sql, _ in cursor.statements)
+
+
+@pytest.mark.parametrize("bound", [*ANOTHER_ENVIRONMENTS, *OWN_RESERVED, "MARKETING_ACME_DEV"])
+def test_the_fixed_layout_binds_names_that_carry_no_meaning_in_its_account(bound):
+    access, cursor = snowflake_service(shared_account=False)
+    assert access.bind("finance", bound)["statement"] == (
+        f'GRANT ROLE "{bound.upper()}" TO ROLE "FINANCE";'
+    )
+    access.create_group("team", role="team_acme_prod")
+    assert ('CREATE ROLE "TEAM_ACME_PROD"', None) in cursor.statements
+
+
+@pytest.mark.parametrize("bound", ["loader", "ANALYST", "Marketing", "provisioner"])
+def test_the_fixed_layout_still_refuses_its_own_managed_roles(bound):
+    access, _ = snowflake_service(shared_account=False)
+    with pytest.raises(ValueError, match="manages"):
+        access.bind("finance", bound)

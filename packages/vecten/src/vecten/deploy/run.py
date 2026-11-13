@@ -55,12 +55,16 @@ from vecten.deploy.guards import (
     require_on_default_branch,
 )
 from vecten.deploy.promotion import (
+    FETCHED,
+    CommitFiles,
     fetch_default_branch,
     given_commit,
     newest_shipped,
     previous_in,
     promoted_tree,
     promotion_order,
+    read_commit_files,
+    read_fetched_facts,
     read_head_facts,
     require_shipped_by,
 )
@@ -82,7 +86,7 @@ from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import shared_layout, snowflake_names
+from vecten_shared.provider import recorded_base, shared_base, shared_layout, snowflake_names
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
 from vecten_shared.records import write_text_atomic
 from vecten_shared.services import check_bindings, limits_per_host
@@ -107,19 +111,25 @@ GIT_APP_NAMES = (
 
 
 def require_ci_git_credential(
-    project_root: Path, config: VectenConfig, env: str, gh: ToolRunner
+    project_root: Path,
+    config: VectenConfig,
+    env: str,
+    gh: ToolRunner,
+    shipped: CommitFiles | None = None,
 ) -> list[str]:
     """Refuse to dispatch a ship of a private git source that CI holds no credential for; the
     warnings to show when GitHub would not list every name.
 
-    Only names are compared: a secret's value cannot be read, and a wrong one fails the ship in
-    CI before any host changes."""
+    The sources are those of `shipped`, the commit the run ships, else this checkout's. Only
+    names are compared: a secret's value cannot be read, and a wrong one fails the ship in CI
+    before any host changes."""
     from vecten.git_extensions import registered_sources
 
-    record = read_extension_record(project_root) or {}
+    if shipped is None:
+        shipped = CommitFiles(config, read_extension_record(project_root) or {})
     private = [
         name
-        for name, (_, entry) in registered_sources(config, record).items()
+        for name, (_, entry) in registered_sources(shipped.config, shipped.record).items()
         if not entry.git.public
     ]
     if not private:
@@ -442,11 +452,20 @@ def _deploy(
         if gh is None:
             raise Failure(ExitCode.INTERNAL, "dispatching the apply workflow needs the gh runner")
         branch = require_on_default_branch(project_root, deploy.github_repository, gh, git)
-        warnings = require_ci_git_credential(project_root, config, env, gh)
         promoted = _promoted_for_dispatch(gh, git, project_root, config, env, branch, commit)
-        # The run read this checkout's vecten.toml from GitHub, so it named the objects as
-        # this layout does.
-        layout = shared_layout(config, env) if has_snowflake_root(config) else None
+        # CI reads the facts from the fetched head, which this checkout may trail.
+        facts = read_fetched_facts(git, project_root).environments
+        # The run deploys the promoted commit, else that head.
+        shipped = read_commit_files(git, project_root, promoted or FETCHED, facts)
+        warnings = require_ci_git_credential(project_root, config, env, gh, shipped)
+        # The run names the objects by the vecten.toml it deploys, under the base the head
+        # records for the environment if it records one.
+        named = shipped.config
+        layout = (
+            (shared_layout(named, env), recorded_base(named, env) or shared_base(named))
+            if has_snowflake_root(named)
+            else None
+        )
         try:
             followed = dispatch_and_follow(
                 project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted
@@ -455,7 +474,7 @@ def _deploy(
             # A failed run may already have created Snowflake objects under these names.
             if layout is not None:
                 recorded = load_config(project_root)
-                if record_layout(recorded, env, layout):
+                if record_layout(recorded, env, *layout):
                     save_config(project_root, recorded)
             raise
         try:
@@ -472,7 +491,7 @@ def _deploy(
         facts = recorded.environments[env]
         facts.deployed_commit = deployed
         if layout is not None:
-            record_layout(recorded, env, layout)
+            record_layout(recorded, env, *layout)
         # A deploy hands every VM its current key and waits for the acknowledgement, so no VM
         # key is waiting any more; bootstrap deletes the old keys on its next run.
         facts.cloud_ids = {
@@ -843,17 +862,26 @@ def promote_env(
     if identity_pending(config, env):
         raise Failure(ExitCode.PREREQUISITE, identity_pending_note(config, env))
     require_gh(gh, project_root)
-    # The run ships the promoted commit's git sources, which CI fetches as a ship's own.
-    warnings = require_ci_git_credential(project_root, config, env, gh)
     repository = deploy.github_repository
     branch = default_branch(gh, project_root, repository)
+    # The promoted commit is on the default branch, which this checkout may trail.
+    warnings = []
     if commit is None:
+        # GitHub names the commit; its files are read from this checkout's objects, which
+        # may hold it already.
+        try:
+            fetch_default_branch(git, project_root, branch)
+        except Failure as exc:
+            warnings.append(f"{exc.message}; promote reads the commit from this checkout")
         promoted = newest_shipped(gh, project_root, repository, branch, previous)
     else:
         fetch_default_branch(git, project_root, branch)
         promoted = given_commit(git, project_root, commit)
         require_commit_on_default_branch(project_root, git, branch, promoted)
         require_shipped_by(gh, project_root, repository, promoted, env, previous)
+    # The run ships the promoted commit's git sources, which CI fetches as a ship's own.
+    shipped = read_commit_files(git, project_root, promoted, config.environments)
+    warnings += require_ci_git_credential(project_root, config, env, gh, shipped)
     followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git, commit=promoted)
     result = {"env": env, "promotes_from": previous, "dispatched": True, **followed}
     return {**result, "warnings": warnings} if warnings else result
@@ -980,7 +1008,7 @@ def destroy_env(
         elif has_snowflake_root(recorded):
             # The kept database carries the layout's names, and without a deployed commit an
             # unrecorded environment would read as never deployed and take the setting.
-            record_layout(recorded, env, shared_layout(recorded, env))
+            record_layout(recorded, env, shared_layout(recorded, env), shared_base(recorded))
         facts.deployed_commit = None
         cleared = _clear_state_facts(recorded, env)
         save_config(project_root, recorded)

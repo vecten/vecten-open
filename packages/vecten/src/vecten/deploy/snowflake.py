@@ -58,15 +58,15 @@ def _layout(shared: bool) -> str:
     return f"snowflake_shared_account = {'true' if shared else 'false'}"
 
 
-def record_layout(config: VectenConfig, env: str, shared: bool) -> bool:
-    """Record the layout, and a shared layout's base, an environment's first deploy used;
+def record_layout(config: VectenConfig, env: str, shared: bool, base: str) -> bool:
+    """Record the layout, and a shared layout's `base`, an environment's first deploy used;
     whether anything was unrecorded."""
     facts = config.environments[env]
     if facts.snowflake_shared_account is not None:
         return False
     facts.snowflake_shared_account = shared
     if shared:
-        facts.snowflake_base = shared_base(config)
+        facts.snowflake_base = base
     return True
 
 

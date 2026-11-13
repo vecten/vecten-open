@@ -1,7 +1,9 @@
 """Each adapter names a role that already exists, prints the binding statements, and reads
 whether a group role holds its bound role."""
 
-from dataclasses import replace
+import importlib.util
+import sys
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -9,64 +11,14 @@ from snowflake.connector.errors import ProgrammingError
 
 from vecten_mcp.warehouse.base import RoleExists
 from vecten_mcp.warehouse.postgres import PostgresAdapter
-from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
-from vecten_shared.config import VectenConfig
-from vecten_shared.provider import snowflake_names
 
-
-class Cursor:
-    description = [("privilege",), ("granted_on",), ("name",)]
-
-    def __init__(self, answer):
-        self.answer, self.statements = answer, []
-
-    def cursor(self):
-        return self
-
-    def execute(self, sql, params=None):
-        self.statements.append((sql, params))
-        if isinstance(self.answer, Exception):
-            raise self.answer
-        return self
-
-    def fetchall(self):
-        if "FUTURE" in self.statements[-1][0]:
-            return []
-        return self.answer
-
-    def fetchone(self):
-        return self.answer[0] if self.answer else None
-
-    def close(self):
-        pass
-
-
-def names(*, shared_account=False):
-    """Project `acme`'s names: the fixed layout over database D and warehouse W, or its
-    shared-account dev environment's."""
-    config = VectenConfig.model_validate(
-        {
-            "users": 1,
-            "project": {"name": "acme", "scaffold_version": "0.1.1"},
-            "warehouse": {"kind": "snowflake", "account": "a"},
-        }
-    )
-    if shared_account:
-        return snowflake_names(config, "dev", shared_account=True)
-    return replace(snowflake_names(config, "prod"), database="D", warehouse="W")
-
-
-def snowflake(answer, *, shared_account=False):
-    cursor = Cursor(answer)
-    adapter = SnowflakeAdapter(
-        lambda: cursor, None, None, names=names(shared_account=shared_account)
-    )
-    return adapter, cursor
-
-
-def postgres(answer):
-    cursor = Cursor(answer)
-    return PostgresAdapter(lambda: cursor, None), cursor
+_spec = importlib.util.spec_from_file_location(
+    "bindings_warehouse_fakes", Path(__file__).with_name("warehouse_fakes.py")
+)
+fakes = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = fakes
+_spec.loader.exec_module(fakes)
+Cursor, names, snowflake, postgres = fakes.Cursor, fakes.names, fakes.snowflake, fakes.postgres
 
 
 def test_snowflake_names_a_role_that_already_exists():
@@ -227,3 +179,27 @@ def test_postgres_scope_takes_the_bound_flag():
     import inspect
 
     assert "bound" in inspect.signature(PostgresAdapter.check_scope).parameters
+
+
+def _header(review):
+    return "\n".join(line for line in review.splitlines() if line.startswith("--"))
+
+
+def test_a_shared_account_review_names_what_else_makes_the_role_unsafe():
+    adapter, _ = snowflake([], shared_account=True)
+    review = adapter.review_statement("finance_analyst")
+    header = " ".join(line.removeprefix("--").strip() for line in _header(review).splitlines())
+    # The provisioner cannot read the bound role's grants, so the administrator refuses these.
+    assert "on ACCOUNT" in header and "ACCOUNTADMIN" in header
+    assert "USAGE on a role named *_ACME_<ENV>" in header
+    assert "a database named ACME_<ENV> other than ACME_DEV" in header
+    assert "TABLE_CATALOG" in header and "g.table_catalog" in review
+    # ACCOUNT_USAGE lags; SHOW GRANTS reads the grants made since, one role at a time.
+    assert review.rstrip().endswith('SHOW GRANTS TO ROLE "FINANCE_ANALYST";')
+
+
+def test_the_fixed_layout_review_names_no_other_environment():
+    adapter, _ = snowflake([])
+    review = adapter.review_statement("finance_analyst")
+    assert "<ENV>" not in review and "SHOW GRANTS" not in review
+    assert "on\n-- ACCOUNT" in review or "on ACCOUNT" in review

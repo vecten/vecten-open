@@ -213,12 +213,23 @@ class FakeSsm:
 
 
 class FakeGit:
-    """`answers` maps a call's leading words (`("merge-base",)`) to `(exit code, stdout)`;
-    every other call succeeds with no output."""
+    """`answers` maps a call's leading words (`("merge-base",)`) to `(exit code, stdout)`.
+    `git show <commit>:<path>` answers from `shown`, a directory standing for every commit's
+    tree or a map from a commit to its directory (the checkout for any other), and fails for a
+    file it lacks. A commit in `missing` is absent from the object store, as in a shallow
+    clone: `show` and `cat-file` fail for it. Every other call succeeds with no output."""
 
-    def __init__(self, head: str = COMMIT, answers: dict | None = None):
+    def __init__(
+        self,
+        head: str = COMMIT,
+        answers: dict | None = None,
+        shown: Path | dict[str, Path] | None = None,
+        missing: set[str] = frozenset(),
+    ):
         self.head = head
         self.answers = answers or {}
+        self.shown = shown
+        self.missing = missing
         self.calls: list[list[str]] = []
 
     def which(self):
@@ -232,6 +243,21 @@ class FakeGit:
             if tuple(args[: len(prefix)]) == prefix:
                 stderr = "" if code == 0 else f"fatal: git {args[0]} failed"
                 return subprocess.CompletedProcess(args, code, stdout, stderr)
+        if args[:2] == ["cat-file", "-e"]:
+            commit = args[2].removesuffix("^{commit}")
+            code = 128 if commit in self.missing else 0
+            return subprocess.CompletedProcess(args, code, "", "")
+        if len(args) == 2 and args[0] == "show" and ":" in args[1]:
+            commit, _, path = args[1].partition(":")
+            if commit in self.missing:
+                stderr = f"fatal: invalid object name '{commit}'."
+                return subprocess.CompletedProcess(args, 128, "", stderr)
+            tree = self.shown.get(commit) if isinstance(self.shown, dict) else self.shown
+            file = (tree or Path(cwd)) / path
+            if file.is_file():
+                return subprocess.CompletedProcess(args, 0, file.read_text(), "")
+            stderr = f"fatal: path '{path}' does not exist in '{commit}'"
+            return subprocess.CompletedProcess(args, 128, "", stderr)
         return subprocess.CompletedProcess(args, 0, "", "")
 
     def named(self, *prefix: str) -> list[list[str]]:
