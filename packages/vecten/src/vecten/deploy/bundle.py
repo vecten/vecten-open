@@ -251,6 +251,7 @@ def _render_stack(
         project=project,
         hosts=hosts,
         dags_paused_at_creation=tfvars.get(DAGS_PAUSED_AT_CREATION, False),
+        snowflake_account=tfvars.get("snowflake_account"),
     )
     write_text_atomic(stack_dir / "docker-compose.yml", yaml.safe_dump(doc, sort_keys=False))
     write_nginx(

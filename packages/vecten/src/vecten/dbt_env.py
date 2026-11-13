@@ -14,7 +14,7 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-from vecten.deploy.snowflake import LOADER_PRIVATE_KEY
+from vecten.deploy.snowflake import LOADER_PRIVATE_KEY, environment_names
 from vecten.secrets import cloud_store
 from vecten_platform.dbt.deps import write_packages_yml
 from vecten_platform.dbt.profile import profile_env
@@ -22,7 +22,7 @@ from vecten_platform.dbt.runner import base_env, output_tail, run_dbt
 from vecten_shared.config import VectenConfig
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import ConnectionSpec, snowflake_names
+from vecten_shared.provider import ConnectionSpec
 
 ENV_FLAG = "--env"
 PROD_ENV = "prod"
@@ -231,10 +231,14 @@ def check_prod_project(
         )
 
 
-def _loader_spec(config: VectenConfig, env: str) -> ConnectionSpec:
-    if not config.warehouse.account:
-        raise Failure(ExitCode.CONFIG, "vecten.toml: warehouse.account is required on Snowflake")
-    names = snowflake_names(config, env)
+def _loader_spec(root: Path, config: VectenConfig, env: str) -> ConnectionSpec:
+    names = environment_names(root, config, env)
+    if not names.account:
+        raise Failure(
+            ExitCode.CONFIG,
+            f"deploy/envs/{env}.tfvars names no snowflake_account, and vecten.toml no "
+            "[warehouse] account",
+        )
     # `profile_env` signs in with the role as the user: the loader's user and role share a name.
     return ConnectionSpec(
         kind="snowflake",
@@ -278,7 +282,7 @@ def environment_dbt_env(
         raise _refuse_postgres(env)
     store = cloud_store(root, env)
     command = check_prod_command(args) if env == PROD_ENV else ()
-    spec = _loader_spec(config, env)
+    spec = _loader_spec(root, config, env)
     dbt_dir = root / "dbt"
     write_packages_yml(dbt_dir, config)
     inherited = without_dbt_settings(os.environ) if env == PROD_ENV else None

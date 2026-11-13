@@ -13,9 +13,10 @@ terraform {
 
 # `vecten deploy` signs in as the deploy user from the SNOWFLAKE_* environment it builds
 # from the secrets store, so no credential is written here or reaches the state. The module
-# reads the role Terraform runs as, a preview data source no environment variable enables.
+# reads the role Terraform runs as and, in a shared account, sets the loader's sign-in
+# policy: preview features no environment variable enables.
 provider "snowflake" {
-  preview_features_enabled = ["snowflake_current_role_datasource"]
+  preview_features_enabled = ["snowflake_current_role_datasource", "snowflake_authentication_policy_resource", "snowflake_user_authentication_policy_attachment_resource"]
 }
 
 module "snowflake" {
@@ -35,4 +36,5 @@ module "snowflake" {
   provisioner_role_name = var.provisioner_role_name
   warehouse_size        = var.warehouse_size
   loader_public_key     = var.loader_public_key
+  loader_sign_in        = var.loader_sign_in
 }

@@ -17,6 +17,7 @@ from vecten_shared.declarations import component_for, secret_problem
 from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.provider import SNOWFLAKE_ACCOUNT_VAR
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.provider.local import local_pg_published_port
 from vecten_shared.services import SERVICE_COMPONENT, Bound, bound_services
@@ -219,6 +220,7 @@ def _airflow_common(
     project: str,
     hosts: dict[str, str],
     dags_paused_at_creation: bool,
+    account_env: dict[str, str],
 ) -> dict:
     db = (
         "postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres/airflow"
@@ -286,6 +288,7 @@ def _airflow_common(
             # instance role; on Scaleway the agent defines it with the key and S3 endpoint.
             "AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID": "aws_default",
         }
+        common["environment"] |= account_env
         if cloud == "scaleway":
             common["environment"]["AIRFLOW_CONN_AWS_DEFAULT"] = "${AIRFLOW_CONN_AWS_DEFAULT}"
         common["volumes"] += [
@@ -508,13 +511,21 @@ def generate_compose(
     project: str | None = None,
     hosts: dict[str, str] | None = None,
     dags_paused_at_creation: bool = False,
+    snowflake_account: str | None = None,
 ) -> dict:
     """The Compose document; a vm stack passes `hosts` from `vm_hostnames(outputs)`.
 
-    `dags_paused_at_creation` is the environment's tfvars setting; a local stack starts its
-    DAGs paused whatever it says.
+    `dags_paused_at_creation` and `snowflake_account` are the environment's tfvars settings;
+    a local stack starts its DAGs paused whatever the first says, and signs in to no
+    environment's account.
     """
     hosts = _hosts(mode, hosts)
+    # Each environment names its own Snowflake account in its tfvars, which the hosts lack.
+    account_env = (
+        {SNOWFLAKE_ACCOUNT_VAR: snowflake_account}
+        if mode == "vm" and config.warehouse.kind == "snowflake" and snowflake_account
+        else {}
+    )
     services: dict[str, dict] = {}
     volumes: dict[str, dict] = {}
     with_platform = "platform" in host_components
@@ -528,7 +539,9 @@ def generate_compose(
         volumes["postgres-data"] = {}
 
     if with_platform:
-        common = _airflow_common(config, mode, stack_dir, project, hosts, dags_paused_at_creation)
+        common = _airflow_common(
+            config, mode, stack_dir, project, hosts, dags_paused_at_creation, account_env
+        )
         depends = {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
         services["airflow-api-server"] = {
             **common,
@@ -638,6 +651,7 @@ def generate_compose(
                 "VECTEN_MCP_POOL_CAP": "${VECTEN_MCP_POOL_CAP}",
                 "VECTEN_FEEDBACK_MANIFEST": "/app/feedback.json",
             }
+            services["mcp-server"]["environment"] |= account_env
             services["mcp-server"]["volumes"].append(VM_ENVIRONMENT_MOUNT)
             services["mcp-server"]["volumes"].append("../ship/feedback.json:/app/feedback.json:ro")
             if config.mcp.admin_panel == "off":

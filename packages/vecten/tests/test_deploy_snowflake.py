@@ -1,5 +1,6 @@
 """The Snowflake root's inputs: the deploy credentials, the loader key pair and the root itself."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -329,6 +330,21 @@ def test_the_root_takes_every_name_from_the_snowflake_names(tmp_path, monkeypatc
     assert extra["analyst_role_name"] == "ANALYST_ACME_PROD"
     assert extra["loader_role_name"] == extra["loader_user_name"] == "LOADER_ACME_PROD"
     assert extra["provisioner_role_name"] == "PROVISIONER_ACME_PROD"
+    assert extra["loader_sign_in"] == '{schema="VECTEN_SIGN_IN",policy="SERVICE_SIGN_IN"}'
+
+
+def test_a_thin_root_without_the_sign_in_variable_refuses_a_shared_account(tmp_path, monkeypatch):
+    from vecten.deploy import snowflake
+
+    root = render_snowflake(tmp_path / "snow")
+    path = root / "deploy" / "terraform" / "snowflake" / "variables.tf"
+    text = path.read_text()
+    path.write_text(re.sub(r'variable "loader_sign_in" \{.*?\n\}\n', "", text, flags=re.S))
+    assert snowflake_root(root, load_config(root), "prod", deploy_store()) is not None
+    _shared_names(monkeypatch, snowflake)
+    with pytest.raises(Failure) as caught:
+        snowflake_root(root, load_config(root), "prod", deploy_store())
+    assert "loader_sign_in" in caught.value.message and "vecten update" in caught.value.message
 
 
 def _drop_name_variables(root):

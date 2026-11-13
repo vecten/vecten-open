@@ -554,11 +554,15 @@ def test_the_scope_check_reads_and_compares_with_the_snowflake_names(monkeypatch
             ),
         ],
     )
-    adapter = SnowflakeAdapter(GrantsConnection, None, None, names=_shared_names())
+    monkeypatch.setattr(HoldersConnection, "holders", {})
+    adapter = SnowflakeAdapter(HoldersConnection, None, None, names=_shared_names())
     adapter.check_scope({})
     assert [query for query, _ in GrantsConnection.seen] == [
         'SHOW GRANTS TO ROLE "PROVISIONER_ACME_DEV"',
         'SHOW FUTURE GRANTS TO ROLE "PROVISIONER_ACME_DEV"',
+        "SHOW DATABASES LIKE 'ACME_DEV'",
+        'SHOW GRANTS OF ROLE "PROVISIONER_ACME_DEV"',
+        'SHOW GRANTS OF ROLE "ANALYST_ACME_DEV"',
     ]
     # The fixed layout's analyst role belongs to another project in a shared account.
     monkeypatch.setattr(GrantsConnection, "grants", [("USAGE", "ROLE", "ANALYST", "false")])
@@ -593,10 +597,276 @@ def test_the_default_groups_role_is_the_names_analyst_role(monkeypatch):
     adapter.schema_grant("analyst", "core")
     adapter.connect_principal({"warehouse_name": "jane"}, {"analyst"}, 1)
     assert GrantsConnection.seen == [
-        ('GRANT ROLE "ANALYST_ACME_DEV" TO USER "JANE"', None),
+        ('GRANT ROLE "ANALYST_ACME_DEV" TO USER "JANE_ACME_DEV"', None),
         (
             'CALL "ACME_DEV"."VECTEN_ACCESS".READ_GRANT(%s,%s,%s,%s)',
             ("ANALYST_ACME_DEV", "CORE", None, True),
         ),
     ]
     assert minted[0]["roles"] == {"ANALYST_ACME_DEV"}
+
+
+class UsersConnection(GrantsConnection):
+    """The provisioner's connection, answering SHOW USERS with `users`."""
+
+    users: list = []
+
+    @property
+    def description(self):
+        if self.query == "SHOW USERS":
+            return [("name",), ("last_success_login",)]
+        return GrantsConnection.description
+
+    def fetchall(self):
+        if self.query == "SHOW USERS":
+            return self.users
+        return super().fetchall()
+
+
+def _shared_adapter(monkeypatch, minted=None, logins=None):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    monkeypatch.setattr(GrantsConnection, "grants", [])
+    monkeypatch.setattr(UsersConnection, "users", [])
+    # Holders the Snowflake root and the script grant, before the MCP created anyone.
+    holders = {
+        role: [h for h in found if h[0] == "ROLE" or h[1].startswith("PROVISIONER")]
+        for role, found in LEGITIMATE_HOLDERS.items()
+    }
+    monkeypatch.setattr(HoldersConnection, "holders", holders)
+
+    def connect(**kwargs):
+        if logins is not None:
+            logins.append(kwargs)
+        return Connection("query")
+
+    def mint(**kwargs):
+        if minted is not None:
+            minted.append(kwargs)
+        return "token"
+
+    return SnowflakeAdapter(HoldersConnection, connect, mint, names=_shared_names())
+
+
+POLICY = '"ACME_DEV"."VECTEN_ACCESS"."MCP_SIGN_IN"'
+
+
+def test_a_shared_account_suffixes_every_user_and_role_the_adapter_names(monkeypatch):
+    minted, logins = [], []
+    adapter = _shared_adapter(monkeypatch, minted, logins)
+    adapter.create_account("jane", "human")
+    adapter.create_account("svc_reporting", "service")
+    adapter.create_group("finance")
+    adapter.membership("finance", "jane")
+    adapter.membership("finance", "jane", grant=False)
+    adapter.schema_grant("finance", "marts")
+    adapter.drop_group("finance")
+    adapter.drop_account("jane")
+    assert [query for query, _ in GrantsConnection.seen] == [
+        'CREATE USER "JANE_ACME_DEV" TYPE = PERSON',
+        f'ALTER USER "JANE_ACME_DEV" SET AUTHENTICATION POLICY {POLICY}',
+        'CREATE USER "SVC_REPORTING_ACME_DEV" TYPE = SERVICE',
+        f'ALTER USER "SVC_REPORTING_ACME_DEV" SET AUTHENTICATION POLICY {POLICY}',
+        'CREATE ROLE "FINANCE_ACME_DEV"',
+        'GRANT ROLE "FINANCE_ACME_DEV" TO USER "JANE_ACME_DEV"',
+        'REVOKE ROLE "FINANCE_ACME_DEV" FROM USER "JANE_ACME_DEV"',
+        'CALL "ACME_DEV"."VECTEN_ACCESS".READ_GRANT(%s,%s,%s,%s)',
+        'DROP ROLE "FINANCE_ACME_DEV"',
+        'DROP USER "JANE_ACME_DEV"',
+    ]
+    assert GrantsConnection.seen[7][1] == ("FINANCE_ACME_DEV", "MARTS", None, True)
+    adapter.connect_principal({"warehouse_name": "jane"}, {"finance"}, 1)
+    assert minted == [{"subject": "JANE_ACME_DEV", "roles": {"FINANCE_ACME_DEV"}, "expires_at": 1}]
+    assert (logins[0]["user"], logins[0]["role"]) == ("JANE_ACME_DEV", "FINANCE_ACME_DEV")
+
+
+def test_a_fixed_account_sets_no_authentication_policy(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    adapter = SnowflakeAdapter(GrantsConnection, None, None, names=names())
+    adapter.create_account("jane", "human")
+    assert [query for query, _ in GrantsConnection.seen] == ['CREATE USER "JANE" TYPE = PERSON']
+
+
+def test_a_shared_account_adopts_no_existing_user(monkeypatch):
+    adapter = _shared_adapter(monkeypatch)
+    assert adapter.inspect_account("jane") is None
+    monkeypatch.setattr(UsersConnection, "users", [("JANE", None)])
+    assert adapter.inspect_account("jane") is None
+    monkeypatch.setattr(UsersConnection, "users", [("JANE_ACME_DEV", "2026-11-01")])
+    with pytest.raises(ValueError, match="JANE_ACME_DEV") as refused:
+        adapter.inspect_account("jane")
+    assert "adopt" in str(refused.value)
+    assert not any(q.startswith(("ALTER", "CREATE", "GRANT")) for q, _ in GrantsConnection.seen)
+
+
+def test_a_fixed_account_still_offers_adoption(monkeypatch):
+    monkeypatch.setattr(UsersConnection, "users", [("JANE", "2026-11-01")])
+    adapter = SnowflakeAdapter(UsersConnection, None, None, names=names())
+    account = adapter.inspect_account("jane")
+    assert account.can_adopt and account.name == "jane"
+
+
+@pytest.mark.parametrize(
+    ("grant", "valid"),
+    [
+        (("OWNERSHIP", "USER", "JANE_ACME_DEV", "true"), True),
+        (("OWNERSHIP", "USER", "JANE", "true"), False),
+        (("OWNERSHIP", "USER", "JANE_ACME_PROD", "true"), False),
+        (("OWNERSHIP", "ROLE", "FINANCE_ACME_DEV", "true"), True),
+        (("OWNERSHIP", "ROLE", "FINANCE_ACME_PROD", "true"), False),
+        (("OWNERSHIP", "ROLE", "FINANCE", "true"), False),
+        (("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.MCP_SIGN_IN", "false"), True),
+        (("APPLY", "AUTHENTICATION_POLICY", "ACME_PROD.VECTEN_ACCESS.MCP_SIGN_IN", "false"), False),
+        (("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.OTHER", "false"), False),
+        # The service users' key-pair-only policy is the administrator's to set, never the MCP's.
+        (
+            ("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_ACCESS.SERVICE_SIGN_IN", "false"),
+            False,
+        ),
+        (
+            ("APPLY", "AUTHENTICATION_POLICY", "ACME_DEV.VECTEN_SIGN_IN.SERVICE_SIGN_IN", "false"),
+            False,
+        ),
+        (("USAGE", "DATABASE", "ACME_PROD", "false"), False),
+    ],
+)
+def test_the_shared_scope_check_reads_the_registry_without_the_suffix(monkeypatch, grant, valid):
+    adapter = _shared_adapter(monkeypatch)
+    monkeypatch.setattr(GrantsConnection, "grants", [grant])
+    registry = {"jane": {"kind": "human"}, "finance": {"kind": "group"}}
+    if valid:
+        adapter.check_scope(registry)
+    else:
+        with pytest.raises(ValueError, match=grant[2]):
+            adapter.check_scope(registry)
+
+
+def test_the_fixed_scope_check_refuses_any_policy_grant(monkeypatch):
+    monkeypatch.setattr(
+        GrantsConnection,
+        "grants",
+        [("APPLY", "AUTHENTICATION_POLICY", "D.VECTEN_ACCESS.MCP_SIGN_IN", "false")],
+    )
+    with pytest.raises(ValueError, match="APPLY"):
+        SnowflakeAdapter(GrantsConnection, None, None, names=names()).check_scope({})
+
+
+class PolicyRefused(UsersConnection):
+    def execute(self, query, parameters=None):
+        if "AUTHENTICATION POLICY" in query:
+            GrantsConnection.seen.append((query, parameters))
+            raise RuntimeError("policy refused")
+        return super().execute(query, parameters)
+
+
+def test_a_user_whose_policy_cannot_be_set_is_dropped_again(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    adapter = SnowflakeAdapter(PolicyRefused, None, None, names=_shared_names())
+    with pytest.raises(RuntimeError, match="policy refused"):
+        adapter.create_account("jane", "human")
+    assert [query for query, _ in GrantsConnection.seen] == [
+        'CREATE USER "JANE_ACME_DEV" TYPE = PERSON',
+        f'ALTER USER "JANE_ACME_DEV" SET AUTHENTICATION POLICY {POLICY}',
+        'DROP USER "JANE_ACME_DEV"',
+    ]
+
+
+class HoldersConnection(UsersConnection):
+    """The provisioner's connection in a shared account: SHOW GRANTS TO ROLE answers
+    `grants`, SHOW DATABASES the deploy role as the owner, SHOW GRANTS OF ROLE `holders`."""
+
+    holders: dict = {}
+
+    @property
+    def description(self):
+        if self.query.startswith("SHOW DATABASES"):
+            return [("name",), ("owner",)]
+        if self.query.startswith("SHOW GRANTS OF ROLE"):
+            return [("role",), ("granted_to",), ("grantee_name",)]
+        return UsersConnection.description.fget(self)
+
+    def fetchall(self):
+        if self.query.startswith("SHOW DATABASES"):
+            return [("ACME_DEV", "DEPLOY_ROLE")]
+        if self.query.startswith("SHOW GRANTS OF ROLE"):
+            role = self.query.split('"')[1]
+            return [(role, kind, name) for kind, name in self.holders.get(role, [])]
+        return super().fetchall()
+
+
+LEGITIMATE_HOLDERS = {
+    "PROVISIONER_ACME_DEV": [
+        ("USER", "PROVISIONER_ACME_DEV"),
+        ("ROLE", "SYSADMIN"),
+        ("ROLE", "DEPLOY_ROLE"),
+    ],
+    "ANALYST_ACME_DEV": [
+        ("ROLE", "PROVISIONER_ACME_DEV"),
+        ("ROLE", "SYSADMIN"),
+        ("ROLE", "DEPLOY_ROLE"),
+        ("USER", "JANE_ACME_DEV"),
+    ],
+}
+
+
+@pytest.mark.parametrize(
+    ("role", "holder", "refused"),
+    [
+        (None, None, False),
+        ("PROVISIONER_ACME_DEV", ("USER", "MALLORY"), True),
+        ("PROVISIONER_ACME_DEV", ("ROLE", "PROVISIONER_ACME_PROD"), True),
+        ("ANALYST_ACME_DEV", ("USER", "JANE_ACME_PROD"), True),
+        ("ANALYST_ACME_DEV", ("ROLE", "FINANCE_ACME_DEV"), False),
+    ],
+)
+def test_the_shared_scope_check_refuses_a_stranger_holding_an_environment_role(
+    monkeypatch, role, holder, refused
+):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    monkeypatch.setattr(
+        GrantsConnection,
+        "grants",
+        [
+            ("OWNERSHIP", "USER", "JANE_ACME_DEV", "true"),
+            ("OWNERSHIP", "ROLE", "FINANCE_ACME_DEV", "true"),
+        ],
+    )
+    holders = {name: list(found) for name, found in LEGITIMATE_HOLDERS.items()}
+    if role:
+        holders[role].append(holder)
+    monkeypatch.setattr(HoldersConnection, "holders", holders)
+    adapter = SnowflakeAdapter(HoldersConnection, None, None, names=_shared_names())
+    registry = {"jane": {"kind": "human"}, "finance": {"kind": "group"}}
+    if refused:
+        with pytest.raises(ValueError, match=f"{role}.*{holder[1]}"):
+            adapter.check_scope(registry)
+    else:
+        adapter.check_scope(registry)
+    queries = [query for query, _ in GrantsConnection.seen]
+    assert 'SHOW GRANTS OF ROLE "PROVISIONER_ACME_DEV"' in queries
+    if not refused:
+        assert 'SHOW GRANTS OF ROLE "ANALYST_ACME_DEV"' in queries
+
+
+def test_the_fixed_scope_check_reads_no_holders(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    monkeypatch.setattr(GrantsConnection, "grants", [])
+    SnowflakeAdapter(HoldersConnection, None, None, names=names()).check_scope({})
+    assert not any("GRANTS OF" in query for query, _ in GrantsConnection.seen)
+
+
+class PolicyAndDropRefused(PolicyRefused):
+    def execute(self, query, parameters=None):
+        if query.startswith("DROP USER"):
+            GrantsConnection.seen.append((query, parameters))
+            raise RuntimeError("drop refused")
+        return super().execute(query, parameters)
+
+
+def test_a_user_left_without_its_policy_is_named_for_an_administrator(monkeypatch):
+    monkeypatch.setattr(GrantsConnection, "seen", [])
+    adapter = SnowflakeAdapter(PolicyAndDropRefused, None, None, names=_shared_names())
+    with pytest.raises(RuntimeError) as caught:
+        adapter.create_account("jane", "human")
+    message = str(caught.value)
+    assert "JANE_ACME_DEV" in message and "DROP USER" in message
+    assert "policy refused" in message

@@ -484,3 +484,15 @@ def test_the_snowflake_connection_takes_every_name_from_the_snowflake_names(tmp_
         "ACME_PROD_WH",
         "ACMEORG-PROD1",
     )
+
+
+def test_the_snowflake_connection_reaches_the_account_ship_handed_the_host(tmp_path, monkeypatch):
+    aws_credentials(monkeypatch, tmp_path)
+    write_aws_project(
+        tmp_path,
+        outputs=mcp_only_outputs(),
+        warehouse={"kind": "snowflake", "existing": True, "account": "ACMEORG-PROD1"},
+    )
+    monkeypatch.setenv("VECTEN_SNOWFLAKE_ACCOUNT", "ACMEORG-DEV1")
+    spec = AwsRuntimeProvider(tmp_path, "dev").connection("dev", "warehouse")
+    assert spec.account == "ACMEORG-DEV1"

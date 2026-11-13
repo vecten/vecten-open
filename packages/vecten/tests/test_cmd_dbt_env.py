@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,10 @@ import yaml
 
 from vecten import dbt_env
 from vecten.cli.commands import dbt as dbt_cmd
+from vecten.deploy.tfvars import env_tfvars_path
 from vecten_platform.dbt.runner import DbtRun
 from vecten_shared import provider as provider_module
+from vecten_shared.config import load_config, save_config
 
 from .fixture_project import render_fixture
 
@@ -180,12 +183,17 @@ def test_other_environments_run_every_command(invoke, snowflake, args):
     assert snowflake["parses"] == []
 
 
-def test_the_connection_takes_every_name_from_the_snowflake_names(invoke, snowflake, monkeypatch):
-    from functools import partial
-
-    from vecten_shared.provider import snowflake_names
-
-    monkeypatch.setattr(dbt_env, "snowflake_names", partial(snowflake_names, shared_account=True))
+def test_a_shared_environment_connects_with_its_own_names_and_account(invoke, snowflake):
+    root = snowflake["root"]
+    prod = env_tfvars_path(root, "prod").read_text()
+    staging = re.sub(r'environment\s*=\s*"prod"', 'environment = "staging"', prod)
+    staging = re.sub(
+        r'snowflake_account\s*=\s*"[^"]*"', 'snowflake_account = "ACME-SHARED"', staging
+    )
+    env_tfvars_path(root, "staging").write_text(staging)
+    config = load_config(root)
+    config.warehouse.shared_account = True
+    save_config(root, config)
     result = invoke("dbt", "--env", "staging", "run")
     assert result.exit_code == 3, result.stderr
     env = snowflake["runs"][0]["env"]
@@ -194,7 +202,7 @@ def test_the_connection_takes_every_name_from_the_snowflake_names(invoke, snowfl
         "ACME_STAGING",
         "ACME_STAGING_WH",
     )
-    assert env["SNOWFLAKE_ACCOUNT"] == "ACME-PROD"
+    assert env["SNOWFLAKE_ACCOUNT"] == "ACME-SHARED"
 
 
 def test_other_environments_run_hooks_and_store_failures(invoke, snowflake):
@@ -406,8 +414,14 @@ def test_env_needs_a_deployed_project(invoke, tmp_path, monkeypatch):
 
 
 def test_env_needs_the_snowflake_account(invoke, snowflake):
-    toml = snowflake["root"] / "vecten.toml"
+    root = snowflake["root"]
+    toml = root / "vecten.toml"
     toml.write_text(toml.read_text().replace('account = "ACME-PROD"\n', ""))
+    # The environment's tfvars name its account, which is enough on its own.
+    assert invoke("dbt", "--env", "prod", "compile").exit_code == 3
+    tfvars = env_tfvars_path(root, "prod")
+    tfvars.write_text(re.sub(r"snowflake_account\s*=.*\n", "", tfvars.read_text()))
+    READ.clear()
     result = invoke("dbt", "--env", "prod", "compile")
     assert result.exit_code == 6
     assert "account" in result.stderr and READ == []

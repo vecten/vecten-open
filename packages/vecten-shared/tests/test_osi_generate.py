@@ -224,14 +224,16 @@ def test_dataset_database_matches_the_local_build_default():
     ("project", "database"), [("acme", None), ("acme-data", None), ("acme", "analytics_dw")]
 )
 def test_snowflake_sources_name_the_database_the_root_creates(project, database):
-    from types import SimpleNamespace
-
+    from vecten_shared.config import VectenConfig
     from vecten_shared.osi.generate import dataset_database
     from vecten_shared.provider import snowflake_names
 
-    config = SimpleNamespace(
-        project=SimpleNamespace(name=project),
-        warehouse=SimpleNamespace(kind="snowflake", database=database, account=None),
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": project, "scaffold_version": "0.1.1"},
+            "warehouse": {"kind": "snowflake", "database": database},
+        }
     )
     created = snowflake_names(config, "prod").database
     assert dataset_database(config).upper() == created

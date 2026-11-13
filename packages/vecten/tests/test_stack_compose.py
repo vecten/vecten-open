@@ -248,6 +248,34 @@ def test_dags_start_paused_on_the_laptop_and_scheduled_on_a_vm(tmp_path, mode, s
         assert environment["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == expected, name
 
 
+@pytest.mark.parametrize("hosts", [["platform", "mcp"], ["platform"], ["mcp"]])
+def test_every_vm_host_runs_with_its_environments_snowflake_account(tmp_path, hosts):
+    config = cfg(["platform", "mcp"], warehouse="snowflake", deploy=DEPLOY)
+    doc = generate_compose(
+        config, "vm", hosts, tmp_path, hosts=VM_HOSTS, snowflake_account="ACME-DEV"
+    )
+    found = [name for name in (*AIRFLOW_SERVICES, "mcp-server") if name in doc["services"]]
+    assert found
+    for name in found:
+        environment = doc["services"][name]["environment"]
+        assert environment["VECTEN_SNOWFLAKE_ACCOUNT"] == "ACME-DEV", name
+
+
+@pytest.mark.parametrize(
+    ("mode", "warehouse"), [("local", "snowflake"), ("vm", "postgres"), ("local", "postgres")]
+)
+def test_only_a_snowflake_vm_stack_carries_the_account(tmp_path, mode, warehouse):
+    deploy = DEPLOY if mode == "vm" else None
+    config = cfg(["platform", "mcp"], warehouse=warehouse, deploy=deploy)
+    kwargs = {"hosts": VM_HOSTS} if mode == "vm" else {}
+    plain = generate_compose(config, mode, ["platform", "mcp"], tmp_path, **kwargs)
+    given = generate_compose(
+        config, mode, ["platform", "mcp"], tmp_path, snowflake_account="ACME-DEV", **kwargs
+    )
+    assert given == plain
+    assert "VECTEN_SNOWFLAKE_ACCOUNT" not in yaml.safe_dump(given)
+
+
 def test_mcp_only_local(tmp_path):
     doc = generate_compose(cfg(["mcp"]), "local", ["mcp"], tmp_path)
     assert set(doc["services"]) == {"postgres", "mcp-server", "nginx"}

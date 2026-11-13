@@ -7,7 +7,7 @@ import pytest
 
 from vecten.scaffold.params import ScaffoldParams
 from vecten.scaffold.render import render_project
-from vecten_shared.config import load_config
+from vecten_shared.config import load_config, save_config
 
 LOCAL = ("--name", "acme", "--users", "8", "--source", "hubspot")
 DEPLOY = (
@@ -291,6 +291,38 @@ def test_a_recorded_snowflake_account_reaches_tfvars_and_vecten_toml(invoke, wor
     assert 'snowflake_account = "ACME-PROD"' in (proj / "deploy/envs/prod.tfvars").read_text()
     again = invoke("init", "--deploy", "--json")
     assert json.loads(again.stdout)["changed"] == []
+
+
+@pytest.mark.parametrize(("answer", "shared"), [("yes", True), ("no", False)])
+def test_the_shared_account_answer_reaches_vecten_toml(
+    invoke, workdir, monkeypatch, answer, shared
+):
+    invoke("init", "p", *LOCAL, "--warehouse", "snowflake", *DEPLOY, "--json")
+    proj = workdir / "p"
+    monkeypatch.chdir(proj)
+    invoke("answer", "snowflake_account", "ACME-PROD")
+    invoke("answer", "snowflake_shared_account", answer)
+    r = invoke("init", "--deploy", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert load_config(proj).warehouse.shared_account is shared
+    assert ("shared_account = true" in (proj / "vecten.toml").read_text()) is shared
+    again = invoke("init", "--deploy", "--json")
+    assert json.loads(again.stdout)["changed"] == []
+
+
+def test_the_shared_account_answer_leaves_a_deployed_project_as_it_is(invoke, workdir, monkeypatch):
+    invoke("init", "p", *LOCAL, "--warehouse", "snowflake", *DEPLOY, "--json")
+    proj = workdir / "p"
+    monkeypatch.chdir(proj)
+    invoke("answer", "snowflake_account", "ACME-PROD")
+    assert invoke("init", "--deploy", "--json").exit_code == 0
+    config = load_config(proj)
+    config.environments["prod"].snowflake_shared_account = False
+    save_config(proj, config)
+    invoke("answer", "snowflake_shared_account", "yes")
+    r = invoke("init", "--deploy", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert load_config(proj).warehouse.shared_account is False
 
 
 def test_snowflake_account_flag_is_a_deploy_flag(invoke, workdir, monkeypatch):

@@ -3,13 +3,13 @@
 import json
 import re
 
+from vecten.deploy.snowflake import environment_names
 from vecten.mcp_url import mcp_url
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, load_config, save_config
 from vecten_shared.identity_setup import introspection_document, provisioner_script
 from vecten_shared.keypair import generate_one_line, load_private_key, public_body
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import snowflake_names
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import write_record, write_text_atomic
 
@@ -108,7 +108,7 @@ def setup_script(root, env, confirm=False, public_key=None):
         issuer=issuer,
         database=None if snowflake else config.warehouse.database or config.project.name,
         public_key=public_key,
-        names=snowflake_names(config, env) if snowflake else None,
+        names=environment_names(root, config, env) if snowflake else None,
     )
     commands.insert(0, f"vecten mcp provisioner-script{flag} --confirm-run")
     return {"env": env, "sql": sql, "commands": commands, "confirmed": False}

@@ -9,8 +9,9 @@ from typing import Any
 
 from vecten.deploy.sizing import TIERS
 from vecten_shared.config import APEX, VectenConfig
-from vecten_shared.names import check_env_name
+from vecten_shared.names import check_env_name, env_name_problem
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.provider import recorded_layout, shared_layout, snowflake_names
 
 REQUIRED = (
     "environment",
@@ -37,6 +38,12 @@ def _no_constant(name: str) -> Any:
 
 _DECODER = json.JSONDecoder(parse_constant=_no_constant)
 _TEMPLATE = ("${", "%{")
+
+
+def has_snowflake_root(config: VectenConfig) -> bool:
+    # `init` renders deploy/terraform/snowflake under exactly this condition: the platform
+    # builds the warehouse, so an MCP over an existing Snowflake account has no root.
+    return config.warehouse.kind == "snowflake" and "platform" in config.components
 
 
 def env_tfvars_path(project_root: Path, env: str) -> Path:
@@ -163,7 +170,8 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
             f"{rel} sets warehouse = {values['warehouse']!r}; vecten.toml says "
             f"{config.warehouse.kind!r}: {SECOND_WAREHOUSE}",
         )
-    if snowflake:
+    # Each environment names its own Snowflake account; `prod`'s is the one vecten.toml names.
+    if snowflake and env == "prod":
         found, expected = values["snowflake_account"], config.warehouse.account
         if not expected:
             raise Failure(
@@ -175,6 +183,8 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
             raise _mismatch(
                 rel, "snowflake_account", found, expected, "vecten.toml [warehouse] account"
             )
+    if has_snowflake_root(config):
+        _check_account_layout(project_root, config, env, str(values["snowflake_account"]))
     if not snowflake and "snowflake_account" in values:
         raise Failure(
             ExitCode.CONFIG,
@@ -204,6 +214,59 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
         )
     _check_service_hostnames(rel, config, values)
     return values
+
+
+def environment_accounts(project_root: Path) -> dict[str, str]:
+    """The Snowflake account each environment's `deploy/envs/<env>.tfvars` names."""
+    accounts: dict[str, str] = {}
+    envs = project_root / "deploy" / "envs"
+    for path in sorted(envs.glob("*.tfvars")) if envs.is_dir() else []:
+        if env_name_problem(path.stem):
+            continue
+        account = read_tfvars(path).get("snowflake_account")
+        if isinstance(account, str) and account:
+            accounts[path.stem] = account
+    return accounts
+
+
+def _files(envs: list[str]) -> str:
+    return ", ".join(f"deploy/envs/{env}.tfvars" for env in envs)
+
+
+def _check_account_layout(project_root: Path, config: VectenConfig, env: str, account: str) -> None:
+    """Refuse an account whose names would meet another environment's: fixed names hold an
+    account alone, and a shared account holds no environment with fixed names."""
+    rel = f"deploy/envs/{env}.tfvars"
+    shared = shared_layout(config, env)
+    if shared:
+        # Refuses an environment name or base the suffixed names cannot carry.
+        snowflake_names(config, env)
+    # Snowflake account identifiers are case-insensitive.
+    others = sorted(
+        other
+        for other, named in environment_accounts(project_root).items()
+        if other != env and named.upper() == account.upper()
+    )
+    if not shared and recorded_layout(config, env) is None and others:
+        raise Failure(
+            ExitCode.CONFIG,
+            f"{rel} names Snowflake account {account!r}, which {_files(others)} also "
+            f"names; with fixed Snowflake names an account holds one environment of the "
+            f"project, so give {env} an account of its own, or set [warehouse] "
+            "shared_account = true before its first deploy",
+        )
+    # A deployed fixed environment holds its account already; a fixed environment beside it
+    # is refused at its own first deploy, above.
+    beside = [other for other in others if shared_layout(config, other) != shared]
+    if beside:
+        layout = "fixed" if shared else "shared-account"
+        raise Failure(
+            ExitCode.CONFIG,
+            f"{rel} names Snowflake account {account!r}, which {_files(beside)} also names "
+            f"for an environment with {layout} Snowflake names; a fixed environment holds "
+            f"its account alone, so give {'this environment' if shared else 'that one'} "
+            "another account",
+        )
 
 
 def _check_service_hostnames(rel: str, config: VectenConfig, values: dict[str, Any]) -> None:

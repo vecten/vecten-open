@@ -132,3 +132,17 @@ variable "loader_public_key" {
     error_message = "loader_public_key is a PEM public key; a private key never belongs in Terraform."
   }
 }
+
+variable "loader_sign_in" {
+  description = "In a shared account, the schema and the name of the key-pair-only authentication policy set on the loader user, so that no External OAuth integration in the account signs in as it; null with fixed names."
+  type = object({
+    schema = string
+    policy = string
+  })
+  default = null
+
+  validation {
+    condition     = var.loader_sign_in == null || (can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.loader_sign_in.schema)) && can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.loader_sign_in.policy)))
+    error_message = "loader_sign_in names its schema and policy as unquoted upper-case Snowflake identifiers."
+  }
+}
