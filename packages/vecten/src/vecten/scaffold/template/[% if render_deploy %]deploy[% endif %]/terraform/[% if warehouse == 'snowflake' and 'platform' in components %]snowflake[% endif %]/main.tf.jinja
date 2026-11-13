@@ -27,8 +27,12 @@ module "snowflake" {
   components   = var.components
   account      = var.snowflake_account
 
-  database_name     = var.database_name
-  warehouse_name    = var.warehouse_name
-  warehouse_size    = var.warehouse_size
-  loader_public_key = var.loader_public_key
+  database_name         = var.database_name
+  warehouse_name        = var.warehouse_name
+  analyst_role_name     = var.analyst_role_name
+  loader_role_name      = var.loader_role_name
+  loader_user_name      = var.loader_user_name
+  provisioner_role_name = var.provisioner_role_name
+  warehouse_size        = var.warehouse_size
+  loader_public_key     = var.loader_public_key
 }

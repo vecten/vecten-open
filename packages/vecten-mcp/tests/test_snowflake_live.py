@@ -123,6 +123,25 @@ def _public_body(pem):
     return public_body(load_private_key(pem, "signing key"))
 
 
+def _names():
+    """The fixed layout's names, over the CI account's database and warehouse."""
+    from dataclasses import replace
+
+    from vecten_shared.config import VectenConfig
+    from vecten_shared.provider import snowflake_names
+
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "vecten-ci", "scaffold_version": "0.1.1"},
+            "warehouse": {"kind": "snowflake"},
+        }
+    )
+    return replace(
+        snowflake_names(config, "ci"), account=ACCOUNT, database=DATABASE, warehouse=WAREHOUSE
+    )
+
+
 class Secrets:
     def __init__(self):
         self.values = {}
@@ -154,14 +173,10 @@ def account():
             cursor.execute(statement)
         provisioner_key = load_private_key(generate_one_line(), "provisioner")
         keys = SigningKeys(Secrets(), ISSUER)
-        audience = f"https://{ACCOUNT}.snowflakecomputing.com"
+        names = _names()
+        audience = names.audience
         script = provisioner_script(
-            "snowflake",
-            database=DATABASE,
-            issuer=ISSUER,
-            account=ACCOUNT,
-            public_key=public_body(provisioner_key),
-            warehouse=WAREHOUSE,
+            "snowflake", issuer=ISSUER, public_key=public_body(provisioner_key), names=names
         )
         for statement in _statements(script):
             if statement.upper().startswith("ALTER SECURITY INTEGRATION"):
@@ -175,17 +190,15 @@ def account():
             cursor.execute(statement)
         adapter = SnowflakeAdapter(
             lambda: _connect(
-                user="VECTEN_PROVISIONER",
-                role="PROVISIONER",
+                user=names.provisioner_user,
+                role=names.provisioner_role,
                 private_key=provisioner_key,
                 database=DATABASE,
                 warehouse=WAREHOUSE,
             ),
             lambda **kwargs: _connect(**{k: v for k, v in kwargs.items() if k != "account"}),
             lambda **kwargs: keys.snowflake_token(**kwargs, audience=audience),
-            account=ACCOUNT,
-            database=DATABASE,
-            warehouse=WAREHOUSE,
+            names=names,
         )
         yield type("Account", (), {"cursor": cursor, "adapter": adapter, "keys": keys})
     finally:

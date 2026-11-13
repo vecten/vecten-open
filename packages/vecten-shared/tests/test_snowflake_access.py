@@ -1,23 +1,36 @@
 import json
+import re
 import shutil
 import subprocess
+from dataclasses import replace
 
 import pytest
 
+from vecten_shared.config import VectenConfig
 from vecten_shared.identity_setup import provisioner_script
+from vecten_shared.provider import snowflake_names
+
+
+def names(database="D", warehouse="W", *, shared_account=False, env="prod"):
+    """The names of project `acme`, over a test database and warehouse in the fixed layout."""
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "acme", "scaffold_version": "0.1.1"},
+            "warehouse": {"kind": "snowflake", "account": "org-account"},
+        }
+    )
+    derived = snowflake_names(config, env, shared_account=shared_account)
+    if shared_account:
+        return derived
+    return replace(derived, database=database, warehouse=warehouse)
 
 
 def test_metadata_procedure_returns_only_existence_and_binds_relation_identifiers():
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
-    sql = provisioner_script(
-        "snowflake",
-        database="D",
-        warehouse="W",
-        issuer="https://mcp.example",
-        account="org-account",
-    )
+    sql = provisioner_script("snowflake", issuer="https://mcp.example", names=names())
     handler = sql.split("$$")[3]
     harness = r"""
 const fs = require('fs');
@@ -59,13 +72,7 @@ def test_owner_procedure_enforces_boundaries(target, schema, relation, enabled, 
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
-    sql = provisioner_script(
-        "snowflake",
-        database="D",
-        warehouse="W",
-        issuer="https://mcp.example",
-        account="org-account",
-    )
+    sql = provisioner_script("snowflake", issuer="https://mcp.example", names=names())
     assert "EXECUTE AS OWNER" in sql
     handler = sql.split("$$", 2)[1]
     harness = r"""
@@ -123,3 +130,36 @@ process.stdout.write(JSON.stringify({statements,error}));
         assert sum("SELECT ON TABLE" in s for s in output["statements"]) == 1
         if not enabled:
             assert not any("USAGE" in s for s in output["statements"])
+
+
+FIXED_NAMES = re.compile(
+    r"\b(ANALYST|LOADER|PROVISIONER|VECTEN_PROVISIONER|VECTEN_EXTERNAL_OAUTH)\b"
+)
+
+
+def test_the_script_takes_every_name_from_the_snowflake_names():
+    shared = names(shared_account=True, env="dev")
+    sql = provisioner_script("snowflake", issuer="https://mcp.example", names=shared)
+    assert not FIXED_NAMES.findall(sql)
+    assert "CREATE ROLE IF NOT EXISTS ANALYST_ACME_DEV;" in sql
+    assert "CREATE ROLE IF NOT EXISTS PROVISIONER_ACME_DEV;" in sql
+    assert "CREATE USER IF NOT EXISTS PROVISIONER_ACME_DEV TYPE = SERVICE;" in sql
+    assert "GRANT ROLE PROVISIONER_ACME_DEV TO USER PROVISIONER_ACME_DEV;" in sql
+    assert "CREATE SECURITY INTEGRATION IF NOT EXISTS EXTERNAL_OAUTH_ACME_DEV" in sql
+    assert 'CREATE SCHEMA IF NOT EXISTS "ACME_DEV"."VECTEN_ACCESS";' in sql
+    assert 'GRANT USAGE ON WAREHOUSE "ACME_DEV_WH" TO ROLE ANALYST_ACME_DEV;' in sql
+    assert "('https://org-account.snowflakecomputing.com')" in sql
+    handler = sql.split("$$", 2)[1]
+    for value in ("ANALYST_ACME_DEV", "PROVISIONER_ACME_DEV", "LOADER_ACME_DEV", "_ACME_DEV"):
+        assert json.dumps(value) in handler, value
+
+
+@pytest.mark.parametrize("role", ["P; DROP DATABASE D", "_PROVISIONER", "provisioner"])
+def test_a_name_that_is_no_plain_identifier_is_refused(role):
+    # The same rule as the Snowflake module's role variables: ^[A-Z][A-Z0-9_]{0,254}$.
+    with pytest.raises(ValueError):
+        provisioner_script(
+            "snowflake",
+            issuer="https://mcp.example",
+            names=replace(names(), provisioner_role=role),
+        )

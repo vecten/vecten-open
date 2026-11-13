@@ -8,7 +8,12 @@ locals {
   schemas         = toset(["STAGING", "SNAPSHOTS", "CORE", "MARTS"])
   analyst_schemas = toset(["CORE", "MARTS"])
   with_mcp        = contains(var.components, "mcp")
-  roles           = concat(["ANALYST", "LOADER"], local.with_mcp ? ["PROVISIONER"] : [])
+  # Keyed by purpose: the keys are the resource addresses an environment deployed with the
+  # fixed names already holds, so they stay the role names of that layout.
+  roles = merge(
+    { ANALYST = var.analyst_role_name, LOADER = var.loader_role_name },
+    local.with_mcp ? { PROVISIONER = var.provisioner_role_name } : {},
+  )
   database_privileges = merge(
     { ANALYST = ["USAGE"], LOADER = ["USAGE", "CREATE SCHEMA"] },
     local.with_mcp ? { PROVISIONER = ["USAGE"] } : {},
@@ -43,9 +48,9 @@ resource "snowflake_warehouse" "this" {
 }
 
 resource "snowflake_account_role" "this" {
-  for_each = toset(local.roles)
+  for_each = local.roles
 
-  name    = each.key
+  name    = each.value
   comment = local.comment
 }
 
@@ -53,9 +58,9 @@ resource "snowflake_account_role" "this" {
 # preview features, which the thin root enables.
 data "snowflake_current_role" "deployer" {}
 
-# Ownership of the schemas moves to LOADER, so the deploy role keeps reading them on the next
-# plan only through a role it holds: every role created here is granted to SYSADMIN, as
-# Snowflake's role hierarchy expects, and to the role Terraform runs as.
+# Ownership of the schemas moves to the loader role, so the deploy role keeps reading them on
+# the next plan only through a role it holds: every role created here is granted to SYSADMIN,
+# as Snowflake's role hierarchy expects, and to the role Terraform runs as.
 resource "snowflake_grant_account_role" "sysadmin" {
   for_each = snowflake_account_role.this
 
@@ -73,7 +78,7 @@ resource "snowflake_grant_account_role" "deployer" {
 }
 
 resource "snowflake_service_user" "loader" {
-  name              = "LOADER"
+  name              = var.loader_user_name
   comment           = local.comment
   default_role      = snowflake_account_role.this["LOADER"].name
   default_warehouse = snowflake_warehouse.this.name
@@ -124,8 +129,8 @@ resource "snowflake_grant_privileges_to_account_role" "analyst_schema" {
   }
 }
 
-# Future grants are set before ownership moves to LOADER, whose dbt runs then create the
-# tables and views ANALYST reads.
+# Future grants are set before ownership moves to the loader role, whose dbt runs then create
+# the tables and views the analyst role reads.
 resource "snowflake_grant_privileges_to_account_role" "analyst_future" {
   for_each = local.analyst_future
 

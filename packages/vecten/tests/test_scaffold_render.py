@@ -320,7 +320,16 @@ def test_snowflake_root_takes_the_provider_from_the_environment_and_names_by_var
     )
     assert f'version = "~> {VERSIONS.terraform_snowflake_provider}.0"' in main
     assert f"vecten-open.git//terraform/snowflake?ref={params.terraform_module_ref}" in main
-    for name in ("database_name", "warehouse_name", "warehouse_size", "loader_public_key"):
+    for name in (
+        "database_name",
+        "warehouse_name",
+        "analyst_role_name",
+        "loader_role_name",
+        "loader_user_name",
+        "provisioner_role_name",
+        "warehouse_size",
+        "loader_public_key",
+    ):
         assert re.search(rf"^\s*{name}\s*=\s*var\.{name}\s*$", main, re.M), name
         assert f'variable "{name}"' in (root / "variables.tf").read_text(), name
     assert 'backend "s3"' in (root / "backend.tf").read_text()

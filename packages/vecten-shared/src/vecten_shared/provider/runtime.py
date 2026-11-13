@@ -22,7 +22,6 @@ from vecten_shared.provider.environment import EnvironmentOutputs, environment_f
 
 # Only standing MCP credentials may be rotated by the runtime.
 RUNTIME_WRITABLE = frozenset({"MCP_IMPERSONATOR_PASSWORD", "MCP_SIGNING_KEY"})
-SNOWFLAKE_ANALYST_ROLE = "ANALYST"
 EXISTING_WAREHOUSE_ROLE = "impersonator"
 POSTGRES_PORT = 5432
 
@@ -145,9 +144,9 @@ class OutputsRuntimeProvider:
         return ConnectionSpec(
             kind="snowflake",
             database=names.database,
-            role=SNOWFLAKE_ANALYST_ROLE,
+            role=names.analyst_role,
             auth="external_oauth",
-            account=config.warehouse.account,
+            account=names.account,
             warehouse=names.warehouse,
         )
 
