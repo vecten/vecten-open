@@ -171,11 +171,13 @@ def check_tfvars(project_root: Path, config: VectenConfig, env: str) -> dict[str
                 f"{rel} sets snowflake_account = {found!r} but vecten.toml sets no "
                 f"[warehouse] account; {ACCOUNT_HINT}",
             )
-        # One account serves one environment, so only `prod` builds in the account vecten.toml
-        # names; another environment builds in its own.
-        if env == "prod" and found != expected:
-            raise _mismatch(
-                rel, "snowflake_account", found, expected, "vecten.toml [warehouse] account"
+        # The hosts, the MCP and dbt read the account from vecten.toml for every environment,
+        # so Terraform building in another one would leave them connecting elsewhere.
+        if found != expected:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"{rel} sets snowflake_account = {found!r}; vecten.toml [warehouse] account says "
+                f"{expected!r}, the account every environment's platform, MCP and dbt connect to",
             )
     if not snowflake and "snowflake_account" in values:
         raise Failure(

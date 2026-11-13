@@ -450,6 +450,15 @@ def test_guide_walks_the_promotion_order(phrase):
     assert phrase in flat("guide")
 
 
+def test_guide_sets_up_no_order_on_a_snowflake_warehouse_the_platform_builds():
+    guide = flat("guide")
+    assert "ORGANIZATION-ACCOUNT" not in guide.split("the promotion order")[1].split("####")[0]
+    assert (
+        "On a Snowflake warehouse the platform builds, set up no order: every tfvars must name "
+        "the `[warehouse] account`"
+    ) in guide
+
+
 def test_guide_tells_how_a_password_user_gets_a_link():
     body = skill_body("guide")
     assert "vecten user password-link" in body and "vecten mcp admin-link --env prod" in body

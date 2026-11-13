@@ -1076,8 +1076,9 @@ the commit `dev` ran, when you promote it.
 2. Copy `deploy/envs/prod.tfvars` to `deploy/envs/dev.tfvars`, set `environment = "dev"` and
    set `domain` to the name `dev` serves under, such as `dev.[[ domain ]]`.
 [%- if warehouse == 'snowflake' and 'platform' in components %]
-   Set `snowflake_account` to `dev`'s own Snowflake account: one account serves one
-   environment.
+   On this project's Snowflake warehouse an order waits for Snowflake accounts per environment:
+   every tfvars must name the `[warehouse] account`, which the platform, the MCP and dbt
+   connect to, and there `dev` would build the same database and roles as `prod`.
 [%- endif %]
 3. `vecten bootstrap --env dev`, then `vecten deploy --env dev`, as for `prod`.
 4. `vecten answer deploy.promotion dev,prod` records the order; `vecten github push` commits

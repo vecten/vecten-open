@@ -354,15 +354,21 @@ def test_tfvars_may_not_set_service_hostnames(project):
     assert "service_hostnames" in failure.message and "vecten.toml" in failure.message
 
 
-def test_another_environment_may_build_in_its_own_snowflake_account(tmp_path):
+def test_every_environment_builds_in_the_account_its_runtime_connects_to(tmp_path):
+    from vecten_shared.provider.runtime import OutputsRuntimeProvider
+
     from .fixture_project import render_fixture
 
     root = render_fixture(tmp_path, "snowflake", deploy=True)
     text = env_tfvars_path(root, "prod").read_text()
     text = text.replace('environment       = "prod"', 'environment       = "dev"')
     env_tfvars_path(root, "dev").write_text(text.replace('"ACME-PROD"', '"ACME-DEV"'))
-    assert check_tfvars(root, load_config(root), "dev")["snowflake_account"] == "ACME-DEV"
-    replace_line(root, "prod", "snowflake_account", 'snowflake_account = "ACME-DEV"')
-    failure = refusal(root)
+    # The hosts, the MCP and dbt connect to vecten.toml's account whatever a tfvars names.
+    assert OutputsRuntimeProvider(root, "dev")._snowflake_warehouse().account == "ACME-PROD"
+    failure = refusal(root, "dev")
     assert failure.code == ExitCode.CONFIG
+    assert "deploy/envs/dev.tfvars" in failure.message
     assert "'ACME-DEV'" in failure.message and "'ACME-PROD'" in failure.message
+    assert "[warehouse] account" in failure.message and "connect" in failure.message
+    env_tfvars_path(root, "dev").write_text(text)
+    assert check_tfvars(root, load_config(root), "dev")["snowflake_account"] == "ACME-PROD"

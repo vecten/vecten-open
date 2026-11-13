@@ -200,14 +200,16 @@ other, for example `dev`, then `prod`, with `prod` last. A push to the default b
 ships the first; each later one ships only through `vecten promote --env <env>`, which
 ships the commit the environment before it shipped. Without the key, the order is `prod`
 alone and everything stays as this guide describes it. `next` never asks about an order;
-set one up only when the human asks for a test or staging environment before production:
+set one up only when the human asks for a test or staging environment before production.
+On a Snowflake warehouse the platform builds, set up no order: every tfvars must name the
+`[warehouse] account`, which the platform, the MCP and dbt connect to, and there `dev` would
+build the same database and roles as `prod`. Tell the human that an order on this project
+waits for Snowflake accounts per environment. Otherwise:
 
 1. Each environment of the order needs its own `deploy/envs/<env>.tfvars`. Copy
    `deploy/envs/prod.tfvars` to `deploy/envs/dev.tfvars`, set `environment = "dev"`, and
    set `domain` to the name the human chooses for it, such as `dev.<domain>`; the
-   environment's components answer under it. On a Snowflake warehouse the platform
-   builds, each environment builds in its own account: ask the human for `dev`'s
-   ORGANIZATION-ACCOUNT and set `snowflake_account` to it.
+   environment's components answer under it.
 2. Record the order with `vecten answer deploy.promotion dev,prod`. Exit 4 naming
    `vecten update` means the project's workflows predate promotion: run `vecten update`,
    show the human what changed, commit, and record the order again. Exit 2 names what is

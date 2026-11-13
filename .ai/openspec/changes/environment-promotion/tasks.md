@@ -46,6 +46,8 @@
 - [x] 7.5 `docs/GLOSSARY.md`: "Promotion order" and "Promote"
 - [x] 7.6 `CHANGELOG.md` under `[Unreleased]`
 
+Note: `check_tfvars` keeps every environment's `snowflake_account` equal to `[warehouse] account`, because the hosts, the MCP and dbt read the account from `vecten.toml`. A Snowflake warehouse the platform builds takes an order once snowflake-shared-account tasks 3.3 and 3.4 land (the per-environment account in `check_tfvars` and on every host's runtime); that change relaxes the check together with its plumbing, and until then the guide (7.2) and the runbook (7.4) set up no order on such a project.
+
 ## 8. Proven only on a real repository and two deployed environments
 
 - [ ] 8.1 A merge ships `dev` only and sets `vecten/ship/dev`
