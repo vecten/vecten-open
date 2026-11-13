@@ -82,3 +82,13 @@ def test_the_mcp_names_its_objects_by_the_layout_vecten_toml_records(monkeypatch
     monkeypatch.setattr(runtime_setup, "provisioner_key", lambda secrets: "KEY")
     adapter = runtime_setup.snowflake_adapter(config, "dev", secrets=None, keys=Keys())
     assert adapter.names.provisioner_role == "PROVISIONER_ACME_DEV"
+
+
+def test_the_model_reads_the_projects_database_as_the_environments(monkeypatch):
+    config = _config()
+    config.environments["dev"].snowflake_shared_account = True
+    monkeypatch.setattr(runtime_setup, "provisioner_key", lambda secrets: "KEY")
+    adapter = runtime_setup.snowflake_adapter(config, "dev", secrets=None, keys=Keys())
+    assert runtime_setup.model_database(config, adapter) == ("acme", "ACME_DEV")
+    fixed = runtime_setup.snowflake_adapter(_config(), "prod", secrets=None, keys=Keys())
+    assert runtime_setup.model_database(_config(), fixed) == ("acme", "ACME")

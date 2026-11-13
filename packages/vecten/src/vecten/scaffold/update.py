@@ -23,7 +23,7 @@ def update_project(root: Path) -> Result:
     root = root.resolve()
     for name in (ANSWERS, BASELINE, "vecten.toml"):
         checked_path(root, name)
-    load_config(root)
+    config = load_config(root)
     try:
         answers = yaml.safe_load((root / ANSWERS).read_text())
         if not isinstance(answers, dict):
@@ -37,6 +37,8 @@ def update_project(root: Path) -> Result:
                 for k, v in answers.items()
                 if k in ScaffoldParams.model_fields
             }
+            # The layout is vecten.toml's, which the answers file does not hold.
+            | {"snowflake_shared_account": config.warehouse.shared_account}
         )
     except (OSError, ValueError, KeyError, TypeError, InvalidVersion, yaml.YAMLError) as exc:
         raise Failure(ExitCode.CONFIG, f"{ANSWERS}: {exc}") from None

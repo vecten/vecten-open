@@ -1042,43 +1042,94 @@ long-running process, such as a bot or a portal, served on a hostname of its own
 [% if warehouse == 'snowflake' and 'platform' in components %]
 ### Snowflake
 
+[% if snowflake_shared_account -%]
+This project's Snowflake account is shared (`shared_account = true` under `[warehouse]`): it
+may hold other environments of this project and other teams' data, so every name Vecten gives
+an account-level object ends in the environment's suffix `_<BASE>_<ENV>`. `<BASE>` is
+`[warehouse] database`, or the project name when it is unset, and `<ENV>` the environment's
+name, both in upper case with hyphens as underscores; an environment name holds no hyphen
+(`dev2`, not `dev-2`). An environment first deployed with fixed names keeps them, in an
+account of its own.
+
+`vecten deploy` also applies the Terraform root `deploy/terraform/snowflake`, with its state at
+`<env>/snowflake.tfstate` in the state bucket. It creates the database `<BASE>_<ENV>` with the
+schemas `STAGING`, `SNAPSHOTS`, `CORE` and `MARTS`, the roles `ANALYST_<BASE>_<ENV>`,
+`LOADER_<BASE>_<ENV>` and, with the `mcp` component, `PROVISIONER_<BASE>_<ENV>`, the service
+user `LOADER_<BASE>_<ENV>`, which signs in by key pair only (the authentication policy
+`<BASE>_<ENV>.VECTEN_SIGN_IN.SERVICE_SIGN_IN`), and the warehouse `<BASE>_<ENV>_WH`. Every
+object carries the comment `vecten <project> <env> in <account>`; an apply that finds one of
+these names taken fails rather than share it.
+
+- Each environment names its account in `snowflake_account` in `deploy/envs/<env>.tfvars`;
+  `prod`'s is also `account` under `[warehouse]` in `vecten.toml`, and `vecten deploy` refuses
+  `prod` unless they agree. Several environments may name one account; `vecten deploy`
+  refuses one whose account an environment with fixed names also names.
+[%- else -%]
 `vecten deploy` also applies the Terraform root `deploy/terraform/snowflake`, with its state at
 `<env>/snowflake.tfstate` in the state bucket. It creates in your Snowflake account the
 database, the schemas `STAGING`, `SNAPSHOTS`, `CORE` and `MARTS`, the roles `ANALYST`, `LOADER`
 and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a warehouse named
 `<PROJECT>_<ENV>_WH`.
 
-- The account is the `ORGANIZATION-ACCOUNT` identifier in `snowflake_account` in
-  `deploy/envs/<env>.tfvars` and `account` under `[warehouse]` in `vecten.toml`, which
-  `vecten deploy` refuses unless they agree. `vecten answer snowflake_account <ORG-ACCOUNT>`
-  followed by `vecten init --deploy` writes both for `prod`.
+- Each environment names its account, the `ORGANIZATION-ACCOUNT` identifier, in
+  `snowflake_account` in `deploy/envs/<env>.tfvars`; `prod`'s is also `account` under
+  `[warehouse]` in `vecten.toml`, and `vecten deploy` refuses `prod` unless they agree.
+  `vecten answer snowflake_account <ORG-ACCOUNT>` followed by `vecten init --deploy` writes
+  both for `prod`.
 - One environment per Snowflake account: the role names, the `LOADER` user and the database's
-  name are the same for every environment, so a second environment in the same account collides
-  with the first. They also collide with roles or a user of the same names already in the
-  account; check before the first deploy.
+  name are the same for every environment, so the account holds this one environment and
+  nothing else of these names. `vecten deploy` refuses a second environment that names an
+  account another environment's tfvars name. The names also collide with roles or a user of the
+  same names already in the account; check before the first deploy. To run several
+  environments in one account, set `shared_account = true` under `[warehouse]` before their
+  first deploy.
+[%- endif %]
 - Terraform signs in as a deploy user with key-pair authentication. Create that user with a
   default role that holds
   CREATE DATABASE, CREATE WAREHOUSE, CREATE ROLE, CREATE USER and MANAGE GRANTS
   on the account. MANAGE GRANTS lets the first apply set the future grants in `CORE` and
-  `MARTS` through which `ANALYST` reads every table dbt builds there. Then store the user's
-  name and private key:
+  `MARTS` through which `ANALYST[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` reads every table dbt builds there.
+  Then store the user's name and private key:
   `vecten secret set DEPLOY_SNOWFLAKE_USER --env <env>` and
   `vecten secret set DEPLOY_SNOWFLAKE_PRIVATE_KEY --env <env> < <private key file>`.
   `vecten deploy` refuses while either is missing.
-- With `shared_account = true` under `[warehouse]`, every External OAuth integration in the
-  account accepts a token for a user that no authentication policy binds, and each
-  environment's MCP holds a signing key for its own integration. The loader and the MCP's
-  provisioner sign in by key pair only, and each integration refuses `SYSADMIN` and the role
-  that created the environment's database. Give each environment's deploy user the same
-  protection before its first deploy, as ACCOUNTADMIN, in a schema of your own:
+[%- if snowflake_shared_account %]
+- Give each environment its own deploy user and role: the root grants every role it creates
+  to the role it runs as, so a deploy user shared by environments is one credential that
+  reaches all of them. `vecten deploy` cannot check this, since it reads no other
+  environment's secrets.
+- Every External OAuth integration in the account accepts a token for a user that no
+  authentication policy binds, and each environment's MCP holds the signing key of its own
+  integration. So give each deploy user a key-pair-only policy before its first deploy, as
+  ACCOUNTADMIN, in a schema of your own:
   `CREATE AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN AUTHENTICATION_METHODS = ('KEYPAIR');`
   then `ALTER USER <deploy user> SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN;`
-  for each deploy user. Give each environment its own deploy user and role, too: the root
-  grants every role it creates to the role it runs as.
-- The first plan generates the `LOADER` user's key pair and stores the private key as
-  `SNOWFLAKE_LOADER_PRIVATE_KEY`; only the public key reaches Terraform.
+  for each deploy user. Each environment's integration also refuses `SYSADMIN` and the role
+  that created the environment's database.
+[%- endif %]
+- The first plan generates the `LOADER[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` user's key pair and stores
+  the private key as `SNOWFLAKE_LOADER_PRIVATE_KEY`; only the public key reaches Terraform.
 - Pull-request plans cover the [% if cloud == 'aws' %]AWS root only, because the plan role reads no `deploy` secret[% else %]Scaleway root only, because the plan key reads no secret[% endif %];
   the Snowflake root is planned when the `terraform-apply` workflow is dispatched.
+[% if snowflake_shared_account -%]
+- `vecten destroy` keeps the Snowflake database, and its Terraform root, unless
+  `--delete-data <env>` is given.
+[%- if 'mcp' in components %] Before it runs any Terraform it reads, as the deploy user, which
+  users and roles `PROVISIONER_<BASE>_<ENV>` owns: by ownership, never by a name pattern,
+  since another project's suffix can end in this one's. Without `--delete-data` it lists them,
+  with the provisioner's user and the integration `EXTERNAL_OAUTH_<BASE>_<ENV>`, as kept.
+  With it, destroy refuses while any of them stays, because their sign-in policies live in the
+  database it drops, and prints the statements an ACCOUNTADMIN runs: a `DROP` for each user
+  and role the provisioner owns, then the provisioner's user and the integration. Run them,
+  then destroy again.
+[%- endif %]
+- Moving an environment that has fixed names into a shared account is a new deployment of it:
+  destroy it with `--delete-data <env>`, keeping its `state` snapshot if you want it, point
+  `snowflake_account` in its tfvars at the shared account, set `shared_account = true`, and
+  deploy again. The connectors load the raw data again, or Snowflake's database replication
+  copies it; people are added again with `vecten user add`, and groups and grants are created
+  again.
+[%- else -%]
 - `vecten destroy` keeps the Snowflake database, and its Terraform root, unless
   `--delete-data <env>` is given.
 [%- if 'mcp' in components %] Either way the users and roles `PROVISIONER` created stay,
@@ -1090,12 +1141,40 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
   `PROVISIONER` holds outside this project's database and warehouse, which an install in
   another database left and the MCP equally refuses.
 [%- endif %]
+[%- endif %]
 [% if 'mcp' in components -%]
+[% if snowflake_shared_account -%]
+- The MCP signs in to Snowflake as the service user `PROVISIONER_<BASE>_<ENV>`, by key pair
+  only (`<BASE>_<ENV>.VECTEN_ACCESS.SERVICE_SIGN_IN`), which only an ACCOUNTADMIN can set up,
+  in the database the first deploy creates. So the first deploy ships no host. Then run
+  `vecten mcp provisioner-script --env <env>`, which stores the provisioner's key pair as
+  `MCP_PROVISIONER_PRIVATE_KEY` and prints the SQL. Its one block first stops, changing
+  nothing, at a role, user or integration of these names that another project or environment
+  holds (another comment, owner or holder), then creates the environment's integration
+  `EXTERNAL_OAUTH_<BASE>_<ENV>` and the policy `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`,
+  which binds every user the MCP creates to that integration. Have an ACCOUNTADMIN run it,
+  record it with `--confirm-run`, and `vecten github push`: the ship workflow then ships every
+  host.
+- People's and services' users are `<NAME>_<BASE>_<ENV>` and groups' roles
+  `<GROUP>_<BASE>_<ENV>`, one per environment; the MCP adopts no existing user here. Row
+  access and masking policies keyed on a person's own Snowflake user do not apply to these
+  users; key them on roles.
+- What a shared account protects: one environment's keys (its loader key, provisioner key and
+  MCP signing key) reach no other environment's data. It does not protect an environment from
+  an administrator who already controls another environment's provisioner, which may create
+  account-level users and roles named for that environment before its first script run:
+  create `prod` first, or give it an account of its own, and
+  keep every deploy user on a key-pair-only policy. Parts of this rest on Snowflake behaviour
+  the project's live checks have yet to confirm (several External OAuth integrations in one
+  account, authentication policies binding them); until they pass, treat a shared account as
+  for non-production environments.
+[%- else -%]
 - The MCP signs in to Snowflake as `VECTEN_PROVISIONER`, which only an ACCOUNTADMIN can set up,
   in the database the first deploy creates. So the first deploy ships no host. Then run
   `vecten mcp provisioner-script --env <env>`, which stores the provisioner's key pair as
   `MCP_PROVISIONER_PRIVATE_KEY` and prints the SQL. Have an ACCOUNTADMIN run it, record it with
   `--confirm-run`, and `vecten github push`: the ship workflow then ships every host.
+[%- endif %]
 [% endif -%]
 [% endif %][% endif %]
 [% if render_deploy and 'mcp' in components %]
