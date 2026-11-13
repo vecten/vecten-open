@@ -25,19 +25,19 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 
 ## 2. Source identity
 
-- [ ] 2.1 Check out the extension's directory from the fetched commit into a fetched copy; refuse symbolic links; read static name and version and `[build-system]` with `tomllib`.
-- [ ] 2.2 `source_sha256` (Decision 4) in `vecten_shared.git_sources`, and `python -m vecten_shared.git_sources verify <dir> <extensions.lock.json>` for the image build.
-- [ ] 2.3 Tests: the hash is unchanged by file order and modification times, changed by any file's bytes, path or executable bit; a symbolic link is refused; the same commit gives the same hash on macOS and Linux runners.
+- [x] 2.1 Check out the extension's directory from the fetched commit into a fetched copy; refuse symbolic links; read static name and version and `[build-system]` with `tomllib`.
+- [x] 2.2 `source_sha256` (Decision 4) in `vecten_shared.git_sources`, and `python -m vecten_shared.git_sources verify <dir> <extensions.lock.json>` for the image build.
+- [x] 2.3 Tests: the hash is unchanged by file order and modification times, changed by any file's bytes, path or executable bit; a symbolic link is refused; the same commit gives the same hash on macOS and Linux runners.
 
 ## 3. Records and `extension add`
 
-- [ ] 3.1 Parse the git form beside index names and in-repo paths; `vecten.toml` keeps names and extras.
-- [ ] 3.2 Resolve, fetch, check the tag against the version, record `source_sha256` and build pins; inspect entry points from the copy; refuse a different distribution name.
-- [ ] 3.3 `requirements.txt` lines with the full commit and `# tag` comment; carry git lines over verbatim on other changes.
-- [ ] 3.4 Upgrade semantics (Decision 8), `--json` with `source`, `source_sha256` and `previous`.
-- [ ] 3.5 `vecten lock` and the record checks: accept a URL line only for a registered extension, `git+https`, full commit, no user information, identical in `requirements.txt` and every lock, agreeing with `extensions.lock.json`; never re-resolve a tag.
-- [ ] 3.6 `vecten secret set` refuses `GIT_CREDENTIALS` and `MCP_GIT_CREDENTIALS` with `--env`.
-- [ ] 3.7 Tests, unit tier: every scenario of the extension-points delta against the local `git http-backend`.
+- [x] 3.1 Parse the git form beside index names and in-repo paths; `vecten.toml` keeps names and extras.
+- [x] 3.2 Resolve, fetch, check the tag against the version, record `source_sha256` and build pins; inspect entry points from the copy; refuse a different distribution name.
+- [x] 3.3 `requirements.txt` lines with the full commit and `# tag` comment; carry git lines over verbatim on other changes.
+- [x] 3.4 Upgrade semantics (Decision 8), `--json` with `source`, `source_sha256` and `previous`.
+- [x] 3.5 `vecten lock` and the record checks: accept a URL line only for a registered extension, `git+https`, full commit, no user information, identical in `requirements.txt` and every lock, agreeing with `extensions.lock.json`; never re-resolve a tag.
+- [x] 3.6 `vecten secret set` refuses `GIT_CREDENTIALS` and `MCP_GIT_CREDENTIALS` with `--env`.
+- [x] 3.7 Tests, unit tier: every scenario of the extension-points delta against the local `git http-backend`.
 
 ## 4. Ship, images and workflows
 

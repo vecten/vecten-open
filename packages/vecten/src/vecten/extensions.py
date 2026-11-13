@@ -11,6 +11,9 @@ import sys
 import sysconfig
 import tempfile
 import tomllib
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path, PurePosixPath
@@ -20,8 +23,9 @@ from urllib.parse import unquote, urlsplit
 import tomlkit
 from pydantic import ValidationError
 
-from vecten import in_repo, locking
+from vecten import git_extensions, in_repo, locking
 from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
+from vecten_shared import git_sources
 from vecten_shared.apps import GROUP as APPS_GROUP
 from vecten_shared.apps import AppDeclaration, colliding_service, parse_app, principal_name
 from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
@@ -59,10 +63,45 @@ def package_environment(root: Path) -> dict[str, str]:
     return env
 
 
-def _uv(args: list[str], root: Path, cwd: Path | None = None) -> None:
+# Set while `extension add` or `vecten lock` works on a project with git sources: every uv
+# call then runs, with the build backends it starts, with git isolated from the user's setup.
+_GIT_PROJECT: ContextVar[bool] = ContextVar("git_project", default=False)
+
+
+@contextmanager
+def _git_project(active: bool) -> Iterator[None]:
+    token = _GIT_PROJECT.set(_GIT_PROJECT.get() or active)
+    try:
+        yield
+    finally:
+        _GIT_PROJECT.reset(token)
+
+
+def has_git_sources(root: Path) -> bool:
+    """Whether the project's records hold a git source."""
+    record = locking.read_record(root) or {}
+    return any(e.git is not None for e in record.values()) or any(
+        git_extensions.is_source(line) for line in locking.read_pins(root).values()
+    )
+
+
+def uv_environment(root: Path, served: Mapping[str, Path] | None = None) -> dict[str, str]:
+    """The environment uv and the build backends it runs get: never a git credential, and in a
+    project with git sources, a git that reads each source from the repository serving it."""
+    return git_extensions.uv_settings(
+        package_environment(root), served or {}, git_project=_GIT_PROJECT.get()
+    )
+
+
+def _uv(
+    args: list[str],
+    root: Path,
+    cwd: Path | None = None,
+    served: Mapping[str, Path] | None = None,
+) -> None:
     if not shutil.which("uv"):
         raise Failure(ExitCode.PREREQUISITE, "install uv to manage extension dependencies")
-    env = package_environment(root)
+    env = uv_environment(root, served)
     try:
         result = subprocess.run(
             ["uv", "--no-config", *args],
@@ -110,6 +149,8 @@ class PackageMetadata:
     extras: tuple[str, ...] = ()
     # Read from the project's extensions/<name>/ rather than staged from an index.
     in_repo: bool = False
+    # Fetched from a git source, whose copy outlives the lock that installs it.
+    git: git_extensions.Copy | None = None
 
 
 def inspect_package(package: str, root: Path) -> PackageMetadata:
@@ -187,11 +228,14 @@ def install_lock(lock: str, root: Path, editable: tuple[str, ...] | list[str] = 
     """Install the CLI lock, then each in-repo extension editable, all without resolving.
 
     The lock is the full third-party closure, so `--no-deps` installs exactly its pins and never
-    looks a name up on an index, which an in-repo extension's name may also exist on.
+    looks a name up on an index, which an in-repo extension's name may also exist on. A git
+    source's line is left to `install_sources`, which installs it from its fetched copy.
     """
     with tempfile.TemporaryDirectory(prefix="vecten-install-") as temp:
         path = Path(temp) / "requirements.lock"
-        path.write_text(lock)
+        path.write_text(
+            "".join(f"{line}\n" for line in lock.splitlines() if not git_extensions.is_source(line))
+        )
         constraints = release_constraints(Path(temp) / "constraints.txt")
         install = ["pip", "install", "--python", sys.executable, "--no-deps"]
         _uv([*install, "--constraint", str(constraints), "-r", str(path)], root)
@@ -204,6 +248,31 @@ def install_lock(lock: str, root: Path, editable: tuple[str, ...] | list[str] = 
     importlib.invalidate_caches()
 
 
+def install_sources(
+    copies: Mapping[str, git_extensions.Copy], record: dict[str, locking.Extension], root: Path
+) -> None:
+    """Install each git-sourced extension from its fetched copy, not editable and without
+    resolving, its build backend held to the versions the record pins."""
+    with tempfile.TemporaryDirectory(prefix="vecten-install-") as temp:
+        for name, copy in sorted(copies.items()):
+            constraints = Path(temp) / f"{name}-build-constraints.txt"
+            constraints.write_text("".join(f"{line}\n" for line in record[name].build_requires))
+            _uv(
+                [
+                    "pip",
+                    "install",
+                    "--python",
+                    sys.executable,
+                    "--no-deps",
+                    "--build-constraint",
+                    str(constraints),
+                    str(copy.directory),
+                ],
+                root,
+            )
+    importlib.invalidate_caches()
+
+
 def resolve_lock(
     requirements: list[str],
     root: Path,
@@ -213,11 +282,17 @@ def resolve_lock(
     previous: str | None = None,
     upgrade: tuple[str, ...] = (),
     cwd: Path | None = None,
+    sources: Mapping[str, tuple[git_extensions.Copy, str]] | None = None,
+    served: Mapping[str, Path] | None = None,
 ) -> str:
     """Resolve `requirements`, keeping every pin of `previous` that still satisfies them.
 
-    A `./extensions/<name>` input resolves against `cwd`; uv echoes its line as given.
+    A `./extensions/<name>` input resolves against `cwd`; uv echoes its line as given. Each
+    of `sources`, by name, is a git source's fetched copy and its record line, and `served`
+    the repository serving each source URL: uv reads the sources from those, and a source's
+    line in the output is replaced by its record line.
     """
+    sources = sources or {}
     with tempfile.TemporaryDirectory(prefix="vecten-lock-") as temp:
         source, lock = Path(temp) / "requirements.txt", Path(temp) / "requirements.lock"
         source.write_text("\n".join(requirements) + "\n")
@@ -245,26 +320,36 @@ def resolve_lock(
             ],
             root,
             cwd=cwd,
+            served=served,
         )
         text = lock.read_text()
         from packaging.requirements import InvalidRequirement, Requirement
 
+        lines = []
         try:
             for line in text.splitlines():
                 if not line.strip() or line.startswith("#") or line.startswith(IN_REPO_PREFIX):
+                    lines.append(line)
                     continue
                 req = Requirement(line)
+                if req.url:
+                    # Only a registered extension may come from git, and only from its record.
+                    copy, record_line = sources.get(normalize_name(req.name), (None, None))
+                    if copy is None or not git_extensions.same_source(line, copy.origin):
+                        raise InvalidRequirement()
+                    lines.append(record_line)
+                    continue
                 if (
-                    req.url
-                    or not all(s.operator == "==" and "*" not in s.version for s in req.specifier)
+                    not all(s.operator == "==" and "*" not in s.version for s in req.specifier)
                     or not req.specifier
                 ):
                     raise InvalidRequirement()
+                lines.append(line)
         except InvalidRequirement:
             raise Failure(
                 ExitCode.REFUSED, "package resolution produced a non-portable dependency lock"
             ) from None
-        return text
+        return "".join(f"{line}\n" for line in lines)
 
 
 def write_project_files(files: dict[Path, str | Path | None]) -> None:
@@ -311,9 +396,10 @@ def _pinned_version(text: str) -> str | None:
 
 
 def _extension_pins(
-    root: Path, config: VectenConfig, added: PackageMetadata | None
-) -> tuple[dict[str, str], dict[str, locking.Extension]]:
-    """Each registered extension's exact pin and record entry, inspecting only what is unknown.
+    root: Path, config: VectenConfig, added: PackageMetadata | None, fetched: Path
+) -> tuple[dict[str, str], dict[str, locking.Extension], dict[str, git_extensions.Copy]]:
+    """Each registered extension's exact pin, record entry and, for a git source, its copy
+    fetched into `fetched`, inspecting only what is unknown.
 
     `requirements.txt` may still hold an earlier release's connector dependencies; only the
     registered extensions' lines are kept.
@@ -321,7 +407,8 @@ def _extension_pins(
     pins = locking.read_pins(root)
     record = locking.read_record(root) or {}
     paths = _path_lines(root)
-    found_pins, found_record = {}, {}
+    found_pins, found_record, copies = {}, {}, {}
+    credentials = None
     for registration in config.extensions:
         req = requirement(registration)
         name = normalize_name(req.name)
@@ -335,19 +422,115 @@ def _extension_pins(
             found_pins[name] = f"./{info.path}{extras}"
             found_record[name] = _in_repo_entry(root, info, record.get(name))
             continue
+        entry = record.get(name)
+        if added_here and added.git is not None:
+            copy = added.git
+        elif not added_here and (
+            git_extensions.is_source(pins.get(name, ""))
+            or (entry is not None and entry.git is not None and name not in pins)
+        ):
+            if credentials is None:
+                credentials = git_extensions.credentials(root)
+            copy = _fetch_recorded(name, pins.get(name), entry, credentials, fetched)
+        else:
+            copy = None
+        if copy is not None:
+            found_pins[name] = git_extensions.line_for(name, req.extras, copy.origin)
+            found_record[name] = _git_entry(root, copy, entry)
+            copies[name] = copy
+            continue
         if added_here:
             dist = added
         else:
-            pinned, entry = pins.get(name), record.get(name)
+            pinned = pins.get(name)
             version = _pinned_version(pinned) if pinned else None
             satisfied = version is not None and (not req.specifier or version in req.specifier)
-            if satisfied and entry and not entry.source_path and version == entry.version:
+            if (
+                satisfied
+                and entry
+                and not entry.source_path
+                and not entry.git
+                and version == entry.version
+            ):
                 found_pins[name], found_record[name] = f"{name}{extras}=={entry.version}", entry
                 continue
             dist = inspect_package(pinned if satisfied else registration, root)
         found_pins[name] = f"{name}{extras}=={dist.version}"
         found_record[name] = locking.Extension(version=dist.version, extras=tuple(dist.extras))
-    return found_pins, found_record
+    return found_pins, found_record, copies
+
+
+def _fetch_recorded(
+    name: str,
+    line: str | None,
+    entry: locking.Extension | None,
+    credentials: git_sources.Credentials,
+    fetched: Path,
+) -> git_extensions.Copy:
+    """The copy of the commit `requirements.txt` records for `name`, checked against the
+    record's source hash when the record holds that commit. No tag is resolved again."""
+    if line is None:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"{locking.PINS_FILE} lost the git source of {name}; record it again with "
+            "`vecten extension add` and its git source",
+        )
+    pinned = git_extensions.parse_line(line, locking.PINS_FILE)
+    source = pinned.source
+    same = (
+        entry is not None
+        and entry.git is not None
+        and (entry.git.url, entry.git.commit, entry.git.subdirectory)
+        == (source.url, pinned.commit, source.subdirectory)
+    )
+    if same:
+        public = entry.git.public
+    elif pinned.tag is None:
+        public = git_sources.resolve(source, credentials).public
+    else:
+        # A commit edited into requirements.txt is adopted only where its tag vouches for it.
+        tagged = git_sources.resolve(replace(source, ref=pinned.tag), credentials)
+        if tagged.commit != pinned.commit:
+            raise Failure(
+                ExitCode.REFUSED,
+                f"{locking.PINS_FILE}: {name}: the tag {pinned.tag} points at {tagged.commit}, "
+                f"not at {pinned.commit}; record the source with `vecten extension add`",
+            )
+        public = tagged.public
+    copy = git_extensions.fetch_copy(
+        source, pinned.commit, pinned.tag, public, credentials, fetched
+    )
+    if not same:
+        git_extensions.check_tag_version(copy)
+    if same and copy.source_sha256 != entry.source_sha256:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"{name} at {pinned.commit}: the fetched source has source_sha256 "
+            f"{copy.source_sha256}, but {locking.RECORD_FILE} records {entry.source_sha256}",
+        )
+    return copy
+
+
+def _build_pins(root: Path, requires: tuple[str, ...]) -> tuple[str, ...]:
+    text = resolve_lock(list(requires), root, runtime=True, cwd=root)
+    return tuple(line for line in text.splitlines() if line and not line.startswith("#"))
+
+
+def _git_entry(
+    root: Path, copy: git_extensions.Copy, previous: locking.Extension | None
+) -> locking.Extension:
+    """The record entry, with build requirements pinned once per source."""
+    if previous is not None and previous.git and previous.source_sha256 == copy.source_sha256:
+        build = previous.build_requires
+    else:
+        build = _build_pins(root, copy.metadata.build_requires)
+    return locking.Extension(
+        version=copy.metadata.version,
+        extras=copy.metadata.extras,
+        git=copy.origin,
+        source_sha256=copy.source_sha256,
+        build_requires=build,
+    )
 
 
 IN_REPO_PREFIX = f"./{in_repo.EXTENSIONS_DIR}/"
@@ -372,8 +555,7 @@ def _in_repo_entry(
     if previous is not None and previous.metadata_sha256 == info.metadata_sha256:
         build = previous.build_requires
     else:
-        text = resolve_lock(list(info.build_requires), root, runtime=True, cwd=root)
-        build = tuple(line for line in text.splitlines() if line and not line.startswith("#"))
+        build = _build_pins(root, info.build_requires)
     return locking.Extension(
         version=info.version,
         extras=info.extras,
@@ -405,10 +587,28 @@ def lock_project(
     """Resolve every component's lock and install the CLI's; return the records to write.
 
     Nothing is written here: the caller writes these files together, so a failure in any
-    resolution leaves every committed record as it was.
+    resolution leaves every committed record as it was. Git sources are fetched into a
+    directory that is removed when this returns.
     """
     _check_connector_dependencies(config)
-    pins, record = _extension_pins(root, config, added)
+    git = has_git_sources(root) or (added is not None and added.git is not None)
+    with (
+        _git_project(git),
+        tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
+    ):
+        return _lock_project(root, config, upgrade, added, Path(fetched))
+
+
+def _lock_project(
+    root: Path,
+    config: VectenConfig,
+    upgrade: tuple[str, ...],
+    added: PackageMetadata | None,
+    fetched: Path,
+) -> tuple[dict[Path, str], dict]:
+    pins, record, copies = _extension_pins(root, config, added, fetched)
+    sources = {name: (copy, pins[name]) for name, copy in copies.items()}
+    served = git_extensions.serve_copies(copies.values(), fetched)
     locks = {}
     for component in locking.components(config):
         lock_roots = locking.roots(config, pins, record, component)
@@ -425,6 +625,8 @@ def lock_project(
                 previous=previous.read_text() if previous.is_file() else None,
                 upgrade=upgrade,
                 cwd=root,
+                sources=sources,
+                served=served,
             )
         except Failure as failure:
             raise Failure(failure.code, f"{name}: {failure.message}") from None
@@ -438,6 +640,8 @@ def lock_project(
         body = "".join(f"{line}\n" for line in lines)
         locks[component] = f"{locking.stamp_line(component, digest)}\n{body}"
     install_lock(locks["cli"], root, [e.source_path for e in record.values() if e.source_path])
+    if copies:
+        install_sources(copies, record, root)
     manifests = load_manifests(config)
     services = load_services(config)
     apps = load_apps(config)
@@ -678,10 +882,76 @@ def _in_repo_package(root: Path, argument: str) -> tuple[PackageMetadata, str]:
     return meta, f"{info.name}[{extras}" if extras else info.name
 
 
+def _origin(entry: locking.Extension | None) -> dict | None:
+    """Where a record entry says an extension comes from, as `extension add` reports it."""
+    if entry is None:
+        return None
+    if entry.git is not None:
+        return {
+            "kind": "git",
+            "version": entry.version,
+            **entry.git.as_json(),
+            "source_sha256": entry.source_sha256,
+        }
+    if entry.source_path:
+        return {"kind": "path", "version": entry.version, "path": entry.source_path}
+    return {"kind": "index", "version": entry.version}
+
+
+def _git_package(root: Path, package: str, fetched: Path) -> tuple[PackageMetadata, str]:
+    """The git source `package` names, resolved, fetched and checked, and the extras asked for."""
+    source = git_sources.parse_source(package)
+    name = normalize_name(source.name)
+    if in_repo.has_folder(root, name):
+        raise Failure(
+            ExitCode.REFUSED,
+            f"the project keeps {name} in extensions/{name}; remove that folder to take {name} "
+            "from a git source",
+        )
+    credentials = git_extensions.credentials(root)
+    resolution = git_sources.resolve(source, credentials)
+    copy = git_extensions.fetch_copy(
+        source, resolution.commit, resolution.tag, resolution.public, credentials, fetched
+    )
+    git_extensions.check_tag_version(copy)
+    groups = tuple(SimpleNamespace(group=g) for g in copy.metadata.groups)
+    meta = PackageMetadata(name, copy.metadata.version, groups, copy.metadata.extras, git=copy)
+    extras = f"[{','.join(source.extras)}]" if source.extras else ""
+    return meta, f"{name}{extras}"
+
+
+def _refuse_bare_name_of_a_git_source(root: Path, req) -> None:
+    name = normalize_name(req.name)
+    entry = (locking.read_record(root) or {}).get(name)
+    pinned = locking.read_pins(root).get(name, "")
+    if req.specifier or not (
+        git_extensions.is_source(pinned) or (entry is not None and entry.git is not None)
+    ):
+        return
+    raise Failure(
+        ExitCode.USAGE,
+        f"{name} comes from a git source; name a tag or a full commit, as in "
+        f"`vecten extension add '{name} @ git+https://<host>/<repository>@<tag>'`, or name an "
+        f"index version, as in `{name}==<version>`, to take it from the index",
+    )
+
+
 def add_extension(root: Path, package: str) -> dict:
+    git = has_git_sources(root) or git_extensions.is_source(package)
+    with (
+        _git_project(git),
+        tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
+    ):
+        return _add_extension(root, package, Path(fetched))
+
+
+def _add_extension(root: Path, package: str, fetched: Path) -> dict:
     config = load_config(root)
     if in_repo.is_path(package):
         dist, package = _in_repo_package(root, package)
+        req = requirement(package)
+    elif git_extensions.is_source(package):
+        dist, package = _git_package(root, package, fetched)
         req = requirement(package)
     else:
         req = requirement(package)
@@ -692,7 +962,9 @@ def add_extension(root: Path, package: str) -> dict:
                 f"the project keeps {name} in extensions/{name}; add it with "
                 f"`vecten extension add ./extensions/{name}`, so it is never fetched by name",
             )
+        _refuse_bare_name_of_a_git_source(root, req)
         dist = inspect_package(str(req), root)
+    previous = (locking.read_record(root) or {}).get(normalize_name(dist.name))
     known = sorted({ep.group for ep in dist.entry_points if ep.group in GROUPS})
     unknown = sorted(
         {
@@ -731,12 +1003,15 @@ def add_extension(root: Path, package: str) -> dict:
     except ValidationError as exc:
         raise Failure(ExitCode.CONFIG, f"binding the services of {name}: {exc}") from None
     check_bindings(bound, record)
+    changed = _differs({root / "vecten.toml": text, **files})
     write_project_files({root / "vecten.toml": text, **files})
-    pinned = (
-        f"./{in_repo.EXTENSIONS_DIR}/{normalize_name(dist.name)}{extras}"
-        if dist.in_repo
-        else f"{normalize_name(dist.name)}{extras}=={dist.version}"
-    )
+    if dist.git is not None:
+        pinned = git_extensions.root_line(name, req.extras, dist.git.origin)
+    elif dist.in_repo:
+        pinned = f"./{in_repo.EXTENSIONS_DIR}/{name}{extras}"
+    else:
+        pinned = f"{name}{extras}=={dist.version}"
+    entry = record.get(name)
     return {
         "package": pinned,
         "groups": known,
@@ -744,6 +1019,13 @@ def add_extension(root: Path, package: str) -> dict:
         "missing_secrets": report["missing_locally"],
         "undelivered": report["undelivered"],
         **services,
+        **(
+            {"source": entry.git.as_json(), "source_sha256": entry.source_sha256}
+            if entry is not None and entry.git is not None
+            else {}
+        ),
+        "previous": _origin(previous),
+        "changed": changed,
     }
 
 
@@ -900,6 +1182,49 @@ def services_message(data: dict) -> list[str]:
         lines.append("new hostnames, served after `vecten deploy`: " + ", ".join(data["hostnames"]))
     lines += data.get("binding_notes", [])
     return lines
+
+
+def source_changes(data: dict) -> list[str]:
+    """Lines naming how `extension add` changed a git source, or switched to or from one;
+    nothing for an extension that is not from git before or after."""
+    previous, source = data.get("previous"), data.get("source")
+    if previous is None or (previous["kind"] != "git" and source is None):
+        return []
+    if source is None:
+        now = "a path" if data["package"].startswith("./") else "the index"
+        return [f"switched from git (commit {previous['commit']}) to {now}"]
+    if previous["kind"] != "git":
+        was = "the index" if previous["kind"] == "index" else "a path"
+        return [f"switched from {was} (version {previous['version']}) to git"]
+    if previous["commit"] != source["commit"]:
+        lines = [f"previous commit {previous['commit']}, now {source['commit']}"]
+        if source["tag"] and (source["url"], source["tag"]) == (previous["url"], previous["tag"]):
+            lines.append(f"the tag {source['tag']} moved since it was recorded")
+        return lines
+    if not data["changed"]:
+        return [f"already recorded at {source['commit']}; nothing changed"]
+    lines = [f"still at commit {source['commit']}"]
+    if source["public"] != previous["public"]:
+        lines.append(
+            "the repository now answers without a credential"
+            if source["public"]
+            else "the repository now needs a credential"
+        )
+    return lines
+
+
+def _differs(files: dict[Path, str | Path | None]) -> bool:
+    """Whether writing `files` would change anything under the project."""
+    for path, content in files.items():
+        if isinstance(content, Path):
+            if not path.is_symlink() or Path(os.readlink(path)) != content:
+                return True
+        elif content is None:
+            if path.exists() or path.is_symlink():
+                return True
+        elif not path.is_file() or path.read_text(encoding="utf-8") != content:
+            return True
+    return False
 
 
 def secrets_message(missing: list[str], undelivered: list[str]) -> list[str]:

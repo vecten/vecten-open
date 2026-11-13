@@ -127,6 +127,27 @@ def test_upgrade_changes_only_dependency_records(invoke, project, monkeypatch):
     assert "acme-demo==2.0.0\n" in lock_body(project / "requirements.lock")
 
 
+def test_index_adds_print_what_they_printed_before_git_sources(invoke, project, monkeypatch):
+    from vecten import extensions
+
+    installer(monkeypatch)
+    first = invoke("extension", "add", "acme-demo==1.2.0")
+    again = invoke("extension", "add", "acme-demo==1.2.0")
+    monkeypatch.setattr(
+        extensions,
+        "inspect_package",
+        lambda *args: extensions.PackageMetadata(
+            name="acme-demo", version="2.0.0", entry_points=(SimpleNamespace(group="vecten.dags"),)
+        ),
+    )
+    upgraded = invoke("extension", "add", "acme-demo[cli]==2.0.0")
+    assert [r.stdout for r in (first, again, upgraded)] == [
+        "installed acme-demo==1.2.0\n",
+        "installed acme-demo==1.2.0\n",
+        "installed acme-demo[cli]==2.0.0\n",
+    ]
+
+
 def test_resolution_and_installation_keep_release_constraints(tmp_path, monkeypatch):
     from pathlib import Path
 
@@ -135,7 +156,7 @@ def test_resolution_and_installation_keep_release_constraints(tmp_path, monkeypa
 
     calls = []
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, served=None):
         calls.append(args)
         assert "--constraint" in args
         constraints = Path(args[args.index("--constraint") + 1]).read_text()
@@ -154,7 +175,7 @@ def test_unknown_package_is_inspected_without_installing_into_cli(tmp_path, monk
 
     from vecten.extensions import inspect_package
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, served=None):
         assert "--target" in args and "--no-deps" in args
         assert (
             "--python" not in args
@@ -192,7 +213,7 @@ def test_compile_targets_runtime_python_and_does_not_install(tmp_path, monkeypat
 
     calls = []
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, served=None):
         calls.append(args)
         assert args[:2] == ["pip", "compile"]
         assert args[args.index("--python-version") + 1] == VERSIONS.python
@@ -234,7 +255,7 @@ def test_inspection_reads_the_extras_a_wheel_provides(tmp_path, monkeypatch, lin
 
     from vecten.extensions import inspect_package
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, served=None):
         info = Path(args[args.index("--target") + 1]) / "acme_demo-1.0.dist-info"
         info.mkdir(parents=True)
         (info / "METADATA").write_text(

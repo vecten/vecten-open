@@ -18,7 +18,12 @@ from vecten.next.declared import declared_secret_items
 from vecten.next.existing_warehouse import provisioner_secrets_item
 from vecten.next.gitstate import GitState
 from vecten.next.items import Item
-from vecten.secrets import LAPTOP_ONLY, provisioner_secret_names, recorded_secret_names
+from vecten.secrets import (
+    GIT_CREDENTIALS,
+    LAPTOP_ONLY,
+    provisioner_secret_names,
+    recorded_secret_names,
+)
 from vecten_shared.config import EnvironmentFacts, VectenConfig
 from vecten_shared.envfile import read_env_values
 from vecten_shared.provider.local import LocalProvider
@@ -98,7 +103,8 @@ def _uncopied_secrets(root: Path, config: VectenConfig, env: str) -> list[str]:
     # `--from-local` refuses a bare or empty entry, so only names with a value can be copied.
     local = {name for name, value in values.items() if value}
     # The local stack's own credentials stay local: the cloud environment generates its own.
-    local -= STACK_MANAGED | LAPTOP_ONLY
+    # The git credential lives only in .env and in CI, and `secret set --env` refuses it.
+    local -= STACK_MANAGED | LAPTOP_ONLY | GIT_CREDENTIALS
     if not config.has("platform"):
         local -= set(provisioner_secret_names(config))
     return sorted(local - recorded_secret_names(root, env))

@@ -189,7 +189,7 @@ def test_resolve_lock_seeds_the_output_with_the_previous_lock_and_passes_upgrade
 ):
     seen = {}
 
-    def uv(args, root, cwd=None):
+    def uv(args, root, cwd=None, served=None):
         out = Path(args[args.index("--output-file") + 1])
         seen["seeded"] = out.read_text()
         seen["args"] = args
@@ -479,6 +479,16 @@ def _register(root):
     doc["extensions"] = ["acme-portal"]
     (root / "vecten.toml").write_text(tomli_w.dumps(doc))
     (root / "requirements.txt").write_text("./extensions/acme-portal\n")
+
+
+def test_an_in_repo_version_bump_prints_what_it_printed_before_git_sources(invoke, project, fakes):
+    path = make(project)
+    assert invoke("extension", "add", "./extensions/acme-portal").exit_code == 0
+    text = (path / "pyproject.toml").read_text().replace('version = "0.1.0"', 'version = "0.2.0"')
+    (path / "pyproject.toml").write_text(text)
+    r = invoke("extension", "add", "./extensions/acme-portal")
+    assert r.exit_code == 0, r.output
+    assert r.stdout == "installed ./extensions/acme-portal\n"
 
 
 def test_extension_add_registers_an_in_repo_extension_by_its_path(invoke, project, fakes):
