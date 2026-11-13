@@ -17,6 +17,11 @@ def connect(
     adopt: bool = typer.Option(
         False, "--adopt", help="Adopt an existing warehouse account after reviewing it."
     ),
+    groups_only: bool = typer.Option(
+        False,
+        "--groups-only",
+        help="Set an existing principal's groups to the binding; keep its credentials.",
+    ),
     json_output: bool = JsonFlag,
 ):
     def run(ctx):
@@ -24,7 +29,7 @@ def connect(
 
         if not name:
             raise Failure(ExitCode.USAGE, "app connect needs an app as <extension>.<app>")
-        data = connect_app(ctx.require_project(), name, env, adopt=adopt)
+        data = connect_app(ctx.require_project(), name, env, adopt=adopt, rotate=not groups_only)
         return Result(data=data, message=data["message"])
 
     run_command(json_output, run)

@@ -79,7 +79,41 @@ def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> 
 def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
     app, group = (str(entry.get(k, "?")) for k in ("app", "group"))
     where = f"`[apps.{app}]` groups in vecten.toml"
-    if "principal_id" in entry:
+    reason = entry.get("reason")
+    roles = ", ".join(str(r) for r in entry.get("roles", [])) or "?"
+    if reason == "role sync failed":
+        name = str(entry.get("warehouse_name", "?"))
+        group = f"{name} roles"
+        title = f"The MCP could not set the warehouse roles of {name}"
+        resolution = (
+            f"{name}, the principal of {app}, may hold some of {roles}: setting its roles to "
+            f"those of the groups {app} admits failed ({entry.get('error', 'unknown error')}). "
+            "Until it succeeds its queries may miss an admitted group's data, and are refused "
+            "on Postgres while a role to revoke remains. The MCP retries at every "
+            f"reconciliation; `vecten reconcile --env {ctx.env}` retries now."
+        )
+    elif reason == "warehouse roles beyond the admitted groups":
+        name = str(entry.get("warehouse_name", "?"))
+        group = f"{name} extra roles"
+        title = f"App principal {name} holds warehouse roles beyond its admitted groups"
+        resolution = (
+            f"{name}, the principal of {app}, holds {roles} in the warehouse, beyond the roles "
+            f"of the groups {app} admits, so its queries are refused on Postgres. A warehouse "
+            f"administrator revokes them (REVOKE <role> FROM {name}); a role the MCP granted is "
+            f"revoked again by `vecten reconcile --env {ctx.env}`."
+        )
+    elif reason == "groups differ from the binding":
+        name = str(entry.get("warehouse_name", "?"))
+        group = name
+        groups = ", ".join(str(g) for g in entry.get("groups", [])) or "no group"
+        bound = ", ".join(str(g) for g in entry.get("bound", []))
+        title = f"App principal {name} is in other groups than {app} is bound to"
+        resolution = (
+            f"{name} is in {groups}, but vecten.toml binds {app} to {bound}. Run "
+            f"`vecten app connect {app} --env {ctx.env} --groups-only` to set its groups to "
+            "the binding without changing its credentials."
+        )
+    elif "principal_id" in entry:
         name = str(entry.get("warehouse_name", "?"))
         group = name
         title = f"Service principal {name} is not marked as {app}'s principal"

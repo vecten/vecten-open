@@ -138,7 +138,7 @@ def test_first_connection_stores_both_names_in_the_platform_scope_and_prints_no_
     result = connect(invoke, "--env", "prod")
     assert result.exit_code == 0, result.stdout + result.stderr
     assert FakeAdmin.calls == [
-        ("prod", "apps/connect", {"name": "acme-sales.overview", "adopt": False})
+        ("prod", "apps/connect", {"name": "acme-sales.overview", "adopt": False, "rotate": True})
     ]
     assert STORE == {
         "APP_OVERVIEW_CLIENT_ID": "the-client-id",
@@ -353,3 +353,33 @@ def test_next_asks_for_sign_in_before_connecting(project, tmp_path):
     items = post_deploy_items(project, config, "prod", CLEAN)
     titles = [item.title for item in items]
     assert titles.index("Sign in to the MCP as an admin") < titles.index(CONNECT.title)
+
+
+def test_groups_only_resyncs_without_rotating_or_storing(invoke, project, fake_admin, monkeypatch):
+    def groups_only(self, operation, data=None):
+        self.calls.append((self.env, operation, data))
+        return {
+            "app": data["name"],
+            "created": False,
+            "principal": {"id": "p-app", "name": "App", "warehouse_name": "svc_app_overview"},
+            "groups": ["sales"],
+            "credentials": None,
+        }
+
+    monkeypatch.setattr(FakeAdmin, "call", groups_only)
+    result = invoke(
+        "app", "connect", "acme-sales.overview", "--env", "prod", "--groups-only", "--json"
+    )
+    assert result.exit_code == 0, result.stdout
+    assert FakeAdmin.calls == [
+        ("prod", "apps/connect", {"name": "acme-sales.overview", "adopt": False, "rotate": False})
+    ]
+    assert STORE == {}
+    doc = json.loads(result.stdout)
+    assert doc["secrets"] == [] and "credentials are unchanged" in doc["message"]
+
+
+def test_groups_only_and_adopt_are_refused_together(invoke, project, fake_admin):
+    result = invoke("app", "connect", "acme-sales.overview", "--groups-only", "--adopt", "--json")
+    assert result.exit_code == ExitCode.USAGE
+    assert FakeAdmin.calls == []

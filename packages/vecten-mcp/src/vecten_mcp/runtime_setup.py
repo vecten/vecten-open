@@ -129,8 +129,9 @@ def backend_name(mcp, env):
     return mcp.auth
 
 
-def session_validator(state, clock):
-    """The pool's check of a session and its principal, against durable state."""
+def session_validator(state, clock, *, narrow=None):
+    """The pool's check of a session and its principal, against durable state; `narrow`
+    gives an app principal's querying groups (AppScopes.query_groups)."""
 
     def validate_session(snapshot, session_id, roles):
         # Called while holding the pool lock. Revocation deletes durable state before
@@ -141,9 +142,11 @@ def session_validator(state, clock):
         principal = state.principal(snapshot["id"])
         if not principal or not principal["enabled"] or not principal["provisioned"]:
             raise NoWarehouseAccess()
-        current_roles = {
-            state.group(group)["warehouse_role"] for group in state.groups_for(principal["id"])
-        }
+        groups = state.groups_for(principal["id"])
+        narrowed = narrow(principal["id"], groups) if narrow else None
+        if narrowed is not None:
+            groups = narrowed
+        current_roles = {state.group(group)["warehouse_role"] for group in groups}
         return principal, current_roles
 
     return validate_session
@@ -296,6 +299,8 @@ def configured_runtime(root, config, extensions):
         database=getattr(adapter, "database", None),
     )
     access.apps = runtime.apps
+    pools.validate = session_validator(state, oauth.clock, narrow=runtime.apps.query_groups)
+    runtime.queries.narrow = runtime.apps.query_groups
     from vecten_mcp.model import ModelService
     from vecten_shared.osi.revision import read_built_commit
 

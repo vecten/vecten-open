@@ -199,3 +199,76 @@ def test_the_viewer_is_audited_beside_the_app_principal(stack):
 def test_the_default_group_is_admitted_through_its_schema_grant(stack):
     assert stack.runtime.apps.admitted("overview") == {"default"}
     assert stack.admin(stack.ada, "access-health")["data"]["apps"] == []
+
+
+# Row policies on the declared table: `default` (role analyst) sees eu rows only, `finance`
+# sees every row but holds no grant on orders, so the app does not admit it.
+POLICIES = """
+ALTER TABLE marts.orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY eu_only ON marts.orders FOR SELECT TO analyst USING (region = 'eu');
+CREATE POLICY every_row ON marts.orders FOR SELECT TO finance USING (true);
+"""
+
+
+def test_a_bound_group_the_app_does_not_admit_never_feeds_its_queries(stack):
+    from vecten_mcp.apps import BoundApp
+
+    runtime = stack.runtime
+    stack.admin(stack.ada, "groups/create", {"name": "finance"})
+    stack.pg.sql(POLICIES, user="loader")
+    runtime.apps.apps["overview"] = BoundApp(
+        "acme-sales", "overview", "Sales overview", "container", ("orders",), ("default", "finance")
+    )
+    runtime.access.admit()
+    assert runtime.apps.admitted("overview") == {"default"}
+    resynced = stack.admin(
+        stack.ada, "apps/connect", {"name": "acme-sales.overview", "rotate": False}
+    )["data"]
+    assert resynced["groups"] == ["default", "finance"]
+    assert runtime.state.groups_for(stack.principal["id"]) == {"default", "finance"}
+    # Only the eu row: finance's policy would show the us row too.
+    assert rows(sql(stack, "SELECT sum(amount) FROM marts.orders")) == [["100"]]
+
+
+def test_a_sync_grants_a_role_the_principal_already_holds_again_without_error(stack):
+    from vecten_mcp.access import APP_ROLES
+
+    access, principal_id = stack.runtime.access, stack.principal["id"]
+    for _ in range(2):
+        access.sync_app_roles(principal_id)
+    assert access.held_roles(principal_id) == {"analyst"}
+    assert "failed" not in stack.runtime.state.get(APP_ROLES, principal_id)
+    grants = stack.pg.sql(
+        "SELECT count(*) FROM pg_catalog.pg_auth_members m"
+        " JOIN pg_catalog.pg_roles r ON r.oid = m.roleid"
+        " JOIN pg_catalog.pg_roles u ON u.oid = m.member"
+        " WHERE r.rolname = 'analyst' AND u.rolname = %s",
+        params=(stack.principal["warehouse_name"],),
+    )
+    assert grants == [(1,)]
+
+
+def extra_roles(stack):
+    health = stack.admin(stack.ada, "access-health")["data"]
+    return [
+        entry["roles"]
+        for entry in health.get("apps", [])
+        if entry.get("reason") == "warehouse roles beyond the admitted groups"
+    ]
+
+
+def test_a_role_granted_outside_the_mcp_refuses_the_app_query(stack):
+    name = stack.principal["warehouse_name"]
+    # Postgres reports the principal's memberships; the MCP's own grants leave nothing extra.
+    assert extra_roles(stack) == []
+    stack.pg.sql(f"GRANT finance TO {name}")
+    try:
+        result = sql(stack, "SELECT sum(amount) FROM marts.orders")
+        assert result["isError"]
+        assert "finance" in result["content"][0]["text"]
+    finally:
+        stack.pg.sql(f"REVOKE finance FROM {name}")
+    stack.pg.sql(f"CREATE ROLE stray_reader NOLOGIN; GRANT stray_reader TO {name}")
+    result = sql(stack, "SELECT sum(amount) FROM marts.orders")
+    assert result["isError"] and "stray_reader" in result["content"][0]["text"]
+    assert extra_roles(stack) == [["stray_reader"]]
