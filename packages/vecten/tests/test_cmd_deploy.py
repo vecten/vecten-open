@@ -1,5 +1,6 @@
 import copy
 import json
+import shutil
 import subprocess
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -711,6 +712,61 @@ def test_a_changed_layout_is_refused_before_any_dispatch(invoke, laptop, snowfla
     assert "deploy/envs/dev.tfvars" in error
     assert laptop.named("workflow", "run") == []
     assert load_config(snowflake).environments["prod"].snowflake_shared_account is False
+
+
+SHIPPED = "a3f9c2e0a3f9c2e0a3f9c2e0a3f9c2e0a3f9c2e0"
+
+
+def _promoting(root: Path, tmp_path: Path, monkeypatch, *, watch_code: int = 0) -> Path:
+    """`root` with dev before prod, dev in an account of its own having shipped SHIPPED; the
+    directory standing for SHIPPED's tree, a copy of `root` as it is now."""
+    from .test_deploy_promotion import ordered
+
+    ordered(root)
+    dev = env_tfvars_path(root, "dev")
+    dev.write_text(dev.read_text().replace('"ACME-PROD"', '"ACME-DEV"'))
+    set_facts(
+        root,
+        "dev",
+        bootstrapped=True,
+        state_bucket=STATE_BUCKET,
+        deployed_commit=COMMIT,
+        snowflake_shared_account=False,
+    )
+    shipped = tmp_path / "at-shipped"
+    shutil.copytree(root, shipped)
+    gh = FakeGh(history=[COMMIT, SHIPPED], statuses={SHIPPED: [("vecten/ship/dev", "success")]})
+    gh.watch_code = watch_code
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit(shown=shipped))
+    return shipped
+
+
+@pytest.mark.parametrize("watch_code", [0, 1])
+def test_a_promoted_first_deploy_records_the_layout_of_the_commit_it_deploys(
+    invoke, laptop, snowflake, tmp_path, monkeypatch, watch_code
+):
+    _promoting(snowflake, tmp_path, monkeypatch, watch_code=watch_code)
+    _share_account(snowflake)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert (r.exit_code == 0) is (watch_code == 0), r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    # The run named the objects by SHIPPED's vecten.toml, which keeps the fixed layout.
+    assert facts.snowflake_shared_account is False and facts.snowflake_base is None
+
+
+def test_a_promoted_first_deploy_records_the_base_of_the_commit_it_deploys(
+    invoke, laptop, snowflake, tmp_path, monkeypatch
+):
+    _share_account(snowflake)
+    _promoting(snowflake, tmp_path, monkeypatch)
+    config = load_config(snowflake)
+    config.warehouse.database = "LAKE"
+    save_config(snowflake, config)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME"
 
 
 def test_a_shared_environment_applies_its_suffixed_names(invoke, deploy_secrets, snowflake):

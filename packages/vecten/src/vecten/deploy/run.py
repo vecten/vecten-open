@@ -84,7 +84,7 @@ from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import shared_layout, snowflake_names
+from vecten_shared.provider import shared_base, shared_layout, snowflake_names
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
 from vecten_shared.records import write_text_atomic
 from vecten_shared.services import check_bindings, limits_per_host
@@ -459,9 +459,12 @@ def _deploy(
             else None
         )
         warnings = require_ci_git_credential(project_root, config, env, gh, shipped)
-        # The run read this checkout's vecten.toml from GitHub, so it named the objects as
-        # this layout does.
-        layout = shared_layout(config, env) if has_snowflake_root(config) else None
+        # The run names the objects by the vecten.toml it deploys: the promoted commit's, else
+        # the default branch's, which require_on_default_branch made this checkout's.
+        named = shipped.config if shipped is not None else config
+        layout = (
+            (shared_layout(named, env), shared_base(named)) if has_snowflake_root(named) else None
+        )
         try:
             followed = dispatch_and_follow(
                 project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted
@@ -470,7 +473,7 @@ def _deploy(
             # A failed run may already have created Snowflake objects under these names.
             if layout is not None:
                 recorded = load_config(project_root)
-                if record_layout(recorded, env, layout):
+                if record_layout(recorded, env, *layout):
                     save_config(project_root, recorded)
             raise
         try:
@@ -487,7 +490,7 @@ def _deploy(
         facts = recorded.environments[env]
         facts.deployed_commit = deployed
         if layout is not None:
-            record_layout(recorded, env, layout)
+            record_layout(recorded, env, *layout)
         # A deploy hands every VM its current key and waits for the acknowledgement, so no VM
         # key is waiting any more; bootstrap deletes the old keys on its next run.
         facts.cloud_ids = {
@@ -997,7 +1000,7 @@ def destroy_env(
         elif has_snowflake_root(recorded):
             # The kept database carries the layout's names, and without a deployed commit an
             # unrecorded environment would read as never deployed and take the setting.
-            record_layout(recorded, env, shared_layout(recorded, env))
+            record_layout(recorded, env, shared_layout(recorded, env), shared_base(recorded))
         facts.deployed_commit = None
         cleared = _clear_state_facts(recorded, env)
         save_config(project_root, recorded)
