@@ -41,6 +41,12 @@ and the build checks them together. The command item `Build the dbt project loca
   it at build time.
 - The files that are yours: `dbt/models/staging/staging_*.sql`, `dbt/snapshots/snapshot_*.sql`,
   `dbt/models/core/*.sql`, `dbt/models/marts/*.sql` and the `schema.yml` beside core and marts.
+- A dbt package from dbt hub or a public git repository, such as `dbt_utils`, goes in
+  `dbt/project-packages.yml` with dbt's `packages:` shape: `package: dbt-labs/dbt_utils` with
+  `version: 1.3.0`, one exact release, or `git: https://...` with `revision:` set to a full
+  40-character commit id. Ask the human before adding one. Never edit `dbt/packages.yml`: it
+  is regenerated before every run from that file. The build exits 6 and names the entry when a
+  pin is a range, a tag or a branch, or when the package is private.
 - The CLI owns `dbt/models/staging/sources.yml` (written by each sync), `osi/datasets.json`
   (written by the local build), `vecten.toml`, `.vecten/` and `dbt/target/`; never edit them.
   `osi/metrics.json` belongs to the `semantic` skill.
@@ -97,8 +103,8 @@ relying on lineage, and again after changing models.
 
 That is quicker and more reliable than parsing `manifest.json` by hand. `generate_source`,
 `generate_model_yaml` and `generate_staging_model` appear only when the dbt project has the
-`dbt-codegen` package, which this project does not install; when the server offers them, their
-output is a draft to rewrite to the convention. Leave `build`, `run` and `test` to
+`dbt-codegen` package, which this project installs only if `dbt/project-packages.yml` lists it;
+when the server offers them, their output is a draft to rewrite to the convention. Leave `build`, `run` and `test` to
 `vecten dbt-build-local`, which replays the fixtures, runs the convention's second step and
 regenerates the semantic model.
 
@@ -208,6 +214,35 @@ people will ask, and propose a mart for them.
           meta: {osi: {synonyms: [value, deal size]}}
 ```
 
+### Restricted areas
+
+When the human says a group alone may read some marts, such as finance figures, they belong in
+a restricted area, which `vecten.toml` declares as `[areas.<area>]` (lowercase letters and
+digits, no underscore). Its marts go to `dbt/models/marts_<area>/` and the core models only
+they read to `dbt/models/core_<area>/`, each folder configured in `dbt/dbt_project.yml`:
+
+```yaml
+models:
+  acme:
+    core_finance:
+      +schema: core_finance
+      +materialized: table
+    marts_finance:
+      +schema: marts_finance
+      +materialized: table
+```
+
+A core model whose rows the default group must not read goes to `core_<area>`, even when it is
+an ordinary entity such as `invoice`; leaving it in `core` lets the default group read the facts
+the area hides. A core model that unrestricted marts also read stays in `core`. Area models
+follow their layer's rules, and each mart in `marts_<area>` is a dataset. No role reads an area
+until an admin grants it, so declaring the area is the human's decision, never yours. dbt can
+still copy restricted rows into an unrestricted schema; never build a `core` or `marts` model
+from an area's models.
+
+Never set dbt's `grants` config or a granting post-hook: the MCP owns every read grant, and
+`convention_no_grants` fails the build.
+
 ## 7. Build until green
 
 ```bash
@@ -235,20 +270,28 @@ the marts. The document carries `ok`,
   `osi/metrics.json` that reads a mart you renamed or removed. Metrics are the `semantic`
   skill's; tell the human which metric and why.
 
-The four convention tests fail as nodes of those names, each message reading
+The five convention tests fail as nodes of those names, each message reading
 `model <name>: <reason>`:
 
 | Test | What a failure means | Fix |
 |---|---|---|
-| `convention_model_naming` | A model's name breaks its layer's rule, or it lands outside `staging`, `snapshots`, `core` and `marts`. | Rename the file and every `ref` to it. |
+| `convention_model_naming` | A model's name breaks its layer's rule, or it lands outside `staging`, `snapshots`, `core`, `marts` and the declared areas' schemas. "add [areas.<area>]" names an area `vecten.toml` does not declare. | Rename the file and every `ref` to it; for an area, fix a misspelt `+schema`, or ask the human whether to declare the area. |
 | `convention_descriptions` | A core or mart model or column has no description, or a built column is not declared in `schema.yml`. | Declare and describe it. |
 | `convention_core_primary_key` | A core model has no column tested both `unique` and `not_null`. | Test the key column. |
 | `convention_staging_load_metadata` | A staging model lacks `_loaded_at` or `_source`. | Add both columns. |
+| `convention_no_grants` | A model, snapshot or seed sets dbt's `grants` config, or a Snowflake model sets `copy_grants` to `false`. The same check stops every dbt run before it builds, reading "convention_no_grants failed before the build". | Remove the setting; for a dbt package's node, add the override the message names to `dbt/dbt_project.yml`. |
 
 A failing data test is information about the data: a `unique` failure on a key means the
 staging model or the snapshot key is wrong, or the source really repeats ids, which the human
 needs to hear. Fix the model; never silence a failure by deleting a test, a description or a
 column from `schema.yml`, and never touch `osi/datasets.json` or the fixtures.
+
+When a test fails only on a deployed environment's data in a Snowflake project, as `operate`
+reports it, read that data with `vecten dbt --env <env> test --select <test>` or
+`vecten dbt --env <env> show --select <model>`. `--env` comes first. On `prod` it runs only
+commands that build nothing and exits 4 on anything else; never try to build `prod` this way.
+The `dbt_build` DAG builds it once the fix merges and ships. The fix is still proved with
+`vecten dbt-build-local --json`. A Postgres project exits 4 on `--env`.
 
 ## 8. Validate the semantic model
 

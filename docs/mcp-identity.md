@@ -33,12 +33,25 @@ existing-warehouse script.
 Snowflake External OAuth (issuer, audience, role scope, query identity and key rotation) is
 exercised against a real account by the `snowflake_live` test tier, which the maintainers run
 before a release; unit tests and generated SQL are not that verification.
-The generated Snowflake setup SQL includes `analyst` database, compute warehouse, and core/marts
-table access, plus the provisioner's table SELECT grant options. It installs an owner-rights
+The generated Snowflake setup SQL grants `analyst` database and compute warehouse usage only,
+plus the provisioner's table SELECT grant options on core/marts. It installs an owner-rights
 procedure in the configured database's `VECTEN_ACCESS` schema. The procedure accepts only
-`ANALYST` or provisioner-owned reader roles and convention schemas, and can grant/revoke only
-read privileges. Run setup under an administrator authorized to manage existing and future
-grants; that authority is kept on the procedure owner, never granted to provisioner.
+`ANALYST` or provisioner-owned reader roles, and the convention schemas, `RAW_<SOURCE>`
+schemas and schemas matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$` (restricted areas, matched by
+pattern, so declaring an area needs no rerun), and can grant/revoke only read privileges.
+
+A schema or area grant covers tables, views, materialized views, dynamic tables, external
+tables and Iceberg tables, each with its current and future grants. On a grant, a kind the
+account refuses is listed in access health with Snowflake's message while the others apply;
+on a revoke, a refusal fails the call while the role still reads anything in the schema, and
+the revoke is retried on every reconciliation. A dataset grant takes its relation's object
+type from `INFORMATION_SCHEMA.TABLES`, trying a base table as a table, a dynamic table and an
+Iceberg table in turn, and counts a statement only once `SHOW GRANTS` reads the change back.
+On Postgres the helpers cover tables, partitioned tables, views, materialized views and
+foreign tables.
+
+Run setup under an administrator authorized to manage existing and future grants; that
+authority is kept on the procedure owner, never granted to provisioner.
 See Snowflake's [owner-rights procedure rules](https://docs.snowflake.com/en/developer-guide/stored-procedure/stored-procedures-rights)
 and [grant authority requirements](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#access-control-requirements).
 
@@ -136,21 +149,123 @@ this grant, and services cannot receive MCP admin rights. Vecten creates no pass
 individual warehouse accounts: Postgres uses a NOLOGIN role; Snowflake uses a PERSON or
 SERVICE user authenticated through External OAuth.
 
+### Group roles and bound roles
+
+Each group maps to a warehouse role the provisioner creates and owns, named after the group
+unless `vecten group add finance --role fin_readers` (or the panel's group form) names it. A
+role name follows the warehouse-name rules and may not start with `admin_`, `svc_`, `pg_` or
+`p_` (kept for one reader role per person). When a role of that name already exists, creation
+is refused and names both ways out: another role name, or binding the existing role.
+
+A group can read through a role the client already has, such as `FINANCE_ANALYST` with its
+own grants and row access policies, by binding it:
+
+1. `vecten group bind finance finance_analyst` records the binding as pending and prints two
+   statements for an administrator. The review lists every grant the role holds, through
+   every role nested under it: on Snowflake a recursive query over
+   `SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES`, which lags by up to two hours. The grant nests
+   the role under the group's role: on Snowflake `GRANT ROLE "FINANCE_ANALYST" TO ROLE
+   "FINANCE";`, on Postgres `GRANT "finance_analyst" TO "finance" WITH INHERIT TRUE, SET
+   FALSE;`.
+2. An administrator reviews the role and runs the grant.
+3. `vecten group bind finance finance_analyst --confirm` checks that the group's role holds
+   the bound role (`SHOW GRANTS TO ROLE` on Snowflake, `pg_auth_members` with inherit on
+   Postgres) and records it. Binding a confirmed role again prints its grant and keeps the
+   record.
+
+`vecten group unbind finance` forgets the binding and prints the revoke for an administrator
+to run. Each reconciliation reads the roles granted to every group's role. Access health and
+`vecten issues` list a confirmed binding whose grant is gone, and every other role nested
+under a group's role, including an unbound one until its revoke has run.
+
+The server never owns, grants, alters or drops a bound role, and never targets it with a
+dataset, schema or area grant or with drift revocation: `READ_GRANT` and the Postgres helpers
+refuse it as a target, and deleting the group drops only the group's own role. The default
+group, system roles (`ACCOUNTADMIN`, `SYSADMIN`, `PUBLIC` and the like), Postgres's predefined
+`pg_` roles, the roles setup creates, any role the server manages, and a role bound to another
+group cannot be bound, nor can a group's role be named after a bound role. On Postgres, binding
+and confirming also refuse a role that has, or is a member at any depth of a role that has,
+`SUPERUSER`, `BYPASSRLS`, `CREATEROLE`, `CREATEDB` or `REPLICATION`, a predefined `pg_` role,
+`rds_superuser`, `cloudsqlsuperuser`, `azure_pg_admin` or a managed role. Postgres binds a role
+by its lower-case name. In a shared Snowflake account, binding refuses every role whose name
+ends in `_<BASE>_<ENV>` for any environment of the project, in any case: this environment's own
+roles (`LOADER_ACME_DEV`, `MARKETING_ACME_DEV`) and every other environment's
+(`ANALYST_ACME_PROD`). A group's role named with such an ending is refused as well, since the
+environment adds its own suffix to it.
+
+On Snowflake, binding checks a role by its name only. The provisioner cannot read the
+privileges of a role it neither owns nor holds, so it cannot check what a bound role reaches:
+the administrator's review is the check. In a shared account the review's header names what
+else makes a role unsafe to bind: a grant on another environment's database (`ACME_PROD`) or on
+anything in it, or `USAGE` on a role named `*_<BASE>_<ENV>`. Binding accepts such a role, for
+example `FINANCE_ANALYST` with `SELECT` on `ACME_PROD`, or the role Terraform deploys with; the
+administrator refuses it. The review lists every grant through the role's hierarchy with each
+object's database, and ends with `SHOW GRANTS TO ROLE`, which also shows the grants of the last
+two hours that `ACCOUNT_USAGE` does not list yet.
+
+The provisioner owns each group's role, and an owner can grant itself the roles it owns, so it
+can reach whatever a bound role reaches. A bound role must therefore never hold account-level
+privileges or roles such as `ACCOUNTADMIN`, `SECURITYADMIN`, `SYSADMIN` or `USERADMIN`. While a
+binding exists, the MCP's startup check refuses `USAGE` on a group role held by `PROVISIONER`.
+What a bound role reads, including outside the environment's database, is the client's to set,
+and the warehouse enforces it; in a shared account, another environment's database is the
+exception above.
+
+A person's session runs under the group's role (or, with one reader role per person, their
+own), never the bound role, so a policy keyed on `CURRENT_ROLE()` does not match a bound role.
+On Snowflake, key row access and masking policies on `IS_ROLE_IN_SESSION('FINANCE_ANALYST')`,
+which matches a role inherited through the role hierarchy. On Postgres, a row-level security
+policy uses `pg_has_role(current_user, 'finance_analyst', 'USAGE')`, which follows inherited
+memberships the same way.
+
 ## Access and enforcement
 
 Groups map to warehouse roles. Every principal starts in the `default` group, mapped to
 `analyst`. `core` and `marts` are literal schema names for modelled warehouse tables. Managed
 warehouse setup creates them; existing warehouse setup uses the administrator-run SQL described
-below. Setup grants `analyst` access to those two schemas; raw ingestion schemas,
-`staging`, and `snapshots` have no default grant. Memberships combine the permissions of all
-assigned groups. Removing a grant from one group does not remove access provided by another.
+below. The MCP records the default group's grants on those two schemas once, at its first
+start, and its reconciliation applies them; no deploy, ship or setup script grants `analyst`
+anything on a schema while `mcp` is a component, so revoking `marts` from the default group
+holds. Without the MCP, setup grants `analyst` the two schemas. Raw ingestion schemas,
+`staging`, and `snapshots` have no default grant.
+
+Reconciliation also reads the read grants `analyst` and every group role hold in the
+convention and `raw_<source>` schemas and the schemas of declared areas (on Snowflake through
+the owner-rights `VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the catalogs) and
+revokes those the state does not hold. The `reconcile_drift` setting, `revoke` by default, can
+be set to `report` to list them in access health without revoking; an MCP state created by an
+earlier release starts at `report`. A grant in any other schema, or to a role the MCP does not
+manage, is left alone. While the installed procedures are older than the MCP, this step is
+skipped, grants that reach an area are refused and wait, and access health names
+`vecten mcp provisioner-script`. Memberships combine the permissions of all assigned groups. Removing a grant from one group does not remove access provided by another.
 
 Use `vecten group`, `vecten grant`, `vecten revoke`, and `vecten reconcile` for group membership
 and desired grants. A dataset grant names one dataset in the semantic model under `osi/`;
 a schema grant covers an entire schema. This implementation accepts only the literal schemas
-`core`, `marts`, `staging`, `snapshots`, and names beginning with `raw_`, such as
-`raw_hubspot`; it rejects arbitrary other schema names. Desired grants are reconciled every fifteen
-minutes, on a semantic-model update, and on demand. The default setup grants are recorded once,
+`core`, `marts`, `staging`, `snapshots`, names beginning with `raw_`, such as
+`raw_hubspot`, and the schemas of an area `vecten.toml` declares; it rejects arbitrary other
+schema names.
+
+An area grant (`vecten grant --area finance --group finance`) is a schema grant on both
+`core_finance` and `marts_finance`, applied and revoked together; one that fails on the second
+schema is rolled back on the first. It is refused for an area with no `[areas.<area>]` entry,
+and an area removed from `vecten.toml` has its grants revoked and forgotten, so declaring it
+again starts with none. Each granted schema carries its own future or default grant, so a
+relation dbt rebuilds there is readable by the granted groups and no group without the grant,
+with no reconciliation in between. No group reads an area until it is granted, with these
+exceptions, which the warehouse and not the MCP decides:
+
+- a dataset grant on a mart in the area, which reaches that one relation;
+- a future grant an administrator made for the whole database, which reaches every schema
+  without a schema-level one; access health lists those it finds on managed roles;
+- `loader`, which owns the area's schemas and builds them, and the roles above it: on
+  Snowflake `SYSADMIN` and the deploy role, on Postgres the master that sets its role.
+
+On Postgres the setup that `ship` runs creates every declared area's schemas as `loader` and
+installs their helpers; over an existing warehouse, rerun the printed script once dbt has
+created them.
+
+Desired grants are reconciled every fifteen minutes, on a semantic-model update, and on demand. The default setup grants are recorded once,
 so an administrator's later revocation is not undone merely by restarting MCP. See the
 schema-grant limitations above before relying on these operations. Reconciliation
 attempts independent grants even when another grant fails. Its Boolean `complete` field is
@@ -221,8 +336,9 @@ This procedure applies when `components = ["mcp"]` and `[warehouse] existing = t
 Run `vecten mcp provisioner-script` to review SQL for a warehouse administrator. On Snowflake,
 first configure the cloud deployment settings using `vecten init --deploy`, as described in the
 [AWS deployment guide](deploy-aws.md) or
-[Scaleway deployment guide](deploy-scaleway.md). Its `[deploy] domain` determines the public HTTPS
-issuer and JWKS URL. On its first run the script generates the provisioner's key pair into the
+[Scaleway deployment guide](deploy-scaleway.md). The environment's domain, the `domain` in
+`deploy/envs/<env>.tfvars` (for `prod`, `[deploy] domain`), determines the public HTTPS issuer and
+JWKS URL. On its first run the script generates the provisioner's key pair into the
 laptop's store as `MCP_PROVISIONER_PRIVATE_KEY`, kept on one line because the local `.env`
 holds no newline, and fills the public half into the SQL; the private key never reaches the
 locator or the SQL. `vecten secret set MCP_PROVISIONER_PRIVATE_KEY --env <env> --from-local`
@@ -256,6 +372,50 @@ an ACCOUNTADMIN. The MCP checks its scope as `VECTEN_PROVISIONER` when it starts
 
 Until the run is recorded, `vecten ship` refuses and the ship workflow finishes without shipping.
 `vecten next` reports each step.
+
+### Several environments in one Snowflake account
+
+With `shared_account = true` under `[warehouse]` in `vecten.toml`, environments of the project may
+share one Snowflake account, and other teams' data may sit beside them. Each environment then has
+its own users, roles and integration, named with the environment's suffix `_<BASE>_<ENV>`
+(`<BASE>` is `[warehouse] database` or the project name, `<ENV>` the environment, both in upper
+case): the provisioner `PROVISIONER_ACME_DEV` (role and user), the integration
+`EXTERNAL_OAUTH_ACME_DEV`, the default group's role `ANALYST_ACME_DEV`, and for people, services
+and groups `JANE_DOE_ACME_DEV`, `SVC_REPORTING_ACME_DEV` and `FINANCE_ACME_DEV`. The MCP state
+keeps the names without the suffix (`jane_doe`, `finance`, `analyst`); the server adds the suffix
+whenever it names a Snowflake user or role, and a grant never targets another environment's role.
+
+- **Per-environment users.** A person added in `dev` and in `prod` has two Snowflake users,
+  `JANE_DOE_ACME_DEV` and `JANE_DOE_ACME_PROD`, each holding only its environment's roles. Query
+  history shows that name, not the person's own corporate user, so row access and masking
+  policies keyed on a person's user do not apply to MCP queries; key them on roles.
+- **Bound to one integration.** The administrator's script creates the authentication policy
+  `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`, which admits OAuth through the environment's own
+  integration only, and the MCP sets it on every user it creates. A token signed with another
+  environment's key names a user that refuses it. The provisioner's user and the loader sign in
+  by key pair only (`SERVICE_SIGN_IN`), and each integration refuses `SYSADMIN` and the role that
+  created the environment's database.
+- **No adoption.** Setting the policy on an existing user would change how its owner signs in, so
+  in a shared account the MCP refuses a user that already exists, naming it.
+- **Checks before change.** The provisioner script runs as one block that changes nothing when a
+  role, user or integration of the environment's names carries another comment or owner or is
+  held by a stranger, or when the access schema or a policy has another owner; the MCP's startup
+  check refuses a stranger holding its provisioner or analyst role.
+- **Destroy.** `vecten destroy` reads by ownership what the provisioner created and lists it as
+  kept; with `--delete-data` it refuses while any of it stays and prints the statements an
+  administrator runs.
+
+What this protects, and what it does not: one environment's keys (its loader key, provisioner key
+and MCP signing key) reach no other environment's data. It does not protect an environment from
+someone who already controls another environment's provisioner, which holds account-level
+`CREATE USER` and `CREATE ROLE` and can create objects named for another environment before that
+environment's first script run. So create `prod` first, or give it an account of its own, put
+every human deploy user on a key-pair-only authentication policy (the runbook gives the
+statement), and give each environment its own deploy user. Several of these guarantees rest on
+Snowflake behaviour that the project's live checks have not yet confirmed (several `CUSTOM`
+integrations in one account, an authentication policy limiting External OAuth to one integration,
+the provisioner setting that policy); until they pass, use a shared account for non-production
+environments.
 
 Introspection uses the existing-warehouse administrator connection to discover catalog objects
 that an unprovisioned MCP identity cannot yet see, as the login `warehouse_url` names or `--user`

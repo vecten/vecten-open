@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from vecten import git_extensions
 from vecten.deploy.aws import clients
 from vecten.deploy.aws.bootstrap import (
     caller_account,
@@ -32,7 +33,11 @@ from vecten.deploy.aws.clients import aws_errors, aws_failure, aws_reason, error
 from vecten.deploy.aws.ship import host_for, remember_secret, ship_host, ship_order
 from vecten.deploy.aws.snapshots import final_snapshots
 from vecten.deploy.aws.tunnel import free_port, get_tunnel
-from vecten.deploy.bundle import build_host_bundle, head_commit, prepare_bundle_metadata
+from vecten.deploy.bundle import (
+    build_host_bundle,
+    head_commit,
+    prepare_bundle_metadata,
+)
 from vecten.deploy.control import (
     DESTROYING_VAR,
     CloudBootstrap,
@@ -143,6 +148,10 @@ class AwsProvider(AwsRuntimeProvider):
     admin_grants = ADMIN_GRANTS
     # RDS deletion protection, which the module sets in prod, refuses a database deletion.
     guarded_resources: tuple[str, ...] = ()
+
+    def __init__(self, project_root: Path, env: str):
+        super().__init__(project_root, env)
+        self.orphaned_volumes: dict[str, list[str]] = {}
 
     def _client(self, service: str) -> Any:
         if service not in self._clients:
@@ -475,6 +484,7 @@ class AwsProvider(AwsRuntimeProvider):
         """Build and ship one bundle per host, setup host first; stops at the first failure."""
         self._check_env(env)
         shipped: list[str] = []
+        self.orphaned_volumes = {}
         metadata = prepare_bundle_metadata(
             project_root,
             config,
@@ -482,11 +492,21 @@ class AwsProvider(AwsRuntimeProvider):
             with_mcp=any("mcp" in host.components for host in outputs.hosts.values()),
         )
         with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
+            # Every source is fetched and checked before any host changes.
+            sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
             for host in ship_order(outputs):
                 bundle = build_host_bundle(
-                    project_root, config, env, outputs, host, commit, Path(tmp), metadata=metadata
+                    project_root,
+                    config,
+                    env,
+                    outputs,
+                    host,
+                    commit,
+                    Path(tmp),
+                    metadata=metadata,
+                    sources=sources,
                 )
-                self.ship_host(host, bundle, commit)
+                self.orphaned_volumes[host] = self.ship_host(host, bundle, commit)
                 shipped.append(host)
         return shipped
 
@@ -579,8 +599,8 @@ class AwsProvider(AwsRuntimeProvider):
             bundle = build_host_bundle(project_dir, config, env, outputs, host, commit, Path(tmp))
             self.ship_host(host, bundle, commit)
 
-    def ship_host(self, host: str, bundle: Path, commit: str) -> None:
-        ship_host(self, host, bundle, commit)
+    def ship_host(self, host: str, bundle: Path, commit: str) -> list[str]:
+        return ship_host(self, host, bundle, commit)
 
 
 def register() -> None:

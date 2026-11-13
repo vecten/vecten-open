@@ -11,13 +11,15 @@ def next_command(json_output: bool = JsonFlag) -> None:
     """What is missing, in priority order; reads files, run records and git only."""
 
     def run(ctx: CliContext) -> Result:
-        from vecten.next.assemble import next_items
+        from vecten.next.assemble import next_items, next_notes
 
         items = next_items(ctx.cwd)
-        lines = [f"{i.kind}: {i.title} -> {i.resolution}" for i in items]
+        notes = next_notes(ctx.cwd)
+        lines = [f"{i.kind}: {i.title} -> {i.resolution}" for i in items] or ["nothing left to do"]
+        lines += [f"note: {note}" for note in notes]
         return Result(
-            data={"items": [i.to_json() for i in items]},
-            message="\n".join(lines) or "nothing left to do",
+            data={"items": [i.to_json() for i in items], "notes": notes},
+            message="\n".join(lines),
         )
 
     run_command(json_output, run)

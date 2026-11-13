@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from vecten.connectors.extensions import ExtensionConnector
+from vecten.connectors.extensions import ExtensionConnector, ExtensionGroup
 from vecten.connectors.inspect_source import secret_params, source_function_name
 from vecten.connectors.names import check_connector_name, secret_name
 from vecten.connectors.render import (
@@ -60,7 +60,14 @@ def _unknown(name: str) -> Failure:
     )
 
 
-def _dag_files(project_root: Path, decl: ConnectorDecl, keep_existing: bool) -> dict[Path, str]:
+def _dag_files(
+    project_root: Path,
+    decl: ConnectorDecl,
+    keep_existing: bool,
+    declared_groups: dict[str, ExtensionGroup],
+) -> dict[Path, str]:
+    """`declared_groups` are an extension's own, whose schedules the DAG files carry; a group
+    it does not declare runs on the default schedule."""
     files = {}
     for group, objects in decl.groups.items():
         path = project_root / DAGS_DIR / f"sync_{decl.name}_{group}.py"
@@ -72,7 +79,10 @@ def _dag_files(project_root: Path, decl: ConnectorDecl, keep_existing: bool) -> 
                 f"{path.relative_to(project_root)} already exists; "
                 f"move it aside to add {decl.name}",
             )
-        files[path] = render_dag_file(decl.name, group, objects)
+        declared = declared_groups.get(group, ExtensionGroup(objects))
+        files[path] = render_dag_file(
+            decl.name, group, objects, declared.schedule, declared.timezone
+        )
     return files
 
 
@@ -98,7 +108,7 @@ def _stage_extension(stage: Path, name: str, ext: ExtensionConnector) -> Connect
     if not (stage / "__init__.py").is_file():
         write_text_atomic(stage / "__init__.py", "")
     render_test_file(stage, name)
-    return ConnectorDecl(
+    decl = ConnectorDecl(
         name=name,
         source=ext.kind,
         secrets=list(ext.secrets),
@@ -106,6 +116,9 @@ def _stage_extension(stage: Path, name: str, ext: ExtensionConnector) -> Connect
         extension=ext.package,
         version=ext.version or None,
     )
+    if ext.groups:
+        decl.groups = {group: list(spec.objects) for group, spec in ext.groups.items()}
+    return decl
 
 
 def _stage_verified(stage: Path, name: str, verified: VerifiedSources) -> ConnectorDecl:
@@ -212,6 +225,12 @@ def add_connector(
     check_connector_name(name)
     config = load_config(project_root)
     _require_platform(config)
+    if name in config.areas:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"area {name} is declared in vecten.toml under the same name; an area and a "
+            "connector are named apart, so choose another connector name or rename the area",
+        )
     connector_dir = project_root / "connectors" / name
     if connector_dir.exists():
         raise Failure(
@@ -238,7 +257,15 @@ def add_connector(
         decl.scaffold_hash = scaffold_hash((stage / "connector.py").read_text(encoding="utf-8"))
         # Everything that can refuse runs before the move, so a refusal changes nothing.
         load_sources(project_root / "dbt")
-        dag_files = _dag_files(project_root, decl, keep_existing=declared is not None)
+        from_extension = (
+            extensions.get(name) if decl.extension or decl.source == "vecten-managed" else None
+        )
+        dag_files = _dag_files(
+            project_root,
+            decl,
+            keep_existing=declared is not None,
+            declared_groups=from_extension.groups if from_extension is not None else {},
+        )
         shutil.move(str(stage), str(connector_dir))
 
     for dag_path, text in dag_files.items():

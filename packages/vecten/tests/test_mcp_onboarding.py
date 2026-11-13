@@ -20,10 +20,25 @@ def test_postgres_script_has_exact_roles_and_no_embedded_passwords():
     assert "\\getenv" in sql
 
 
-def test_snowflake_script_names_custom_oauth_login_mapping():
-    sql = provisioner_script(
-        "snowflake", database="WAREHOUSE", issuer="https://mcp.example", account="org-account"
+def names(database, warehouse="W"):
+    """The fixed layout's names, over a test database and warehouse in `org-account`."""
+    from dataclasses import replace
+
+    from vecten_shared.config import VectenConfig
+    from vecten_shared.provider import snowflake_names
+
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "project": {"name": "acme", "scaffold_version": "0.1.1"},
+            "warehouse": {"kind": "snowflake", "account": "org-account"},
+        }
     )
+    return replace(snowflake_names(config, "prod"), database=database, warehouse=warehouse)
+
+
+def test_snowflake_script_names_custom_oauth_login_mapping():
+    sql = provisioner_script("snowflake", issuer="https://mcp.example", names=names("WAREHOUSE"))
     assert "EXTERNAL_OAUTH_TYPE = CUSTOM" in sql
     assert "https://mcp.example/jwks" in sql
     assert "LOGIN_NAME" in sql and "('sub')" in sql
@@ -275,7 +290,7 @@ def test_plain_provisioner_script_output_is_sql_and_comments_only(invoke, workdi
 def test_snowflake_script_opens_with_the_privilege_its_future_grants_need():
     # In a regular schema a future grant needs MANAGE GRANTS, even from the schema's owner.
     first = provisioner_script(
-        "snowflake", database="D", issuer="https://mcp.example", account="org-account"
+        "snowflake", issuer="https://mcp.example", names=names("D")
     ).splitlines()[0]
     assert first.startswith("-- ")
     assert "ACCOUNTADMIN" in first and "MANAGE GRANTS" in first
@@ -283,11 +298,7 @@ def test_snowflake_script_opens_with_the_privilege_its_future_grants_need():
 
 def test_snowflake_script_ends_with_the_leftover_drops():
     sql = provisioner_script(
-        "snowflake",
-        database="ANALYTICS",
-        issuer="https://mcp.example",
-        account="org-account",
-        warehouse="ANALYTICS_WH",
+        "snowflake", issuer="https://mcp.example", names=names("ANALYTICS", "ANALYTICS_WH")
     )
     statements = [line for line in sql.strip().splitlines() if not line.startswith("--")]
     assert statements[-3:] == [
@@ -303,11 +314,7 @@ def test_snowflake_script_ends_with_the_leftover_drops():
 def test_snowflake_script_prints_revokes_for_grants_outside_its_database():
     # An account that hosted an earlier install leaves PROVISIONER grants the MCP refuses.
     sql = provisioner_script(
-        "snowflake",
-        database="ANALYTICS",
-        issuer="https://mcp.example",
-        account="org-account",
-        warehouse="ANALYTICS_WH",
+        "snowflake", issuer="https://mcp.example", names=names("ANALYTICS", "ANALYTICS_WH")
     )
     block = sql[sql.index("AS leftover_grant") - 400 : sql.index("AS leftover_grant") + 400]
     assert "'REVOKE ' || \"privilege\" || ' ON ' || \"granted_on\"" in block
@@ -321,9 +328,7 @@ def test_snowflake_script_prints_revokes_for_grants_outside_its_database():
 
 def test_snowflake_script_rerun_points_the_integration_at_this_deployment():
     # CREATE ... IF NOT EXISTS keeps an integration an earlier install left with other values.
-    sql = provisioner_script(
-        "snowflake", database="D", issuer="https://mcp.example", account="org-account"
-    )
+    sql = provisioner_script("snowflake", issuer="https://mcp.example", names=names("D"))
     assert (
         "ALTER SECURITY INTEGRATION VECTEN_EXTERNAL_OAUTH SET\n"
         "  EXTERNAL_OAUTH_ISSUER = 'https://mcp.example'\n"
@@ -334,24 +339,22 @@ def test_snowflake_script_rerun_points_the_integration_at_this_deployment():
 
 def test_snowflake_script_seeds_scoped_data_access_without_owner_power():
     sql = provisioner_script(
-        "snowflake",
-        database="ANALYTICS",
-        issuer="https://mcp.example",
-        account="org-account",
-        warehouse="ANALYTICS_WH",
+        "snowflake", issuer="https://mcp.example", names=names("ANALYTICS", "ANALYTICS_WH")
     )
     assert 'GRANT USAGE ON DATABASE "ANALYTICS" TO ROLE ANALYST;' in sql
     assert 'GRANT USAGE ON WAREHOUSE "ANALYTICS_WH" TO ROLE ANALYST;' in sql
     for schema in ("CORE", "MARTS"):
         target = f'"ANALYTICS"."{schema}"'
-        for role in ("ANALYST", "PROVISIONER"):
-            assert f"GRANT USAGE ON SCHEMA {target} TO ROLE {role};" in sql
-            suffix = " WITH GRANT OPTION" if role == "PROVISIONER" else ""
-            for shape in ("ALL", "FUTURE"):
-                assert (
-                    f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE {role}{suffix};"
-                    in sql
-                )
+        assert f"GRANT USAGE ON SCHEMA {target} TO ROLE PROVISIONER;" in sql
+        for shape in ("ALL", "FUTURE"):
+            assert (
+                f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE PROVISIONER "
+                "WITH GRANT OPTION;"
+            ) in sql
+    # ANALYST's reads come from the MCP's state, which its reconciliation applies.
+    assert "ON SCHEMA" not in "".join(
+        line for line in sql.splitlines() if line.endswith("TO ROLE ANALYST;")
+    )
     # The leftover note advises an administrator in a comment; no statement grants ownership.
     statements = "\n".join(line for line in sql.splitlines() if not line.startswith("--"))
     assert "MANAGE GRANTS" not in statements
@@ -360,9 +363,7 @@ def test_snowflake_script_seeds_scoped_data_access_without_owner_power():
 
 
 def test_snowflake_script_updates_secondary_role_mode_on_rerun():
-    sql = provisioner_script(
-        "snowflake", database="D", issuer="https://mcp.example", account="org-account"
-    )
+    sql = provisioner_script("snowflake", issuer="https://mcp.example", names=names("D"))
     assert (
         "ALTER SECURITY INTEGRATION VECTEN_EXTERNAL_OAUTH "
         "SET EXTERNAL_OAUTH_ANY_ROLE_MODE = ENABLE;" in sql
@@ -542,6 +543,34 @@ def test_platform_script_grants_on_the_database_the_root_creates(platform_snowfl
     save_config(platform_snowflake, config)
     sql = setup_script(platform_snowflake, "prod")["sql"]
     assert '"ACME_DATA"' in sql and "ACME-DATA" not in sql
+
+
+def _shared_dev(root, account="ACME-SHARED"):
+    import re
+
+    from vecten.deploy.tfvars import env_tfvars_path
+    from vecten_shared.config import load_config, save_config
+
+    prod = env_tfvars_path(root, "prod").read_text()
+    dev = re.sub(r'environment\s*=\s*"prod"', 'environment = "dev"', prod)
+    dev = re.sub(r'domain\s*=\s*"[^"]*"', 'domain = "dev.acme.com"', dev)
+    dev = re.sub(r'snowflake_account\s*=\s*"[^"]*"', f'snowflake_account = "{account}"', dev)
+    env_tfvars_path(root, "dev").write_text(dev)
+    config = load_config(root)
+    config.warehouse.shared_account = True
+    save_config(root, config)
+
+
+def test_a_shared_environments_script_names_its_own_objects_and_account(platform_snowflake):
+    from vecten.mcp_onboarding import setup_script
+
+    _shared_dev(platform_snowflake)
+    sql = setup_script(platform_snowflake, "dev")["sql"]
+    assert "CREATE ROLE IF NOT EXISTS ANALYST_ACME_DEV" in sql
+    assert "EXTERNAL_OAUTH_ACME_DEV" in sql
+    assert "'https://ACME-SHARED.snowflakecomputing.com'" in sql
+    assert "'https://mcp.dev.acme.com'" in sql
+    assert "ACME-PROD" not in sql
 
 
 @pytest.fixture

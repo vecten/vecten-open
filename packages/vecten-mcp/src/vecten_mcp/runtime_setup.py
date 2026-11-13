@@ -21,7 +21,7 @@ from vecten_mcp.warehouse.pool import PrincipalPools
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import get_provider
+from vecten_shared.provider import get_provider, shipped_account, snowflake_names
 from vecten_shared.provider.runtime import RUNTIME_WRITABLE
 from vecten_shared.records import write_text_atomic
 
@@ -129,8 +129,9 @@ def backend_name(mcp, env):
     return mcp.auth
 
 
-def session_validator(state, clock):
-    """The pool's check of a session and its principal, against durable state."""
+def session_validator(state, clock, *, narrow=None):
+    """The pool's check of a session and its principal, against durable state; `narrow`
+    gives an app principal's querying groups (AppScopes.query_groups)."""
 
     def validate_session(snapshot, session_id, roles):
         # Called while holding the pool lock. Revocation deletes durable state before
@@ -141,9 +142,11 @@ def session_validator(state, clock):
         principal = state.principal(snapshot["id"])
         if not principal or not principal["enabled"] or not principal["provisioned"]:
             raise NoWarehouseAccess()
-        current_roles = {
-            state.group(group)["warehouse_role"] for group in state.groups_for(principal["id"])
-        }
+        groups = state.groups_for(principal["id"])
+        narrowed = narrow(principal["id"], groups) if narrow else None
+        if narrowed is not None:
+            groups = narrowed
+        current_roles = {state.group(group)["warehouse_role"] for group in groups}
         return principal, current_roles
 
     return validate_session
@@ -160,6 +163,56 @@ def state_url(spec, password, cloud):
         database=spec.database,
         query={} if cloud == "local" else {"sslmode": "require"},
     )
+
+
+def snowflake_adapter(config, env, secrets, keys, connect=None):
+    """The Snowflake adapter: the provisioner's control connection and people's sessions,
+    each signing in with the environment's names."""
+    if connect is None:
+        import snowflake.connector
+
+        connect = snowflake.connector.connect
+    names = snowflake_names(config, env, account=shipped_account())
+
+    def provisioner():
+        return connect(
+            account=names.account,
+            user=names.provisioner_user,
+            role=names.provisioner_role,
+            private_key=provisioner_key(secrets),
+            database=names.database,
+            warehouse=names.warehouse,
+        )
+
+    return SnowflakeAdapter(
+        provisioner,
+        connect,
+        lambda **kwargs: keys.snowflake_token(**kwargs, audience=names.audience),
+        names=names,
+    )
+
+
+def model_database(config, adapter):
+    """(the database `osi/` sources name, the environment's database) on Snowflake, where a
+    shared account gives each environment its own; None on Postgres."""
+    if config.warehouse.kind != "snowflake":
+        return None
+    from vecten_shared.osi.generate import dataset_database
+
+    return dataset_database(config), adapter.names.database
+
+
+def build_watch(config):
+    """What tells the MCP a dbt build replaced relations, or None where it need not know.
+
+    Postgres has no equivalent of Snowflake's COPY GRANTS, so a rebuilt relation drops its
+    per-relation grants until the next reconciliation.
+    """
+    if config.warehouse.kind != "postgres" or not config.has("platform"):
+        return None
+    from vecten_shared.osi.revision import read_build_finished
+
+    return lambda: read_build_finished(os.environ)
 
 
 def configured_runtime(root, config, extensions):
@@ -230,46 +283,25 @@ def configured_runtime(root, config, extensions):
             lambda: connect("impersonator", "MCP_IMPERSONATOR_PASSWORD"),
         )
     else:
-        import snowflake.connector
-
-        from vecten_shared.provider import snowflake_names
-
-        names = snowflake_names(config, env)
-        account = config.warehouse.account
-
-        def provisioner():
-            return snowflake.connector.connect(
-                account=account,
-                user="VECTEN_PROVISIONER",
-                role="PROVISIONER",
-                private_key=provisioner_key(secrets),
-                database=names.database,
-                warehouse=names.warehouse,
-            )
-
-        adapter = SnowflakeAdapter(
-            provisioner,
-            snowflake.connector.connect,
-            lambda **kwargs: keys.snowflake_token(
-                **kwargs, audience="https://" + account + ".snowflakecomputing.com"
-            ),
-            account=account,
-            database=names.database,
-            warehouse=names.warehouse,
-        )
+        adapter = snowflake_adapter(config, env, secrets, keys)
     pools = PrincipalPools(adapter, max_connections=int(os.environ.get("VECTEN_MCP_POOL_CAP", "2")))
     oauth = OAuthService(
         state, keys, issuer, backend, admins=config.mcp.admins, revoke_session=pools.revoke_session
     )
 
     pools.validate = session_validator(state, oauth.clock)
-    access = AccessService(state, adapter, invalidate=pools.disable_principal)
+    access = AccessService(state, adapter, invalidate=pools.disable_principal, areas=config.areas)
     access.seed_defaults()
     idle_setting = state.get("settings", "session_idle_seconds")
     if idle_setting:
         pools.idle_timeout = idle_setting["value"]
     admin = Administration(state, adapter, oauth, access, pools=pools)
-    runtime = Runtime(state, oauth, extensions, adapter, pools, admin, access)
+    runtime = Runtime(
+        state, oauth, extensions, adapter, pools, admin, access, build_finished=build_watch(config)
+    )
+    from vecten_mcp.auth.gate import GateService
+
+    runtime.gate = GateService.from_config(oauth, config)
     from vecten_mcp.audit import AuditService
 
     runtime.audit = AuditService(state, start=False, sink=extensions.emit_audit)
@@ -282,6 +314,19 @@ def configured_runtime(root, config, extensions):
         runtime.password_rotation = PasswordRotation(
             state, secrets, lambda password: connect_password("impersonator", password)
         )
+    from vecten_mcp.apps import AppScopes, read_bound_apps
+
+    # Built with no bound apps too, so a principal marked for an app that a ship unbound
+    # still reads nothing.
+    runtime.apps = AppScopes(
+        state,
+        read_bound_apps(root, config),
+        kind=config.warehouse.kind,
+        database=getattr(adapter, "database", None),
+    )
+    access.apps = runtime.apps
+    pools.validate = session_validator(state, oauth.clock, narrow=runtime.apps.query_groups)
+    runtime.queries.narrow = runtime.apps.query_groups
     from vecten_mcp.model import ModelService
     from vecten_shared.osi.revision import read_built_commit
 
@@ -296,6 +341,8 @@ def configured_runtime(root, config, extensions):
         on_swap=lambda model: access.model_changed(
             {name: dataset["source"] for name, dataset in model.datasets.items()}
         ),
+        checks=runtime.apps.missing,
+        database=model_database(config, adapter),
     )
     from vecten_mcp.feedback_resolution import FeedbackResolution
 

@@ -28,6 +28,7 @@ MODULE_ROOTS = ["aws", "scaleway", "snowflake"]
 AGENT = REPO / "packages" / "vecten" / "src" / "vecten" / "deploy" / "vm" / "apply.py"
 OPTIONAL_VARIABLES = {
     "platform_size",
+    "root_volume_size_gb",
     "instance_type_overrides",
     "database_public_cidrs",
     "log_line_prefix",
@@ -118,6 +119,59 @@ def test_terraform_test_passes(root):
     if shutil.which("terraform") is None:
         pytest.skip("terraform is not installed")
     _init_and_test(TERRAFORM / root)
+
+
+@pytest.mark.terraform
+@pytest.mark.parametrize(
+    ("test_file", "run", "prefix"),
+    [
+        ("upgrade.tftest.hcl", "the_upgrade_forgets_them_without_revoking", ""),
+        (
+            "upgrade_child.tftest.hcl",
+            "the_upgrade_forgets_them_inside_the_child_module",
+            "module.snowflake.",
+        ),
+    ],
+    ids=["root", "child"],
+)
+def test_snowflake_upgrade_forgets_the_analyst_grants_without_revoking(
+    tmp_path, test_file, run, prefix
+):
+    """`terraform test` cannot assert on planned actions, so the upgrade file's verbose plan is
+    read here: every earlier ANALYST grant leaves state, and nothing is destroyed, with the
+    module as the root and as a thin root's child."""
+    if shutil.which("terraform") is None:
+        pytest.skip("terraform is not installed")
+    module = tmp_path / "snowflake"
+    shutil.copytree(SNOWFLAKE, module, ignore=shutil.ignore_patterns(".terraform*"))
+    env = _terraform_env()
+    steps = [
+        ["init", "-backend=false", "-input=false"],
+        ["test", f"-filter=tests/{test_file}", "-verbose"],
+    ]
+    for args in steps:
+        done = subprocess.run(
+            ["terraform", f"-chdir={module}", *args, "-no-color"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=600,
+        )
+        assert done.returncode == 0, done.stdout + done.stderr
+    plan = done.stdout.split(f'run "{run}"', 1)[1]
+    kept = r"# (\S+) will no longer be managed by Terraform, but will not be destroyed"
+    forgotten = set(re.findall(kept, plan))
+    assert forgotten == {
+        f'{prefix}snowflake_grant_privileges_to_account_role.analyst_schema["CORE"]',
+        f'{prefix}snowflake_grant_privileges_to_account_role.analyst_schema["MARTS"]',
+        *(
+            f'{prefix}snowflake_grant_privileges_to_account_role.analyst_future["{schema}/{kind}"]'
+            for schema in ("CORE", "MARTS")
+            for kind in ("TABLES", "VIEWS")
+        ),
+    }
+    assert re.search(r"Plan: \d+ to add, 0 to change, 0 to destroy\.", plan), plan
+    assert "will be destroyed" not in plan
 
 
 ROOT_TEST = """
@@ -262,7 +316,15 @@ def _render_snowflake(tmp_path: Path, components: list[str]) -> Path:
     return target / "deploy" / "terraform" / "snowflake"
 
 
-SNOWFLAKE_ROOT_VARS = {"database_name", "warehouse_name", "warehouse_size", "loader_public_key"}
+SNOWFLAKE_NAME_VARS = {
+    "database_name",
+    "warehouse_name",
+    "analyst_role_name",
+    "loader_role_name",
+    "loader_user_name",
+    "provisioner_role_name",
+}
+SNOWFLAKE_ROOT_VARS = SNOWFLAKE_NAME_VARS | {"warehouse_size", "loader_public_key"}
 
 
 def test_rendered_snowflake_root_passes_every_module_variable(tmp_path):
@@ -273,6 +335,7 @@ def test_rendered_snowflake_root_passes_every_module_variable(tmp_path):
     assert passed == module_variables
     root_variables = _declared_variables(root / "variables.tf")
     assert SNOWFLAKE_ROOT_VARS <= root_variables
+    assert len(SNOWFLAKE_ROOT_VARS) == 8
     assert re.search(r"^\s*account\s*=\s*var\.snowflake_account\s*$", main, re.M)
     for name in passed - {"account"}:
         assert re.search(rf"^\s*{name}\s*=\s*var\.{name}\s*$", main, re.M), name
@@ -284,7 +347,11 @@ def test_rendered_snowflake_root_configures_the_provider_from_the_environment_on
     # Credentials come from the environment only; the block holds the one setting no
     # environment variable can carry.
     assert _block_arguments(main, 'provider "snowflake" {') == {"preview_features_enabled"}
-    assert 'preview_features_enabled = ["snowflake_current_role_datasource"]' in main
+    assert re.search(r"preview_features_enabled = \[([^]]*)\]", main).group(1).split(", ") == [
+        '"snowflake_current_role_datasource"',
+        '"snowflake_authentication_policy_resource"',
+        '"snowflake_user_authentication_policy_attachment_resource"',
+    ]
     assert 'source  = "snowflakedb/snowflake"' in main
     assert f'version = "~> {VERSIONS.terraform_snowflake_provider}.0"' in main
     # deploy sets these with -var on every plan; a tfvars entry would go stale when the key
@@ -294,16 +361,25 @@ def test_rendered_snowflake_root_configures_the_provider_from_the_environment_on
         assert name not in tfvars, name
         block = re.search(rf'variable "{name}" \{{(.*?)\}}', (root / "variables.tf").read_text())
         assert block and "default" not in block.group(1), name
+    # deploy passes it in a shared account only, so a fixed environment plans as before.
+    assert "loader_sign_in" not in tfvars
+    assert re.search(
+        r'variable "loader_sign_in" \{.*?default = null', (root / "variables.tf").read_text(), re.S
+    )
 
 
 SNOWFLAKE_ROOT_TEST = """
 mock_provider "snowflake" {}
 
 variables {
-  database_name     = "ACME"
-  warehouse_name    = "ACME_PROD_WH"
-  warehouse_size    = "XSMALL"
-  loader_public_key = "-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0B\\n-----END PUBLIC KEY-----"
+  database_name         = "ACME"
+  warehouse_name        = "ACME_PROD_WH"
+  analyst_role_name     = "ANALYST"
+  loader_role_name      = "LOADER"
+  loader_user_name      = "LOADER"
+  provisioner_role_name = "PROVISIONER"
+  warehouse_size        = "XSMALL"
+  loader_public_key     = "-----BEGIN PUBLIC KEY-----\\nMIIB\\n-----END PUBLIC KEY-----"
 }
 
 run "thin_root_plans_against_the_module" {
@@ -399,6 +475,18 @@ def test_rendered_root_leaves_optional_defaults_to_the_module(tmp_path, warehous
         block = re.search(rf'variable "{name}" \{{(.*?)\n\}}', module_variables, re.S)
         assert block, name
         assert re.search(r"nullable\s*=\s*false", block.group(1)), name
+
+
+@pytest.mark.parametrize("cloud", ["aws", "scaleway"])
+def test_rendered_root_declares_the_ship_only_setting_without_passing_it(tmp_path, cloud):
+    # `ship` reads dags_paused_at_creation from the tfvars; the module has no such input.
+    root = (_render if cloud == "aws" else _render_scaleway)(tmp_path, "postgres")
+    (block,) = _blocks((root / "variables.tf").read_text(), 'variable "dags_paused_at_creation"')
+    assert re.search(r"type\s*=\s*bool", block) and re.search(r"default\s*=\s*null", block)
+    main = (root / "main.tf").read_text()
+    assert "dags_paused_at_creation" not in main
+    for module in (AWS, SCALEWAY):
+        assert "dags_paused_at_creation" not in _declared_variables(module / "variables.tf")
 
 
 def test_module_leaves_the_provider_to_the_thin_root(tmp_path):

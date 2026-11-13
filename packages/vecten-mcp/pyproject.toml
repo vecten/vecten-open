@@ -64,3 +64,4 @@ packages = ["src/vecten_mcp"]
 "read_audit_row" = "vecten_mcp.tools:read_audit_row_tool"
 "list_grants" = "vecten_mcp.tools:list_grants_tool"
 "read_settings" = "vecten_mcp.tools:read_settings_tool"
+"list_apps" = "vecten_mcp.tools:list_apps_tool"

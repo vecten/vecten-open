@@ -3,14 +3,31 @@ authenticates with, and the loader's key pair whose public half it registers."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from vecten.deploy.sizing import snowflake_warehouse_size
 from vecten.deploy.terraform import TerraformRoot, state_key
-from vecten.deploy.tfvars import check_tfvars, root_var_file
+from vecten.deploy.tfvars import (
+    check_tfvars,
+    env_tfvars_path,
+    environment_accounts,
+    has_snowflake_root,
+    read_tfvars,
+    root_var_file,
+)
 from vecten_shared.config import SNOWFLAKE_ACCOUNT, EnvironmentFacts, VectenConfig
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import Provider, snowflake_names
+from vecten_shared.provider import (
+    Provider,
+    SnowflakeNames,
+    recorded_base,
+    recorded_layout,
+    shared_base,
+    snowflake_names,
+)
+
+__all__ = ["has_snowflake_root"]
 
 SNOWFLAKE_ROOT = "snowflake"
 DEPLOY_USER = "DEPLOY_SNOWFLAKE_USER"
@@ -29,16 +46,78 @@ KEY_BITS = 2048
 NO_CONFIG_FILE = "/nonexistent/vecten/snowflake-config"
 
 
-def has_snowflake_root(config: VectenConfig) -> bool:
-    # `init` renders deploy/terraform/snowflake under exactly this condition: the platform
-    # builds the warehouse, so an MCP over an existing Snowflake account has no root.
-    return config.warehouse.kind == "snowflake" and "platform" in config.components
+def environment_names(project_root: Path, config: VectenConfig, env: str) -> SnowflakeNames:
+    """The environment's Snowflake names in the account its tfvars name, for the laptop; a
+    host reads the account `ship` handed it."""
+    path = env_tfvars_path(project_root, env)
+    account = read_tfvars(path).get("snowflake_account") if path.is_file() else None
+    return snowflake_names(config, env, account=account if isinstance(account, str) else None)
+
+
+def _layout(shared: bool) -> str:
+    return f"snowflake_shared_account = {'true' if shared else 'false'}"
+
+
+def record_layout(config: VectenConfig, env: str, shared: bool, base: str) -> bool:
+    """Record the layout, and a shared layout's `base`, an environment's first deploy used;
+    whether anything was unrecorded."""
+    facts = config.environments[env]
+    if facts.snowflake_shared_account is not None:
+        return False
+    facts.snowflake_shared_account = shared
+    if shared:
+        facts.snowflake_base = base
+    return True
+
+
+def check_layout(project_root: Path, config: VectenConfig, env: str) -> None:
+    """Refuse an environment whose recorded Snowflake layout differs from the setting, unless
+    the setting is shared and the environment's fixed names hold an account of their own.
+
+    The layout decides every name the environment's objects carry, so it never changes for a
+    deployed environment; a fixed one alone in its account keeps its names beside shared ones.
+    """
+    if not has_snowflake_root(config):
+        return
+    recorded = recorded_layout(config, env)
+    setting = config.warehouse.shared_account
+    base = recorded_base(config, env)
+    if base and base != shared_base(config):
+        raise Failure(
+            ExitCode.REFUSED,
+            f"environment {env!r} was first deployed with the Snowflake names based on "
+            f"{base!r}, and [warehouse] database (or the project name) now gives "
+            f"{shared_base(config)!r}, which would rename every object it has; set "
+            "[warehouse] database back, or destroy the environment with --delete-data and "
+            "deploy it again",
+        )
+    if recorded is None or recorded == setting:
+        return
+    accounts = environment_accounts(project_root)
+    own = accounts.get(env, "")
+    others = sorted(o for o, a in accounts.items() if o != env and a.upper() == own.upper())
+    if setting and own and not others:
+        return
+    beside = (
+        f", and its account {own!r} is also named by "
+        + ", ".join(f"deploy/envs/{o}.tfvars" for o in others)
+        if others
+        else ""
+    )
+    raise Failure(
+        ExitCode.REFUSED,
+        f"environment {env!r} was first deployed with {_layout(recorded)} and keeps the "
+        f"Snowflake names it gave, but [warehouse] shared_account is now "
+        f"{'true' if setting else 'false'}{beside}. Moving an environment "
+        f"{'into' if setting else 'out of'} a shared account is a new deployment: destroy it "
+        f'with --delete-data {env}, then deploy it again (docs/runbook.md, "Snowflake")',
+    )
 
 
 def identity_pending(config: VectenConfig, env: str) -> bool:
     """Whether the MCP of a platform-built Snowflake still lacks its Snowflake identity.
 
-    The MCP checks its scope as VECTEN_PROVISIONER when it starts and refuses to serve
+    The MCP checks its scope as the provisioner user when it starts and refuses to serve
     without it, and only an ACCOUNTADMIN running `vecten mcp provisioner-script` creates it,
     after the first deploy has created the database the script grants on.
     """
@@ -46,9 +125,10 @@ def identity_pending(config: VectenConfig, env: str) -> bool:
     return has_snowflake_root(config) and config.has("mcp") and not facts.provisioner_script_run
 
 
-def identity_pending_note(env: str) -> str:
+def identity_pending_note(config: VectenConfig, env: str) -> str:
+    user = snowflake_names(config, env).provisioner_user
     return (
-        "the MCP signs in to Snowflake as VECTEN_PROVISIONER, which "
+        f"the MCP signs in to Snowflake as {user}, which "
         f"`vecten mcp provisioner-script --env {env}` sets up, so no host was shipped: run it, "
         "have an ACCOUNTADMIN run its SQL, confirm with `--confirm-run`, then "
         "`vecten github push`, which ships"
@@ -106,7 +186,7 @@ def deploy_credentials(provider: Provider, env: str, account: str) -> dict[str, 
 
 
 def ensure_loader_key(provider: Provider, *, store: bool = True) -> str:
-    """The PEM public key of the LOADER user.
+    """The PEM public key of the loader user.
 
     With `store` false nothing is written: an absent key is replaced by a throwaway one whose
     public half satisfies the root's variable, which a destroy reads but never applies.
@@ -157,6 +237,40 @@ def ensure_key_pair(provider: Provider, name: str, *, store: bool = True) -> str
     return public.decode("ascii")
 
 
+def _name_vars(
+    project_root: Path, root_dir: Path, names: SnowflakeNames
+) -> tuple[tuple[str, str], ...]:
+    """The role and user names the root's variables take, and in a shared account the
+    loader's sign-in policy.
+
+    A thin root rendered before these variables existed pins a module that spells the fixed
+    names itself, so it plans the same objects without them; any other names need the
+    variables, which `vecten update` adds.
+    """
+    values = (
+        ("analyst_role_name", names.analyst_role),
+        ("loader_role_name", names.loader_role),
+        ("loader_user_name", names.loader_user),
+        ("provisioner_role_name", names.provisioner_role),
+    )
+    if names.sign_in_schema and names.service_policy:
+        # The module creates the loader's key-pair-only policy only when this is set, so a
+        # fixed environment's plan stays as it was.
+        sign_in = f'{{schema="{names.sign_in_schema}",policy="{names.service_policy}"}}'
+        values += (("loader_sign_in", sign_in),)
+    text = "\n".join(path.read_text(encoding="utf-8") for path in sorted(root_dir.glob("*.tf")))
+    declared = {name for name, _ in values if re.search(rf'^variable\s+"{name}"', text, re.M)}
+    missing = [name for name, _ in values if name not in declared]
+    if missing and names.suffix:
+        rel = root_dir.relative_to(project_root).as_posix()
+        raise Failure(
+            ExitCode.CONFIG,
+            f"{rel} does not declare {', '.join(missing)}, which this environment's Snowflake "
+            "names need; run `vecten update`, then deploy again",
+        )
+    return tuple((name, value) for name, value in values if name in declared)
+
+
 def snowflake_root(
     project_root: Path,
     config: VectenConfig,
@@ -181,16 +295,19 @@ def snowflake_root(
         raise Failure(failure.code, f"deploy/envs/{env}.tfvars: {failure.message}") from None
     credentials = deploy_credentials(secrets, env, account)
     names = snowflake_names(config, env)
+    root_dir = project_root / "deploy" / "terraform" / SNOWFLAKE_ROOT
+    name_vars = _name_vars(project_root, root_dir, names)
     # The loader key is written only once every refusal has passed.
     public_key = ensure_loader_key(secrets, store=not read_only)
     return TerraformRoot(
         SNOWFLAKE_ROOT,
-        project_root / "deploy" / "terraform" / SNOWFLAKE_ROOT,
+        root_dir,
         state_key(env, SNOWFLAKE_ROOT),
         root_var_file(env),
         extra_vars=(
             ("database_name", names.database),
             ("warehouse_name", names.warehouse),
+            *name_vars,
             ("warehouse_size", snowflake_warehouse_size(str(values["size"]))),
             ("loader_public_key", public_key),
         ),

@@ -3,12 +3,13 @@
 import json
 import re
 
+from vecten.deploy.snowflake import environment_names
+from vecten.mcp_url import mcp_url
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, load_config, save_config
 from vecten_shared.identity_setup import introspection_document, provisioner_script
 from vecten_shared.keypair import generate_one_line, load_private_key, public_body
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import snowflake_names
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import write_record, write_text_atomic
 
@@ -67,9 +68,9 @@ def setup_script(root, env, confirm=False, public_key=None):
         check_env_name(env)
         if not config.deploy:
             raise Failure(ExitCode.PREREQUISITE, "configure the deploy layer first")
-    issuer = (
-        f"https://mcp.{config.deploy.domain}" if config.deploy else "https://mcp.localhost:8443"
-    )
+    # Snowflake fetches the issuer's keys from the internet, which cannot reach the laptop, so
+    # the laptop's script names prod's public issuer once a deploy layer exists.
+    issuer = mcp_url(root, config, "prod" if env == "local" and config.deploy else env)
     if config.warehouse.kind == "snowflake" and not config.deploy:
         raise Failure(
             ExitCode.PREREQUISITE,
@@ -101,16 +102,13 @@ def setup_script(root, env, confirm=False, public_key=None):
         public_key = public_body(
             load_private_key(_local_key_pair(root, PROVISIONER_KEY), PROVISIONER_KEY)
         )
-    snowflake = snowflake_names(config, env) if config.warehouse.kind == "snowflake" else None
+    snowflake = config.warehouse.kind == "snowflake"
     sql = provisioner_script(
         config.warehouse.kind,
-        database=(
-            snowflake.database if snowflake else config.warehouse.database or config.project.name
-        ),
         issuer=issuer,
-        account=config.warehouse.account,
+        database=None if snowflake else config.warehouse.database or config.project.name,
         public_key=public_key,
-        warehouse=snowflake.warehouse if snowflake else None,
+        names=environment_names(root, config, env) if snowflake else None,
     )
     commands.insert(0, f"vecten mcp provisioner-script{flag} --confirm-run")
     return {"env": env, "sql": sql, "commands": commands, "confirmed": False}

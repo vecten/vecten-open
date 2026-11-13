@@ -2,9 +2,49 @@
 
 from contextlib import contextmanager
 
+import psycopg
 from psycopg import sql
 
-from vecten_mcp.warehouse.base import Account, check_account
+from vecten_mcp.warehouse.base import Account, RoleExists, check_account
+from vecten_shared.identity_setup import ACCESS_VERSION
+
+READ_GRANTS = """
+WITH managed AS (SELECT oid, rolname FROM pg_catalog.pg_roles WHERE rolname = ANY(%s))
+SELECT m.rolname, 'usage', n.nspname, NULL, 'schema'
+FROM pg_catalog.pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+JOIN managed m ON m.oid = a.grantee
+WHERE a.privilege_type = 'USAGE'
+UNION ALL
+SELECT m.rolname, 'select', n.nspname, c.relname,
+       CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'partitioned table'
+                      WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view'
+                      ELSE 'foreign table' END
+FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(c.relacl) a JOIN managed m ON m.oid = a.grantee
+WHERE a.privilege_type = 'SELECT' AND c.relkind IN ('r','p','v','m','f')
+UNION ALL
+SELECT m.rolname, 'future', n.nspname, NULL, 'table'
+FROM pg_catalog.pg_default_acl d LEFT JOIN pg_catalog.pg_namespace n
+  ON n.oid = d.defaclnamespace
+CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN managed m ON m.oid = a.grantee
+WHERE a.privilege_type = 'SELECT' AND d.defaclobjtype = 'r'
+"""
+
+
+# The role and every role it is a member of, with any options: SET reaches as far as
+# INHERIT does.
+REACH = """
+WITH RECURSIVE reach(oid) AS (
+    SELECT oid FROM pg_catalog.pg_roles WHERE rolname = %s
+    UNION
+    SELECT m.roleid FROM pg_catalog.pg_auth_members m JOIN reach ON m.member = reach.oid
+)
+SELECT r.rolname, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication
+FROM reach JOIN pg_catalog.pg_roles r ON r.oid = reach.oid
+"""
+ATTRIBUTES = ("SUPERUSER", "BYPASSRLS", "CREATEROLE", "CREATEDB", "REPLICATION")
+# The managed services' administrator roles, which act as superusers.
+ADMIN_ROLES = frozenset({"rds_superuser", "cloudsqlsuperuser", "azure_pg_admin"})
 
 
 def identifier(name):
@@ -89,7 +129,69 @@ class PostgresAdapter:
     def create_group(self, role):
         check_account(role)
         with self.control() as conn:
-            conn.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(identifier(role)))
+            try:
+                conn.execute(sql.SQL("CREATE ROLE {} NOLOGIN").format(identifier(role)))
+            except psycopg.errors.DuplicateObject:
+                raise RoleExists(role) from None
+
+    def bind_statement(self, bound, role, grant=True):
+        """What an administrator runs to make the group's role inherit `bound`; the
+        provisioner holds no ADMIN on `bound`, so it cannot grant it."""
+        statement = (
+            "GRANT {} TO {} WITH INHERIT TRUE, SET FALSE;" if grant else "REVOKE {} FROM {};"
+        )
+        return sql.SQL(statement).format(identifier(bound), identifier(role)).as_string()
+
+    def review_statement(self, bound):
+        return (
+            sql.SQL(
+                "SELECT d.datname FROM pg_database d "
+                "WHERE has_database_privilege({}, d.datname, 'CONNECT');"
+            )
+            .format(sql.Literal(bound))
+            .as_string()
+        )
+
+    def granted_roles(self, role):
+        """Every role the group's role is a member of, whatever the membership's options."""
+        check_account(role)
+        with self.control() as conn:
+            rows = conn.execute(
+                "SELECT r.rolname FROM pg_auth_members m "
+                "JOIN pg_roles g ON g.oid=m.member JOIN pg_roles r ON r.oid=m.roleid "
+                "WHERE g.rolname=%s",
+                (role,),
+            ).fetchall()
+        return {row[0] for row in rows}
+
+    def bound_role_problem(self, bound, managed):
+        """Why `bound` may not be bound, from the role and every role it is a member of."""
+        if bound != bound.lower():
+            return "a Postgres role is bound by its lower case name"
+        with self.control() as conn:
+            reach = conn.execute(REACH, (bound,)).fetchall()
+        if not reach:
+            return f"no role named {bound}"
+        for name, *flags in reach:
+            held = [flag for flag, on in zip(ATTRIBUTES, flags, strict=True) if on]
+            if held:
+                return f"{name} has {', '.join(held)}"
+            if name != bound and (name.startswith("pg_") or name in ADMIN_ROLES):
+                return f"{bound} is a member of {name}"
+            if name.lower() in managed:
+                return f"{bound} reaches {name}, a role the server manages"
+        return None
+
+    def holds_role(self, role, bound):
+        check_account(role)
+        with self.control() as conn:
+            row = conn.execute(
+                "SELECT EXISTS (SELECT FROM pg_auth_members m "
+                "JOIN pg_roles g ON g.oid=m.member JOIN pg_roles r ON r.oid=m.roleid "
+                "WHERE g.rolname=%s AND r.rolname=%s AND m.inherit_option)",
+                (role, bound),
+            ).fetchone()
+        return bool(row and row[0])
 
     def drop_account(self, name):
         check_account(name)
@@ -213,7 +315,22 @@ class PostgresAdapter:
                     (role, grant, relation),
                 )
 
-    def check_scope(self, registry):
+    def access_version(self):
+        # The catalogs are read directly and drift is revoked through the owner helpers,
+        # whose behaviour no installed version changes.
+        return ACCESS_VERSION
+
+    def read_grants(self, roles):
+        """`(role, kind, schema, relation, object kind)` for every USAGE, SELECT and default
+        SELECT the roles hold, from the catalogs every role may read; a default privilege set
+        for the whole database has no schema."""
+        with self.control() as conn:
+            rows = conn.execute(READ_GRANTS, (sorted(roles),)).fetchall()
+        return {tuple(row) for row in rows}
+
+    def check_scope(self, registry, bound=False):
+        """Refuse any privilege the provisioner holds outside its stated set; its memberships
+        never inherit, bound roles or not."""
         registry = set(registry)
         with self.control() as conn:
             self._check_helpers(conn, registry)

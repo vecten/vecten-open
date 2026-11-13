@@ -13,15 +13,22 @@ from vecten.deploy.snowflake import (
     has_snowflake_root,
     secret_set_command,
 )
-from vecten.intake.answers import ANSWER_KEYS, DECLINED, read_answers
+from vecten.intake.answers import ANSWER_KEYS, DECLINED, SHARED_ACCOUNT_KEY, read_answers
+from vecten.next.declared import declared_secret_items
 from vecten.next.existing_warehouse import provisioner_secrets_item
 from vecten.next.gitstate import GitState
 from vecten.next.items import Item
-from vecten.secrets import LAPTOP_ONLY, provisioner_secret_names, recorded_secret_names
-from vecten.stack.env import STACK_MANAGED
+from vecten.secrets import (
+    GIT_CREDENTIALS,
+    LAPTOP_ONLY,
+    provisioner_secret_names,
+    recorded_secret_names,
+)
 from vecten_shared.config import EnvironmentFacts, VectenConfig
 from vecten_shared.envfile import read_env_values
+from vecten_shared.provider import recorded_layout
 from vecten_shared.provider.local import LocalProvider
+from vecten_shared.stack_secrets import STACK_MANAGED
 
 # `none` records that the human has no account yet; the question stays open and, asked again,
 # carries the guides to show first. An agent acting on the item records it like any answer.
@@ -47,6 +54,8 @@ def _questions(
     )
     if _needs_account(config):
         questions += (((ACCOUNT_KEY,), (), (), ""),)
+    if has_snowflake_root(config):
+        questions += (((SHARED_ACCOUNT_KEY,), ANSWER_KEYS[SHARED_ACCOUNT_KEY].choices, (), ""),)
     return questions
 
 
@@ -83,6 +92,18 @@ def deploy_question_items(root: Path, config: VectenConfig, answers: dict[str, A
     return [RENDER_DEPLOY]
 
 
+def _any_deployed(config: VectenConfig) -> bool:
+    """Whether an environment of the project has deployed, which fixes its Snowflake layout."""
+    return any(recorded_layout(config, env) is not None for env in config.environments)
+
+
+def _shared_question() -> Item:
+    spec = ANSWER_KEYS[SHARED_ACCOUNT_KEY]
+    return Item(
+        "ask", spec.question, spec.question, answer_keys=(SHARED_ACCOUNT_KEY,), allowed=spec.choices
+    )
+
+
 def _undeployed(config: VectenConfig, env: str) -> EnvironmentFacts | None:
     """The facts of an environment whose deploy layer exists but has not deployed yet."""
     facts = config.environments.get(env) or EnvironmentFacts()
@@ -97,7 +118,8 @@ def _uncopied_secrets(root: Path, config: VectenConfig, env: str) -> list[str]:
     # `--from-local` refuses a bare or empty entry, so only names with a value can be copied.
     local = {name for name, value in values.items() if value}
     # The local stack's own credentials stay local: the cloud environment generates its own.
-    local -= STACK_MANAGED | LAPTOP_ONLY
+    # The git credential lives only in .env and in CI, and `secret set --env` refuses it.
+    local -= STACK_MANAGED | LAPTOP_ONLY | GIT_CREDENTIALS
     if not config.has("platform"):
         local -= set(provisioner_secret_names(config))
     return sorted(local - recorded_secret_names(root, env))
@@ -132,11 +154,14 @@ def deploy_prerequisite_items(
     # `init --deploy` writes the answered account to the tfvars and vecten.toml, which
     # deploy refuses to run without.
     if _needs_account(config):
-        if read_answers(root).get(ACCOUNT_KEY):
-            items.append(RENDER_DEPLOY)
-        else:
+        answers = read_answers(root)
+        if not answers.get(ACCOUNT_KEY):
             question = ANSWER_KEYS[ACCOUNT_KEY].question
             items.append(Item("ask", question, question, answer_keys=(ACCOUNT_KEY,)))
+        elif answers.get(SHARED_ACCOUNT_KEY) is None and not _any_deployed(config):
+            items.append(_shared_question())
+        else:
+            items.append(RENDER_DEPLOY)
     if not git.has_origin:
         items.append(Item("command", "Put the project on GitHub", "vecten github init"))
     if not facts.bootstrapped:
@@ -147,9 +172,11 @@ def deploy_prerequisite_items(
     if provisioner is not None:
         items.append(provisioner)
     items += snowflake_deploy_secret_items(root, config, env)
-    for name in _uncopied_secrets(root, config, env):
+    uncopied = _uncopied_secrets(root, config, env)
+    for name in uncopied:
         command = f"vecten secret set {name} --env {env} --from-local"
         items.append(Item("command", f"Copy {name} to {env}", command))
+    items += declared_secret_items(root, config, env, skip=uncopied)
     if git.has_origin and (git.dirty or git.ahead):
         items.append(PUSH)
     return items
@@ -159,6 +186,10 @@ def deploy_gate_items(config: VectenConfig, env: str) -> list[Item]:
     if _undeployed(config, env) is None:
         return []
     title = f"Deploy to {env}? This creates resources your cloud provider bills you for."
+    # The apply workflow of a later environment ships the commit the one before it shipped.
+    previous = config.promoted_from(env)
+    if previous:
+        title += f" It ships the commit {previous} shipped last."
     return [Item("ask", title, f"vecten deploy --env {env}", allowed=("yes", "no"))]
 
 

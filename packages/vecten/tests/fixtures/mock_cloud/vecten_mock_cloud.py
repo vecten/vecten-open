@@ -88,6 +88,8 @@ class MockCloud:
     def __init__(self, project_root: Path, env: str):
         self.project_root = Path(project_root)
         self.env = env
+        # The stand-in hosts run no agent, so no volume is ever named.
+        self.orphaned_volumes: dict[str, list[str]] = {}
         directory = os.environ.get(CLOUD_DIR_VAR)
         if not directory:
             raise Failure(

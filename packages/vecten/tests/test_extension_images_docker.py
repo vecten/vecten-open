@@ -15,7 +15,7 @@ from vecten.stack.images import write_project_layer
 from vecten_shared.config import VectenConfig, save_config
 from vecten_shared.versions import VERSIONS
 
-from .docker_util import docker_available
+from .docker_util import require_base_image
 
 pytestmark = pytest.mark.docker
 REPO = Path(__file__).resolve().parents[3]
@@ -23,11 +23,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 @pytest.mark.parametrize("kind", ["airflow", "mcp"])
 def test_extension_install_uses_ephemeral_build_secret(tmp_path, kind, monkeypatch):
-    if not docker_available():
-        pytest.skip("Docker is not available")
-    base = f"vecten-{kind}:0.1.0"
-    if subprocess.run(["docker", "image", "inspect", base], capture_output=True).returncode:
-        pytest.skip(f"build {base} with vecten dev build-images first")
+    base = require_base_image(kind)
     config = VectenConfig.model_validate(
         {
             "project": {"name": "extension-test", "scaffold_version": "0.1.0"},
@@ -78,7 +74,7 @@ def test_extension_install_uses_ephemeral_build_secret(tmp_path, kind, monkeypat
         (project_dags / "project.py").write_text(
             "from airflow.sdk import DAG\ndag = DAG('project_dag', schedule=None)\n"
         )
-    from vecten.extensions import base_constraints, resolve_runtime_locks
+    from vecten.extensions import base_constraints, resolve_lock
     from vecten_shared.provider.local import LocalProvider
 
     baseline = base_constraints(kind)
@@ -86,9 +82,12 @@ def test_extension_install_uses_ephemeral_build_secret(tmp_path, kind, monkeypat
     LocalProvider(tmp_path, inside_compose=False).put_secret(
         "PACKAGE_INDEX_URL", "https://pypi.org/simple"
     )
-    for filename, lock in resolve_runtime_locks(
-        ["vecten-test-extension==1.0"], tmp_path, config
-    ).items():
+    runtime_locks = {
+        f"requirements-{kind}.lock": resolve_lock(
+            ["vecten-test-extension==1.0"], tmp_path, constraints=baseline, runtime=True
+        )
+    }
+    for filename, lock in runtime_locks.items():
         (tmp_path / filename).write_text(lock)
         subprocess.run(
             [

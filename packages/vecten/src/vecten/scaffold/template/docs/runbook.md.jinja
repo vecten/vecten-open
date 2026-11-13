@@ -62,9 +62,11 @@ bucket under `platform/` with the same keys. `vecten issues` reads them from eit
 lists each failing test, model and stale source; see `docs/operations.md` in the Vecten
 repository.
 
-`mark_built` writes the commit of the shipped bundle to `dbt/built_commit` after a green build and
-convention run. It reads the commit from `VECTEN_BUNDLE_COMMIT`, which only a shipped bundle sets,
-so on the laptop stack it writes nothing.
+`mark_built` writes the commit of the shipped bundle to `dbt/built_commit` after a green full
+build and convention run. It reads the commit from `VECTEN_BUNDLE_COMMIT`, which only a shipped
+bundle sets, so on the laptop stack it writes nothing. A run triggered with `select` or `exclude`
+skips it, because the MCP serves a newly shipped semantic model only once the whole bundle is
+built; after such a run, trigger `dbt_build` with no parameters to let the MCP switch.
 
 `freshness` runs `dbt source freshness` on the sources `vecten connector add` declares in
 `dbt/models/staging/sources.yml`, timed by dlt's load id: a source last loaded more than 36 hours
@@ -79,10 +81,36 @@ target there, so on the laptop stack the container never shares `dbt/target` or
 `dbt/dbt_packages` with the host. The laptop stack and the host each resolve dbt dependencies
 before every run and keep separate build directories.
 
+The project's own dbt packages, from dbt hub or a public git repository, are listed in
+`dbt/project-packages.yml`. Each hub package is pinned to one release (`version: 1.3.0`), and
+each git package to a full commit id (`revision:`). The file is committed and shipped, and
+every resolution appends its entries to the generated `dbt/packages.yml`. An unpinned, private,
+local or duplicate entry stops the run with exit 6. On a deployed host the `deps` task installs
+them on every run, which needs outbound HTTPS to `hub.getdbt.com`, `github.com` and
+`codeload.github.com`. The hosts' security groups allow all outbound traffic. When those sites
+are unreachable, `deps` fails and the build does not run.
+
 On a laptop, `vecten dbt-build-local` runs the same build and convention steps on a disposable
 warehouse from the connectors' recorded fixtures; `vecten dbt <args>` runs dbt against the stack's
-Postgres.
-[% endif %][% if render_deploy and cloud == 'aws' %]
+Postgres[% if warehouse == 'snowflake' %], which a Snowflake project does not use, so here it
+refuses without `--env`[% endif %].
+[% if warehouse == 'snowflake' and render_deploy %]
+`vecten dbt --env <env> <args>` runs dbt against a deployed environment's Snowflake warehouse as
+its `LOADER` user, with `SNOWFLAKE_LOADER_PRIVATE_KEY` read from that environment's secrets
+store. The key reaches dbt only through its process environment. On `prod` only `clean`,
+`compile`, `debug`, `deps`, `docs generate`, `docs serve`, `ls`, `parse`, `show`,
+`source freshness` and `test` run, and every other command exits 4. On `prod`, `test` also
+leaves out unit tests and refuses `--store-failures`. `test` and `source freshness` are refused
+while the project or a package declares an `on-run-start` or `on-run-end` hook, and `test` while
+a test stores its failures. `LOADER` can write, so these checks guard against accidents. They
+cannot catch SQL that Jinja runs at compile time. Every command runs on any other environment,
+which is how to build a scratch Snowflake database: deploy an environment for it in its own
+Snowflake account.
+[% elif render_deploy %]
+`vecten dbt --env <env>` exits 4 on this project: a deployed Postgres warehouse sits on the
+environment's private network, which the laptop does not reach. The `dbt_build` DAG builds it,
+and `vecten issues --env <env>` reports its failures.
+[% endif %][% endif %][% if render_deploy and cloud == 'aws' %]
 ## AWS deployment
 
 An environment such as `prod` runs in one AWS account: an EC2 virtual machine (VM) per host,
@@ -104,9 +132,11 @@ request that changes `deploy/` or `vecten.toml` runs the `terraform-plan` workfl
 plan as a comment. No VM accepts SSH: `vecten ship` reaches each VM through AWS Systems Manager
 (SSM) Run Command.
 
-At v0.1 the workflows that run on their own, the pull-request plan and the ship on every push,
-cover `prod` only; any other environment is deployed and shipped when you dispatch it with
-`vecten deploy --env <env>` or `vecten ship --env <env>`. Each ship recreates the stack's
+The pull-request plan covers `prod`. The ship on every push covers the first environment of
+the promotion order, `prod` when `vecten.toml` declares none, and each later environment of the
+order ships only through `vecten promote --env <env>` ("Promotion order" below). Any other
+environment is deployed and shipped when you dispatch it with `vecten deploy --env <env>` or
+`vecten ship --env <env>`. Each ship recreates the stack's
 containers on the host, so Airflow tasks running at that moment restart. A ship that fails
 on the host prints, after its error, the last lines of `docker compose`'s own output (a failed
 pull, build or port) and of each failing container's log, with secrets masked; on a VM without
@@ -203,6 +233,11 @@ holding a secret on a VM.
 Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secrets Manager page.
+[%- if 'platform' in components %]
+To keep the login page off the open internet, list the networks that may reach it under
+`[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
+the ship polls. Run `vecten issues --env <env>` from a listed network.
+[%- endif %]
 
 ### Admin access
 [% if 'platform' in components and warehouse == 'postgres' %]
@@ -377,6 +412,18 @@ destroy again.
   instance.
 - `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
   `instance_type_overrides` replaces the instance type of a host or an instance by its key.
+- `root_volume_size_gb` sets the size of every VM's encrypted root volume, which holds the
+  images and Docker's named volumes: 30 GiB by default, from 30 to 16384. A larger value grows
+  each volume in place at the next deploy; EBS cannot shrink a volume, so a smaller value fails
+  the apply. A running VM's file system does not see the added space until its partition and
+  file system are grown; cloud-init grows both at boot, so a reboot should do it, which is not
+  verified.
+[%- if 'platform' in components %]
+- `dags_paused_at_creation = true` makes the environment's new DAGs start paused, so nothing
+  scheduled runs until someone unpauses it in the Airflow UI. By default a deployed DAG starts
+  unpaused, because no deployed step unpauses it. The setting is read by `vecten ship`, not by
+  Terraform, takes effect at the next ship, and leaves a DAG Airflow already knows as it is.
+[%- endif %]
 - The Terraform root's provider lock file, `deploy/terraform/aws/.terraform.lock.hcl`, is
   committed. The first local `vecten deploy --env <env> --plan-only` writes it; commit and push
   it with `vecten github push`, because `vecten deploy` refuses while `deploy/` holds changes
@@ -424,9 +471,11 @@ request that changes `deploy/` or `vecten.toml` runs the `terraform-plan` workfl
 plan as a comment. No VM accepts SSH and Scaleway offers no run-command API, so each VM pulls
 its bundles from the bucket; "Shipping" below describes how.
 
-At v0.1 the workflows that run on their own, the pull-request plan and the ship on every push,
-cover `prod` only; any other environment is deployed and shipped when you dispatch it with
-`vecten deploy --env <env>` or `vecten ship --env <env>`. Each ship recreates the stack's
+The pull-request plan covers `prod`. The ship on every push covers the first environment of
+the promotion order, `prod` when `vecten.toml` declares none, and each later environment of the
+order ships only through `vecten promote --env <env>` ("Promotion order" below). Any other
+environment is deployed and shipped when you dispatch it with `vecten deploy --env <env>` or
+`vecten ship --env <env>`. Each ship recreates the stack's
 containers on the host, so Airflow tasks running at that moment restart. A ship that fails
 on the host prints, after its error, the last lines of `docker compose`'s own output (a failed
 pull, build or port) and of each failing container's log, with secrets masked; on a VM without
@@ -635,6 +684,11 @@ secret on a VM.
 Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secret Manager page of the project `<prefix>`.
+[%- if 'platform' in components %]
+To keep the login page off the open internet, list the networks that may reach it under
+`[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
+the ship polls. Run `vecten issues --env <env>` from a listed network.
+[%- endif %]
 
 ### Shipping
 
@@ -891,6 +945,17 @@ in a way that would replace a resource, and a person reconciles the two, startin
 - `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
   `instance_type_overrides` replaces the server or node type of a host or an instance by its
   key: `platform`, `mcp`, `main`, `state` or `warehouse`.
+- `root_volume_size_gb` sets the size of every VM's boot volume, which holds the images and
+  Docker's named volumes: 30 GB by default, and at least 30. A DEV1 type boots from its local
+  SSD, so the size cannot exceed the type's local storage (40 GB on DEV1-M, 80 GB on DEV1-L);
+  a POP2 type boots from an SBS volume, which can grow but never shrink. Whether a changed size
+  is applied in place or replaces the VM is not verified, so set it before the first deploy.
+[%- if 'platform' in components %]
+- `dags_paused_at_creation = true` makes the environment's new DAGs start paused, so nothing
+  scheduled runs until someone unpauses it in the Airflow UI. By default a deployed DAG starts
+  unpaused, because no deployed step unpauses it. The setting is read by `vecten ship`, not by
+  Terraform, takes effect at the next ship, and leaves a DAG Airflow already knows as it is.
+[%- endif %]
 - The Terraform root's provider lock file, `deploy/terraform/scaleway/.terraform.lock.hcl`, is
   committed. The first local `vecten deploy --env <env> --plan-only` writes it; commit and push
   it with `vecten github push`, because `vecten deploy` refuses while `deploy/` holds changes
@@ -947,36 +1012,129 @@ two failed ships within an hour can reach that limit; wait an hour before shippi
 module creates A records only, so a stale AAAA (IPv6) record for the same name in the zone can
 send the validation to another server: remove it. A systemd timer on the VM renews the
 certificates daily.
+
+### Extension services
+
+These apply once `vecten.toml` binds a service of an extension under `[services]`: a
+long-running process, such as a bot or a portal, served on a hostname of its own.
+
+- **Adding a hostname.** A new service hostname is served only once its DNS record exists. After
+  the merge that binds it, the ship starts the service and reports its routes as waiting for
+  `vecten deploy --env <env>`; run that command, whose pull-request plan shows the new record,
+  and the ship it runs gets the hostname's certificate as described above. While Let's Encrypt
+  checks the name, NGINX on that VM stops for a few seconds, so Airflow or the MCP on the same
+  VM are unreachable for that time: add hostnames outside busy hours.
+- **The boot guard.** A VM that runs a service has the systemd unit
+  `vecten-services-guard.service`, which Docker requires: before Docker starts, it adds the
+  firewall rule that keeps services away from the cloud's metadata address, where a container
+  could otherwise obtain the VM's cloud credentials. If the unit fails, Docker, and the whole
+  stack on that VM, stays down until the cause is fixed.[% if cloud == 'aws' %] Read why with
+  `journalctl -u vecten-services-guard.service`, run on the VM through Systems Manager Run
+  Command.[% else %] A Scaleway VM accepts no SSH and Scaleway offers no run-command API, so
+  the unit's log cannot be read from outside, and Vecten has no command that repairs the VM in
+  place; the way back is a new VM, which loses what the old one kept on its disk (see "Changes
+  that replace a server or a database").[% endif %] A ship whose rule cannot be added fails
+  naming its `service isolation` step and leaves the running release as it was.
+- **Volumes.** A service's volume lives on its VM's disk: it survives ships and reboots, is not
+  backed up, and is lost when the VM is replaced. When a service is no longer bound, each ship
+  names its volume as no longer used; Vecten never removes one.[% if cloud == 'aws' %] Remove it
+  with `docker volume rm <name>` through Systems Manager Run Command.[% endif %]
+- **Health.** The log of each `ship` and `terraform-apply` workflow run reports every bound
+  service as `healthy`, `unhealthy`, `waiting for deploy`, `not routed` or `served`, and names
+  the volumes of services no longer bound; a laptop's `vecten ship` or `vecten deploy` only
+  dispatches the run. A service's state never fails a ship or rolls it back.
 [% if warehouse == 'snowflake' and 'platform' in components %]
 ### Snowflake
 
+[% if snowflake_shared_account -%]
+This project's Snowflake account is shared (`shared_account = true` under `[warehouse]`): it
+may hold other environments of this project and other teams' data, so every name Vecten gives
+an account-level object ends in the environment's suffix `_<BASE>_<ENV>`. `<BASE>` is
+`[warehouse] database`, or the project name when it is unset, and `<ENV>` the environment's
+name, both in upper case with hyphens as underscores; an environment name holds no hyphen
+(`dev2`, not `dev-2`). An environment first deployed with fixed names keeps them, in an
+account of its own.
+
+`vecten deploy` also applies the Terraform root `deploy/terraform/snowflake`, with its state at
+`<env>/snowflake.tfstate` in the state bucket. It creates the database `<BASE>_<ENV>` with the
+schemas `STAGING`, `SNAPSHOTS`, `CORE` and `MARTS`, the roles `ANALYST_<BASE>_<ENV>`,
+`LOADER_<BASE>_<ENV>` and, with the `mcp` component, `PROVISIONER_<BASE>_<ENV>`, the service
+user `LOADER_<BASE>_<ENV>`, which signs in by key pair only (the authentication policy
+`<BASE>_<ENV>.VECTEN_SIGN_IN.SERVICE_SIGN_IN`), and the warehouse `<BASE>_<ENV>_WH`. Every
+object carries the comment `vecten <project> <env> in <account>`; an apply that finds one of
+these names taken fails rather than share it.
+
+- Each environment names its account in `snowflake_account` in `deploy/envs/<env>.tfvars`;
+  `prod`'s is also `account` under `[warehouse]` in `vecten.toml`, and `vecten deploy` refuses
+  `prod` unless they agree. Several environments may name one account; `vecten deploy`
+  refuses one whose account an environment with fixed names also names.
+[%- else -%]
 `vecten deploy` also applies the Terraform root `deploy/terraform/snowflake`, with its state at
 `<env>/snowflake.tfstate` in the state bucket. It creates in your Snowflake account the
 database, the schemas `STAGING`, `SNAPSHOTS`, `CORE` and `MARTS`, the roles `ANALYST`, `LOADER`
 and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a warehouse named
 `<PROJECT>_<ENV>_WH`.
 
-- The account is the `ORGANIZATION-ACCOUNT` identifier in `snowflake_account` in
-  `deploy/envs/<env>.tfvars` and `account` under `[warehouse]` in `vecten.toml`, which
-  `vecten deploy` refuses unless they agree. `vecten answer snowflake_account <ORG-ACCOUNT>`
-  followed by `vecten init --deploy` writes both for `prod`.
+- Each environment names its account, the `ORGANIZATION-ACCOUNT` identifier, in
+  `snowflake_account` in `deploy/envs/<env>.tfvars`; `prod`'s is also `account` under
+  `[warehouse]` in `vecten.toml`, and `vecten deploy` refuses `prod` unless they agree.
+  `vecten answer snowflake_account <ORG-ACCOUNT>` followed by `vecten init --deploy` writes
+  both for `prod`.
 - One environment per Snowflake account: the role names, the `LOADER` user and the database's
-  name are the same for every environment, so a second environment in the same account collides
-  with the first. They also collide with roles or a user of the same names already in the
-  account; check before the first deploy.
+  name are the same for every environment, so the account holds this one environment and
+  nothing else of these names. `vecten deploy` refuses a second environment that names an
+  account another environment's tfvars name. The names also collide with roles or a user of the
+  same names already in the account; check before the first deploy. To run several
+  environments in one account, set `shared_account = true` under `[warehouse]` before their
+  first deploy.
+[%- endif %]
 - Terraform signs in as a deploy user with key-pair authentication. Create that user with a
   default role that holds
   CREATE DATABASE, CREATE WAREHOUSE, CREATE ROLE, CREATE USER and MANAGE GRANTS
-  on the account. MANAGE GRANTS lets the first apply set the future grants in `CORE` and
-  `MARTS` through which `ANALYST` reads every table dbt builds there. Then store the user's
-  name and private key:
+  on the account. [% if 'mcp' in components %]`ANALYST[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` reads `CORE` and `MARTS` through the
+  default group's grants, which the MCP applies; the module grants it no schema. [% else %]MANAGE GRANTS lets the first apply set the future grants in `CORE` and
+  `MARTS` through which `ANALYST[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` reads every table dbt builds there. [% endif %]Then store
+  the user's name and private key:
   `vecten secret set DEPLOY_SNOWFLAKE_USER --env <env>` and
   `vecten secret set DEPLOY_SNOWFLAKE_PRIVATE_KEY --env <env> < <private key file>`.
   `vecten deploy` refuses while either is missing.
-- The first plan generates the `LOADER` user's key pair and stores the private key as
-  `SNOWFLAKE_LOADER_PRIVATE_KEY`; only the public key reaches Terraform.
+[%- if snowflake_shared_account %]
+- Give each environment its own deploy user and role: the root grants every role it creates
+  to the role it runs as, so a deploy user shared by environments is one credential that
+  reaches all of them. `vecten deploy` cannot check this, since it reads no other
+  environment's secrets.
+- Every External OAuth integration in the account accepts a token for a user that no
+  authentication policy binds, and each environment's MCP holds the signing key of its own
+  integration. So give each deploy user a key-pair-only policy before its first deploy, as
+  ACCOUNTADMIN, in a schema of your own:
+  `CREATE AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN AUTHENTICATION_METHODS = ('KEYPAIR');`
+  then `ALTER USER <deploy user> SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN;`
+  for each deploy user. Each environment's integration also refuses `SYSADMIN` and the role
+  that created the environment's database.
+[%- endif %]
+- The first plan generates the `LOADER[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` user's key pair and stores
+  the private key as `SNOWFLAKE_LOADER_PRIVATE_KEY`; only the public key reaches Terraform.
 - Pull-request plans cover the [% if cloud == 'aws' %]AWS root only, because the plan role reads no `deploy` secret[% else %]Scaleway root only, because the plan key reads no secret[% endif %];
   the Snowflake root is planned when the `terraform-apply` workflow is dispatched.
+[% if snowflake_shared_account -%]
+- `vecten destroy` keeps the Snowflake database, and its Terraform root, unless
+  `--delete-data <env>` is given.
+[%- if 'mcp' in components %] Before it runs any Terraform it reads, as the deploy user, which
+  users and roles `PROVISIONER_<BASE>_<ENV>` owns: by ownership, never by a name pattern,
+  since another project's suffix can end in this one's. Without `--delete-data` it lists them,
+  with the provisioner's user and the integration `EXTERNAL_OAUTH_<BASE>_<ENV>`, as kept.
+  With it, destroy refuses while any of them stays, because their sign-in policies live in the
+  database it drops, and prints the statements an ACCOUNTADMIN runs: a `DROP` for each user
+  and role the provisioner owns, then the provisioner's user and the integration. Run them,
+  then destroy again.
+[%- endif %]
+- Moving an environment that has fixed names into a shared account is a new deployment of it:
+  destroy it with `--delete-data <env>`, keeping its `state` snapshot if you want it, point
+  `snowflake_account` in its tfvars at the shared account, set `shared_account = true`, and
+  deploy again. The connectors load the raw data again, or Snowflake's database replication
+  copies it; people are added again with `vecten user add`, and groups and grants are created
+  again.
+[%- else -%]
 - `vecten destroy` keeps the Snowflake database, and its Terraform root, unless
   `--delete-data <env>` is given.
 [%- if 'mcp' in components %] Either way the users and roles `PROVISIONER` created stay,
@@ -988,14 +1146,99 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
   `PROVISIONER` holds outside this project's database and warehouse, which an install in
   another database left and the MCP equally refuses.
 [%- endif %]
+[%- endif %]
 [% if 'mcp' in components -%]
+[% if snowflake_shared_account -%]
+- The MCP signs in to Snowflake as the service user `PROVISIONER_<BASE>_<ENV>`, by key pair
+  only (`<BASE>_<ENV>.VECTEN_ACCESS.SERVICE_SIGN_IN`), which only an ACCOUNTADMIN can set up,
+  in the database the first deploy creates. So the first deploy ships no host. Then run
+  `vecten mcp provisioner-script --env <env>`, which stores the provisioner's key pair as
+  `MCP_PROVISIONER_PRIVATE_KEY` and prints the SQL. Its one block first stops, changing
+  nothing, at a role, user or integration of these names that another project or environment
+  holds (another comment, owner or holder), then creates the environment's integration
+  `EXTERNAL_OAUTH_<BASE>_<ENV>` and the policy `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`,
+  which binds every user the MCP creates to that integration. Have an ACCOUNTADMIN run it,
+  record it with `--confirm-run`, and `vecten github push`: the ship workflow then ships every
+  host.
+- People's and services' users are `<NAME>_<BASE>_<ENV>` and groups' roles
+  `<GROUP>_<BASE>_<ENV>`, one per environment; the MCP adopts no existing user here. Row
+  access and masking policies keyed on a person's own Snowflake user do not apply to these
+  users; key them on roles.
+- What a shared account protects: one environment's keys (its loader key, provisioner key and
+  MCP signing key) reach no other environment's data. It does not protect an environment from
+  an administrator who already controls another environment's provisioner, which may create
+  account-level users and roles named for that environment before its first script run:
+  create `prod` first, or give it an account of its own, and
+  keep every deploy user on a key-pair-only policy. Parts of this rest on Snowflake behaviour
+  the project's live checks have yet to confirm (several External OAuth integrations in one
+  account, authentication policies binding them); until they pass, treat a shared account as
+  for non-production environments.
+[%- else -%]
 - The MCP signs in to Snowflake as `VECTEN_PROVISIONER`, which only an ACCOUNTADMIN can set up,
   in the database the first deploy creates. So the first deploy ships no host. Then run
   `vecten mcp provisioner-script --env <env>`, which stores the provisioner's key pair as
   `MCP_PROVISIONER_PRIVATE_KEY` and prints the SQL. Have an ACCOUNTADMIN run it, record it with
   `--confirm-run`, and `vecten github push`: the ship workflow then ships every host.
+[%- endif %]
 [% endif -%]
 [% endif %][% endif %]
+[% if render_deploy %]
+## Promotion order
+
+Without `[deploy] promotion` in `vecten.toml`, every merge to the default branch ships `prod`.
+With an order such as `["dev", "prod"]`, a merge ships `dev` only, and `prod` receives exactly
+the commit `dev` ran, when you promote it.
+
+### Adopting an order
+
+1. Workflows rendered before promotion existed ship `prod` on every push whatever the order
+   says, so the CLI refuses to record an order under them, naming `vecten update`. Run
+   `vecten update` then, review and commit.
+2. Copy `deploy/envs/prod.tfvars` to `deploy/envs/dev.tfvars`, set `environment = "dev"` and
+   set `domain` to the name `dev` serves under, such as `dev.[[ domain ]]`.
+[%- if warehouse == 'snowflake' and 'platform' in components %]
+   Set `snowflake_account` there to `dev`'s Snowflake account, which `dev`'s hosts, the MCP
+   and dbt connect to; `[warehouse] account` stays `prod`'s.
+[%- if snowflake_shared_account %]
+   In this shared account `dev` may name `prod`'s account: every account-level name `dev`
+   gets ends in `_<BASE>_DEV`.
+[%- else %]
+   With fixed names one account holds one environment, so `dev` names an account of its own;
+   `vecten deploy` refuses an account another environment's tfvars name.
+[%- endif %]
+[%- endif %]
+3. `vecten bootstrap --env dev`, then `vecten deploy --env dev`, as for `prod`.
+4. `vecten answer deploy.promotion dev,prod` records the order; `vecten github push` commits
+   it. From that push on, a merge ships `dev` and sets the commit status `vecten/ship/dev`.
+5. `vecten promote --env prod` ships `prod` the commit `dev` shipped last. The first promotion
+   needs one push shipped to `dev` by these workflows, because only they set the status.
+
+`vecten next` walks the order: `dev` through its deploy, sign-in and first user, then `prod`.
+`vecten promote --status` lists what each environment shipped last and whether it is behind
+the one before it. `vecten answer deploy.promotion none` and a push return to shipping `prod`
+on every merge.
+
+### What a promoted run reads from where
+
+`vecten promote --env prod` dispatches `deploy-platform.yml` on the default branch with
+`environment: prod` and `commit: <sha>`, and `vecten deploy --env prod` dispatches
+`terraform-apply.yml` the same way. Before any host or Terraform changes, the run refuses a
+commit that is not on the default branch, and one whose `vecten/ship/dev` status is not
+`success`. Then:
+
+- From the promoted commit: the bundle (DAGs, connectors, dbt, `osi/`, `evals/`,
+  `vecten.toml`), `deploy/envs/prod.tfvars`, the Terraform roots, and the `vecten` version its
+  `[project] scaffold_version` names, so `prod` gets what `dev` ran, configuration included.
+- From the default branch's head: the workflow file, and the facts the CLI records under
+  `[environments.prod]` in `vecten.toml` (whether `prod` is bootstrapped and deployed, its
+  cloud ids and keys), which describe `prod` as it is now. A fact the promoted commit's CLI
+  does not know is named in a warning and left out.
+
+A `prod`-only tfvars change therefore reaches `prod` on the next promotion, not on the merge
+that carries it. `vecten promote --env prod --commit <sha>` ships an older commit `dev`
+shipped, which is how `prod` rolls back. Required reviewers on the GitHub environment `prod`,
+where the plan offers them, hold every promotion until someone approves it.
+[% endif %]
 [% if render_deploy and 'mcp' in components %]
 ## First sign-in to the MCP
 
@@ -1035,9 +1278,23 @@ an update. An internal project without a baseline must initialize it with its or
 release before installing a newer release.
 
 [% if 'platform' in components %]
+Before installing a release whose convention refuses dbt grants (version 2 and later), remove
+every dbt `grants:` config and granting post-hook from the dbt project, and override one a dbt
+package sets with `+grants: {}` under its name in `dbt/dbt_project.yml`. From that release every
+dbt run stops before it builds anything while one remains, naming each model, snapshot or seed.
+
 Run `vecten dbt-build-local --check` after the update. It tests the model conventions and
 checks that the generated semantic datasets agree with the models. If model definitions
 changed, run without `--check` first, review the regenerated datasets, then check again.
+[% endif %]
+[% if 'mcp' in components %]
+Read the release notes for steps an upgrade needs beyond the update, such as an administrator's
+rerun of `vecten mcp provisioner-script`. The MCP revokes read grants its state does not hold
+from `analyst` and the group roles, in the convention and `raw_` schemas. A deployment whose
+MCP state an earlier release created starts with the setting `reconcile_drift` at `report`:
+read the drift in `vecten issues`, record the grants to keep with `vecten grant`, remove dbt
+`grants:` configs and granting post-hooks, then set it to `revoke` in the admin panel. A
+`SELECT` on a relation that is not a dataset cannot be recorded and is revoked from then on.
 [% endif %]
 Run `vecten mcp validate`, review and commit the changed files. The next local `vecten up`
 uses the installed release's images. A deployed project ships content when changes reach its

@@ -42,6 +42,10 @@ GITHUB = Item("ask", GITHUB_Q, f"{GITHUB_Q} {NO_ACCOUNT}", answer_keys=("github_
 INIT_DEPLOY = Item("command", "Render the deploy layer", "vecten init --deploy")
 ACCOUNT_Q = ANSWER_KEYS["snowflake_account"].question
 ACCOUNT = Item("ask", ACCOUNT_Q, ACCOUNT_Q, answer_keys=("snowflake_account",))
+SHARED_Q = ANSWER_KEYS["snowflake_shared_account"].question
+SHARED = Item(
+    "ask", SHARED_Q, SHARED_Q, answer_keys=("snowflake_shared_account",), allowed=("yes", "no")
+)
 DEPLOY_ANSWERS = {
     "cloud": "aws",
     "domain": "data.acme.com",
@@ -227,7 +231,22 @@ def test_a_snowflake_platform_is_asked_its_account_before_the_deploy_layer(tmp_p
     config = load_config(root)
     assert deploy_question_items(root, config, DEPLOY_ANSWERS) == [ACCOUNT]
     answers = {**DEPLOY_ANSWERS, "snowflake_account": "ACME-PROD"}
-    assert deploy_question_items(root, config, answers) == [INIT_DEPLOY]
+    assert deploy_question_items(root, config, answers) == [SHARED]
+    for answer in ("yes", "no"):
+        answers["snowflake_shared_account"] = answer
+        assert deploy_question_items(root, config, answers) == [INIT_DEPLOY]
+
+
+def test_a_known_snowflake_account_is_still_asked_whether_it_is_shared(tmp_path):
+    root = render_fixture(tmp_path, "snowflake")
+    config = load_config(root)
+    config.warehouse.account = "ACME-PROD"
+    assert deploy_question_items(root, config, DEPLOY_ANSWERS) == [SHARED]
+
+
+def test_a_postgres_project_is_not_asked_about_a_shared_account(tmp_path):
+    root = render_fixture(tmp_path, "postgres")
+    assert deploy_question_items(root, load_config(root), DEPLOY_ANSWERS) == [INIT_DEPLOY]
 
 
 def test_an_existing_snowflake_warehouse_is_not_asked_its_account(tmp_path):
@@ -241,7 +260,19 @@ def test_a_deploy_layer_without_its_snowflake_account_asks_it_first(tmp_path):
     config.environments["prod"].bootstrapped = True
     assert deploy_prerequisite_items(root, config, "prod", CLEAN)[0] == ACCOUNT
     write_answer(root, "snowflake_account", "ACME-PROD")
+    assert deploy_prerequisite_items(root, config, "prod", CLEAN)[0] == SHARED
+    write_answer(root, "snowflake_shared_account", "no")
     assert deploy_prerequisite_items(root, config, "prod", CLEAN)[0] == INIT_DEPLOY
+
+
+def test_the_shared_account_question_is_never_asked_once_an_environment_deployed(tmp_path):
+    root = render_fixture(tmp_path, "snowflake", deploy=True, account=None)
+    config = load_config(root)
+    config.environments["prod"].deployed_commit = "a" * 40
+    config.environments["dev"].bootstrapped = True
+    write_answer(root, "snowflake_account", "ACME-PROD")
+    items = deploy_prerequisite_items(root, config, "dev", CLEAN)
+    assert SHARED not in items and items[0] == INIT_DEPLOY
 
 
 def test_rendered_deploy_layer_asks_nothing(deploy_layer):
@@ -314,6 +345,18 @@ def test_deploy_items_never_copy_the_warehouse_admin_password(tmp_path, url):
     assert deploy_prerequisite_items(root, config, "prod", CLEAN) == [store]
     config.environments["prod"].provisioner_secrets_set = True
     assert deploy_prerequisite_items(root, config, "prod", CLEAN) == []
+
+
+@pytest.mark.parametrize("url", [POSTGRES_URL, SNOWFLAKE_URL])
+def test_deploy_items_never_copy_the_git_credential(tmp_path, url):
+    root = render_mcp_only_deploy(tmp_path, url)
+    config = load_config(root)
+    (root / ".env").write_text(
+        "GIT_CREDENTIALS=https://u:t@example.com\nMCP_GIT_CREDENTIALS=https://u:t@example.com\n"
+        + LOCAL_PROVISIONER_ENV[url]
+    )
+    config.environments["prod"].bootstrapped = True
+    assert deploy_prerequisite_items(root, config, "prod", CLEAN) == [PROVISIONER_SECRETS[url]]
 
 
 @pytest.mark.parametrize("url", [POSTGRES_URL, SNOWFLAKE_URL])
@@ -799,3 +842,57 @@ def test_a_login_record_that_is_not_an_object_counts_as_no_session(deploy_layer,
     signed_in(token_cache, config, root)
     (root / ".vecten" / "records" / "login" / "prod.json").write_text("[]")
     assert _asks_for_login(root, config)
+
+
+# Service hostnames bound after the deploy wait for the next one.
+
+
+def _hostname_layer(tmp_path, listed):
+    import copy
+
+    from .deploy_fixtures import STANDARD_OUTPUTS, write_outputs
+    from .services_fixtures import with_services
+
+    root = render_fixture(tmp_path, "postgres", deploy=True)
+    with_services(root, {"bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}}})
+    if listed is not None:
+        outputs = copy.deepcopy(STANDARD_OUTPUTS)
+        outputs["hosts"]["platform"]["service_hostnames"] = listed
+        write_outputs(root, outputs)
+    config = oidc_ready(load_config(root))
+    config.environments["prod"].oidc_registered = True
+    return root, config
+
+
+WAITING_HOSTNAME = Item(
+    "command", "Create the DNS record for bot.data.acme.com", "vecten deploy --env prod"
+)
+
+
+def test_a_bound_hostname_the_outputs_do_not_list_offers_deploy_first(tmp_path):
+    root, config = _hostname_layer(tmp_path, [])
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == WAITING_HOSTNAME
+
+
+def test_a_hostname_the_outputs_list_asks_for_nothing(tmp_path):
+    root, config = _hostname_layer(tmp_path, ["bot.data.acme.com"])
+    assert WAITING_HOSTNAME not in post_deploy_items(root, config, "prod", CLEAN)
+
+
+def test_without_an_outputs_file_next_does_not_guess(tmp_path):
+    root, config = _hostname_layer(tmp_path, None)
+    assert WAITING_HOSTNAME not in post_deploy_items(root, config, "prod", CLEAN)
+
+
+def test_an_app_hostname_the_outputs_do_not_list_offers_deploy_first(tmp_path):
+    from .deploy_fixtures import STANDARD_OUTPUTS, write_outputs
+    from .services_fixtures import with_apps
+
+    root = render_fixture(tmp_path, "postgres", deploy=True)
+    with_apps(root, {"overview": {"groups": ["default"]}})
+    write_outputs(root, STANDARD_OUTPUTS)
+    config = oidc_ready(load_config(root))
+    config.environments["prod"].oidc_registered = True
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == Item(
+        "command", "Create the DNS record for overview.data.acme.com", "vecten deploy --env prod"
+    )

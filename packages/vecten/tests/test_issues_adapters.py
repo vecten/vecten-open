@@ -37,12 +37,13 @@ def night(day: int) -> datetime:
 
 
 def attempt(day, state, *, dag=DAG, task="sync", obj="deals", map_index=0, run=None):
+    mapped = task == "sync" or task.startswith("sync_stage_")
     return TaskAttempt(
         dag_id=dag,
         task_id=task,
         run_id=run or f"scheduled__2026-10-{day:02d}T02:00:00+00:00",
-        map_index=map_index if task == "sync" else -1,
-        rendered_map_index=obj if task == "sync" else None,
+        map_index=map_index if mapped else -1,
+        rendered_map_index=obj if mapped else None,
         try_number=3 if state == "failed" else 1,
         state=state,
         run_after=night(day),
@@ -196,6 +197,13 @@ def test_the_excerpt_redacts_tokens_and_known_secret_values_and_keeps_text_as_da
 def test_each_object_is_its_own_issue():
     ctx = context([attempt(21, "failed"), attempt(21, "success", obj="companies", map_index=1)])
     assert [i.id for i in airflow_issues(ctx)] == [DEALS_ID]
+
+
+def test_an_object_in_a_stage_is_the_same_issue_as_in_the_parallel_sync():
+    ctx = context([attempt(21, "failed", task="sync_stage_2")])
+    (issue,) = airflow_issues(ctx)
+    assert issue.id == DEALS_ID
+    assert issue.title.startswith("hubspot object deals fails")
 
 
 def test_the_sync_check_task_repeats_the_object_failures_and_is_not_an_issue():
@@ -493,6 +501,58 @@ def test_a_failed_grant_is_an_issue_per_target():
     assert "bounded reader role" in issues[0].evidence["error"]
 
 
+DRIFT = {
+    "group": "default",
+    "role": "analyst",
+    "privilege": "FUTURE SELECT",
+    "schema": "marts",
+    "relation": None,
+}
+
+
+def test_drift_listed_in_report_mode_is_an_issue_per_grant():
+    table = {**DRIFT, "privilege": "SELECT", "relation": "payroll"}
+    health = {"checked_at": 1792627200, "failures": [], "drift": [DRIFT, table]}
+    issues = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert [i.id for i in issues] == [
+        "iss_mcp_drift_analyst_FUTURE-SELECT_marts",
+        "iss_mcp_drift_analyst_SELECT_marts_payroll",
+    ]
+    assert issues[0].title == "default's role analyst holds FUTURE SELECT on marts"
+    assert "reconcile_drift" in issues[0].resolution and "revoke" in issues[0].resolution
+    assert issues[1].evidence["relation"] == "payroll"
+
+
+def test_a_failed_read_of_a_roles_grants_names_the_read():
+    failure = {"group": "finance", "kind": "drift", "target": "*", "operation": "read"}
+    health = {"checked_at": 1792627200, "failures": [{**failure, "error": "timed out"}]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.title == "Reading the read grants of finance failed"
+    assert "vecten reconcile --env prod" in issue.resolution
+
+
+def test_a_failed_drift_revoke_names_the_place():
+    failure = {"group": "default", "kind": "drift", "target": "marts", "operation": "revoke"}
+    health = {"checked_at": 1792627200, "failures": [{**failure, "error": "still held"}]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.title == "Revoking default's drift on marts failed"
+
+
+def test_revoked_drift_is_not_an_issue():
+    health = {"checked_at": 1792627200, "failures": [], "revoked": [DRIFT]}
+    assert mcp_issues(context([], admin=admin_with(access_health=health))) == []
+
+
+def test_older_access_procedures_are_one_issue_naming_the_script():
+    outdated = {"installed": 1, "required": 2, "fix": "An ACCOUNTADMIN reruns the script"}
+    health = {"checked_at": 1792627200, "failures": [], "outdated": outdated}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_access_procedures"
+    assert issue.kind == "command"
+    assert "vecten mcp provisioner-script --env prod" in issue.resolution
+    assert issue.evidence["installed"] == 1 and issue.evidence["required"] == 2
+
+
 def test_an_mcp_without_access_health_reads_as_unavailable():
     def admin(operation, params):
         if operation == "access-health":
@@ -521,3 +581,147 @@ def test_a_not_ready_model_is_found_by_its_id():
     ctx = context([], admin=admin_with(model_health=NOT_READY))
     shown = find(ctx, "iss_mcp_model")
     assert shown is not None and shown.evidence["status"] == "error"
+
+
+APP_EXCLUSION = {
+    "app": "acme-sales.finance",
+    "group": "default",
+    "dataset": "revenue",
+    "source": "marts_finance.revenue",
+    "message": "group default may open acme-sales.finance but cannot read marts_finance.revenue",
+}
+
+
+def test_a_group_an_app_does_not_admit_is_an_issue_naming_the_app_and_table():
+    health = {"checked_at": 1792627200, "failures": [], "apps": [APP_EXCLUSION]}
+    ctx = context([], admin=admin_with(access_health=health))
+    [issue] = [i for i in collect(ctx).issues if i.source == "mcp"]
+    assert "acme-sales.finance" in issue.title and "default" in issue.title
+    assert "marts_finance.revenue" in issue.resolution
+    assert "vecten grant revenue --group default --env prod" in issue.resolution
+    assert find(ctx, issue.id) is not None
+
+
+def test_a_bound_group_that_does_not_exist_is_an_issue():
+    entry = {"app": "acme-sales.finance", "group": "sales", "reason": "no such group"}
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "sales" in issue.title and "does not exist" in issue.resolution
+
+
+def test_an_app_dataset_the_model_lacks_is_an_issue():
+    entry = {
+        "app": "acme-sales.finance",
+        "group": "finance",
+        "dataset": "revenue",
+        "reason": "not in the model",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "revenue" in issue.resolution and "osi/" in issue.resolution
+
+
+def test_an_unmarked_app_principal_is_an_issue():
+    entry = {
+        "app": "acme-sales.overview",
+        "principal_id": "p1",
+        "warehouse_name": "svc_app_overview",
+        "reason": "not marked as the app's principal",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "svc_app_overview" in issue.title
+    assert "vecten app connect acme-sales.overview --env prod --adopt" in issue.resolution
+
+
+def test_an_app_principal_in_other_groups_than_the_binding_is_an_issue():
+    entry = {
+        "app": "acme-sales.overview",
+        "principal_id": "p1",
+        "warehouse_name": "svc_app_overview",
+        "reason": "groups differ from the binding",
+        "groups": ["default", "sales"],
+        "bound": ["sales"],
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert "svc_app_overview" in issue.title and "groups" in issue.title
+    assert "vecten app connect acme-sales.overview --env prod --groups-only" in issue.resolution
+    assert "--adopt" not in issue.resolution
+
+
+@pytest.mark.parametrize(
+    ("reason", "title", "fix"),
+    [
+        ("role sync failed", "could not set", "vecten reconcile --env prod"),
+        ("warehouse roles beyond the admitted groups", "holds warehouse roles", "REVOKE"),
+    ],
+)
+def test_an_app_principals_warehouse_roles_are_an_issue(reason, title, fix):
+    entry = {
+        "app": "acme-sales.overview",
+        "principal_id": "p1",
+        "warehouse_name": "svc_app_overview",
+        "reason": reason,
+        "roles": ["pii_reader"],
+        "error": "permission denied",
+    }
+    health = {"checked_at": 1792627200, "failures": [], "apps": [entry]}
+    [issue] = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert title in issue.title and "svc_app_overview" in issue.title
+    assert fix in issue.resolution and "pii_reader" in issue.resolution
+    assert "--adopt" not in issue.resolution
+
+
+def test_a_failed_sync_and_extra_roles_of_one_principal_are_two_issues():
+    base = {"app": "acme-sales.overview", "principal_id": "p1", "warehouse_name": "svc_app_x"}
+    entries = [
+        {**base, "reason": "role sync failed", "roles": ["a"]},
+        {**base, "reason": "warehouse roles beyond the admitted groups", "roles": ["b"]},
+    ]
+    health = {"checked_at": 1792627200, "failures": [], "apps": entries}
+    issues = [
+        i
+        for i in collect(context([], admin=admin_with(access_health=health))).issues
+        if i.source == "mcp"
+    ]
+    assert len({i.id for i in issues}) == 2
+
+
+def test_a_missing_binding_is_an_issue_printing_the_statement_to_rerun():
+    missing = {"group": "finance", "role": "finance", "bound_role": "finance_analyst"}
+    health = {"checked_at": 1792627200, "failures": [], "missing_bindings": [missing]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_binding_finance_finance_analyst"
+    assert issue.title == "finance's role no longer holds its bound role finance_analyst"
+    assert "vecten group bind finance finance_analyst --env prod" in issue.resolution
+    assert "vecten group unbind finance --env prod" in issue.resolution
+
+
+def test_a_role_nested_under_a_group_role_without_a_binding_is_an_issue():
+    nested = {"group": "finance", "role": "finance", "granted_role": "SYSADMIN"}
+    health = {"checked_at": 1792627200, "failures": [], "unbound_roles": [nested]}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_nested_finance_SYSADMIN"
+    assert issue.title == "finance's role holds SYSADMIN, which no confirmed binding names"
+    assert "REVOKE" in issue.resolution and "vecten group bind finance" in issue.resolution

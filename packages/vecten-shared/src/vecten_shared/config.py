@@ -12,6 +12,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import tomli_w
+from packaging.version import InvalidVersion, Version
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -22,7 +23,11 @@ from pydantic import (
     model_validator,
 )
 
+from vecten_shared.apps import APP_CREDENTIAL, principal_name
+from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
+from vecten_shared.declarations import is_toml_time, secret_problem
 from vecten_shared.names import (
+    area_name_problem,
     connector_name_problem,
     env_name_problem,
     group_name_problem,
@@ -30,6 +35,10 @@ from vecten_shared.names import (
 )
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
+from vecten_shared.requirements import REQUIREMENT_RULE, parse_requirement
+from vecten_shared.services import CPUS, MEMORY_MB
+from vecten_shared.services import name_problem as service_name_problem
+from vecten_shared.versions import normalize_name
 
 CONFIG_FILE = "vecten.toml"
 Component = Literal["platform", "mcp"]
@@ -58,6 +67,9 @@ class WarehouseSection(Strict):
     account: str | None = None
     # The login introspection signs in as, named by warehouse_url.
     admin_user: str | None = None
+    # Whether an environment's Snowflake account may hold anything besides that environment;
+    # each environment records the value it was first deployed with.
+    shared_account: bool = False
 
 
 _REGION = re.compile(r"[a-z0-9-]{2,32}")
@@ -112,20 +124,80 @@ def check_deploy_value(key: str, value: str | None) -> str | None:
     return value
 
 
+PROD_ENV = "prod"
+DEFAULT_PROMOTION: tuple[str, ...] = (PROD_ENV,)
+# The first release whose rendered workflows read `[deploy] promotion`; workflows rendered
+# earlier ship prod on every push whatever the order says.
+PROMOTION_SINCE = "0.1.1"
+
+
+def promotion_problem(order: list[str]) -> str | None:
+    """Why `order` is no valid `[deploy] promotion`, or None."""
+    for env in order:
+        problem = env_name_problem(env)
+        if problem:
+            return problem
+    if len(order) < 2:
+        return (
+            f"lists at least two environments ending with {PROD_ENV}; leave it out to ship "
+            f"{PROD_ENV} on every push"
+        )
+    repeated = sorted({env for env in order if order.count(env) > 1})
+    if repeated:
+        return f"names {', '.join(repeated)} more than once"
+    if order[-1] != PROD_ENV or order.count(PROD_ENV) != 1:
+        return f"must end with {PROD_ENV}, so that no environment promotes from it; got {order}"
+    return None
+
+
 class DeploySection(Strict):
     cloud: Cloud
     region: str
     domain: str
     dns_zone: str
     github_repository: str
+    # The order code reaches environments in: a push ships the first, each later one ships
+    # only what the one before it shipped. None means prod alone.
+    promotion: list[str] | None = None
 
     @field_validator("region", "domain", "dns_zone", "github_repository")
     @classmethod
     def _deploy_value(cls, value: str, info: ValidationInfo) -> str:
         return check_deploy_value(info.field_name, value)
 
+    @field_validator("promotion")
+    @classmethod
+    def _promotion(cls, value: list[str] | None) -> list[str] | None:
+        return value if value is None else _checked(promotion_problem(value), value)
+
+
+def promotion_scaffold_problem(config: VectenConfig) -> str | None:
+    """Why the project may not carry a promotion order yet, or None.
+
+    The workflows pin the release they were rendered with, and one older than
+    `PROMOTION_SINCE` ships prod on every push whatever the order says.
+    """
+    if config.deploy is None or config.deploy.promotion is None:
+        return None
+    rendered = config.project.scaffold_version
+    try:
+        current = Version(rendered) >= Version(PROMOTION_SINCE)
+    except InvalidVersion:
+        current = False
+    if current:
+        return None
+    return (
+        f"[deploy] promotion needs workflows rendered by vecten {PROMOTION_SINCE} or later, "
+        f"and this project's were rendered by {rendered}; run `vecten update` first"
+    )
+
 
 McpAuth = Literal["oidc", "password"]
+
+
+def allow_networks(value: list[str]) -> list[str]:
+    # Each entry becomes an NGINX `allow` line, so only a parsed network may pass.
+    return [str(ipaddress.ip_network(item, strict=True)) for item in value]
 
 
 class McpSection(Strict):
@@ -139,14 +211,123 @@ class McpSection(Strict):
     @field_validator("admin_allow")
     @classmethod
     def _networks(cls, value: list[str]) -> list[str]:
-        # Each entry becomes an NGINX `allow` line, so only a parsed network may pass.
-        return [str(ipaddress.ip_network(item, strict=True)) for item in value]
+        return allow_networks(value)
 
     @model_validator(mode="after")
     def _exposure(self) -> McpSection:
         if self.admin_panel == "off" and self.admin_allow:
             raise ValueError("admin_allow applies only while admin_panel is public")
         return self
+
+
+class AirflowSection(Strict):
+    # The networks that may reach a deployed `airflow.<domain>`; empty leaves it public.
+    allow: list[str] = Field(default_factory=list)
+
+    @field_validator("allow")
+    @classmethod
+    def _networks(cls, value: list[str]) -> list[str]:
+        return allow_networks(value)
+
+
+APEX = "@"
+_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+# The stack's own hostnames, and `_`-prefixed names that DNS and ACME use for their records.
+RESERVED_LABELS = frozenset({"airflow", "mcp", "www"})
+
+
+def label_problem(value: str) -> str | None:
+    """Why `value` cannot name a service's hostname below the domain, or None."""
+    if value == APEX:
+        return None
+    if value in RESERVED_LABELS or value.startswith("_"):
+        return f"{value} is reserved; choose another label"
+    if not _LABEL.fullmatch(value):
+        return "a DNS label of lowercase letters, digits and inner hyphens, or @ for the apex"
+    return None
+
+
+def service_hostname(label: str, domain: str) -> str:
+    return domain if label == APEX else f"{label}.{domain}"
+
+
+class RouteBinding(Strict):
+    access: Literal["public", "login"]
+    groups: list[str] = Field(default_factory=list)
+    # Networks that may reach the route on a deployed host; empty admits every address.
+    allow: list[str] = Field(default_factory=list)
+
+    @field_validator("groups")
+    @classmethod
+    def _groups(cls, value: list[str]) -> list[str]:
+        for group in value:
+            _checked(group_name_problem(group), group)
+        return value
+
+    @field_validator("allow")
+    @classmethod
+    def _networks(cls, value: list[str]) -> list[str]:
+        return allow_networks(value)
+
+    @model_validator(mode="after")
+    def _groups_match_access(self) -> RouteBinding:
+        if self.access == "login" and not self.groups:
+            raise ValueError("groups: a login route admits one or more groups")
+        if self.access == "public" and self.groups:
+            raise ValueError("groups: only a login route names groups")
+        return self
+
+
+class ServiceBinding(Strict):
+    # A DNS label below the environment's domain, or `@` for the domain itself.
+    hostname: str | None = None
+    host: Component | None = None
+    local: bool = True
+    memory_mb: int | None = Field(default=None, ge=MEMORY_MB[0], le=MEMORY_MB[1])
+    cpus: float | None = Field(default=None, ge=CPUS[0], le=CPUS[1])
+    routes: dict[str, RouteBinding] = Field(default_factory=dict)
+
+    @field_validator("hostname")
+    @classmethod
+    def _label(cls, value: str | None) -> str | None:
+        return value if value is None else _checked(label_problem(value), value)
+
+    @field_validator("routes")
+    @classmethod
+    def _route_names(cls, value: dict[str, RouteBinding]) -> dict[str, RouteBinding]:
+        for name in value:
+            _checked(service_name_problem("route", name), name)
+        return value
+
+    @model_validator(mode="after")
+    def _routes_need_a_hostname(self) -> ServiceBinding:
+        if self.routes and self.hostname is None:
+            raise ValueError("hostname is required when a route is bound")
+        return self
+
+
+class AppBinding(Strict):
+    # The MCP groups that may open the app; the MCP also restricts what it reads to them.
+    groups: list[str]
+    # A container app's DNS label below the environment's domain; the app's name when unset.
+    hostname: str | None = None
+    # Whether a container app runs on the laptop stack too; true when unset. None, not a default
+    # of true, keeps a snowflake app's binding free of a host field once vecten.toml is written.
+    local: bool | None = None
+
+    @field_validator("groups")
+    @classmethod
+    def _groups(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("one or more MCP groups may open the app")
+        for group in value:
+            _checked(group_name_problem(group), group)
+        return value
+
+    @field_validator("hostname")
+    @classmethod
+    def _label(cls, value: str | None) -> str | None:
+        return value if value is None else _checked(label_problem(value), value)
 
 
 def _checked(problem: str | None, value: Any) -> Any:
@@ -194,6 +375,8 @@ class ConnectorDecl(Strict):
     def _secrets(cls, value: list[str]) -> list[str]:
         for secret in value:
             _checked(secret_name_problem(secret), secret)
+            if APP_CREDENTIAL.fullmatch(secret):
+                raise ValueError(f"{secret} is reserved for an analytics app's client credentials")
         return value
 
     @field_validator("groups")
@@ -203,6 +386,13 @@ class ConnectorDecl(Strict):
         for group in value:
             _checked(group_name_problem(group), group)
         return value
+
+
+class AreaDecl(Strict):
+    """A restricted area: the schemas `core_<name>` and `marts_<name>`, which no role reads
+    until an admin grants the area to a group."""
+
+    access: AccessDecl | None = None
 
 
 # Cloud identifiers land in tfvars, workflow variables and API paths.
@@ -231,12 +421,19 @@ class EnvironmentFacts(Strict):
     deployed_commit: str | None = None
     first_user_added: bool = False
     connector_access_applied: list[str] = Field(default_factory=list)
+    area_access_applied: list[str] = Field(default_factory=list)
     provisioner_script_run: bool = False
     provisioner_secrets_set: bool = False
     connection_shown: bool = False
     alert_webhook_asked: bool = False
     oidc_registered: bool = False
     admin_link_issued: bool = False
+    # The `[warehouse] shared_account` value the environment's first deploy used; its
+    # Snowflake objects carry the names that value gives for the environment's life.
+    snowflake_shared_account: bool | None = None
+    # The base of a shared account's names when the environment first deployed; another base
+    # would rename every object it has.
+    snowflake_base: str | None = Field(default=None, pattern=r"^[A-Z0-9_]+$")
 
     @field_validator("cloud_ids")
     @classmethod
@@ -267,6 +464,68 @@ class PackagesSection(Strict):
     private_index: bool = False
 
 
+# A Debian package name, optionally `=<version>`. Entries reach an `apt-get install` line of a
+# generated Dockerfile, so nothing that a shell or apt would read as more than a name passes:
+# apt reads a trailing `-` as "remove this package", and a version starts with a digit after an
+# optional numeric epoch.
+_DEBIAN_PACKAGE = re.compile(
+    r"[a-z0-9][a-z0-9+.-]*[a-z0-9+.](=([0-9]+:)?[0-9]([A-Za-z0-9.+~-]*[A-Za-z0-9.+~])?)?"
+)
+
+
+class _PythonDependencies(Strict):
+    python: list[str] = Field(default_factory=list)
+
+    @field_validator("python")
+    @classmethod
+    def _python(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            if parse_requirement(entry) is None:
+                raise ValueError(f"{entry!r}: {REQUIREMENT_RULE}")
+        return value
+
+
+class CliDependencies(_PythonDependencies):
+    @model_validator(mode="before")
+    @classmethod
+    def _no_system(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "system" in value:
+            raise ValueError(
+                "system: Vecten does not install operating-system packages on the laptop; "
+                "install them yourself, and list the image's in [dependencies.platform] or "
+                "[dependencies.mcp]"
+            )
+        return value
+
+
+class ComponentDependencies(_PythonDependencies):
+    system: list[str] = Field(default_factory=list)
+
+    @field_validator("system")
+    @classmethod
+    def _system(cls, value: list[str]) -> list[str]:
+        for entry in value:
+            if not _DEBIAN_PACKAGE.fullmatch(entry):
+                raise ValueError(
+                    f"{entry!r} is not a Debian package name, optionally with =<version>"
+                )
+        return value
+
+
+class DependenciesSection(Strict):
+    platform: ComponentDependencies | None = None
+    mcp: ComponentDependencies | None = None
+    cli: CliDependencies | None = None
+
+    def python(self, component: str) -> list[str]:
+        section = getattr(self, component)
+        return list(section.python) if section is not None else []
+
+    def system(self, component: str) -> list[str]:
+        section = getattr(self, component)
+        return list(getattr(section, "system", [])) if section is not None else []
+
+
 class VectenConfig(Strict):
     packages: PackagesSection = Field(default_factory=PackagesSection)
     users: int = Field(gt=0)
@@ -279,7 +538,18 @@ class VectenConfig(Strict):
     warehouse: WarehouseSection = Field(default_factory=WarehouseSection)
     deploy: DeploySection | None = None
     mcp: McpSection = Field(default_factory=McpSection)
+    airflow: AirflowSection = Field(default_factory=AirflowSection)
     connectors: list[ConnectorDecl] = Field(default_factory=list)
+    areas: dict[str, AreaDecl] = Field(default_factory=dict)
+    dependencies: DependenciesSection = Field(default_factory=DependenciesSection)
+    # Secret names the project's own DAGs and MCP code read, delivered like an extension's.
+    secrets: list[str] = Field(default_factory=list)
+    # `[settings.<extension>]` and `[settings.project]`, with `env.<env>` overrides.
+    settings: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # `[services.<extension>.<service>]`: where and how each declared service runs.
+    services: dict[str, dict[str, ServiceBinding]] = Field(default_factory=dict)
+    # `[apps.<extension>.<app>]`: who may open each declared analytics app, and where it runs.
+    apps: dict[str, dict[str, AppBinding]] = Field(default_factory=dict)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -289,6 +559,191 @@ class VectenConfig(Strict):
             _checked(env_name_problem(env), env)
         return value
 
+    @field_validator("areas")
+    @classmethod
+    def _area_names(cls, value: dict[str, AreaDecl]) -> dict[str, AreaDecl]:
+        for name in value:
+            _checked(area_name_problem(name), name)
+        return value
+
+    @model_validator(mode="after")
+    def _areas_apart_from_connectors(self) -> VectenConfig:
+        # The access answers, the panel and `next` name an area and a connector the same way.
+        for connector in self.connectors:
+            if connector.name in self.areas:
+                raise ValueError(
+                    f"area {connector.name} shares its name with the connector that loads "
+                    f"raw_{connector.name}; choose another area name"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _shared_account_needs_the_snowflake_root(self) -> VectenConfig:
+        # Only the platform's Snowflake root creates the per-environment database, warehouse
+        # and roles the shared account's names separate environments by.
+        if self.warehouse.shared_account:
+            if self.warehouse.kind != "snowflake":
+                raise ValueError("[warehouse] shared_account needs a Snowflake warehouse")
+            if not self.has("platform"):
+                raise ValueError("[warehouse] shared_account needs the platform component")
+        return self
+
+    @model_validator(mode="after")
+    def _applied_areas_are_declared(self) -> VectenConfig:
+        # The MCP forgets the grants of an area that left this file, so `next` seeds a later
+        # declaration of the same name again.
+        for facts in self.environments.values():
+            facts.area_access_applied = [a for a in facts.area_access_applied if a in self.areas]
+        return self
+
+    @model_validator(mode="after")
+    def _airflow_needs_platform(self) -> VectenConfig:
+        # Without the platform no host serves Airflow, so the list would restrict nothing.
+        if self.airflow.allow and not self.has("platform"):
+            raise ValueError("[airflow] allow needs the platform component")
+        return self
+
+    @field_validator("secrets")
+    @classmethod
+    def _secrets(cls, value: list[str]) -> list[str]:
+        for name in value:
+            problem = secret_problem(name)
+            if problem:
+                raise ValueError(problem)
+        return value
+
+    @field_validator("extensions")
+    @classmethod
+    def _no_extension_named_project(cls, value: list[str]) -> list[str]:
+        for registration in value:
+            req = parse_requirement(registration)
+            if req is not None and normalize_name(req.name) == PROJECT_SETTINGS:
+                raise ValueError(
+                    "an extension may not be named project, which names the project's settings"
+                )
+        return value
+
+    @model_validator(mode="after")
+    def _settings_namespaces(self) -> VectenConfig:
+        listed = {
+            normalize_name(req.name)
+            for req in map(parse_requirement, self.extensions)
+            if req is not None
+        }
+        for namespace, table in self.settings.items():
+            where = f"settings.{namespace}"
+            if namespace != PROJECT_SETTINGS and namespace not in listed:
+                raise ValueError(f"{where}: no extension of that name is listed in extensions")
+            if is_toml_time(table):
+                raise ValueError(
+                    f"{where}: a TOML date or time, inf or nan has no JSON type; use a string"
+                )
+            overrides = table.get("env", {})
+            if not isinstance(overrides, dict):
+                raise ValueError(f"{where}.env: a table of environments, such as env.prod")
+            for env, values in overrides.items():
+                if env != "local" and env_name_problem(env):
+                    raise ValueError(f"{where}.env.{env}: {env_name_problem(env)}")
+                if not isinstance(values, dict):
+                    raise ValueError(f"{where}.env.{env}: a table of settings")
+        return self
+
+    @model_validator(mode="after")
+    def _service_bindings(self) -> VectenConfig:
+        listed = {
+            normalize_name(req.name)
+            for req in map(parse_requirement, self.extensions)
+            if req is not None
+        }
+        labels: set[str] = set()
+        for extension, bindings in self.services.items():
+            if extension not in listed:
+                raise ValueError(
+                    f"services.{extension}: no extension of that name is listed in extensions"
+                )
+            for name, binding in bindings.items():
+                where = f"services.{extension}.{name}"
+                problem = service_name_problem("service", name)
+                if problem:
+                    raise ValueError(f"{where}: {problem}")
+                if binding.host is not None and not self.has(binding.host):
+                    raise ValueError(f"{where}.host: the project does not enable {binding.host}")
+                label = binding.hostname
+                if label is not None:
+                    if label in labels:
+                        raise ValueError(f"{where}.hostname: {label} is bound twice")
+                    labels.add(label)
+                    if label == APEX and self.deploy and self.deploy.domain == self.deploy.dns_zone:
+                        raise ValueError(
+                            f"{where}.hostname: @ is {self.deploy.domain}, the DNS zone itself, "
+                            "whose apex records the zone keeps; choose a label"
+                        )
+                for route_name, route in binding.routes.items():
+                    if route.access == "login" and not self.has("mcp"):
+                        raise ValueError(
+                            f"{where}.routes.{route_name}.access: a login route needs the mcp "
+                            "component, whose sign-in admits people"
+                        )
+        return self
+
+    @model_validator(mode="after")
+    def _app_bindings(self) -> VectenConfig:
+        listed = {
+            normalize_name(req.name)
+            for req in map(parse_requirement, self.extensions)
+            if req is not None
+        }
+        labels = {b.hostname for bindings in self.services.values() for b in bindings.values()} - {
+            None
+        }
+        named: dict[str, str] = {}
+        for extension, bindings in self.apps.items():
+            if extension not in listed:
+                raise ValueError(
+                    f"apps.{extension}: no extension of that name is listed in extensions"
+                )
+            for name, binding in bindings.items():
+                where = f"apps.{extension}.{name}"
+                problem = service_name_problem("app", name)
+                if problem:
+                    raise ValueError(f"{where}: {problem}")
+                if not self.has("mcp"):
+                    raise ValueError(
+                        f"{where}: an app needs the mcp component, which decides who may open "
+                        "it and what it reads"
+                    )
+                # The app's principal and its credential names carry the app's name alone,
+                # folded into a warehouse name.
+                principal = principal_name(name)
+                other = named.setdefault(principal, f"{extension}.{name}")
+                if other != f"{extension}.{name}":
+                    raise ValueError(
+                        f"{where}: {other} is bound too, and both would run as {principal}"
+                    )
+                label = binding.hostname
+                if label is None:
+                    continue
+                if label in labels:
+                    raise ValueError(f"{where}.hostname: {label} is bound twice")
+                labels.add(label)
+                if label == APEX and self.deploy and self.deploy.domain == self.deploy.dns_zone:
+                    raise ValueError(
+                        f"{where}.hostname: @ is {self.deploy.domain}, the DNS zone itself, "
+                        "whose apex records the zone keeps; choose a label"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def _dependencies_need_their_component(self) -> VectenConfig:
+        # No image would install them, so the requirements would be silently ignored.
+        for component in ("platform", "mcp"):
+            if getattr(self.dependencies, component) is not None and not self.has(component):
+                raise ValueError(
+                    f"[dependencies.{component}] needs the {component} component, "
+                    "which this project does not enable"
+                )
+        return self
+
     def model_post_init(self, context: Any, /) -> None:
         self.environments = _EnvDict(self.environments)
 
@@ -297,6 +752,18 @@ class VectenConfig(Strict):
 
     def connector(self, name: str) -> ConnectorDecl | None:
         return next((c for c in self.connectors if c.name == name), None)
+
+    def promotion_order(self) -> tuple[str, ...]:
+        declared = self.deploy.promotion if self.deploy is not None else None
+        return tuple(declared) if declared else DEFAULT_PROMOTION
+
+    def promoted_from(self, env: str) -> str | None:
+        """The environment `env` promotes from; None for the first one or one outside the order."""
+        order = self.promotion_order()
+        if env not in order:
+            return None
+        index = order.index(env)
+        return order[index - 1] if index else None
 
 
 def load_config(project_root: Path) -> VectenConfig:
@@ -322,9 +789,65 @@ def stack_project_name(project_root: Path, project_name: str) -> str:
     return f"vecten-{project_name}-{digest}"
 
 
+def _merge(table: Any, data: dict[str, Any], changed: dict[str, Any]) -> None:
+    """Make `table` hold `data`, touching only keys whose values differ.
+
+    A key the file does not hold is added only when `changed` (the values that differ from
+    their defaults) has it. Comments, blank lines and the order of everything unchanged stay as
+    the person wrote them.
+    """
+    for key in [k for k in table if k not in data]:
+        del table[key]
+    for key, value in data.items():
+        current = table.get(key)
+        if isinstance(value, dict) and isinstance(current, dict):
+            _merge(current, value, changed.get(key) or {})
+        elif current is None:
+            if key in changed:
+                table[key] = changed[key]
+        elif _plain(current) != value:
+            table[key] = value
+
+
+def _plain(item: Any) -> Any:
+    return item.unwrap() if hasattr(item, "unwrap") else item
+
+
 def save_config(project_root: Path, config: VectenConfig) -> None:
+    import tomlkit
+
+    # A command that adds to a loaded configuration builds it with model_copy, which skips the
+    # validators; what fails them would make every later command refuse the file.
+    try:
+        VectenConfig.model_validate(config.model_dump(mode="json"))
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        loc = ".".join(str(p) for p in first["loc"])
+        where = f"{loc}: " if loc else ""
+        raise Failure(ExitCode.CONFIG, f"{CONFIG_FILE} not saved: {where}{first['msg']}") from None
+    problem = promotion_scaffold_problem(config)
+    if problem:
+        raise Failure(ExitCode.REFUSED, problem)
     data = config.model_dump(mode="json", exclude_none=True)
-    write_text_atomic(project_root / CONFIG_FILE, tomli_w.dumps(data))
+    for optional in ("dependencies", "secrets", "settings", "services", "apps", "areas"):
+        if not data.get(optional):
+            data.pop(optional, None)
+    path = project_root / CONFIG_FILE
+    doc = tomlkit.parse(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if doc is None:
+        write_text_atomic(path, tomli_w.dumps(data))
+        return
+    changed = config.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+    _merge(doc, data, changed)
+    text = tomlkit.dumps(doc)
+    # tomlkit can emit a table twice when a file declares one table's parts apart; such a file
+    # does not load, so the whole configuration is written afresh instead, without comments.
+    try:
+        if VectenConfig.model_validate(tomllib.loads(text)) != config:
+            raise ValueError("the edited file reads back differently")
+    except tomllib.TOMLDecodeError, ValueError, ValidationError:
+        text = tomli_w.dumps(data)
+    write_text_atomic(path, text)
 
 
 def parse_warehouse_locator(url: str) -> WarehouseSection:

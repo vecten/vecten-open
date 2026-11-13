@@ -16,6 +16,10 @@ GROUP_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 GROUP_RULE = (
     "lowercase letters, digits and underscores, starting with a letter, at most 63 characters"
 )
+# An area name follows `core_` and `marts_` in a schema name, so it holds no underscore and
+# `marts_<area>` parses one way; 57 characters keep the schema within Postgres's 63.
+AREA_NAME = re.compile(r"[a-z][a-z0-9]{0,56}")
+AREA_RULE = "[a-z][a-z0-9]*: lowercase letters and digits, starting with a letter, at most 57"
 # A secret name lands inside Compose's `${...}` and every provider's key space.
 SECRET_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SECRET_RULE = (
@@ -41,6 +45,12 @@ def group_name_problem(value: str) -> str | None:
     if GROUP_NAME.fullmatch(value):
         return None
     return f"group names must be {GROUP_RULE}; got {value!r}"
+
+
+def area_name_problem(value: str) -> str | None:
+    if AREA_NAME.fullmatch(value):
+        return None
+    return f"area names must be {AREA_RULE}; got {value!r}"
 
 
 def secret_name_problem(value: str) -> str | None:

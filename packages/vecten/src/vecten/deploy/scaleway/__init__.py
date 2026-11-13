@@ -130,6 +130,7 @@ class ScalewayProvider(ScalewayRuntimeProvider):
         self._operator: str | None = None
         self._organization: str | None = None
         self._storages: dict[str, Any] = {}
+        self.orphaned_volumes: dict[str, list[str]] = {}
         self._known: set[str] = set()
         # The hosts `after_cloud_apply` handed a key to, which ship gives the first-ship window.
         self._keyed: frozenset[str] = frozenset()

@@ -39,6 +39,7 @@ action_checkout: {type: str, ask: false}
 action_setup_uv: {type: str, ask: false}
 action_setup_terraform: {type: str, ask: false}
 action_configure_aws_credentials: {type: str, ask: false}
+action_create_github_app_token: {type: str, ask: false}
 convention_version: {type: int, ask: false}
 ossie_spec: {type: str, ask: false}
 warehouse_host: {type: str, default: "", ask: false}
@@ -46,3 +47,6 @@ warehouse_port: {type: int, default: 0, ask: false}
 warehouse_database: {type: str, default: "", ask: false}
 warehouse_account: {type: str, default: "", ask: false}
 snowflake_account: {type: str, default: "", ask: false}
+# From `[warehouse] shared_account`, which vecten.toml records; `when: false` keeps it out of
+# the answers file, so a project's answers stay the same in both layouts.
+snowflake_shared_account: {type: bool, default: false, when: false}

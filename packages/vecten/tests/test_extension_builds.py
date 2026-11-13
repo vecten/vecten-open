@@ -176,3 +176,228 @@ def test_images_use_separate_runtime_locks_and_preserve_base_packages(tmp_path):
         text = (stack / "build" / f"{kind}.Dockerfile").read_text()
         assert f"COPY requirements-{kind}.txt" in text
         assert "--constraint /tmp/vecten-base-constraints.txt" in text
+
+
+def _stamped_project(root, c, lock_text):
+    """A project as `vecten lock` leaves it: pins, record and fresh stamped locks."""
+    from vecten import locking
+
+    (root / "requirements.txt").write_text("acme-demo==1.0\n")
+    record = {"acme-demo": locking.Extension("1.0", ("platform",))}
+    (root / locking.RECORD_FILE).write_text(locking.record_text(record))
+    for component in locking.components(c):
+        roots = locking.roots(c, locking.read_pins(root), record, component)
+        stamp = locking.stamp_line(component, locking.inputs_hash(component, roots))
+        (root / locking.LOCK_FILES[component]).write_text(f"{stamp}\n{lock_text[component]}")
+
+
+def test_stamped_locks_give_each_image_its_own_packages(tmp_path):
+    c = config(extensions=["acme-demo"])
+    stack = tmp_path / ".vecten/stack"
+    _stamped_project(
+        tmp_path,
+        c,
+        {
+            "cli": "acme-demo==1.0\n",
+            "platform": "acme-demo==1.0\npolars==1.0\n",
+            "mcp": "acme-demo==1.0\nrapidfuzz==3.0\n",
+        },
+    )
+    write_project_layer(stack, c, None)
+    airflow = (stack / "build" / "requirements-airflow.txt").read_text()
+    mcp = (stack / "build" / "requirements-mcp.txt").read_text()
+    assert airflow == "acme-demo==1.0\npolars==1.0\n"
+    assert mcp == "acme-demo==1.0\nrapidfuzz==3.0\n"
+
+
+def test_a_stale_stamped_lock_is_refused_naming_the_lock_and_vecten_lock(tmp_path):
+    from vecten_shared.config import ComponentDependencies
+
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    c.dependencies.mcp = ComponentDependencies(python=["rapidfuzz"])
+    with pytest.raises(Failure) as caught:
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+    assert "requirements-mcp.lock" in caught.value.message
+    assert "vecten lock" in caught.value.message
+    assert not (tmp_path / ".vecten/stack/build/mcp.Dockerfile").exists()
+
+
+def test_a_stamped_lock_without_its_record_is_refused(tmp_path):
+    from vecten import locking
+
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    (tmp_path / locking.RECORD_FILE).unlink()
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_project_requirements_without_locks_are_refused(tmp_path):
+    c = config(extensions=[], dependencies={"platform": {"python": ["polars"]}})
+    with pytest.raises(Failure) as caught:
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+    assert "vecten lock" in caught.value.message
+
+
+def test_an_unstamped_lock_refusal_names_vecten_lock(tmp_path):
+    c = config()
+    (tmp_path / "requirements.txt").write_text("acme-demo==1.0\n")
+    write_locks(tmp_path, "acme-demo==9.0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_project_requirements_in_a_project_locked_by_an_earlier_release_are_refused(tmp_path):
+    c = config(dependencies={"platform": {"python": ["polars"]}})
+    (tmp_path / "requirements.txt").write_text("acme-demo==1.0\n")
+    write_locks(tmp_path, "acme-demo==1.0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_a_legacy_runtime_lock_must_match_the_pinned_extension(tmp_path):
+    c = config(extensions=["acme-demo"])
+    (tmp_path / "requirements.txt").write_text("acme-demo==1.0\n")
+    (tmp_path / "requirements.lock").write_text("acme-demo==1.0\n")
+    (tmp_path / "requirements-airflow.lock").write_text("acme-demo==9.0\n")
+    (tmp_path / "requirements-mcp.lock").write_text("acme-demo==1.0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_system_packages_install_as_root_before_python_then_return_to_the_image_user(tmp_path):
+    c = config(
+        extensions=[],
+        dependencies={"platform": {"system": ["libgomp1"]}, "mcp": {"system": ["libpq5=15.8"]}},
+    )
+    write_project_layer(tmp_path, c, None)
+    for kind, package, user in (("airflow", "libgomp1", "airflow"), ("mcp", "libpq5=15.8", "app")):
+        text = (tmp_path / "build" / f"{kind}.Dockerfile").read_text()
+        assert text.splitlines()[1:4] == [
+            "USER root",
+            "RUN apt-get update && apt-get install -y --no-install-recommends "
+            f"{package} && rm -rf /var/lib/apt/lists/* "
+            f"&& dpkg -s {package.split('=')[0]} >/dev/null",
+            f"USER {user}",
+        ]
+
+
+def test_a_dockerfile_without_system_packages_is_unchanged(tmp_path):
+    with_none = tmp_path / "a"
+    write_project_layer(with_none, config(), None)
+    with_empty = tmp_path / "b"
+    write_project_layer(with_empty, config(dependencies={"platform": {"system": []}}), None)
+    for kind in ("airflow", "mcp"):
+        text = (with_none / "build" / f"{kind}.Dockerfile").read_text()
+        assert "USER root" not in text and "apt-get" not in text
+        assert text == (with_empty / "build" / f"{kind}.Dockerfile").read_text()
+
+
+# --- in-repo extensions -------------------------------------------------------
+
+
+def _in_repo_project(root, c):
+    from vecten import locking
+    from vecten_shared.extension_record import Extension
+
+    from .test_in_repo import make
+
+    make(root)
+    info = __import__("vecten.in_repo", fromlist=["read"]).check(root, "./extensions/acme-portal")
+    record = {
+        "acme-portal": Extension(
+            info.version,
+            info.extras,
+            source_path=info.path,
+            metadata_sha256=info.metadata_sha256,
+            build_requires=("hatchling==1.26.3", "pluggy==1.5.0"),
+        )
+    }
+    (root / "requirements.txt").write_text("./extensions/acme-portal\n")
+    (root / locking.RECORD_FILE).write_text(locking.record_text(record))
+    for component in locking.components(c):
+        roots = locking.roots(c, {}, record, component)
+        digest = locking.inputs_hash(component, [*roots, *locking.metadata_markers(record)])
+        (root / locking.LOCK_FILES[component]).write_text(
+            locking.stamp_line(component, digest) + "\nhttpx==0.28.1\n"
+        )
+
+
+def test_an_in_repo_extension_is_built_from_the_extra_context_without_resolving(tmp_path):
+    c = config(extensions=["acme-portal"])
+    _in_repo_project(tmp_path, c)
+    stack = tmp_path / ".vecten" / "stack"
+    write_project_layer(stack, c, None)
+    assert (stack / "build" / "build-constraints.txt").read_text() == (
+        "hatchling==1.26.3\npluggy==1.5.0\n"
+    )
+    for kind in ("airflow", "mcp"):
+        text = (stack / "build" / f"{kind}.Dockerfile").read_text()
+        assert "--mount=type=bind,from=extensions,target=/tmp/extensions,rw" in text
+        assert "--no-deps" in text and "-r /tmp/requirements.txt" in text
+        assert (
+            "--no-deps --build-constraint /tmp/build-constraints.txt /tmp/extensions/acme-portal"
+            in text
+        )
+        assert "pip check" in text
+
+
+def test_a_locked_project_without_in_repo_extensions_installs_its_lock_without_resolving(
+    tmp_path,
+):
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    stack = tmp_path / ".vecten" / "stack"
+    write_project_layer(stack, c, None)
+    for kind in ("airflow", "mcp"):
+        text = (stack / "build" / f"{kind}.Dockerfile").read_text()
+        assert "--no-deps" in text
+        assert "from=extensions" not in text
+    assert not (stack / "build" / "build-constraints.txt").exists()
+
+
+def test_an_unlocked_or_legacy_project_keeps_todays_install(tmp_path):
+    for root, prepare in (
+        (tmp_path / "unlocked", lambda r: None),
+        (
+            tmp_path / "legacy",
+            lambda r: (
+                (r / "requirements.txt").write_text("acme-demo==1.0\n"),
+                write_locks(r, "acme-demo==1.0\n"),
+            ),
+        ),
+    ):
+        root.mkdir()
+        prepare(root)
+        stack = root / ".vecten" / "stack"
+        write_project_layer(stack, config(), None)
+        for kind in ("airflow", "mcp"):
+            text = (stack / "build" / f"{kind}.Dockerfile").read_text()
+            assert "--no-deps" not in text and "extensions" not in text
+
+
+def test_a_build_rechecks_the_in_repo_rules(tmp_path):
+    c = config(extensions=["acme-portal"])
+    _in_repo_project(tmp_path, c)
+    (tmp_path / "extensions/acme-portal/src/link").symlink_to(tmp_path)
+    with pytest.raises(Failure, match="symbolic link"):
+        write_project_layer(tmp_path / ".vecten" / "stack", c, None)
+
+
+@pytest.mark.parametrize("body", ["acme-demo==9.0\n", ""])
+def test_a_stamped_lock_whose_body_breaks_its_inputs_is_refused(tmp_path, body):
+    c = config(extensions=["acme-demo"])
+    _stamped_project(tmp_path, c, dict.fromkeys(("cli", "platform", "mcp"), "acme-demo==1.0\n"))
+    stamp = (tmp_path / "requirements-mcp.lock").read_text().splitlines()[0]
+    (tmp_path / "requirements-mcp.lock").write_text(f"{stamp}\n{body}")
+    with pytest.raises(Failure, match="requirements-mcp.lock"):
+        write_project_layer(tmp_path / ".vecten/stack", c, None)
+
+
+def test_an_unlocked_project_never_installs_an_in_repo_name_from_an_index(tmp_path):
+    from .test_in_repo import make
+
+    make(tmp_path)
+    with pytest.raises(Failure, match="vecten lock"):
+        write_project_layer(tmp_path / ".vecten/stack", config(extensions=["acme-portal"]), None)

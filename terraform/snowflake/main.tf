@@ -8,13 +8,21 @@ locals {
   schemas         = toset(["STAGING", "SNAPSHOTS", "CORE", "MARTS"])
   analyst_schemas = toset(["CORE", "MARTS"])
   with_mcp        = contains(var.components, "mcp")
-  roles           = concat(["ANALYST", "LOADER"], local.with_mcp ? ["PROVISIONER"] : [])
+  # Keyed by purpose: the keys are the resource addresses an environment deployed with the
+  # fixed names already holds, so they stay the role names of that layout.
+  roles = merge(
+    { ANALYST = var.analyst_role_name, LOADER = var.loader_role_name },
+    local.with_mcp ? { PROVISIONER = var.provisioner_role_name } : {},
+  )
   database_privileges = merge(
     { ANALYST = ["USAGE"], LOADER = ["USAGE", "CREATE SCHEMA"] },
     local.with_mcp ? { PROVISIONER = ["USAGE"] } : {},
   )
-  analyst_future = {
-    for pair in setproduct(local.analyst_schemas, ["TABLES", "VIEWS"]) :
+  # With the MCP, its state database is the only owner of the analyst role's reads, so a
+  # revoke made there holds; without it, nothing else grants them.
+  analyst_default_schemas = local.with_mcp ? toset([]) : local.analyst_schemas
+  analyst_default_future = {
+    for pair in setproduct(local.analyst_default_schemas, ["TABLES", "VIEWS"]) :
     "${pair[0]}/${pair[1]}" => { schema = pair[0], objects = pair[1] }
   }
 }
@@ -43,9 +51,9 @@ resource "snowflake_warehouse" "this" {
 }
 
 resource "snowflake_account_role" "this" {
-  for_each = toset(local.roles)
+  for_each = local.roles
 
-  name    = each.key
+  name    = each.value
   comment = local.comment
 }
 
@@ -53,9 +61,9 @@ resource "snowflake_account_role" "this" {
 # preview features, which the thin root enables.
 data "snowflake_current_role" "deployer" {}
 
-# Ownership of the schemas moves to LOADER, so the deploy role keeps reading them on the next
-# plan only through a role it holds: every role created here is granted to SYSADMIN, as
-# Snowflake's role hierarchy expects, and to the role Terraform runs as.
+# Ownership of the schemas moves to the loader role, so the deploy role keeps reading them on
+# the next plan only through a role it holds: every role created here is granted to SYSADMIN,
+# as Snowflake's role hierarchy expects, and to the role Terraform runs as.
 resource "snowflake_grant_account_role" "sysadmin" {
   for_each = snowflake_account_role.this
 
@@ -73,7 +81,7 @@ resource "snowflake_grant_account_role" "deployer" {
 }
 
 resource "snowflake_service_user" "loader" {
-  name              = "LOADER"
+  name              = var.loader_user_name
   comment           = local.comment
   default_role      = snowflake_account_role.this["LOADER"].name
   default_warehouse = snowflake_warehouse.this.name
@@ -82,6 +90,33 @@ resource "snowflake_service_user" "loader" {
     for line in split("\n", var.loader_public_key) : trimspace(line)
     if !startswith(trimspace(line), "-----")
   ])
+}
+
+# A shared account holds other environments' External OAuth integrations, each of which
+# accepts a token for any user it is not kept from; the policy keeps the loader to its key.
+resource "snowflake_schema" "sign_in" {
+  count = var.loader_sign_in == null ? 0 : 1
+
+  database = snowflake_database.this.name
+  name     = var.loader_sign_in.schema
+  comment  = local.comment
+}
+
+resource "snowflake_authentication_policy" "loader" {
+  count = var.loader_sign_in == null ? 0 : 1
+
+  database               = snowflake_database.this.name
+  schema                 = snowflake_schema.sign_in[0].name
+  name                   = var.loader_sign_in.policy
+  authentication_methods = ["KEYPAIR"]
+  comment                = local.comment
+}
+
+resource "snowflake_user_authentication_policy_attachment" "loader" {
+  count = var.loader_sign_in == null ? 0 : 1
+
+  user_name                  = snowflake_service_user.loader.name
+  authentication_policy_name = snowflake_authentication_policy.loader[0].fully_qualified_name
 }
 
 resource "snowflake_grant_account_role" "loader_user" {
@@ -113,8 +148,27 @@ resource "snowflake_grant_privileges_to_account_role" "database" {
   }
 }
 
-resource "snowflake_grant_privileges_to_account_role" "analyst_schema" {
-  for_each = local.analyst_schemas
+# State written by earlier releases holds the analyst role's reads under these addresses.
+# Forgetting them keeps the grants in Snowflake: with the MCP its reconciliation owns them from
+# here, and without it the resources below take them over with an idempotent GRANT.
+removed {
+  from = snowflake_grant_privileges_to_account_role.analyst_schema
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = snowflake_grant_privileges_to_account_role.analyst_future
+
+  lifecycle {
+    destroy = false
+  }
+}
+
+resource "snowflake_grant_privileges_to_account_role" "analyst_default_schema" {
+  for_each = local.analyst_default_schemas
 
   account_role_name = snowflake_account_role.this["ANALYST"].name
   privileges        = ["USAGE"]
@@ -124,10 +178,10 @@ resource "snowflake_grant_privileges_to_account_role" "analyst_schema" {
   }
 }
 
-# Future grants are set before ownership moves to LOADER, whose dbt runs then create the
-# tables and views ANALYST reads.
-resource "snowflake_grant_privileges_to_account_role" "analyst_future" {
-  for_each = local.analyst_future
+# Future grants are set before ownership moves to the loader role, whose dbt runs then create
+# the tables and views the analyst role reads.
+resource "snowflake_grant_privileges_to_account_role" "analyst_default_future" {
+  for_each = local.analyst_default_future
 
   account_role_name = snowflake_account_role.this["ANALYST"].name
   privileges        = ["SELECT"]
@@ -152,8 +206,8 @@ resource "snowflake_grant_ownership" "schema" {
   }
 
   depends_on = [
-    snowflake_grant_privileges_to_account_role.analyst_schema,
-    snowflake_grant_privileges_to_account_role.analyst_future,
+    snowflake_grant_privileges_to_account_role.analyst_default_schema,
+    snowflake_grant_privileges_to_account_role.analyst_default_future,
     snowflake_grant_account_role.sysadmin,
     snowflake_grant_account_role.deployer,
   ]

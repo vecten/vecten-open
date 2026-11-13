@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from mcp.types import CallToolResult, TextContent
 from pydantic import Field
 
+from vecten_mcp.apps import scoped_model
 from vecten_mcp.audit_call import current_audit
 from vecten_mcp.auth.limits import RateLimit
 from vecten_mcp.failures import ModelNotReady
@@ -44,19 +45,29 @@ def rejected(message, reason="invalid_request"):
     return CallToolResult(content=[TextContent(type="text", text=message)], is_error=True)
 
 
+def app_scope(runtime, caller):
+    """The caller's app scope when it is an app principal, else None."""
+    apps = getattr(runtime, "apps", None)
+    return apps.scope(caller.principal["id"]) if apps else None
+
+
 def snapshot():
+    """The request's model as the caller may see it: an app principal's holds its app's
+    declared datasets only."""
     runtime, caller, call = request()
     if call.model is None:
         raise ModelNotReady()
     denied = runtime.access.denied(caller.principal["id"]) if runtime.access else set()
-    return runtime, caller, call, call.model, denied
+    scope = app_scope(runtime, caller)
+    model = call.model if scope is None else scoped_model(call.model, scope.datasets)
+    return runtime, caller, call, model, denied, scope
 
 
 async def describe(dataset: str | None = None):
     """Describe datasets, fields, metrics and relationships visible to your groups."""
 
     def run():
-        _, _, _, model, denied = snapshot()
+        _, _, _, model, denied, _ = snapshot()
         if dataset is not None and dataset not in model.datasets:
             return rejected("Unknown dataset.")
         return model.describe(dataset, denied=denied)
@@ -71,7 +82,7 @@ async def search(query: str):
     """Search model names, descriptions and synonyms without querying the warehouse."""
 
     def run():
-        _, _, _, model, denied = snapshot()
+        _, _, _, model, denied, _ = snapshot()
         return {"results": model.search(query, denied=denied)}
 
     return await offload(run)
@@ -85,6 +96,13 @@ async def sql_exec(sql: str, question: str = "", parameters: list | None = None)
 
     def run():
         runtime, caller, call = request()
+        scope = app_scope(runtime, caller)
+        if scope is not None:
+            problem = runtime.apps.sql_problem(scope, call.model, sql)
+            if problem:
+                return rejected(
+                    f"App {scope.app} reads only its declared datasets: {problem}.", "app_scope"
+                )
         try:
             read_statement(sql, kind=runtime.queries.kind)
         except ValueError as exc:
@@ -126,7 +144,15 @@ async def query_metrics(
     )
 
     def run():
-        runtime, caller, call, model, denied = snapshot()
+        runtime, caller, call, model, denied, scope = snapshot()
+        if scope is not None:
+            outside = [name for name in metrics if name not in model.metrics]
+            if outside:
+                return rejected(
+                    f"App {scope.app} reads only its declared datasets; "
+                    f"{', '.join(outside)} is not among their metrics.",
+                    "app_scope",
+                )
         cap = runtime.queries.setting("row_cap", 1000, 10000)
         try:
             compiled = model.compile(query, denied=denied, row_cap=cap)
@@ -147,6 +173,14 @@ async def query_metrics(
 
 
 query_metrics_tool = {"handler": query_metrics, "groups": ["*"]}
+# The only tools an app principal may call, by name and by handler, so that no tool another
+# package registers is reached by an app: each of these reads through the app's scope.
+APP_HANDLERS = {
+    "describe": describe,
+    "search": search,
+    "sql-exec": sql_exec,
+    "query_metrics": query_metrics,
+}
 
 
 async def service_call(method, *args, **kwargs):
@@ -337,3 +371,12 @@ async def read_settings():
 
 
 read_settings_tool = {"handler": read_settings, "groups": ["*"], "admin": True}
+
+
+async def list_apps():
+    """List the bound analytics apps: title, URL, bound and admitted groups, datasets, state,
+    their principals and access-health failures. Bindings change in vecten.toml only."""
+    return await admin_read("apps", {})
+
+
+list_apps_tool = {"handler": list_apps, "groups": ["*"], "admin": True}

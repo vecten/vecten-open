@@ -1,5 +1,6 @@
 import copy
 import json
+import shutil
 import subprocess
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -148,6 +149,8 @@ def inside_actions(root: Path, monkeypatch):
     aws_credentials(monkeypatch, root)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    # The gh a ship inside Actions sets its commit status through.
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
     ssm = FakeSsm()
     with mock_aws():
         s3 = boto3.client("s3", region_name=REGION)
@@ -636,6 +639,213 @@ def test_laptop_deploy_dispatches_follows_and_records_the_run_commit(
     assert FakeTerraform.calls == []
 
 
+def test_a_laptop_deploy_refuses_a_private_git_source_without_a_ci_credential(
+    invoke, laptop, project, monkeypatch
+):
+    from .test_cmd_ship import _private_git_source
+
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    name = _private_git_source(project)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code != 0
+    error = doc(r)["error"]
+    assert name in error and "VECTEN_GIT_CREDENTIALS" in error and "VECTEN_GIT_APP_ID" in error
+    assert laptop.named("workflow", "run") == []
+
+
+def test_a_postgres_deploy_records_no_snowflake_layout(invoke, laptop, project, monkeypatch):
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    assert invoke("deploy", "--env", "prod", "--json").exit_code == 0
+    assert load_config(project).environments["prod"].snowflake_shared_account is None
+
+
+def _share_account(root, **facts):
+    config = load_config(root)
+    config.warehouse.shared_account = True
+    save_config(root, config)
+    if facts:
+        set_facts(root, **facts)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_a_snowflake_deploy_records_the_layout_it_was_first_deployed_with(
+    invoke, laptop, snowflake, monkeypatch, shared
+):
+    if shared:
+        _share_account(snowflake)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    assert facts.snowflake_shared_account is shared
+    assert facts.deployed_commit == COMMIT
+
+
+def test_a_failed_first_run_records_the_layout_it_tried(invoke, laptop, snowflake, monkeypatch):
+    _share_account(snowflake)
+    laptop.watch_code = 1
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code != 0, r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    # The run may have created Snowflake objects under these names before it failed.
+    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME"
+    assert facts.deployed_commit is None
+
+
+def test_a_shared_deploy_records_the_base_of_its_names(invoke, laptop, snowflake, monkeypatch):
+    _share_account(snowflake)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    assert invoke("deploy", "--env", "prod", "--json").exit_code == 0
+    assert load_config(snowflake).environments["prod"].snowflake_base == "ACME"
+
+
+def test_a_changed_layout_is_refused_before_any_dispatch(invoke, laptop, snowflake, monkeypatch):
+    dev = env_tfvars_path(snowflake, "prod").read_text().replace('"prod"', '"dev"', 1)
+    env_tfvars_path(snowflake, "dev").write_text(dev)
+    _share_account(snowflake, snowflake_shared_account=False)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    error = doc(r)["error"]
+    assert "snowflake_shared_account = false" in error and "new deployment" in error
+    assert "deploy/envs/dev.tfvars" in error
+    assert laptop.named("workflow", "run") == []
+    assert load_config(snowflake).environments["prod"].snowflake_shared_account is False
+
+
+SHIPPED = "a3f9c2e0a3f9c2e0a3f9c2e0a3f9c2e0a3f9c2e0"
+
+
+def _promoting(root: Path, tmp_path: Path, monkeypatch, *, watch_code: int = 0) -> Path:
+    """`root` with dev before prod, dev in an account of its own having shipped SHIPPED; the
+    directory standing for SHIPPED's tree, a copy of `root` as it is now."""
+    from .test_deploy_promotion import ordered
+
+    ordered(root)
+    dev = env_tfvars_path(root, "dev")
+    dev.write_text(dev.read_text().replace('"ACME-PROD"', '"ACME-DEV"'))
+    set_facts(
+        root,
+        "dev",
+        bootstrapped=True,
+        state_bucket=STATE_BUCKET,
+        deployed_commit=COMMIT,
+        snowflake_shared_account=False,
+    )
+    shipped = tmp_path / "at-shipped"
+    shutil.copytree(root, shipped)
+    gh = FakeGh(history=[COMMIT, SHIPPED], statuses={SHIPPED: [("vecten/ship/dev", "success")]})
+    gh.watch_code = watch_code
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit(shown=shipped))
+    return shipped
+
+
+@pytest.mark.parametrize("watch_code", [0, 1])
+def test_a_promoted_first_deploy_records_the_layout_of_the_commit_it_deploys(
+    invoke, laptop, snowflake, tmp_path, monkeypatch, watch_code
+):
+    _promoting(snowflake, tmp_path, monkeypatch, watch_code=watch_code)
+    _share_account(snowflake)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert (r.exit_code == 0) is (watch_code == 0), r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    # The run named the objects by SHIPPED's vecten.toml, which keeps the fixed layout.
+    assert facts.snowflake_shared_account is False and facts.snowflake_base is None
+
+
+def test_a_promoted_first_deploy_records_the_base_of_the_commit_it_deploys(
+    invoke, laptop, snowflake, tmp_path, monkeypatch
+):
+    _share_account(snowflake)
+    _promoting(snowflake, tmp_path, monkeypatch)
+    config = load_config(snowflake)
+    config.warehouse.database = "LAKE"
+    save_config(snowflake, config)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME"
+
+
+def _ahead(root: Path, tmp_path: Path, **facts) -> Path:
+    """The directory standing for the fetched default branch's head: `root` with `[warehouse]
+    database = "acme_dw"` and prod's `facts`, which this checkout has not pulled."""
+    fetched = tmp_path / "at-fetched"
+    shutil.copytree(root, fetched)
+    config = load_config(fetched)
+    config.warehouse.database = "acme_dw"
+    save_config(fetched, config)
+    if facts:
+        set_facts(fetched, **facts)
+    return fetched
+
+
+@pytest.mark.parametrize("watch_code", [0, 1])
+def test_a_first_deploy_records_the_base_of_the_fetched_head(
+    invoke, laptop, snowflake, tmp_path, monkeypatch, watch_code
+):
+    _share_account(snowflake)
+    git = FakeGit(shown={"FETCH_HEAD": _ahead(snowflake, tmp_path)})
+    monkeypatch.setattr(gh_mod, "get_git", lambda: git)
+    laptop.watch_code = watch_code
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert (r.exit_code == 0) is (watch_code == 0), r.stdout
+    facts = load_config(snowflake).environments["prod"]
+    # CI deployed the default branch's head, whose vecten.toml names the base ACME_DW.
+    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME_DW"
+
+
+def test_a_first_deploy_records_the_layout_the_fetched_head_records(
+    invoke, laptop, snowflake, tmp_path, monkeypatch
+):
+    _share_account(snowflake)
+    fetched = _ahead(
+        snowflake,
+        tmp_path,
+        snowflake_shared_account=True,
+        snowflake_base="LEGACY",
+        deployed_commit=COMMIT,
+    )
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit(shown={"FETCH_HEAD": fetched}))
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    # CI named the objects by the base the head records for prod, not by [warehouse] database.
+    assert load_config(snowflake).environments["prod"].snowflake_base == "LEGACY"
+
+
+def test_a_promoted_first_deploy_records_the_layout_the_fetched_head_records(
+    invoke, laptop, snowflake, tmp_path, monkeypatch
+):
+    _share_account(snowflake)
+    shipped = _promoting(snowflake, tmp_path, monkeypatch)
+    fetched = _ahead(
+        snowflake,
+        tmp_path,
+        snowflake_shared_account=True,
+        snowflake_base="LAKE",
+        deployed_commit=COMMIT,
+    )
+    git = FakeGit(shown={SHIPPED: shipped, "FETCH_HEAD": fetched})
+    monkeypatch.setattr(gh_mod, "get_git", lambda: git)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    # CI read prod's facts from the head, as actions_view does.
+    assert load_config(snowflake).environments["prod"].snowflake_base == "LAKE"
+
+
+def test_a_shared_environment_applies_its_suffixed_names(invoke, deploy_secrets, snowflake):
+    _share_account(snowflake)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = next(args for args, _ in _calls_in("snowflake") if args[0] == "plan")
+    assert _var(plan, "database_name") == "ACME_PROD"
+    assert _var(plan, "warehouse_name") == "ACME_PROD_WH"
+    assert _var(plan, "analyst_role_name") == "ANALYST_ACME_PROD"
+    assert _var(plan, "loader_user_name") == "LOADER_ACME_PROD"
+
+
 def test_laptop_deploy_records_the_vm_keys_handed_over(invoke, laptop, project, monkeypatch):
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ids = {"project": "p", "retiring_platform": "SCWOLDPLATFORM", "retiring_deploy": "SCWOLDCI"}
@@ -815,6 +1025,7 @@ def _scaleway(root: Path, tmp_path: Path, monkeypatch, env: str = "prod", **outp
     monkeypatch.setattr(FakeTerraform, "outputs", outputs)
     monkeypatch.setattr(FakeTerraform, "log", org.log)
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
     watcher = FakeWatcher(org, storage, outputs)
     time = FakeTime()
     monkeypatch.setattr(scw_ship, "sleep", time.sleep)
@@ -1101,3 +1312,108 @@ def test_a_confirmed_snowflake_identity_ships_every_host(invoke, deploy_secrets,
     assert r.exit_code == 0, r.stdout
     assert doc(r)["hosts"] == ["mcp", "platform"]
     assert "ship_skipped" not in doc(r)
+
+
+# Service hostnames: vecten.toml's labels reach the cloud root as one variable.
+
+
+def _bind_hostnames(root: Path) -> None:
+    from .services_fixtures import BOT, with_services
+
+    portal = {
+        "command": ["python", "-m", "acme.portal"],
+        "port": 8501,
+        "health": {"path": "/_stcore/health"},
+        "components": ["platform", "mcp"],
+        "routes": {"app": {"path": "/", "access": "public"}},
+    }
+    with_services(
+        root,
+        {
+            "bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}},
+            "portal": {"hostname": "@", "host": "mcp", "routes": {"app": {"access": "public"}}},
+        },
+        declared={"bot": BOT, "portal": portal},
+    )
+
+
+def test_plan_only_passes_each_bound_hostname_with_its_host_component(invoke, actions, project):
+    _bind_hostnames(project)
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = FakeTerraform.call("plan")
+    assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
+
+
+def test_plan_only_passes_a_bound_container_apps_hostname(invoke, actions, project):
+    from .services_fixtures import with_apps
+
+    with_apps(project, {"overview": {"groups": ["default"]}})
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = FakeTerraform.call("plan")
+    assert json.loads(_var(plan, "service_hostnames")) == {"overview": "platform"}
+
+
+def test_a_project_without_hostnames_passes_no_service_hostnames(invoke, actions, project):
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert not any("service_hostnames" in a for a in FakeTerraform.call("plan"))
+
+
+def test_a_root_without_the_variable_is_refused_naming_vecten_update(invoke, actions, project):
+    _bind_hostnames(project)
+    variables = project / "deploy" / "terraform" / "aws" / "variables.tf"
+    text = variables.read_text()
+    variables.write_text(text[: text.index('variable "service_hostnames"')])
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code != 0
+    assert "vecten update" in doc(r)["error"]
+    assert FakeTerraform.calls == []
+
+
+def test_a_root_without_the_variable_still_plans_a_project_without_hostnames(
+    invoke, actions, project
+):
+    variables = project / "deploy" / "terraform" / "aws" / "variables.tf"
+    text = variables.read_text()
+    variables.write_text(text[: text.index('variable "service_hostnames"')])
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+
+
+def test_a_scaleway_plan_passes_the_bound_hostnames(invoke, scw):
+    _bind_hostnames(scw.root)
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    plan = FakeTerraform.call("plan")
+    assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
+
+
+def test_a_deploy_reports_its_services_after_shipping(invoke, actions, project, monkeypatch):
+    from vecten.deploy import shipping
+
+    from .services_fixtures import locked
+
+    _bind_hostnames(project)
+    locked(project)
+    outputs = copy.deepcopy(STANDARD_OUTPUTS)
+    outputs["hosts"]["platform"]["service_hostnames"] = ["bot.data.acme.com"]
+    monkeypatch.setattr(FakeTerraform, "outputs", outputs)
+    monkeypatch.setattr(shipping, "fetch_response", lambda url: (200, "ok"))
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert doc(r)["services"] == {"acme.bot": "healthy", "acme.portal": "waiting for deploy"}
+    text = invoke("deploy", "--env", "prod")
+    assert "service acme.bot: healthy" in text.stdout
+    assert "routes waiting for `vecten deploy --env prod`: acme.portal.app" in text.stdout
+
+
+def test_a_destroy_passes_no_hostnames_and_needs_no_lock(project):
+    from vecten.deploy.control import service_hostname_vars
+
+    _bind_hostnames(project)
+    (project / "extensions.lock.json").unlink()
+    root_dir = project / "deploy" / "terraform" / "aws"
+    config = load_config(project)
+    assert service_hostname_vars(project, config, root_dir, read_only=True) == ()

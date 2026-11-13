@@ -37,8 +37,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from vecten import git_extensions
 from vecten.deploy import shipping
-from vecten.deploy.bundle import build_host_bundle, prepare_bundle_metadata
+from vecten.deploy.bundle import (
+    build_host_bundle,
+    prepare_bundle_metadata,
+)
 from vecten.deploy.names import name_prefix
 from vecten.deploy.scaleway import clients
 from vecten.deploy.scaleway.bootstrap import (
@@ -238,12 +242,25 @@ def ship_hosts(
     )
     s3 = plane.storage("project")
     shipped: list[str] = []
+    plane.orphaned_volumes = {}
     with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
+        # Every source is fetched and checked before any host changes.
+        sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
         for host in ship_order(outputs):
             bundle = build_host_bundle(
-                project_root, config, env, outputs, host, commit, Path(tmp), metadata=metadata
+                project_root,
+                config,
+                env,
+                outputs,
+                host,
+                commit,
+                Path(tmp),
+                metadata=metadata,
+                sources=sources,
             )
-            ship_host(plane, s3, outputs, host, bundle, commit, first=host in keyed)
+            plane.orphaned_volumes[host] = ship_host(
+                plane, s3, outputs, host, bundle, commit, first=host in keyed
+            )
             shipped.append(host)
     return shipped
 
@@ -257,9 +274,10 @@ def ship_host(
     commit: str,
     *,
     first: bool = False,
-) -> None:
+) -> list[str]:
     """Upload `bundle`, point `host` at it, wait for its watcher, poll its components and
-    point it back at the previous commit when a poll fails.
+    point it back at the previous commit when a poll fails; the orphaned service volumes
+    the watcher reported.
 
     A failed agent run is not rolled back from here: the agent restores the previous release
     itself when it fails after its swap, and its line says so. Only the pointer moves back, to
@@ -345,6 +363,9 @@ def ship_host(
             message,
             details={"component": name, "host": host, "url": url, "rolled_back": rolled_back},
         )
+
+    volumes = status.get("volumes")
+    return shipping.volume_names(volumes) if isinstance(volumes, list) else []
 
 
 def _point_back(

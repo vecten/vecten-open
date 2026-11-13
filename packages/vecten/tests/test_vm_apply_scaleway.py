@@ -1278,3 +1278,17 @@ def test_a_privileged_request_binds_a_source_port_from_the_privileged_range(no_p
     finally:
         server.close()
     assert seen[0]["port"] == base and seen[0]["path"] == "/user_data/vecten-key"
+
+
+def test_the_watcher_reports_the_volumes_its_release_agent_named(agent, tmp_path):
+    watch_config(agent)
+    write_key(agent)
+    fake = FakeScaleway()
+    pointer(fake, COMMIT_A)
+    fake.objects[f"bundles/platform/{COMMIT_A}.tar.gz"] = bundle_bytes()
+    stderr = "vecten agent volume: p_svc-old-data\nother line\n"
+    agent.watch(
+        tmp_path / "releases", ShipRun(ship_code=0, ship_stderr=stderr), http=fake,
+        sleep=lambda s: None,
+    )  # fmt: skip
+    assert status(fake, COMMIT_A)["volumes"] == ["p_svc-old-data"]

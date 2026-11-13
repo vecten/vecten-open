@@ -1,4 +1,4 @@
-"""Check release wheels, including actual installed metadata for a nine-group fixture."""
+"""Check release wheels, including actual installed metadata for a ten-group fixture."""
 
 import argparse
 import ast
@@ -95,7 +95,7 @@ with tempfile.TemporaryDirectory() as project:
         assert "saml" in exc.message and "not installed" in exc.message
     else:
         raise AssertionError("missing SAML extension accepted")
-print("five wheels checked; all nine extension groups reached their owning layers")
+print("five wheels checked; all ten extension groups reached their owning layers")
 """
         subprocess.run(
             [sys.executable, "-c", program],

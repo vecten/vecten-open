@@ -18,8 +18,9 @@ from vecten_shared.output import ExitCode, Failure, Result, render
 PASS_THROUGH = {"allow_extra_args": True, "ignore_unknown_options": True}
 RAW_ARGS = "vecten.dbt.raw_args"
 SNOWFLAKE_UNREACHABLE = (
-    "vecten dbt needs a Snowflake connection, which arrives with deploy; "
-    "the credential-free path is `vecten dbt-build-local`"
+    "vecten dbt without --env runs against the laptop stack, which has no Snowflake: run "
+    "`vecten dbt --env <env> <args>` with a deployed environment's credentials, or "
+    "`vecten dbt-build-local` for the credential-free build on the Snowflake emulation"
 )
 
 
@@ -60,20 +61,30 @@ def register(app: typer.Typer) -> None:
         context_settings=PASS_THROUGH,
         add_help_option=False,
         help=(
-            "Run dbt against the project's profile; arguments, output and exit code are dbt's own."
+            "Run dbt against the project's profile; arguments, output and exit code are dbt's own. "
+            "A leading --env <env> runs it with a deployed Snowflake environment's credentials, "
+            "and on prod only commands that build nothing."
         ),
     )
     def dbt(ctx: typer.Context) -> None:
+        # Imported here: the environment path reaches the deploy and secrets modules.
+        from vecten.dbt_env import environment_dbt_env, split_env, with_area_vars
+
         cli = CliContext(cwd=Path.cwd(), json=False)
         try:
             root, config = _platform_project(cli)
-            env = _dbt_env(root, config)
-            write_packages_yml(root / "dbt", config)
+            target_env, args = split_env(ctx.meta[RAW_ARGS])
+            # The convention tests read the declared areas from this var.
+            args = with_area_vars(args, config.areas)
+            if target_env is None:
+                env = _dbt_env(root, config)
+                write_packages_yml(root / "dbt", config)
+            else:
+                env = environment_dbt_env(root, config, target_env, args)
         except Failure as failure:
             text, code = render(failure, as_json=False)
             print(text, file=sys.stderr)
             raise typer.Exit(code) from None
-        args = ctx.meta[RAW_ARGS]
         run = run_dbt(args, project_dir=root / "dbt", env=env, capture=False)
         raise typer.Exit(run.returncode)
 

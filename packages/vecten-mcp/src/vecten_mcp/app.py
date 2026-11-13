@@ -44,7 +44,10 @@ def create_app(project_root: Path | None = None, runtime=None) -> Starlette:
         from vecten_mcp.assets import asset_routes
 
         app.router.routes.extend(asset_routes())
-        app.router.routes.extend(auth_routes(runtime.oauth))
+        app.router.routes.extend(auth_routes(runtime.oauth, runtime.gate))
+        from vecten_mcp.panel.people import people_routes
+
+        app.router.routes.extend(people_routes(runtime))
         if runtime.administration:
             from vecten_mcp.admin_routes import admin_routes
             from vecten_mcp.panel.routes import panel_routes
@@ -58,10 +61,12 @@ def create_app(project_root: Path | None = None, runtime=None) -> Starlette:
         finally:
             await runtime.close()
 
+    from vecten_mcp.audit_call import ViewerHeader
     from vecten_mcp.http_limits import BodyLimit
 
     app = Starlette(routes=[Route("/health", health)], lifespan=lifespan)
     app.add_middleware(BodyLimit)
+    app.add_middleware(ViewerHeader)
     if extensions is not None:
         app.state.extensions = extensions
     return app

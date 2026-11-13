@@ -34,7 +34,9 @@ platform and not a gap's status.
 If a source applies to the project but cannot be read, for example because the `vecten login`
 session expired, the command exits 5. The same happens when Airflow holds more than 50,000
 finished task instances in the 14-day window, because a page left unread could hold a task's
-newest failure. The output still holds the issues from the other sources, and `sources` names
+newest failure, and when `[airflow] allow` in `vecten.toml` does not list the network you run
+from, because NGINX then refuses the Airflow login with HTTP 403 (see
+[orchestration](orchestration.md#airflow-in-a-deployed-environment)). The output still holds the issues from the other sources, and `sources` names
 each source with `ok` or the reason it could not be read. An empty list means nothing is broken
 only when the command exits 0.
 
@@ -90,7 +92,9 @@ An Airflow or dbt issue leaves the list as soon as the same task, test or source
 an Airflow task that succeeded, or a dbt node whose status is `pass` or `success`. A skipped
 task or node never ran, so it neither clears nor counts a failure; dbt skips everything that
 depends on a failed node. Because a fix only ships forward, the first green run after the fix merges is a run on the
-fixed code. A gap leaves the list when the feedback loop resolves it on the live model, as
+fixed code. Under a [promotion order](#promotion-order) a merged fix ships to the first
+environment only, so the issue leaves that environment's list and stays listed in each later
+environment until the fix is promoted there and runs green. A gap leaves the list when the feedback loop resolves it on the live model, as
 [the feedback loop](feedback-loop.md) describes, or when an admin dismisses it.
 
 ### Fixes that are not code
@@ -144,20 +148,118 @@ made and the failure is still listed by `vecten issues`. After the first deploy,
 asks once whether to set the webhook; on yes, run `vecten secret set ALERT_WEBHOOK_URL --env
 <env>` and then `vecten answer alert_webhook.<env> yes`.
 
+## Services in the ship output
+
+`vecten issues` does not read [extension services](services.md), the long-running processes
+an extension contributes, such as a bot or a portal. Their state shows in the output of each ship,
+after the hosts are shipped, one line per service the project binds, and under `services` with
+`--json`. These lines are printed by the ship that runs inside GitHub Actions: in the log of the `ship` workflow, and of the `terraform-apply` workflow that `vecten deploy` dispatches. `vecten ship --env <env>` or `vecten deploy --env <env>` run from a laptop dispatch the workflow and print only its run and address.
+
+
+
+```text
+shipped 3f9a1c2e to platform, mcp
+service acme-bot.bot: healthy
+service acme-portal.portal: waiting for deploy
+routes waiting for `vecten deploy --env prod`: acme-portal.portal.home
+```
+
+| State | Meaning | What to do |
+|---|---|---|
+| `healthy` | Its health address answered with a status from 200 to 399. | Nothing. |
+| `unhealthy` | It did not, within 60 seconds. | Reproduce it with `vecten up`, which starts the service the same way on the laptop. On a VM its output stays in Docker's log on that host; nothing copies it to the bucket. |
+| `waiting for deploy` | Its hostname has no DNS record yet, so its routes are not served. | `vecten deploy --env <env>`, which `vecten next` also offers. |
+| `not routed` | The project binds no hostname for it; only Docker checks its health. | Nothing, unless it should have routes. |
+| `served` | Its hostname is served, and it declares a health command, which only Docker runs. | Nothing. |
+
+A service's state never fails the ship or restores the previous release, so a broken service
+does not undo the rest of a merge. A ship also names the volumes of services a host no longer
+runs (`orphaned_volumes` with `--json`), which keep their data until someone removes them; see
+[volumes](services.md#volumes-and-what-replaces-a-vm).
+
 ## The `operate` skill
 
 `skills/operate/SKILL.md`, which `vecten init` vendors into every project, does the following:
 
-1. Runs `vecten issues --env prod --json` and stops when the list is empty. When a source is
-   unreadable, it says so and does not call the platform healthy.
-2. Reads each issue with `vecten issues show <id> --env prod --json` before acting.
-3. Dispatches `skill` items to `connector`, `model` or `semantic`. It runs `command` items as
+1. Reads the promotion order from `vecten promote --status --json`, `prod` alone in a
+   project without one, and works through the environments in that order, the first first.
+2. Runs `vecten issues --env <env> --json` for each and stops when every list is empty. When
+   a source is unreadable, it says so and does not call the platform healthy.
+3. Reads each issue with `vecten issues show <id> --env <env> --json` before acting.
+4. Dispatches `skill` items to `connector`, `model` or `semantic`. It runs `command` items as
    printed and lets the person type the secret. It relays `ask` items word for word.
-4. Delivers every code fix as a pull request on an `operate/<id>` branch, with the evidence
-   quoted as data from a body file. The merge ships the fix; it never runs `vecten ship` or
-   `vecten deploy`.
-5. Reports an issue closed only when `vecten issues` no longer lists it, which for a platform
-   issue is after the next green run.
+5. Delivers every code fix as a pull request on an `operate/<id>` branch, with the evidence
+   quoted as data from a body file. The merge ships the fix to the first environment; it
+   never runs `vecten ship` or `vecten deploy`.
+6. Once a fix's issue has left the first environment's list, asks "Promote <commit> to
+   <next env>?" and runs `vecten promote --env <next env>` only after the person's yes.
+7. Reports an issue closed only when `vecten issues --env <env>` no longer lists it, which for
+   a platform issue is after the next green run in that environment.
+
+## Promotion order
+
+By default a merge to the default branch ships `prod`. A project that wants every change to
+run somewhere else first declares a promotion order:
+
+```bash
+vecten answer deploy.promotion dev,prod
+```
+
+That records `[deploy] promotion = ["dev", "prod"]` in `vecten.toml`. The list names at least
+two environments, each with its own `deploy/envs/<env>.tfvars`, without repeats, and ends with
+`prod`, so no environment promotes from production. Longer chains work the same way, as
+`dev,staging,prod`. `vecten answer deploy.promotion none` removes the order.
+
+- **A merge ships the first environment.** The rendered `ship.yml` reads the order from the
+  pushed commit when it runs, so changing the order needs no re-render. `vecten github push`
+  follows that ship and then, once the next environment is deployed, names
+  `vecten promote --env <next env>`.
+- **A later environment ships only by promotion.** `vecten promote --env prod` ships `prod`
+  the commit `dev` shipped last. `vecten ship --env prod` from the laptop refuses and names
+  `promote`. `vecten deploy --env prod` applies `prod`'s Terraform roots and ships from that
+  same promoted commit, so an infrastructure change also runs in `dev` first.
+- **Environments outside the order** deploy and ship when dispatched, as without an order.
+- **`vecten next`** walks the environments in order, `dev` from bootstrap to its first user
+  and connection, then `prod`. It never reports a pending promotion, since knowing one needs
+  GitHub; `vecten promote --status` lists each environment with the commit it shipped last
+  and whether it is behind the one before it.
+
+The CLI refuses to record an order while the project's workflows were rendered by an earlier
+release, naming `vecten update`: those workflows ship `prod` on every push whatever the order
+says.
+
+### What an environment shipped: commit statuses
+
+Every ship that runs in GitHub Actions sets the commit status `vecten/ship/<env>` on the commit
+it ships: `pending` when it starts, then `success` once every host answered its health poll,
+or `failure`. The statuses show on each commit in GitHub. What an environment shipped last is
+the commit, among the default branch's last 200, whose `success` for that environment was set
+last. A ship that fails and rolls back leaves `failure` on its commit, so the environment's
+last shipped commit is the one its hosts went back to.
+
+Inside Actions the CLI refuses, before any host or Terraform changes, a commit that is not on
+the default branch and, for an environment after the first, a commit the environment before
+it did not ship. A promoted run builds the bundle, reads the tfvars and Terraform roots, and
+installs the `vecten` version from the promoted commit; it reads the facts under
+`[environments.<env>]` from the default branch's head, where the CLI records them.
+
+Statuses guard against mistakes, not against people: anyone who can write statuses can also
+push to the default branch and dispatch a deploy.
+
+### Rolling back
+
+`vecten promote --env prod --commit <sha>` ships any commit `dev` shipped, an older one
+included. That is how production rolls back: promote the commit it ran before. The rolled-back
+commit's `success` is then the latest, so it is what `prod` shipped last, and a later
+`vecten promote --env prod` without `--commit` again ships what `dev` shipped last.
+
+### Approval before production
+
+GitHub can hold a job that deploys to an environment until a reviewer approves it. Add
+required reviewers to the `prod` environment under the repository's Settings, Environments,
+where the plan offers them: on public repositories, and on private ones with GitHub
+Enterprise. A dispatched promotion then waits for the approval before it ships. Without them,
+`vecten promote` ships as soon as its checks pass.
 
 ## Worked example: a Tuesday morning
 
@@ -193,7 +295,9 @@ same cause, so the agent names it in the same pull request rather than opening a
 For the gap it dispatches `semantic`, which opens its own pull request, as
 [the feedback loop](feedback-loop.md) describes.
 
-The engineer reviews and merges both. Each merge ships to the hosts without a deploy. The
+The engineer reviews and merges both. Each merge ships to the hosts without a deploy. (With
+a promotion order, it ships to the first environment, and the agent asks before promoting
+each fix to the next.) The
 agent says the HubSpot sync next runs that night and stops, listing what each issue waits on.
 
 On Wednesday morning the agent lists again. The sync ran green on the fixed connector, and

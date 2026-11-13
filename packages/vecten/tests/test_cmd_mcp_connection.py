@@ -1,5 +1,6 @@
 import json
 
+from vecten.deploy.tfvars import env_tfvars_path
 from vecten_shared.config import load_config, save_config
 
 from .fixture_project import render_fixture
@@ -39,9 +40,12 @@ def test_connection_before_the_deploy_prints_the_url_without_recording(
     data = json.loads(result.output)
     assert data["url"] == "https://mcp.data.acme.com/mcp" and data["recorded"] is False
     assert "prod" not in load_config(root).environments
+    prod = env_tfvars_path(root, "prod").read_text()
+    staging = prod.replace('"prod"', '"staging"').replace('"data.acme.com"', '"staging.acme.com"')
+    env_tfvars_path(root, "staging").write_text(staging)
     text = invoke("mcp", "connection", "--env", "staging")
     assert text.exit_code == 0, text.stderr
-    assert "https://mcp.data.acme.com/mcp" in text.stdout
+    assert "https://mcp.staging.acme.com/mcp" in text.stdout
     assert "not recorded" in text.stdout and "staging has not been deployed" in text.stdout
     deploy(root, "staging")
     assert json.loads(invoke("mcp", "connection", "--env", "staging", "--json").stdout)["recorded"]

@@ -16,6 +16,7 @@ from vecten.password_links import added, read_links
 from vecten.scaffold.params import ScaffoldParams
 from vecten.scaffold.render import render_project
 from vecten_shared.config import load_config, save_config
+from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import secret_id
 from vecten_shared.records import read_record, write_record
 
@@ -393,17 +394,23 @@ STATE_FACTS = {
     "first_user_added": True,
     "admin_link_issued": True,
     "connector_access_applied": ["hubspot"],
+    "area_access_applied": ["finance"],
 }
 
 
 def test_destroy_clears_the_facts_the_state_database_held(invoke, project, monkeypatch):
+    from vecten_shared.config import AreaDecl, save_config
+
+    config = load_config(project)
+    config.areas = {"finance": AreaDecl()}
+    save_config(project, config)
     set_facts(project, provisioner_script_run=True, **STATE_FACTS)
     with cloud(project, monkeypatch):
         r = invoke("destroy", "--env", "prod", "--confirm", "prod", "--json")
     assert r.exit_code == 0, r.stdout
     facts = load_config(project).environments["prod"]
     assert not facts.first_user_added and not facts.admin_link_issued
-    assert facts.connector_access_applied == []
+    assert facts.connector_access_applied == [] and facts.area_access_applied == []
     # Over Postgres the provisioner lives in the warehouse the destroy snapshotted.
     assert facts.provisioner_script_run
     assert doc(r)["facts_cleared"] == list(STATE_FACTS)
@@ -637,6 +644,169 @@ def test_snowflake_root_is_destroyed_with_delete_data(invoke, snowflake, monkeyp
     assert DEPLOY_KEY_VALUE not in r.stdout
     # A destroy reads secrets and never writes one: the throwaway loader key is not stored.
     assert secret_id("acme", "prod", "SNOWFLAKE_LOADER_PRIVATE_KEY") not in names
+
+
+@pytest.mark.parametrize(("delete_data", "kept"), [(True, None), (False, False)])
+def test_only_data_deletion_forgets_the_snowflake_layout(
+    invoke, snowflake, monkeypatch, delete_data, kept
+):
+    set_facts(snowflake, snowflake_shared_account=False)
+    args = ["--delete-data", "prod"] if delete_data else []
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke("destroy", "--env", "prod", "--confirm", "prod", *args, "--json")
+    assert r.exit_code == 0, r.stdout
+    assert load_config(snowflake).environments["prod"].snowflake_shared_account is kept
+
+
+def test_a_kept_environment_deployed_without_a_record_keeps_its_fixed_names(
+    invoke, snowflake, monkeypatch
+):
+    # Deployed before layouts were recorded, so its objects carry the fixed names.
+    config = load_config(snowflake)
+    config.warehouse.shared_account = True
+    save_config(snowflake, config)
+    set_facts(snowflake, provisioner_script_run=True)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        r = invoke("destroy", "--env", "prod", "--confirm", "prod")
+    assert r.exit_code == 0, r.stderr
+    facts = load_config(snowflake).environments["prod"]
+    assert facts.deployed_commit is None and facts.snowflake_shared_account is False
+    assert "PROVISIONER created stay in Snowflake" in r.stdout
+    assert "PROVISIONER_ACME_PROD" not in r.stdout
+
+
+def _shared(root, monkeypatch, *, owned=(), provisioner_user=False, integration=False, fails=False):
+    """A shared-account environment, with the Snowflake reads answered from `owned`."""
+    from vecten.deploy import run
+    from vecten.deploy.snowflake_leftovers import Leftovers
+
+    config = load_config(root)
+    config.warehouse.shared_account = True
+    save_config(root, config)
+    set_facts(root, snowflake_shared_account=True, snowflake_base="ACME")
+    reads = []
+
+    def read(credentials, names):
+        reads.append((credentials["SNOWFLAKE_USER"], names.provisioner_role))
+        if fails:
+            raise Failure(ExitCode.TOOL_FAILED, "could not read PROVISIONER_ACME_PROD's objects")
+        return Leftovers(
+            names=names,
+            owned=tuple(owned),
+            provisioner_user=provisioner_user,
+            integration=integration,
+        )
+
+    monkeypatch.setattr(run, "read_leftovers", read)
+    return reads
+
+
+DELETE = ("destroy", "--env", "prod", "--confirm", "prod", "--delete-data", "prod", "--json")
+
+
+def test_data_deletion_is_refused_while_the_provisioner_owns_a_user(invoke, snowflake, monkeypatch):
+    reads = _shared(
+        snowflake, monkeypatch, owned=[("USER", "JANE_DOE_ACME_PROD")], provisioner_user=True
+    )
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke(*DELETE)
+    assert r.exit_code == 4, r.stdout
+    assert FakeTerraform.calls() == []
+    assert reads == [(DEPLOY_USER_VALUE, "PROVISIONER_ACME_PROD")]
+    data = json.loads(r.stdout)
+    assert 'DROP USER "JANE_DOE_ACME_PROD";' in data["error"]
+    statements = [
+        'DROP USER "JANE_DOE_ACME_PROD";',
+        "ALTER USER IF EXISTS PROVISIONER_ACME_PROD UNSET AUTHENTICATION POLICY;",
+        "DROP USER IF EXISTS PROVISIONER_ACME_PROD;",
+        "DROP SECURITY INTEGRATION IF EXISTS EXTERNAL_OAUTH_ACME_PROD;",
+    ]
+    assert data["error"].endswith("\n".join(statements))
+    assert load_config(snowflake).environments["prod"].deployed_commit == COMMIT
+
+
+def test_data_deletion_is_refused_while_the_provisioner_user_stays(invoke, snowflake, monkeypatch):
+    _shared(snowflake, monkeypatch, provisioner_user=True)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke(*DELETE)
+    assert r.exit_code == 4, r.stdout
+    assert "DROP USER IF EXISTS PROVISIONER_ACME_PROD;" in json.loads(r.stdout)["error"]
+    assert FakeTerraform.calls() == []
+
+
+def test_data_deletion_is_refused_while_the_integration_stays(invoke, snowflake, monkeypatch):
+    _shared(snowflake, monkeypatch, integration=True)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke(*DELETE)
+    assert r.exit_code == 4, r.stdout
+    error = json.loads(r.stdout)["error"]
+    assert "DROP SECURITY INTEGRATION IF EXISTS EXTERNAL_OAUTH_ACME_PROD;" in error
+    assert FakeTerraform.calls() == []
+
+
+def test_data_deletion_proceeds_once_an_administrator_dropped_them(invoke, snowflake, monkeypatch):
+    _shared(snowflake, monkeypatch)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke(*DELETE)
+    assert r.exit_code == 0, r.stdout
+    assert ("destroy", "snowflake") in FakeTerraform.calls()
+    assert json.loads(r.stdout)["snowflake"] == "destroyed"
+
+
+def test_data_deletion_refuses_when_snowflake_cannot_be_read(invoke, snowflake, monkeypatch):
+    _shared(snowflake, monkeypatch, fails=True)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke(*DELETE)
+    assert r.exit_code == 5, r.stdout
+    assert FakeTerraform.calls() == []
+
+
+def test_a_kept_database_lists_what_stays_in_snowflake(invoke, snowflake, monkeypatch):
+    _shared(
+        snowflake,
+        monkeypatch,
+        owned=[("USER", "JANE_DOE_ACME_PROD"), ("ROLE", "FINANCE_ACME_PROD")],
+    )
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke("destroy", "--env", "prod", "--confirm", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    data = json.loads(r.stdout)
+    assert data["snowflake"] == "kept"
+    assert data["kept_in_snowflake"] == [
+        "user PROVISIONER_ACME_PROD",
+        "security integration EXTERNAL_OAUTH_ACME_PROD",
+        "user JANE_DOE_ACME_PROD",
+        "role FINANCE_ACME_PROD",
+    ]
+
+
+def test_a_kept_database_is_destroyed_even_when_snowflake_cannot_be_read(
+    invoke, snowflake, monkeypatch
+):
+    _shared(snowflake, monkeypatch, fails=True)
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke("destroy", "--env", "prod", "--confirm", "prod")
+    assert r.exit_code == 0, r.stderr
+    assert "PROVISIONER_ACME_PROD" in r.stdout and "could not read" in r.stdout
+
+
+def test_a_fixed_environment_reads_nothing_from_snowflake(invoke, snowflake, monkeypatch):
+    from vecten.deploy import run
+
+    monkeypatch.setattr(run, "read_leftovers", lambda *a: pytest.fail("read Snowflake"))
+    with cloud(snowflake, monkeypatch, outputs=_snowflake_outputs()):
+        _put_deploy_secrets()
+        r = invoke(*DELETE)
+    assert r.exit_code == 0, r.stdout
+    assert "kept_in_snowflake" not in json.loads(r.stdout)
 
 
 def test_postgres_project_reports_no_snowflake_database(invoke, project, monkeypatch):

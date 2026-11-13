@@ -3174,6 +3174,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sqlglot" },
     { name = "tomli-w" },
+    { name = "tomlkit" },
 ]
 
 [package.metadata]
@@ -3187,6 +3188,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "sqlglot", specifier = ">=30.22,<30.23" },
     { name = "tomli-w", specifier = ">=1.1,<2" },
+    { name = "tomlkit", specifier = ">=0.15,<1" },
 ]
 
 [[package]]

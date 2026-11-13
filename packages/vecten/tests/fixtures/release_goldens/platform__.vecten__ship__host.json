@@ -1,0 +1,32 @@
+{
+  "airflow_parallelism": 4,
+  "bucket": "vecten-acme-prod-data",
+  "buildx_plugin_version": "0.37.2",
+  "certbot_image": "certbot/certbot:v5.8.0",
+  "cloud": "aws",
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "components": [
+    "platform"
+  ],
+  "compose_plugin_version": "5.5.1",
+  "compose_project": "vecten-acme-prod",
+  "connector_secrets": [
+    "HUBSPOT_API_KEY"
+  ],
+  "env": "prod",
+  "host": "platform",
+  "hostnames": [
+    "airflow.data.acme.com"
+  ],
+  "mcp_pool_cap": 3,
+  "plugin_dir": "/usr/libexec/docker/cli-plugins",
+  "postgres_image": "postgres:17",
+  "private_package_index": false,
+  "project": "acme",
+  "project_id": "",
+  "region": "eu-central-1",
+  "secret_prefix": "vecten/acme/prod/",
+  "service_network": "",
+  "service_secrets": [],
+  "setup_host": false
+}

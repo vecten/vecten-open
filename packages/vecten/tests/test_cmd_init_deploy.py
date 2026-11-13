@@ -7,7 +7,7 @@ import pytest
 
 from vecten.scaffold.params import ScaffoldParams
 from vecten.scaffold.render import render_project
-from vecten_shared.config import load_config
+from vecten_shared.config import load_config, save_config
 
 LOCAL = ("--name", "acme", "--users", "8", "--source", "hubspot")
 DEPLOY = (
@@ -293,6 +293,39 @@ def test_a_recorded_snowflake_account_reaches_tfvars_and_vecten_toml(invoke, wor
     assert json.loads(again.stdout)["changed"] == []
 
 
+@pytest.mark.parametrize(("answer", "shared"), [("yes", True), ("no", False)])
+def test_the_shared_account_answer_reaches_vecten_toml(
+    invoke, workdir, monkeypatch, answer, shared
+):
+    invoke("init", "p", *LOCAL, "--warehouse", "snowflake", *DEPLOY, "--json")
+    proj = workdir / "p"
+    monkeypatch.chdir(proj)
+    invoke("answer", "snowflake_account", "ACME-PROD")
+    invoke("answer", "snowflake_shared_account", answer)
+    r = invoke("init", "--deploy", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert load_config(proj).warehouse.shared_account is shared
+    assert ("shared_account = true" in (proj / "vecten.toml").read_text()) is shared
+    assert ("`ANALYST_<BASE>_<ENV>`" in (proj / "docs" / "runbook.md").read_text()) is shared
+    again = invoke("init", "--deploy", "--json")
+    assert json.loads(again.stdout)["changed"] == []
+
+
+def test_the_shared_account_answer_leaves_a_deployed_project_as_it_is(invoke, workdir, monkeypatch):
+    invoke("init", "p", *LOCAL, "--warehouse", "snowflake", *DEPLOY, "--json")
+    proj = workdir / "p"
+    monkeypatch.chdir(proj)
+    invoke("answer", "snowflake_account", "ACME-PROD")
+    assert invoke("init", "--deploy", "--json").exit_code == 0
+    config = load_config(proj)
+    config.environments["prod"].snowflake_shared_account = False
+    save_config(proj, config)
+    invoke("answer", "snowflake_shared_account", "yes")
+    r = invoke("init", "--deploy", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert load_config(proj).warehouse.shared_account is False
+
+
 def test_snowflake_account_flag_is_a_deploy_flag(invoke, workdir, monkeypatch):
     invoke("init", "p", *LOCAL, "--warehouse", "snowflake", *DEPLOY, "--json")
     proj = workdir / "p"
@@ -308,3 +341,21 @@ def test_init_deploy_keeps_a_project_whose_sources_are_free_text(invoke, workdir
     monkeypatch.chdir(proj)
     r = invoke("init", "--deploy", *DEPLOY, "--json")
     assert r.exit_code == 0, r.stdout
+
+
+def test_a_rerun_keeps_the_promotion_order(invoke, workdir, monkeypatch):
+    invoke("init", "p", *LOCAL, *DEPLOY, "--json")
+    proj = workdir / "p"
+    monkeypatch.chdir(proj)
+    (proj / "deploy" / "envs" / "dev.tfvars").write_text(
+        (proj / "deploy" / "envs" / "prod.tfvars").read_text()
+    )
+    text = (proj / "vecten.toml").read_text()
+    text = text.replace("scaffold_version = ", 'scaffold_version = "0.1.1"\n# ', 1)
+    text = text.replace("[deploy]\n", '[deploy]\npromotion = ["dev", "prod"]\n', 1)
+    (proj / "vecten.toml").write_text(text)
+    r = invoke("init", "--deploy", "--domain", "data2.acme.com", "--json")
+    assert r.exit_code == 0, r.stdout
+    config = load_config(proj)
+    assert config.deploy.domain == "data2.acme.com"
+    assert config.deploy.promotion == ["dev", "prod"]

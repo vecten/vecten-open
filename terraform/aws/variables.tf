@@ -59,6 +59,32 @@ variable "components" {
   }
 }
 
+# Set by `vecten deploy` from the hostnames vecten.toml binds.
+variable "service_hostnames" {
+  description = "Service hostname labels below domain (@ for domain itself), each mapped to the component whose host serves it."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+
+  validation {
+    condition     = alltrue([for label in keys(var.service_hostnames) : label == "@" || can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", label))])
+    error_message = "service_hostnames labels are DNS labels of lowercase letters, digits and inner hyphens, or @ for the domain itself."
+  }
+  validation {
+    condition     = alltrue([for label in keys(var.service_hostnames) : !contains(["airflow", "mcp", "www"], label) && !startswith(label, "_")])
+    error_message = "service_hostnames labels airflow, mcp, www and labels starting with _ are reserved."
+  }
+  validation {
+    # A second A record at a zone apex sits beside the zone owner's own website.
+    condition     = !(contains(keys(var.service_hostnames), "@") && var.domain == var.dns_zone)
+    error_message = "service_hostnames: @ is refused where domain is the DNS zone itself; choose a label."
+  }
+  validation {
+    condition     = alltrue([for c in values(var.service_hostnames) : contains(var.components, c)])
+    error_message = "service_hostnames components must be among components."
+  }
+}
+
 variable "profile" {
   description = "standard runs one VM per component and separate state and warehouse instances; minimal runs one VM and one instance."
   type        = string
@@ -106,6 +132,20 @@ variable "platform_size" {
   validation {
     condition     = contains(keys(jsondecode(file("${path.module}/sizing.json")).tiers), var.platform_size)
     error_message = "platform_size must be one of the tiers in sizing.json: small, medium, large."
+  }
+}
+
+variable "root_volume_size_gb" {
+  description = "Size in GiB of every VM's root volume, which holds the images and the named volumes."
+  type        = number
+  default     = 30
+  nullable    = false
+
+  # EBS grows a volume in place but never shrinks one, so a size below the one every VM was
+  # created with would fail the apply.
+  validation {
+    condition     = var.root_volume_size_gb >= 30 && var.root_volume_size_gb <= 16384 && floor(var.root_volume_size_gb) == var.root_volume_size_gb
+    error_message = "root_volume_size_gb is a whole number of GiB from 30 to 16384, the gp3 maximum."
   }
 }
 

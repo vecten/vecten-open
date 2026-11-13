@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from vecten_shared.osi.revision import build_covers, content_revision, read_built_commit
+from vecten_shared.osi.revision import (
+    build_covers,
+    content_revision,
+    read_build_finished,
+    read_built_commit,
+)
 
 
 def test_local_revision_tracks_names_and_contents_but_not_absolute_path(tmp_path):
@@ -36,3 +41,11 @@ def test_read_local_build_marker(tmp_path):
     (tmp_path / "dbt").mkdir()
     (tmp_path / "dbt/built_commit").write_text("abc\n")
     assert read_built_commit(env) == "abc\n"
+
+
+def test_read_local_build_finish_time(tmp_path):
+    env = {"VECTEN_ARTIFACT_DIR": str(tmp_path)}
+    assert read_build_finished(env) is None
+    (tmp_path / "dbt").mkdir()
+    (tmp_path / "dbt/build_finished_at").write_text("2026-11-12T10:00:00+00:00\n")
+    assert read_build_finished(env) == "2026-11-12T10:00:00+00:00\n"

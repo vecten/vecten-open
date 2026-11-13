@@ -3,6 +3,7 @@ import pytest
 from vecten_mcp.access import AccessService
 from vecten_mcp.identity import Identity
 from vecten_mcp.state import StateStore
+from vecten_shared.identity_setup import ACCESS_VERSION
 
 
 class Adapter:
@@ -23,6 +24,15 @@ class Adapter:
 
     def schema_grant(self, role, schema, grant=True):
         self.ops.append(("schema", role, schema, grant))
+
+    def access_version(self):
+        return ACCESS_VERSION
+
+    def read_grants(self, roles):
+        return set()
+
+    def granted_roles(self, role):
+        return set()
 
 
 def test_group_grant_reconcile_and_deny_union():
@@ -60,6 +70,9 @@ def test_group_collision_and_default_deletion_refused():
         service.delete_group("default")
     with pytest.raises(ValueError):
         service.create_group("admin_finance")
+    # READ_GRANT and the Postgres helpers refuse a role named `reader` as a target.
+    with pytest.raises(ValueError, match="reserved"):
+        service.create_group("reader")
     with pytest.raises(ValueError):
         service.grant("missing", "schema", "core")
 
@@ -191,4 +204,10 @@ def test_health_before_any_reconciliation_is_empty():
     assert AccessService(StateStore("sqlite://"), Adapter()).health() == {
         "checked_at": None,
         "failures": [],
+        "added": [],
+        "revoked": [],
+        "drift": [],
+        "database_future": [],
+        "missing_bindings": [],
+        "unbound_roles": [],
     }

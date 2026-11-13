@@ -7,11 +7,15 @@ from pathlib import Path
 
 from vecten.deploy.snowflake import identity_pending
 from vecten.intake.facts import OIDC_REGISTERED_PREFIX
+from vecten.mcp_url import mcp_url
+from vecten.next.areas import area_access_apply_items
+from vecten.next.declared import declared_secret_items
 from vecten.next.deploy import PUSH
 from vecten.next.gitstate import GitState
 from vecten.next.ingestion import access_apply_items
 from vecten.next.items import Item
 from vecten.password_links import owed
+from vecten.secrets import recorded_secret_names
 from vecten_shared.config import EnvironmentFacts, VectenConfig
 from vecten_shared.output import Failure
 from vecten_shared.records import read_record
@@ -31,10 +35,10 @@ ADMIN = Item(
 )
 
 
-def _register_callback(config: VectenConfig, env: str) -> Item:
+def _register_callback(root: Path, config: VectenConfig, env: str) -> Item:
     return Item(
         "ask",
-        f"Register https://mcp.{config.deploy.domain}/oidc/callback with your identity "
+        f"Register {mcp_url(root, config, env)}/oidc/callback with your identity "
         "provider. If it gave you a client secret, store it with "
         f"`vecten secret set MCP_OIDC_CLIENT_SECRET --env {env}`.",
         f"vecten answer {OIDC_REGISTERED_PREFIX}{env} yes",
@@ -50,7 +54,7 @@ def _signed_in(root: Path, config: VectenConfig, env: str) -> bool:
     from vecten.mcp_client import TokenCache, login_record, session_usable
 
     try:
-        session = TokenCache().load(f"https://mcp.{config.deploy.domain}")
+        session = TokenCache().load(mcp_url(root, config, env))
         record = read_record(root, login_record(env))
     except Failure:
         return False
@@ -73,7 +77,7 @@ def _sign_in_items(
         if not (mcp.oidc_issuer and mcp.oidc_client_id):
             return []
         if not facts.oidc_registered:
-            return [] if facts.first_user_added else [_register_callback(config, env)]
+            return [] if facts.first_user_added else [_register_callback(root, config, env)]
     elif mcp.auth == "password":
         if not facts.admin_link_issued and not facts.first_user_added:
             title = "Give the first admin a password link"
@@ -83,6 +87,94 @@ def _sign_in_items(
     return [Item("command", "Sign in to the MCP as an admin", f"vecten login --env {env}")]
 
 
+def _waiting_hostname_items(root: Path, config: VectenConfig, env: str) -> list[Item]:
+    """A bound service hostname gets its DNS record from the next deploy; without the
+    environment's outputs on this machine there is nothing to compare with."""
+    # Deferred so that `next` loads the deploy modules only for a project with a hostname.
+    from vecten.deploy.shipping import unserved_hostnames
+    from vecten_shared.extension_record import read_record as read_extension_record
+    from vecten_shared.provider.environment import environment_file, load_outputs
+
+    # A bound container app is served at its own name when it binds no hostname.
+    if not config.apps and not any(
+        b.hostname for bindings in config.services.values() for b in bindings.values()
+    ):
+        return []
+    path = environment_file(root, env)
+    if not path.is_file():
+        return []
+    try:
+        outputs = load_outputs(path, env)
+        names = unserved_hostnames(config, read_extension_record(root) or {}, outputs)
+    except Failure:
+        return []
+    if not names:
+        return []
+    noun = "record" if len(names) == 1 else "records"
+    return [
+        Item(
+            "command", f"Create the DNS {noun} for {', '.join(names)}", f"vecten deploy --env {env}"
+        )
+    ]
+
+
+def _shipped_apps(root: Path, config: VectenConfig, env: str) -> dict[str, dict] | None:
+    """The apps the MCP of `env` lists, by `<extension>.<app>`, or None when this machine
+    holds no session for it or the MCP does not answer."""
+    if not _signed_in(root, config, env):
+        return None
+    from vecten.mcp_client import AdminClient
+
+    try:
+        listing = AdminClient(root, env).read("apps", {})
+    except Failure:
+        return None
+    if not isinstance(listing, list):
+        return None
+    return {e["app"]: e for e in listing if isinstance(e, dict) and isinstance(e.get("app"), str)}
+
+
+def app_connect_items(root: Path, config: VectenConfig, env: str) -> list[Item]:
+    """`vecten app connect` for each bound container app without a principal in `env`: as
+    the MCP lists it when this machine can ask, else as this checkout's record of the
+    secrets it stored, in which case running it may rotate a working secret."""
+    if not config.apps:
+        return []
+    # Deferred so that `next` loads the app helpers only for a project that binds an app.
+    from vecten.app_connect import app_secret_names
+
+    candidates = []
+    for extension, bindings in sorted(config.apps.items()):
+        for app in sorted(bindings):
+            try:
+                names = app_secret_names(root, config, extension, app)
+            except Failure:
+                continue
+            candidates.append((f"{extension}.{app}", names))
+    if not candidates:
+        return []
+    shipped = _shipped_apps(root, config, env)
+    recorded = recorded_secret_names(root, env)
+    items = []
+    for key, names in candidates:
+        command = f"vecten app connect {key} --env {env}"
+        if shipped is not None:
+            # An app the shipped bundle does not bind waits for the ship; a principal that
+            # exists unmarked or disabled is an access-health issue.
+            entry = shipped.get(key)
+            if entry is not None and entry.get("principal") is None:
+                items.append(
+                    Item("command", f"Create the MCP principal of {key} in {env}", command)
+                )
+        elif not set(names) <= recorded:
+            title = (
+                f"Connect {key} to the MCP in {env}; if it is connected already, this rotates "
+                "its secret and the app needs a ship"
+            )
+            items.append(Item("command", title, command))
+    return items
+
+
 def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState) -> list[Item]:
     facts = config.environments.get(env) or EnvironmentFacts()
     if not facts.deployed_commit:
@@ -90,6 +182,9 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
     # An answer recorded after the deploy changes vecten.toml, which reaches the MCP when
     # the push ships it, so it is pushed before anything else is asked.
     items: list[Item] = [PUSH] if git.dirty or git.ahead else []
+    # An extension added after the deploy can declare secrets the environment does not hold.
+    items += declared_secret_items(root, config, env)
+    items += _waiting_hostname_items(root, config, env)
     if not config.has("mcp"):
         return items
     # Nothing below works before the MCP runs, and it cannot start without its identity.
@@ -117,6 +212,8 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
             for link in owed(root, env)
         ]
     admin_work += access_apply_items(root, config, env)
+    admin_work += app_connect_items(root, config, env)
+    admin_work += area_access_apply_items(root, config, env)
     if admin_work and mcp.admins:
         items += _sign_in_items(root, config, env, facts)
     items += admin_work

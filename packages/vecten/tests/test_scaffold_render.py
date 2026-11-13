@@ -21,8 +21,12 @@ from vecten_shared.config import load_config
 from vecten_shared.osi.generate import render_document
 from vecten_shared.versions import VERSIONS
 
-from .scaffold_matrix import MATRIX, label
+from .scaffold_matrix import DEPLOY, LOCAL, MATRIX, label
 
+COPY_GRANTS = (
+    "  # A rebuilt relation keeps the grants of the one it replaces, in the same statement.\n"
+    "  +copy_grants: true\n"
+)
 SKILL_REFERENCE = re.compile(r"skills/([^/\s`]+)/SKILL\.md")
 BASE_PATHS = [
     "orchestration/docker-compose.override.yml",
@@ -42,6 +46,7 @@ CONVENTION_SECTIONS = [
     "Schemas",
     "Model names",
     "Layers",
+    "Restricted areas",
     "Descriptions and keys",
     "Identity macros",
     "Time",
@@ -93,7 +98,19 @@ def test_render_layout(tmp_path, params):
     assert served is (params.render_deploy and "platform" not in params.components)
     snowflake_root = params.warehouse == "snowflake" and "platform" in params.components
     assert ("### Snowflake" in runbook) is (params.render_deploy and snowflake_root)
+    assert ("## Promotion order" in runbook) is params.render_deploy
+    assert ("### What a promoted run reads from where" in runbook) is params.render_deploy
+    own_account = "Set `snowflake_account` there to `dev`'s Snowflake account" in runbook
+    assert own_account is (params.render_deploy and snowflake_root)
+    assert "waits for Snowflake accounts per environment" not in runbook
     assert (DEPLOY_ROLE_PRIVILEGES in runbook) is (params.render_deploy and snowflake_root)
+    # In a shared account another environment's integration reaches a deploy user without
+    # a key-pair-only policy.
+    shared = params.snowflake_shared_account
+    deploy_policy = "SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN" in runbook
+    assert deploy_policy is (params.render_deploy and snowflake_root and shared)
+    fixed_account = "One environment per Snowflake account" in runbook
+    assert fixed_account is (params.render_deploy and snowflake_root and not shared)
     identity = "`vecten mcp provisioner-script --env <env>`, which stores" in runbook
     assert identity is (params.render_deploy and snowflake_root and "mcp" in params.components)
     managed_warehouse = params.warehouse == "postgres" and "platform" in params.components
@@ -116,9 +133,10 @@ def test_render_layout(tmp_path, params):
         assert f"reboot-db-instance --db-instance-identifier <prefix>-{holder}`" in runbook
         assert "-backend-config=encrypt=true" in runbook
     convention = (target / "docs" / "schema-convention.md").read_text()
-    assert convention.startswith("# Schema convention, version 1\n")
+    assert convention.startswith(f"# Schema convention, version {VERSIONS.schema_convention}\n")
+    assert VERSIONS.schema_convention == 2
     assert f"Apache Ossie {VERSIONS.ossie_spec}" in convention
-    assert len(convention.splitlines()) < 120
+    assert len(convention.splitlines()) < 150
     headings = re.findall(r"^## (.+)$", convention, re.M)
     assert headings == CONVENTION_SECTIONS
     platform = "platform" in params.components
@@ -202,6 +220,7 @@ def test_rendered_project_is_not_tracking_generated_dbt_files(tmp_path):
     ignored = (tmp_path / "proj" / ".gitignore").read_text().splitlines()
     for line in ("dbt/packages.yml", "dbt/package-lock.yml", "dbt/dbt_packages/", "dbt/target/"):
         assert line in ignored
+    assert "dbt/project-packages.yml" not in ignored
     assert not (tmp_path / "proj" / "dbt" / "packages.yml").exists()
 
 
@@ -218,6 +237,22 @@ def test_rendered_dbt_project_delegates_schema_names_to_the_convention(tmp_path)
     assert project["snapshots"]["acme"]["+schema"] == "snapshots"
     macro = (dbt_dir / "macros" / "generate_schema_name.sql").read_text()
     assert "vecten_convention.generate_schema_name(custom_schema_name, node)" in macro
+
+
+def test_snowflake_models_keep_their_grants_across_rebuilds(tmp_path):
+    texts = {}
+    for warehouse in ("postgres", "snowflake"):
+        params = ScaffoldParams.from_answers(
+            {"name": "acme", "users": 3, "sources": ["hubspot"], "warehouse": warehouse}, {}
+        )
+        render_project(tmp_path / warehouse, params)
+        texts[warehouse] = (tmp_path / warehouse / "dbt" / "dbt_project.yml").read_text()
+    assert yaml.safe_load(texts["snowflake"])["models"]["+copy_grants"] is True
+    # A Postgres project renders exactly as before; Snowflake adds the setting only.
+    assert "copy_grants" not in texts["postgres"]
+    assert texts["snowflake"] == texts["postgres"].replace(
+        "\nmodels:\n", "\nmodels:\n" + COPY_GRANTS
+    )
 
 
 @pytest.mark.parametrize("warehouse", ["postgres", "snowflake"])
@@ -315,11 +350,23 @@ def test_snowflake_root_takes_the_provider_from_the_environment_and_names_by_var
     provider = re.search(r'^provider "snowflake" \{\n(.*?)^\}', main, re.M | re.S)
     assert provider
     assert provider.group(1).strip() == (
-        'preview_features_enabled = ["snowflake_current_role_datasource"]'
+        'preview_features_enabled = ["snowflake_current_role_datasource", '
+        '"snowflake_authentication_policy_resource", '
+        '"snowflake_user_authentication_policy_attachment_resource"]'
     )
     assert f'version = "~> {VERSIONS.terraform_snowflake_provider}.0"' in main
     assert f"vecten-open.git//terraform/snowflake?ref={params.terraform_module_ref}" in main
-    for name in ("database_name", "warehouse_name", "warehouse_size", "loader_public_key"):
+    for name in (
+        "database_name",
+        "warehouse_name",
+        "analyst_role_name",
+        "loader_role_name",
+        "loader_user_name",
+        "provisioner_role_name",
+        "warehouse_size",
+        "loader_public_key",
+        "loader_sign_in",
+    ):
         assert re.search(rf"^\s*{name}\s*=\s*var\.{name}\s*$", main, re.M), name
         assert f'variable "{name}"' in (root / "variables.tf").read_text(), name
     assert 'backend "s3"' in (root / "backend.tf").read_text()
@@ -746,3 +793,47 @@ def test_rerender_preserves_owner_files_and_pristine_baseline(tmp_path, name):
     render_project(tmp_path, MATRIX[0])
     assert (tmp_path / name).read_text() == "owner contents\n"
     assert json.loads((tmp_path / BASELINE).read_text())["files"][name] == original
+
+
+def _snowflake_runbook(tmp_path, shared):
+    answers = {**LOCAL, **DEPLOY, "sources": ["hubspot"], "warehouse": "snowflake", "cloud": "aws"}
+    params = ScaffoldParams.from_answers(
+        answers, {"components": ["platform", "mcp"], "snowflake_shared_account": shared}
+    )
+    render_project(tmp_path / "p", params)
+    runbook = (tmp_path / "p" / "docs" / "runbook.md").read_text()
+    return runbook, (tmp_path / "p" / ".copier-answers.yml").read_text()
+
+
+def test_the_runbook_states_a_shared_accounts_names_policies_and_trust(tmp_path):
+    runbook, answers = _snowflake_runbook(tmp_path, shared=True)
+    section = runbook[runbook.index("### Snowflake") : runbook.index("## First sign-in")]
+    for text in (
+        "`_<BASE>_<ENV>`",
+        "`ANALYST_<BASE>_<ENV>`",
+        "`PROVISIONER_<BASE>_<ENV>`",
+        "`EXTERNAL_OAUTH_<BASE>_<ENV>`",
+        "`<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`",
+        "SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN",
+        "its own deploy user and role",
+        "by ownership, never by a name pattern",
+        "Moving an environment that has fixed names into a shared account is a new deployment",
+        "create `prod` first",
+        "live checks have yet to confirm",
+    ):
+        assert text in section, text
+    for fixed in ("`VECTEN_PROVISIONER`", "One environment per Snowflake account"):
+        assert fixed not in section, fixed
+    # The layout is vecten.toml's; the answers file stays the same in both layouts.
+    assert "snowflake_shared_account" not in answers
+    assert _snowflake_runbook(tmp_path / "fixed", shared=False)[1] == answers.replace(
+        str(tmp_path / "p"), str(tmp_path / "fixed" / "p")
+    )
+
+
+def test_the_runbook_states_that_fixed_names_hold_an_account_alone(tmp_path):
+    runbook, _ = _snowflake_runbook(tmp_path, shared=False)
+    section = runbook[runbook.index("### Snowflake") : runbook.index("## First sign-in")]
+    assert "One environment per Snowflake account" in section
+    assert "`VECTEN_PROVISIONER`" in section and "`ANALYST`" in section
+    assert "_<BASE>_<ENV>" not in section

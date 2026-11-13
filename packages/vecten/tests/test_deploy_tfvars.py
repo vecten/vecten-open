@@ -298,3 +298,109 @@ def test_scaleway_accepts_the_rendered_region(tmp_path):
 def test_aws_keeps_its_tfvars_region_unchecked(project):
     replace_line(project, "prod", "region", 'region = "eu-west-3"')
     assert check_tfvars(project, load_config(project), "prod")["region"] == "eu-west-3"
+
+
+def test_dags_paused_at_creation_is_optional_and_a_bool(project):
+    assert "dags_paused_at_creation" not in check_tfvars(project, load_config(project), "prod")
+    path = env_tfvars_path(project, "prod")
+    rendered = path.read_text()
+    path.write_text(rendered + "dags_paused_at_creation = true\n")
+    assert check_tfvars(project, load_config(project), "prod")["dags_paused_at_creation"] is True
+
+
+@pytest.mark.parametrize("value", ['"true"', "1", "[true]"])
+def test_dags_paused_at_creation_refuses_anything_but_true_or_false(project, value):
+    path = env_tfvars_path(project, "prod")
+    path.write_text(path.read_text() + f"dags_paused_at_creation = {value}\n")
+    failure = refusal(project)
+    assert failure.code == ExitCode.CONFIG
+    assert "dags_paused_at_creation" in failure.message and "true or false" in failure.message
+
+
+def _staging(project, domain):
+    text = env_tfvars_path(project, "prod").read_text()
+    text = text.replace('environment       = "prod"', 'environment       = "staging"')
+    text = text.replace('"data.acme.com"', f'"{domain}"')
+    env_tfvars_path(project, "staging").write_text(text)
+
+
+def _bind_apex(project):
+    from .services_fixtures import with_services
+
+    with_services(project, {"bot": {"hostname": "@", "routes": {"webhook": {"access": "public"}}}})
+
+
+def test_the_apex_is_refused_where_an_environments_domain_is_its_zone(project):
+    # vecten.toml's own domain sits below its zone; staging serves at the zone itself.
+    _bind_apex(project)
+    _staging(project, "acme.com")
+    failure = refusal(project, "staging")
+    assert failure.code == ExitCode.CONFIG
+    assert "deploy/envs/staging.tfvars" in failure.message
+    assert "services.acme.bot.hostname" in failure.message and "@" in failure.message
+
+
+def test_an_apps_apex_is_refused_where_an_environments_domain_is_its_zone(project):
+    from .services_fixtures import with_apps
+
+    with_apps(project, {"overview": {"groups": ["default"], "hostname": "@"}})
+    _staging(project, "acme.com")
+    failure = refusal(project, "staging")
+    assert failure.code == ExitCode.CONFIG
+    assert "apps.acme.overview.hostname" in failure.message and "@" in failure.message
+
+
+def test_the_apex_is_admitted_where_the_environments_domain_sits_below_its_zone(project):
+    _bind_apex(project)
+    _staging(project, "staging.acme.com")
+    assert check_tfvars(project, load_config(project), "staging")["domain"] == "staging.acme.com"
+
+
+def test_tfvars_may_not_set_service_hostnames(project):
+    path = env_tfvars_path(project, "prod")
+    path.write_text(path.read_text() + 'service_hostnames = {"bot": "platform"}\n')
+    failure = refusal(project)
+    assert failure.code == ExitCode.CONFIG
+    assert "service_hostnames" in failure.message and "vecten.toml" in failure.message
+
+
+def test_every_environment_builds_in_the_account_its_runtime_connects_to(tmp_path, monkeypatch):
+    import json
+    import tarfile
+
+    import yaml
+
+    from vecten.deploy.bundle import build_host_bundle
+    from vecten_shared.provider import SNOWFLAKE_ACCOUNT_VAR
+    from vecten_shared.provider.environment import EnvironmentOutputs
+    from vecten_shared.provider.runtime import OutputsRuntimeProvider
+
+    from .deploy_fixtures import COMMIT, STANDARD_OUTPUTS
+    from .fixture_project import render_fixture
+
+    root = render_fixture(tmp_path, "snowflake", deploy=True)
+    text = env_tfvars_path(root, "prod").read_text()
+    text = text.replace('environment       = "prod"', 'environment       = "dev"')
+    env_tfvars_path(root, "dev").write_text(text.replace('"ACME-PROD"', '"ACME-DEV"'))
+    # [warehouse] account names prod's account; dev's tfvars names its own.
+    config = load_config(root)
+    assert config.warehouse.account == "ACME-PROD"
+    assert check_tfvars(root, config, "dev")["snowflake_account"] == "ACME-DEV"
+    # `ship` hands each of dev's hosts dev's account, and the runtime there connects to it.
+    outputs = json.loads(json.dumps(STANDARD_OUTPUTS))
+    del outputs["postgres"]["warehouse"]
+    bundle = build_host_bundle(
+        root,
+        config,
+        "dev",
+        EnvironmentOutputs.model_validate(outputs),
+        "mcp",
+        COMMIT,
+        tmp_path / "out",
+    )
+    with tarfile.open(bundle, "r:gz") as tar:
+        compose = yaml.safe_load(tar.extractfile(".vecten/stack/docker-compose.yml").read())
+    shipped = compose["services"]["mcp-server"]["environment"][SNOWFLAKE_ACCOUNT_VAR]
+    assert shipped == "ACME-DEV"
+    monkeypatch.setenv(SNOWFLAKE_ACCOUNT_VAR, shipped)
+    assert OutputsRuntimeProvider(root, "dev")._snowflake_warehouse().account == "ACME-DEV"

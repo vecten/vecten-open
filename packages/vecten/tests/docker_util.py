@@ -1,3 +1,5 @@
+import os
+import random
 import shutil
 import socket
 import subprocess
@@ -109,6 +111,24 @@ def free_port() -> int:
             return port
 
 
+def stack_pg_port() -> int:
+    """A free port for a test stack's published Postgres, below the kernel's ephemeral range.
+
+    The kernel hands any port in that range, 55432 included, to an outbound connection as its
+    local end, and such a socket can make `vecten up` fail to publish the port. Linux's default
+    range starts at 32768 and macOS's at 49152, so only a listener takes a port below both, and
+    the bind here sees a listener.
+    """
+    while True:
+        port = random.randrange(20000, 32768)
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+
+
 @contextmanager
 def pg_container(init_dir, env: dict[str, str]):
     import psycopg
@@ -161,3 +181,22 @@ def pg_container(init_dir, env: dict[str, str]):
         yield connect, name
     finally:
         subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
+
+
+def require_base_image(kind: str, registry: str | None = None) -> str:
+    """The local base image `vecten dev build-images` tags; skipped on a laptop without it.
+
+    In CI a missing image fails the test, because the job that runs it builds the images and a
+    skip there would pass without testing anything.
+    """
+    from vecten.stack.images import base_image
+
+    if not docker_available():
+        pytest.skip("Docker is not available")
+    image = base_image(kind, registry)
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode:
+        message = f"{image} is missing; build it with vecten dev build-images"
+        if os.environ.get("CI"):
+            pytest.fail(message)
+        pytest.skip(message)
+    return image

@@ -9,13 +9,18 @@ from typing import Literal
 
 import yaml
 
-from vecten.stack.images import BUILD_DIR
+from vecten.stack.images import BUILD_DIR, SOURCES_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
-from vecten_shared.config import VectenConfig, stack_project_name
+from vecten_shared.apps import APP_CREDENTIAL, credential_names
+from vecten_shared.config import APEX, VectenConfig, service_hostname, stack_project_name
+from vecten_shared.declarations import component_for, secret_problem
+from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.provider import SNOWFLAKE_ACCOUNT_VAR
 from vecten_shared.provider.environment import EnvironmentOutputs
-from vecten_shared.provider.local import LOCAL_PG_PUBLISHED_PORT
+from vecten_shared.provider.local import local_pg_published_port
+from vecten_shared.services import SERVICE_COMPONENT, Bound, bound_services
 from vecten_shared.sql import local_init_script_path, setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -98,15 +103,80 @@ def _project_mounts(stack_dir: Path) -> list[str]:
     return mounts
 
 
-def connector_secrets(config: VectenConfig) -> list[str]:
-    return sorted({s for c in config.connectors for s in c.secrets})
+def _declared(config: VectenConfig, record: dict[str, Extension]) -> set[str]:
+    names = set(config.secrets)
+    for name, entry in record.items():
+        # The record is a committed file; an app's credential names reach its service only.
+        for secret in entry.secrets:
+            if APP_CREDENTIAL.fullmatch(secret):
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"{RECORD_FILE}: {name}: {secret} is reserved for an analytics app's "
+                    "client credentials",
+                )
+        names.update(entry.secrets)
+    return names
+
+
+def platform_secrets(config: VectenConfig, record: dict[str, Extension]) -> list[str]:
+    """The names delivered to Airflow: connectors', and declared names outside `MCP_`."""
+    names = {s for c in config.connectors for s in c.secrets}
+    names.update(n for n in _declared(config, record) if component_for(n) == "platform")
+    return sorted(names)
+
+
+def mcp_secrets(config: VectenConfig, record: dict[str, Extension]) -> list[str]:
+    return sorted(n for n in _declared(config, record) if component_for(n) == "mcp")
+
+
+def project_record(stack_dir: Path) -> dict[str, Extension]:
+    return read_record(stack_dir.parent.parent) or {}
+
+
+def _record_mount(stack_dir: Path, target_dir: str) -> list[str]:
+    # Compose creates a directory for a bind source that does not exist, so only a project that
+    # has a record mounts it.
+    if not (stack_dir.parent.parent / RECORD_FILE).is_file():
+        return []
+    return [f"../../{RECORD_FILE}:{target_dir}/{RECORD_FILE}:ro"]
+
+
+def _add_secrets(environment: dict, names: list[str], kind: str) -> None:
+    for secret in names:
+        if secret in environment:
+            continue
+        # The name lands inside `${...}`, which Compose would misread with any other character.
+        if not SECRET_NAME.fullmatch(secret):
+            raise Failure(ExitCode.CONFIG, f"{kind} secret {secret!r} must be {SECRET_RULE}")
+        if secret.startswith("AIRFLOW__"):
+            raise Failure(
+                ExitCode.CONFIG,
+                f"{kind} secret {secret} collides with a stack variable; rename the secret",
+            )
+        # `${NAME:-}` lets the stack start before a secret is set; the run then names it.
+        environment[secret] = f"${{{secret}:-}}"
 
 
 def _build(mode: str, stack_dir: Path, dockerfile: str) -> dict:
     # A bundle is rendered on another machine than the VM it runs on, so its context is
     # relative to the stack directory Compose runs from.
     context = f"./{BUILD_DIR}" if mode == "vm" else str(stack_dir / BUILD_DIR)
-    return {"context": context, "dockerfile": dockerfile}
+    build = {"context": context, "dockerfile": dockerfile}
+    record = project_record(stack_dir).values()
+    contexts = {}
+    if any(entry.source_path for entry in record):
+        # In-repo extensions build from the project's own extensions/, never copied into the
+        # layer's context.
+        contexts["extensions"] = (
+            "../../extensions" if mode == "vm" else str(stack_dir.parent.parent / "extensions")
+        )
+    if any(entry.git for entry in record):
+        # A bundle carries each git source in its extensions/; `up` fetches them under the
+        # stack directory, never into the project's own files.
+        contexts["sources"] = "../../extensions" if mode == "vm" else str(stack_dir / SOURCES_DIR)
+    if contexts:
+        build["additional_contexts"] = contexts
+    return build
 
 
 # A Scaleway VM has no instance identity, so the agent hands its containers the VM's key. The
@@ -144,7 +214,13 @@ def _artifacts_source(mode: str) -> str:
 
 
 def _airflow_common(
-    config: VectenConfig, mode: str, stack_dir: Path, project: str, hosts: dict[str, str]
+    config: VectenConfig,
+    mode: str,
+    stack_dir: Path,
+    project: str,
+    hosts: dict[str, str],
+    dags_paused_at_creation: bool,
+    account_env: dict[str, str],
 ) -> dict:
     db = (
         "postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres/airflow"
@@ -158,9 +234,12 @@ def _airflow_common(
         "environment": {
             "AIRFLOW__CORE__EXECUTOR": "LocalExecutor",
             "AIRFLOW__CORE__LOAD_EXAMPLES": "False",
-            # A deployed environment has no step that unpauses a DAG, so only the laptop's start
-            # paused, where a schedule would sync from the human's machine.
-            "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION": str(mode == "local"),
+            # The laptop's DAGs always start paused, where a schedule would sync from the
+            # human's machine. A deployed environment has no step that unpauses a DAG, so its
+            # DAGs start paused only when its tfvars opt in, leaving each to a person to unpause.
+            "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION": str(
+                mode == "local" or dags_paused_at_creation
+            ),
             "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": db,
             "AIRFLOW__CORE__FERNET_KEY": "${AIRFLOW_FERNET_KEY}",
             "AIRFLOW__API__SECRET_KEY": "${AIRFLOW_API_SECRET_KEY}",
@@ -171,11 +250,13 @@ def _airflow_common(
             "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE": PASSWORDS_FILE_TARGET,
             "VECTEN_PROVIDER": mode if mode == "local" else "${VECTEN_PROVIDER}",
             "VECTEN_ENV": "local" if mode == "local" else "${VECTEN_ENV}",
+            "VECTEN_COMPONENT": "platform",
             "FORWARDED_ALLOW_IPS": "*",
         },
         "volumes": [
             *_project_mounts(stack_dir),
             "../../vecten.toml:/opt/airflow/vecten.toml:ro",
+            *_record_mount(stack_dir, "/opt/airflow"),
             "./extension_dags.py:/opt/airflow/dags/vecten_extensions.py:ro",
             # dbt reads the semantic model from the osi directory beside the dbt project.
             "../../osi:/opt/airflow/osi:ro",
@@ -195,21 +276,6 @@ def _airflow_common(
         "RUNTIME__DLTHUB_TELEMETRY": "false",
         ARTIFACT_DIR_VAR: DEFAULT_ARTIFACT_DIR,
     }
-    for secret in connector_secrets(config):
-        # The name lands inside `${...}`, which Compose would misread with any other character.
-        if not SECRET_NAME.fullmatch(secret):
-            raise Failure(ExitCode.CONFIG, f"connector secret {secret!r} must be {SECRET_RULE}")
-        if (
-            secret in common["environment"]
-            or secret in runtime_env
-            or secret.startswith("AIRFLOW__")
-        ):
-            raise Failure(
-                ExitCode.CONFIG,
-                f"connector secret {secret} collides with a stack variable; rename the secret",
-            )
-        # `${NAME:-}` lets the stack start before a secret is set; the run then names it.
-        runtime_env[secret] = f"${{{secret}:-}}"
     common["environment"] |= runtime_env
     if mode == "vm":
         cloud = _cloud(config)
@@ -222,6 +288,7 @@ def _airflow_common(
             # instance role; on Scaleway the agent defines it with the key and S3 endpoint.
             "AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID": "aws_default",
         }
+        common["environment"] |= account_env
         if cloud == "scaleway":
             common["environment"]["AIRFLOW_CONN_AWS_DEFAULT"] = "${AIRFLOW_CONN_AWS_DEFAULT}"
         common["volumes"] += [
@@ -235,7 +302,167 @@ def _airflow_common(
         # The passwords file is 0600 and owned by the host user, so Airflow must run as that
         # uid; the official image supports an arbitrary uid only with gid 0.
         common["user"] = f"{os.getuid()}:0"
+    # Checked against every variable the stack sets, the VM's included: the agent hands secrets
+    # to Compose after the stack's own values, so a colliding name would replace them.
+    secrets = platform_secrets(config, project_record(stack_dir))
+    for secret in secrets:
+        if secret in common["environment"] or secret in SCALEWAY_RUNTIME_VARS:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"declared secret {secret} collides with a stack variable; rename the secret",
+            )
+    _add_secrets(common["environment"], secrets, "declared")
     return common
+
+
+SERVICES_NETWORK = "vecten-services"
+# The VM agent's DOCKER-USER rules match this interface name; Linux caps one at 15 characters.
+SERVICES_BRIDGE = "vecten-services"
+SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
+SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
+
+
+def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str]:
+    """Only the extension's own names its host may read: no cloud key, no stack variable.
+
+    The record is a committed file, so a name `vecten lock` would refuse is refused here too:
+    the agent holds the stack's own secrets and would hand them over under that name.
+    """
+    entry = record.get(bound.extension)
+    names = sorted(n for n in (entry.secrets if entry else ()) if component_for(n) == bound.host)
+    for name in names:
+        problem = secret_problem(name)
+        if problem:
+            raise Failure(ExitCode.CONFIG, f"{RECORD_FILE}: {bound.extension}: {problem}")
+    if bound.app is not None:
+        names = sorted([*names, *credential_names(bound.app, bound.host)])
+    return names
+
+
+def host_services(
+    config: VectenConfig, record: dict[str, Extension], components: list[str]
+) -> tuple[list[str], str]:
+    """What a VM's agent needs for the services it runs: the secret names it reads and hands
+    to Compose, and the bridge it keeps off the metadata address, or empty for no service."""
+    placed = [b for b in bound_services(config, record) if b.host in components]
+    names = sorted({n for bound in placed for n in service_secret_names(bound, record)})
+    return names, SERVICES_BRIDGE if placed else ""
+
+
+def _literal(value: str) -> str:
+    # Compose interpolates `$` in every string, so a declared value keeps its own text this way.
+    return value.replace("$", "$$")
+
+
+def environment_domain(hosts: dict[str, str]) -> str:
+    """The deployed environment's domain, read off its built-in names: it comes from the
+    environment's tfvars, which vecten.toml does not repeat."""
+    return (hosts.get("mcp") or hosts["airflow"]).split(".", 1)[1]
+
+
+def service_host_name(mode: str, label: str, hosts: dict[str, str]) -> str:
+    """The name a service hostname label is served at: below the environment's domain on a
+    VM, below `localhost` with the published port on the laptop."""
+    if mode == "local":
+        name = "localhost" if label == APEX else f"{label}.localhost"
+        return f"{name}:{LOCAL_HTTPS_PORT}"
+    return service_hostname(label, environment_domain(hosts))
+
+
+def _public_url(mode: str, label: str, hosts: dict[str, str]) -> str:
+    return f"https://{service_host_name(mode, label, hosts)}"
+
+
+def served_services(
+    config: VectenConfig,
+    record: dict[str, Extension],
+    components: list[str],
+    hosts: dict[str, str],
+    listed: list[str],
+) -> list[tuple[Bound, str]]:
+    """The services on a VM whose hostname the environment's records list for that VM, each
+    with its name; a name the outputs do not list waits for `vecten deploy`."""
+    served = []
+    for bound in bound_services(config, record):
+        label = bound.binding.hostname
+        if label is None or bound.host not in components:
+            continue
+        name = service_host_name("vm", label, hosts)
+        if name in listed:
+            served.append((bound, name))
+    return served
+
+
+def _service(
+    bound: Bound,
+    mode: str,
+    project: str,
+    hosts: dict[str, str],
+    stack_dir: Path,
+) -> dict:
+    declared, root = bound.service, SERVICE_ROOTS[bound.host]
+    environment = {
+        "VECTEN_ENV": "local" if mode == "local" else "${VECTEN_ENV}",
+        "VECTEN_COMPONENT": SERVICE_COMPONENT,
+        "VECTEN_SERVICE": bound.key,
+        "VECTEN_PROJECT_ROOT": root,
+    }
+    if declared.port is not None:
+        environment["PORT"] = str(declared.port)
+    if bound.binding.hostname is not None:
+        environment["VECTEN_PUBLIC_URL"] = _public_url(mode, bound.binding.hostname, hosts)
+    # On the laptop mcp.localhost resolves to the app's own container and its certificate is
+    # self-signed, so no URL there would reach the MCP.
+    if bound.app is not None and mode != "local":
+        environment["VECTEN_MCP_URL"] = f"https://{hosts['mcp']}/mcp"
+    secrets = service_secret_names(bound, project_record(stack_dir))
+    for secret in secrets:
+        if secret in environment:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"declared secret {secret} collides with a service variable; rename the secret",
+            )
+    _add_secrets(environment, secrets, "declared")
+    if declared.health_path is not None:
+        url = f"http://localhost:{declared.port}{declared.health_path}"
+        test = ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", url]
+    else:
+        test = ["CMD", *(_literal(arg) for arg in declared.health_command or ())]
+    volumes = [f"../../vecten.toml:{root}/vecten.toml:ro", *_record_mount(stack_dir, root)]
+    if declared.volume is not None:
+        volumes.append(f"{bound.compose_name}-data:{declared.volume}")
+    return {
+        "image": f"{project}-{SERVICE_IMAGES[bound.host]}:{VERSIONS.vecten}",
+        # The host component's own service builds this image; a service only runs it.
+        "pull_policy": "never",
+        "profiles": [bound.host],
+        "command": [_literal(arg) for arg in declared.command],
+        "environment": environment,
+        "volumes": volumes,
+        "mem_limit": f"{bound.memory_mb}m",
+        "cpus": bound.cpus,
+        "networks": [SERVICES_NETWORK],
+        "healthcheck": {
+            "test": test,
+            "interval": "10s",
+            "timeout": "5s",
+            "retries": 3,
+            "start_period": "30s",
+        },
+        "restart": "unless-stopped",
+    }
+
+
+def services_to_run(
+    config: VectenConfig, mode: str, host_components: list[str], stack_dir: Path
+) -> list[Bound]:
+    """The bound services this stack runs: those placed on its components, and on the laptop
+    only those that do not opt out."""
+    return [
+        bound
+        for bound in bound_services(config, project_record(stack_dir))
+        if bound.host in host_components and (mode != "local" or bound.binding.local)
+    ]
 
 
 def _postgres(config: VectenConfig) -> dict:
@@ -248,6 +475,8 @@ def _postgres(config: VectenConfig) -> dict:
         "LOADER_PASSWORD": "${LOADER_PASSWORD}",
         "VECTEN_WITH_MCP": "true" if with_mcp else "false",
     }
+    if config.areas:
+        environment["VECTEN_AREAS"] = ",".join(sorted(config.areas))
     if with_mcp:
         environment |= {
             "MCP_STATE_DB_PASSWORD": "${MCP_STATE_DB_PASSWORD}",
@@ -259,7 +488,7 @@ def _postgres(config: VectenConfig) -> dict:
         "profiles": ["local"],
         "command": ["postgres", "-c", "log_line_prefix=%m [%p] %u@%d app=%a "],
         "environment": environment,
-        "ports": [f"127.0.0.1:{LOCAL_PG_PUBLISHED_PORT}:5432"],
+        "ports": [f"127.0.0.1:{local_pg_published_port()}:5432"],
         "volumes": [
             "postgres-data:/var/lib/postgresql/data",
             "./pg-init:/docker-entrypoint-initdb.d:ro",
@@ -283,9 +512,22 @@ def generate_compose(
     stack_dir: Path,
     project: str | None = None,
     hosts: dict[str, str] | None = None,
+    dags_paused_at_creation: bool = False,
+    snowflake_account: str | None = None,
 ) -> dict:
-    """The Compose document; a vm stack passes `hosts` from `vm_hostnames(outputs)`."""
+    """The Compose document; a vm stack passes `hosts` from `vm_hostnames(outputs)`.
+
+    `dags_paused_at_creation` and `snowflake_account` are the environment's tfvars settings;
+    a local stack starts its DAGs paused whatever the first says, and signs in to no
+    environment's account.
+    """
     hosts = _hosts(mode, hosts)
+    # Each environment names its own Snowflake account in its tfvars, which the hosts lack.
+    account_env = (
+        {SNOWFLAKE_ACCOUNT_VAR: snowflake_account}
+        if mode == "vm" and config.warehouse.kind == "snowflake" and snowflake_account
+        else {}
+    )
     services: dict[str, dict] = {}
     volumes: dict[str, dict] = {}
     with_platform = "platform" in host_components
@@ -299,7 +541,9 @@ def generate_compose(
         volumes["postgres-data"] = {}
 
     if with_platform:
-        common = _airflow_common(config, mode, stack_dir, project, hosts)
+        common = _airflow_common(
+            config, mode, stack_dir, project, hosts, dags_paused_at_creation, account_env
+        )
         depends = {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
         services["airflow-api-server"] = {
             **common,
@@ -358,9 +602,15 @@ def generate_compose(
                 "VECTEN_MCP_PUBLIC_URL": f"https://{hosts['mcp']}",
                 "VECTEN_PROVIDER": mode if mode == "local" else "${VECTEN_PROVIDER}",
                 "VECTEN_ENV": "local" if mode == "local" else "${VECTEN_ENV}",
+                "VECTEN_COMPONENT": "mcp",
+                "VECTEN_PROJECT_ROOT": "/app",
                 "MCP_STATE_DB_PASSWORD": "${MCP_STATE_DB_PASSWORD}",
             },
-            "volumes": ["../../osi:/app/osi:ro", "../../vecten.toml:/app/vecten.toml:ro"],
+            "volumes": [
+                "../../osi:/app/osi:ro",
+                "../../vecten.toml:/app/vecten.toml:ro",
+                *_record_mount(stack_dir, "/app"),
+            ],
             "depends_on": (
                 {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
             ),
@@ -388,11 +638,22 @@ def generate_compose(
             }
             services["mcp-server"]["volumes"].append("mcp-secrets:/var/lib/vecten-mcp/secrets")
             volumes["mcp-secrets"] = {}
+            # On a VM the MCP server reads its own scope through its provider instead.
+            mcp_env = services["mcp-server"]["environment"]
+            declared = mcp_secrets(config, project_record(stack_dir))
+            for secret in declared:
+                if secret in mcp_env:
+                    raise Failure(
+                        ExitCode.CONFIG,
+                        f"declared secret {secret} collides with a stack variable; rename it",
+                    )
+            _add_secrets(mcp_env, declared, "declared")
         if mode == "vm":
             services["mcp-server"]["environment"] |= _vm_runtime_env(_cloud(config)) | {
                 "VECTEN_MCP_POOL_CAP": "${VECTEN_MCP_POOL_CAP}",
                 "VECTEN_FEEDBACK_MANIFEST": "/app/feedback.json",
             }
+            services["mcp-server"]["environment"] |= account_env
             services["mcp-server"]["volumes"].append(VM_ENVIRONMENT_MOUNT)
             services["mcp-server"]["volumes"].append("../ship/feedback.json:/app/feedback.json:ro")
             if config.mcp.admin_panel == "off":
@@ -424,7 +685,20 @@ def generate_compose(
         "depends_on": nginx_depends,
         "restart": "unless-stopped",
     }
+    running = services_to_run(config, mode, host_components, stack_dir)
+    for bound in running:
+        services[bound.compose_name] = _service(bound, mode, project, hosts, stack_dir)
+        if bound.service.volume is not None:
+            volumes[f"{bound.compose_name}-data"] = {}
     document = {"name": project, "services": services, "volumes": volumes}
+    if running:
+        services["nginx"]["networks"] = ["default", SERVICES_NETWORK]
+        network = (
+            {"driver_opts": {"com.docker.network.bridge.name": SERVICES_BRIDGE}}
+            if mode == "vm"
+            else {}
+        )
+        document["networks"] = {SERVICES_NETWORK: network}
     if config.packages.private_index:
         secrets = {}
         for name, service in services.items():

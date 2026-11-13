@@ -11,7 +11,14 @@ from vecten_shared.output import ExitCode, Failure, Result
 
 
 def _facts_message(data: dict) -> str:
-    return " ".join(f"{name}={str(value).lower()}" for name, value in data.items())
+    facts = " ".join(
+        f"{name}={str(value).lower()}" for name, value in data.items() if name != "service_limits"
+    )
+    lines = [
+        f"services on {host} reserve {limit['memory_mb']} MB and {limit['cpus']:g} CPUs"
+        for host, limit in data.get("service_limits", {}).items()
+    ]
+    return "\n".join([facts, *lines])
 
 
 def _ship_message(data: dict) -> str:
@@ -26,27 +33,114 @@ def _ship_message(data: dict) -> str:
         )
     if data.get("ship_skipped"):
         return f"shipped nothing: {data['ship_skipped']}"
-    return f"shipped {data['commit'][:8]} to {', '.join(data['hosts'])}"
+    return "\n".join(
+        [f"shipped {data['commit'][:8]} to {', '.join(data['hosts'])}", *_service_lines(data)]
+    )
+
+
+def _service_lines(data: dict) -> list[str]:
+    lines = [f"service {key}: {state}" for key, state in data.get("services", {}).items()]
+    if data.get("waiting_routes"):
+        lines.append(
+            f"routes waiting for `vecten deploy --env {data['env']}`: "
+            + ", ".join(data["waiting_routes"])
+        )
+    lines += [
+        f"volumes of services no longer bound on {host}: {', '.join(names)}; they keep their "
+        "data until removed on the VM"
+        for host, names in data.get("orphaned_volumes", {}).items()
+    ]
+    return lines
 
 
 def ship(
     env: str | None = typer.Option(None, "--env", help="The environment to ship to."),
     check: bool = typer.Option(
-        False, "--check", help="Report whether the environment is bootstrapped and deployed."
+        False,
+        "--check",
+        help="Report whether the environment is bootstrapped and deployed; without --env, "
+        "for the first environment of the promotion order.",
+    ),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="Inside GitHub Actions, the default branch's commit to ship instead of the "
+        "checked-out one.",
     ),
     json_output: bool = JsonFlag,
 ) -> None:
     """Send the project's content to every host of an environment; never runs Terraform."""
 
     def run(ctx: CliContext) -> Result:
-        if not env:
+        if not env and not check:
             raise Failure(ExitCode.USAGE, "ship needs --env <env>")
         # Deferred so that importing the CLI loads no deploy machinery or boto3.
         from vecten.deploy.run import ship_env
 
         root = ctx.require_project()
-        data = ship_env(root, env, gh=gh_mod.get_gh(), git=gh_mod.get_git(), check=check)
-        return Result(data=data, message=_facts_message(data) if check else _ship_message(data))
+        data = ship_env(
+            root, env or None, gh=gh_mod.get_gh(), git=gh_mod.get_git(), check=check, commit=commit
+        )
+        if check:
+            return Result(data=data, message=_facts_message(data))
+        warnings = "".join(f"\nwarning: {w}" for w in data.get("warnings", []))
+        return Result(data=data, message=_ship_message(data) + warnings)
+
+    run_command(json_output, run)
+
+
+def _promote_message(data: dict) -> str:
+    return (
+        f"promoted {data['commit'][:8]} from {data['promotes_from']} to {data['env']}: "
+        f"run {data['run_id']} {data['url']}"
+    )
+
+
+def _status_message(data: dict) -> str:
+    lines = []
+    for entry in data["environments"]:
+        shipped = entry["commit"][:8] if entry["commit"] else "nothing"
+        line = f"{entry['env']} {shipped}"
+        if entry["behind"]:
+            line += f", behind {entry['promotes_from']}: `vecten promote --env {entry['env']}`"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def promote(
+    env: str | None = typer.Option(None, "--env", help="The environment to promote to."),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="A commit the environment before it shipped, instead of the newest one; how "
+        "an environment rolls back to a commit it ran earlier.",
+    ),
+    status: bool = typer.Option(
+        False,
+        "--status",
+        help="List each environment of the promotion order with the commit it shipped last.",
+    ),
+    json_output: bool = JsonFlag,
+) -> None:
+    """Ship an environment of the promotion order the commit the environment before it
+    shipped: dispatches the ship workflow on the default branch with that commit and follows
+    it."""
+
+    def run(ctx: CliContext) -> Result:
+        # Deferred so that importing the CLI loads no deploy machinery or boto3.
+        from vecten.deploy.run import promote_env, promotion_status
+
+        if status:
+            if env or commit:
+                raise Failure(ExitCode.USAGE, "--status lists every environment; drop --env")
+            data = promotion_status(ctx.require_project(), gh=gh_mod.get_gh())
+            return Result(data=data, message=_status_message(data))
+        if not env:
+            raise Failure(ExitCode.USAGE, "promote needs --env <env>, or --status")
+        root = ctx.require_project()
+        data = promote_env(root, env, gh=gh_mod.get_gh(), git=gh_mod.get_git(), commit=commit)
+        warnings = "".join(f"\nwarning: {w}" for w in data.get("warnings", []))
+        return Result(data=data, message=_promote_message(data) + warnings)
 
     run_command(json_output, run)
 
@@ -121,7 +215,11 @@ def bootstrap(
 
 def _deploy_message(data: dict) -> str:
     return "\n".join(
-        [_deployed_message(data), *(f"warning: {w}" for w in data.get("warnings", []))]
+        [
+            _deployed_message(data),
+            *_service_lines(data),
+            *(f"warning: {w}" for w in data.get("warnings", [])),
+        ]
     )
 
 
@@ -162,6 +260,12 @@ def deploy(
         "--cloud-only",
         help="With --plan-only, plan the cloud root alone and read no Snowflake secret.",
     ),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="For an environment after the first in the promotion order, a commit the "
+        "environment before it shipped, instead of the newest one.",
+    ),
     json_output: bool = JsonFlag,
 ) -> None:
     """Create or update an environment's infrastructure and ship every host. Inside GitHub
@@ -185,6 +289,7 @@ def deploy(
             git=gh_mod.get_git(),
             terraform=get_terraform(),
             cloud_only=cloud_only,
+            commit=commit,
         )
         return Result(data=data, message=_facts_message(data) if check else _deploy_message(data))
 
@@ -200,7 +305,7 @@ def _progress(line: str) -> None:
     print(line, file=sys.stderr, flush=True)
 
 
-def _destroy_message(data: dict) -> str:
+def _destroy_message(data: dict, provisioner_role: str | None) -> str:
     # The snapshot identifiers were printed as progress before Terraform ran.
     lines = []
     if data["data_deleted"]:
@@ -227,11 +332,21 @@ def _destroy_message(data: dict) -> str:
             f"the Snowflake database was kept; `vecten destroy --env {data['env']} --confirm "
             f"{data['env']} --delete-data {data['env']}` deletes it"
         )
+    if data.get("kept_in_snowflake"):
+        lines.append(
+            "these stay in Snowflake outside Terraform: " + ", ".join(data["kept_in_snowflake"])
+        )
+    if data.get("kept_unread"):
+        lines.append(
+            f"warning: {data['kept_unread']}; the users and roles {provisioner_role} owns, its "
+            "user and its integration stay in Snowflake"
+        )
     if data["snowflake"] == "kept" and "provisioner_script_run" in data["facts_cleared"]:
         lines.append(
-            "the users and roles PROVISIONER created stay in Snowflake, and the MCP refuses to "
-            "start beside ones its new state does not know; before the next deploy, restore "
-            f"the state snapshot, or run `vecten mcp provisioner-script --env {data['env']}`, "
+            f"the users and roles {provisioner_role} created stay in Snowflake, and the MCP "
+            "refuses to start beside ones its new state does not know; before the next deploy, "
+            "restore the state snapshot, or run "
+            f"`vecten mcp provisioner-script --env {data['env']}`, "
             "whose last query prints a DROP for each"
         )
     if data["facts_cleared"]:
@@ -292,7 +407,13 @@ def destroy(
             terraform=get_terraform(),
             notify=_progress,
         )
-        return Result(data=data, message=_destroy_message(data))
+        provisioner_role = None
+        if data["snowflake"] == "kept":
+            from vecten_shared.config import load_config
+            from vecten_shared.provider import snowflake_names
+
+            provisioner_role = snowflake_names(load_config(root), env).provisioner_role
+        return Result(data=data, message=_destroy_message(data, provisioner_role))
 
     run_command(json_output, run)
 
@@ -301,4 +422,5 @@ def register(app: typer.Typer) -> None:
     app.command("bootstrap")(bootstrap)
     app.command("deploy")(deploy)
     app.command("ship")(ship)
+    app.command("promote")(promote)
     app.command("destroy")(destroy)

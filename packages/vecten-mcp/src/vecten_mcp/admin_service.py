@@ -28,6 +28,7 @@ READS = frozenset(
         "audit",
         "audit/read",
         "audit-status",
+        "apps",
     }
 )
 WRITES = frozenset(
@@ -44,12 +45,16 @@ WRITES = frozenset(
         "groups/create",
         "groups/delete",
         "groups/member",
+        "groups/bind",
+        "groups/confirm",
+        "groups/unbind",
         "grant",
         "revoke",
         "denied/set",
         "settings/set",
         "reconcile",
         "gaps/status",
+        "apps/connect",
     }
 )
 # Admin sessions read warehouse data and gap evidence that can carry instructions, so the
@@ -70,6 +75,7 @@ TOOL_OPERATIONS = frozenset(
         "grants",
         "denied",
         "settings",
+        "apps",
     }
 )
 SETTINGS = {
@@ -102,6 +108,16 @@ SETTINGS = {
         "minimum": 1,
         "maximum": 3600,
         "description": "Seconds a warehouse statement may run.",
+    },
+    "reconcile_drift": {
+        "default": "revoke",
+        "minimum": None,
+        "maximum": None,
+        "choices": ("revoke", "report"),
+        "description": (
+            "What reconciliation does with a read grant a managed role holds and the state "
+            "does not: revoke it, or only list it in access health."
+        ),
     },
 }
 DBT_MARTS = "dbt/models/marts/"
@@ -236,7 +252,13 @@ class AdminService:
             with state.transaction() as conn:
                 return [dict(row) for row in conn.execute(select(memberships)).mappings()]
         if operation == "groups/create":
-            return access.create_group(data["name"])
+            return access.create_group(data["name"], role=data.get("role") or None)
+        if operation == "groups/bind":
+            return access.bind(data["group"], data["role"])
+        if operation == "groups/confirm":
+            return access.confirm_binding(data["group"])
+        if operation == "groups/unbind":
+            return access.unbind(data["group"])
         if operation == "groups/delete":
             return access.delete_group(data["name"])
         if operation == "groups/member":
@@ -255,11 +277,32 @@ class AdminService:
         if operation == "reconcile":
             return access.reconcile()
         if operation == "access-health":
-            return access.health() if access else {"checked_at": None, "failures": []}
+            if access is None:
+                return {
+                    "checked_at": None,
+                    "failures": [],
+                    "added": [],
+                    "revoked": [],
+                    "drift": [],
+                    "database_future": [],
+                    "missing_bindings": [],
+                    "unbound_roles": [],
+                }
+            return access.health()
         if operation == "settings":
             return self.settings()
         if operation == "settings/set":
             return self.set_setting(data["key"], data["value"])
+        if operation == "apps":
+            apps = getattr(runtime, "apps", None)
+            return apps.listing(auth.issuer) if apps else []
+        if operation == "apps/connect":
+            return admin.connect_app(
+                getattr(runtime, "apps", None),
+                data["name"],
+                adopt=data.get("adopt") is True,
+                rotate=data.get("rotate") is not False,
+            )
         if operation == "audit-status":
             if not runtime.audit:
                 raise RuntimeError("audit service unavailable")
@@ -276,8 +319,10 @@ class AdminService:
         spec = SETTINGS.get(key)
         if spec is None:
             raise ValueError("unknown setting or invalid value")
-        if type(value) is not type(spec["default"]) or (
-            spec["minimum"] is not None and not spec["minimum"] <= value <= spec["maximum"]
+        if (
+            type(value) is not type(spec["default"])
+            or (spec["minimum"] is not None and not spec["minimum"] <= value <= spec["maximum"])
+            or value not in spec.get("choices", (value,))
         ):
             raise ValueError("setting is outside the permitted range")
         pools = getattr(self.runtime, "pools", None)

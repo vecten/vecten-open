@@ -37,6 +37,7 @@ PUBLIC_DOCS = {
     "docs/images/vecten-open-light.svg",
     "docs/agent-guide.md",
     "docs/agentic-flow.md",
+    "docs/analytics-apps.md",
     "docs/cli.md",
     "docs/connectors.md",
     "docs/deploy-aws.md",
@@ -48,6 +49,7 @@ PUBLIC_DOCS = {
     "docs/admin-panel.md",
     "docs/exit-codes.md",
     "docs/extensions.md",
+    "docs/extensions-private-git.md",
     "docs/feedback-loop.md",
     "docs/mcp-audit.md",
     "docs/mcp-identity.md",
@@ -55,6 +57,7 @@ PUBLIC_DOCS = {
     "docs/operations.md",
     "docs/query-metrics.md",
     "docs/semantic-model.md",
+    "docs/services.md",
     "docs/skill-evaluations.md",
 }
 PUBLIC_AGENTS = (
@@ -88,6 +91,8 @@ PUBLIC_AGENTS = (
     "  change starts there. The glossary is docs/GLOSSARY.md.\n"
     "- A code comment states the constraint that makes the code correct, never the change\n"
     "  history.\n"
+    "- Branch from the open release/<version> branch and open pull requests against it; main\n"
+    "  takes only release/ and hotfix/ merges. CONTRIBUTING.md has the branch and release rules.\n"
     "- Never commit secrets. The maintainer merges; deployments and publication need explicit\n"
     "  approval.\n"
 )

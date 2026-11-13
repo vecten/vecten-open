@@ -94,16 +94,52 @@ HOST_KEYS = (
     "airflow_parallelism",
     "mcp_pool_cap",
     "plugin_dir",
+    "service_secrets",
+    "service_network",
 )
 LEGACY_HOST_DEFAULTS = {
     "private_package_index": False,
     "cloud": "aws",
     "project_id": "",
     "plugin_dir": PLUGIN_DIRS["aws"],
+    "service_secrets": [],
+    "service_network": "",
 }
 LEGACY_OUTPUT_KEYS = ("bucket", "secret_prefix")
+# Present only when the project declares an area, so a project without one ships unchanged.
+OPTIONAL_HOST_KEYS = {"areas": []}
+_AREA = re.compile(r"[a-z][a-z0-9]{0,56}")
 # What the watcher needs before any release exists on the host; user data writes it.
 WATCH_KEYS = ("host", "components", "bucket", "region", "project_id", "secret_prefix")
+
+# Each cloud's instance metadata address, where an instance role or user data is served.
+METADATA_ADDRESSES = {"aws": "169.254.169.254", "scaleway": "169.254.42.42"}
+# A Linux interface name; it is an iptables argument, so it may not start with `-`.
+_INTERFACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}")
+# Bounded, so a stuck holder of the xtables lock fails the step by name instead of hanging it.
+XTABLES_WAIT_SECONDS = "30"
+# Every Compose service a binding generates is named with this prefix.
+SERVICE_PREFIX = "svc-"
+# After a reboot dockerd restarts services before any unit ordered after it, and keeps a
+# DOCKER-USER chain it finds, so the rule goes in before Docker starts. `RequiredBy` with
+# `Before` keeps Docker down when the guard fails; a skipped condition counts as success.
+# The guard runs a copy of the agent that ships it, since the current release may predate it.
+SYSTEMD_DIR = Path("/etc/systemd/system")
+GUARD_UNIT = "vecten-services-guard.service"
+GUARD_AGENT = Path("/opt/vecten/guard/apply.py")
+GUARD_UNIT_TEXT = f"""[Unit]
+Description=Vecten: keep extension services off the instance metadata address
+Before=docker.service
+ConditionPathExists={RELEASES}/current
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 {GUARD_AGENT} guard
+
+[Install]
+RequiredBy=docker.service
+"""
 
 # The metadata server answers user data only to a request from a source port below 1024.
 METADATA_KEY_URL = "http://169.254.42.42/user_data/vecten-key"
@@ -118,6 +154,9 @@ STATUS_ATTEMPTS = 3
 STATUS_RETRY_SECONDS = 5
 SHIP_LINE_MAX = 300
 LOG_PREFIX = "vecten agent log: "
+VOLUME_PREFIX = "vecten agent volume: "
+# The Compose volume of a bound service: `svc-<extension>-<service>-data`.
+_SERVICE_VOLUME = re.compile(r"svc-[a-z0-9-]+-data")
 LOG_TAIL_LINES = 20
 LOG_EXCERPT_MAX = 40
 COMPOSE_TAIL_LINES = 20
@@ -402,6 +441,13 @@ def load_host(release: Path) -> dict:
     missing = [k for k in HOST_KEYS if k not in host]
     if missing:
         raise AgentError(f"{path} lacks {', '.join(missing)}")
+    for key, value in OPTIONAL_HOST_KEYS.items():
+        host.setdefault(key, value)
+    areas = host["areas"]
+    if not isinstance(areas, list) or not all(
+        isinstance(a, str) and _AREA.fullmatch(a) for a in areas
+    ):
+        raise AgentError(f"{path} names areas outside [a-z][a-z0-9]*")
     host["release"] = str(release)
     return host
 
@@ -804,6 +850,13 @@ def secret_env(
         )
     if "mcp" in components:
         env["MCP_STATE_DB_PASSWORD"] = _required(backend, "MCP_STATE_DB_PASSWORD")
+    requested = set(env) | set(host["connector_secrets"] if "platform" in components else ())
+    # Optional like connector secrets: an unset name reaches its service empty.
+    for name in host["service_secrets"]:
+        if name not in requested:
+            value = backend.read_secret(name)
+            if value is not None:
+                env[name] = value
     if host.get("private_package_index", False):
         if "platform" in components:
             env["PACKAGE_INDEX_URL"] = _required(backend, "PACKAGE_INDEX_URL")
@@ -858,6 +911,86 @@ def stack_env(host: dict, key: tuple[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def isolate_services(host: dict, run: Run, create_chain: bool = False) -> None:
+    """Keep containers on the services bridge off the metadata address, before they start.
+
+    A reboot clears the rule, so the guard and boot insert it again; `-C` first keeps one rule
+    however often this runs. Only before dockerd starts may the chain be created here: while
+    it runs, a missing chain means nothing jumps to it, and the step must fail.
+    """
+    bridge = host["service_network"]
+    if not bridge:
+        return
+    if not _INTERFACE.fullmatch(bridge):
+        raise AgentError(f"service_network {bridge!r} is no interface name")
+    address = METADATA_ADDRESSES.get(host["cloud"])
+    if address is None:
+        raise AgentError(f"no metadata address known for cloud {host['cloud']!r}")
+    rule = ["DOCKER-USER", "-i", bridge, "-d", address, "-j", "DROP"]
+    iptables = ["iptables", "-w", XTABLES_WAIT_SECONDS]
+    if create_chain:
+        # Fails harmlessly when the chain exists.
+        run([*iptables, "-N", "DOCKER-USER"])
+    if run([*iptables, "-C", *rule]).returncode == 0:
+        return
+    result = run([*iptables, "-I", *rule])
+    if result.returncode != 0:
+        raise AgentError(
+            f"inserting the DOCKER-USER rule for {bridge} failed (exit {result.returncode})"
+        )
+
+
+def _replace_file(path: Path, data: bytes, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data)
+    os.chmod(str(tmp), mode)
+    os.replace(str(tmp), str(path))
+
+
+def install_guard(run: Run) -> None:
+    """Install and enable the unit that runs `guard` before Docker starts at boot."""
+    agent = Path(__file__).read_bytes()
+    if not GUARD_AGENT.is_file() or GUARD_AGENT.read_bytes() != agent:
+        _replace_file(GUARD_AGENT, agent, 0o644)
+    path = SYSTEMD_DIR / GUARD_UNIT
+    try:
+        current = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        current = None
+    commands = [["systemctl", "enable", GUARD_UNIT]]
+    if current != GUARD_UNIT_TEXT:
+        _replace_file(path, GUARD_UNIT_TEXT.encode("utf-8"), 0o644)
+        commands.insert(0, ["systemctl", "daemon-reload"])
+    for command in commands:
+        result = run(command)
+        if result.returncode != 0:
+            raise AgentError(f"{' '.join(command)} failed (exit {result.returncode})")
+
+
+def guard(releases: Path, run: Run) -> None:
+    """Before Docker starts at boot: the current release's rule, with no secret read."""
+    current = releases / "current"
+    if not current.is_dir():
+        return
+    isolate_services(load_host(_real(current)), run, create_chain=True)
+
+
+def stop_services(host: dict, run: Run) -> None:
+    """Stop the project's service containers; never raises, the failure that called it does."""
+    try:
+        listing = run(
+            ["docker", "ps", "--format", '{{.ID}}\t{{.Label "com.docker.compose.service"}}']
+            + ["--filter", f"label=com.docker.compose.project={host['compose_project']}"]
+        )
+        rows = [row.split("\t") for row in listing.stdout.splitlines()]
+        ids = [r[0] for r in rows if len(r) > 1 and r[1].startswith(SERVICE_PREFIX)]
+        if ids:
+            run(["docker", "stop", *ids])
+    except Exception:
+        return
+
+
 def scram_verifier(password: str, salt: bytes | None = None) -> str:
     """The SCRAM-SHA-256 verifier Postgres stores for `password` (RFC 5802, RFC 7677).
 
@@ -908,6 +1041,8 @@ def run_setup(host: dict, outputs: dict, run: Run, backend: Backend | None = Non
         args += ["-v", "ON_ERROR_STOP=1"]
         for flag, value in flags.items():
             args += ["-v", f"{flag}={value}"]
+        if host["areas"]:
+            args += ["-v", "areas=" + ",".join(host["areas"])]
         args += ["-f", "/sql/warehouse_setup.sql"]
         # psql's output can quote the statements it ran, so only the exit code is reported.
         result = run(args, env=env)
@@ -1106,6 +1241,43 @@ def swap(releases: Path, new: Path) -> None:
             shutil.rmtree(child)
 
 
+def _compose(release: Path, host: dict) -> list:
+    stack = _real(release) / STACK_DIR
+    args = ["docker", "compose", "--project-name", host["compose_project"]]
+    args += ["--project-directory", str(stack), "-f", str(stack / "docker-compose.yml")]
+    override = _real(release) / OVERRIDE_FILE
+    if override.is_file():
+        # The project's additions merge over the generated file, so they come after it.
+        args += ["-f", str(override)]
+    for component in host["components"]:
+        args += ["--profile", component]
+    return args
+
+
+def orphaned_volumes(release: Path, host: dict, env: dict, run: Run) -> list:
+    """The project's service volumes the release no longer declares. They hold a removed
+    service's data, so they are named for the operator and never removed; a listing that
+    fails names none, since the release already runs."""
+    try:
+        declared = run(_compose(release, host) + ["config", "--volumes"], env=env)
+        listed = run(
+            ["docker", "volume", "ls"]
+            + ["--filter", f"label=com.docker.compose.project={host['compose_project']}"]
+            + ["--format", '{{.Name}}\t{{.Label "com.docker.compose.volume"}}']
+        )
+        if declared.returncode != 0 or listed.returncode != 0:
+            return []
+        kept = set(declared.stdout.split())
+        found = []
+        for line in listed.stdout.splitlines():
+            name, _, volume = line.partition("\t")
+            if _SERVICE_VOLUME.fullmatch(volume) and volume not in kept:
+                found.append(name)
+        return sorted(found)
+    except Exception:
+        return []
+
+
 def compose_up(
     release: Path,
     host: dict,
@@ -1116,15 +1288,7 @@ def compose_up(
 ) -> None:
     """Start the release's stack; a failure carries the tail of compose's own output, which
     names a failed pull, build or port when no container is running yet."""
-    stack = _real(release) / STACK_DIR
-    args = ["docker", "compose", "--project-name", host["compose_project"]]
-    args += ["--project-directory", str(stack), "-f", str(stack / "docker-compose.yml")]
-    override = _real(release) / OVERRIDE_FILE
-    if override.is_file():
-        # The project's additions merge over the generated file, so they come after it.
-        args += ["-f", str(override)]
-    for component in host["components"]:
-        args += ["--profile", component]
+    args = _compose(release, host)
     # Every release tags its project images alike, so `--build` keeps the tag on this one.
     args += ["up", "-d", "--build", "--remove-orphans"]
     if force_recreate:
@@ -1213,6 +1377,14 @@ def _start(
     with step("release"):
         host = load_host(release)
         outputs = load_outputs(release, host["env"])
+    # Docker restarts running services with the daemon, before this runs; the rule needs no
+    # secret, so it comes first, and services that cannot have it are stopped.
+    try:
+        with step("service isolation"):
+            isolate_services(host, run)
+    except AgentError:
+        stop_services(host, run)
+        raise
     for attempt in range(1, attempts + 1):
         try:
             with step("read secrets"):
@@ -1243,7 +1415,8 @@ def ship(
     run_dir: Path | None = None,
     sleep: Callable[[float], None] = time.sleep,
     resolve: Callable[[str], list[str]] = resolve,
-) -> None:
+) -> list:
+    """Install and start `release`; the service volumes it no longer declares."""
     with step("release"):
         host = load_host(release)
         outputs = load_outputs(release, host["env"])
@@ -1264,6 +1437,10 @@ def ship(
     try:
         with step("run files"):
             write_run_files(host, env, run_dir or RUN_DIR)
+        with step("service isolation"):
+            isolate_services(host, run)
+            if host["service_network"]:
+                install_guard(run)
     except AgentError:
         # The certificate step may have stopped NGINX, and the running release still serves.
         _ensure_nginx(host, run)
@@ -1293,6 +1470,7 @@ def ship(
         raise AgentError(f"{exc}; {outcome}", log[:LOG_EXCERPT_MAX]) from None
     with contextlib.suppress(FileNotFoundError):
         (_real(release) / NEVER_STARTED).unlink()
+    return orphaned_volumes(release, host, {**stack, **env}, run)
 
 
 def _ensure_nginx(host: dict, run: Run) -> None:
@@ -1506,15 +1684,15 @@ def _log_lines(stderr: str) -> list[str]:
 
 
 def _pull_and_ship(store: Backend, host: str, releases: Path, commit: str, run: Run):
-    """Download, extract and ship `commit`: whether it shipped, the line to report and the
-    failing containers' log lines the release's agent printed."""
+    """Download, extract and ship `commit`: whether it shipped, the line to report, the
+    failing containers' log lines and the orphaned volumes the release's agent printed."""
     key = f"bundles/{host}/{commit}.tar.gz"
     release = releases / commit
     try:
         with step("download"):
             data = store.get_object(key)
         if data is None:
-            return False, f"vecten agent watch: bundle {key} is missing", []
+            return False, f"vecten agent watch: bundle {key} is missing", [], []
         incoming = releases.parent / "incoming"
         archive = incoming / f"{commit}.tar.gz"
         try:
@@ -1535,19 +1713,27 @@ def _pull_and_ship(store: Backend, host: str, releases: Path, commit: str, run: 
             with contextlib.suppress(OSError):
                 archive.unlink()
     except AgentError as exc:
-        return False, f"vecten agent watch: {exc}", []
+        return False, f"vecten agent watch: {exc}", [], []
     agent = release / SHIP_DIR / "apply.py"
     # Only the agent bundled with a release knows the contract that release was built against.
     result = run([sys.executable, str(agent), "ship", "--release", str(release)])
     if result.returncode != 0:
         line = _last_line(result.stderr) or f"vecten agent ship: failed (exit {result.returncode})"
-        return False, line, _log_lines(result.stderr)
+        return False, line, _log_lines(result.stderr), []
     line = f"shipped {commit}"
     try:
         _refresh_agent_copy(agent)
     except OSError as exc:
         line += f"; the watcher's agent copy was not refreshed ({type(exc).__name__})"
-    return True, line, []
+    return True, line, [], _volume_lines(result.stderr)
+
+
+def _volume_lines(stderr: str) -> list:
+    return [
+        line[len(VOLUME_PREFIX) :][:SHIP_LINE_MAX]
+        for line in stderr.splitlines()
+        if line.startswith(VOLUME_PREFIX)
+    ][:LOG_EXCERPT_MAX]
 
 
 def _running(releases: Path) -> str | None:
@@ -1584,21 +1770,23 @@ def _report(
     log: list[str],
     running,
     sleep,
+    volumes=(),
 ) -> None:
     """The status object CI polls; a lost one would make CI roll back a release that runs.
 
     `running` names the release the host runs after the agent finished, any rollback of its
     own included, so CI can point the pointer back at it when the ship failed.
     """
-    body = json.dumps(
-        {
-            "ok": ok,
-            "line": line,
-            "requested_at": wanted["requested_at"],
-            "running": running,
-            "log": log,
-        }
-    )
+    doc = {
+        "ok": ok,
+        "line": line,
+        "requested_at": wanted["requested_at"],
+        "running": running,
+        "log": log,
+    }
+    if volumes:
+        doc["volumes"] = list(volumes)
+    body = json.dumps(doc)
     key = f"{component}/ship-status/{wanted['commit']}.json"
     for attempt in range(1, STATUS_ATTEMPTS + 1):
         try:
@@ -1680,8 +1868,11 @@ def watch(
                 f"waiting for a release requested after this server's key: the pointer to "
                 f"{wanted['commit']} predates it"
             )
+        volumes = []
         if to_ship:
-            ok, line, log = _pull_and_ship(store, config["host"], releases, wanted["commit"], run)
+            ok, line, log, volumes = _pull_and_ship(
+                store, config["host"], releases, wanted["commit"], run
+            )
             if ok:
                 with contextlib.suppress(FileNotFoundError):
                     pending.unlink()
@@ -1689,7 +1880,15 @@ def watch(
             ok, line, log = True, f"{wanted['commit']} is already the current release", []
         with step("status"):
             _report(
-                store, config["components"][0], wanted, ok, line, log, _running(releases), sleep
+                store,
+                config["components"][0],
+                wanted,
+                ok,
+                line,
+                log,
+                _running(releases),
+                sleep,
+                volumes=volumes,
             )
         _write_root_only(handled_file, json.dumps(wanted))
         return line
@@ -1703,15 +1902,19 @@ def main(argv: list[str] | None = None, run: Run = run) -> int:
     commands.add_parser("rollback", help="start the previous release again")
     commands.add_parser("boot", help="rebuild the run files and start the current release")
     commands.add_parser("watch", help="ship the release this host's pointer object names")
+    commands.add_parser("guard", help="before Docker starts: keep services off the metadata")
     args = parser.parse_args(argv)
     try:
         if args.command == "ship":
-            ship(args.release, run)
+            for name in ship(args.release, run):
+                print(VOLUME_PREFIX + name, file=sys.stderr)
         elif args.command == "rollback":
             for line in rollback(RELEASES, run):
                 print(LOG_PREFIX + line, file=sys.stderr)
         elif args.command == "watch":
             print(f"vecten agent watch: {watch(RELEASES, run)}")
+        elif args.command == "guard":
+            guard(RELEASES, run)
         else:
             boot(RELEASES, run)
     except AgentError as exc:
