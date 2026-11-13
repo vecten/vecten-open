@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import boto3
 import pytest
@@ -146,6 +147,150 @@ def test_outside_actions_dispatches_the_ship_workflow_and_follows_it(invoke, no_
     assert data["head_sha"] == COMMIT
     assert data["conclusion"] == "success"
     assert RecordingTerraform.created == 0
+
+
+# A complete GitHub App setup, its names spread over the repository and the environment.
+APP = {
+    "variable": ["VECTEN_GIT_APP_ID", "VECTEN_GIT_APP_OWNER"],
+    "variable --env prod": ["VECTEN_GIT_APP_REPOSITORIES"],
+    "secret": ["VECTEN_GIT_APP_PRIVATE_KEY"],
+}
+
+
+def _private_git_source(root):
+    from vecten_shared.config import load_config
+
+    from .test_git_ship import NAME, git_project
+
+    config = load_config(root)
+    config.extensions = [NAME]
+    git_project(root, config)
+    return NAME
+
+
+def test_a_private_git_source_without_a_ci_credential_is_not_dispatched(
+    invoke, no_cloud, monkeypatch
+):
+    set_facts(no_cloud, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    name = _private_git_source(no_cloud)
+    gh = FakeGh(listed={"secret": ["OTHER"], "variable --env prod": ["VECTEN_AWS_ROLE_ARN"]})
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code != 0
+    error = doc(r)["error"]
+    assert name in error
+    assert "VECTEN_GIT_CREDENTIALS" in error and "VECTEN_GIT_APP_ID" in error
+    assert gh.named("workflow", "run") == []
+    # Names only: no call reads a value.
+    assert all(call[1] == "list" or call[0] != "secret" for call in gh.calls)
+
+
+@pytest.mark.parametrize(
+    "listed",
+    [
+        {"secret": ["VECTEN_GIT_CREDENTIALS"]},
+        {"secret --env prod": ["VECTEN_GIT_CREDENTIALS"]},
+        {
+            "variable": ["VECTEN_GIT_APP_ID", "VECTEN_GIT_APP_OWNER"],
+            "variable --env prod": ["VECTEN_GIT_APP_REPOSITORIES"],
+            "secret": ["VECTEN_GIT_APP_PRIVATE_KEY"],
+        },
+        {
+            "variable --env prod": [
+                "VECTEN_GIT_APP_ID",
+                "VECTEN_GIT_APP_OWNER",
+                "VECTEN_GIT_APP_REPOSITORIES",
+            ],
+            "secret --env prod": ["VECTEN_GIT_APP_PRIVATE_KEY"],
+        },
+    ],
+    ids=["repository-secret", "environment-secret", "split-app", "environment-app"],
+)
+def test_a_private_git_source_with_a_ci_credential_is_dispatched(
+    invoke, no_cloud, monkeypatch, listed
+):
+    set_facts(no_cloud, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    _private_git_source(no_cloud)
+    gh = FakeGh(listed=listed)
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert len(gh.named("workflow", "run")) == 1
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["VECTEN_GIT_APP_PRIVATE_KEY", "VECTEN_GIT_APP_OWNER", "VECTEN_GIT_APP_REPOSITORIES"],
+)
+def test_an_incomplete_github_app_is_refused_naming_what_is_missing(
+    invoke, no_cloud, monkeypatch, missing
+):
+    set_facts(no_cloud, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    _private_git_source(no_cloud)
+    listed = {key: [n for n in names if n != missing] for key, names in APP.items()}
+    gh = FakeGh(listed=listed)
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code != 0
+    error = doc(r)["error"]
+    assert missing in error
+    assert gh.named("workflow", "run") == []
+
+
+def test_a_list_a_writer_may_not_read_is_skipped_with_a_warning(invoke, no_cloud, monkeypatch):
+    set_facts(no_cloud, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    _private_git_source(no_cloud)
+    gh = FakeGh(forbidden=("secret", "secret --env prod"))
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert len(gh.named("workflow", "run")) == 1
+    [warning] = doc(r)["warnings"]
+    assert "secret" in warning and "VECTEN_GIT_CREDENTIALS" in warning
+    plain = invoke("ship", "--env", "prod")
+    assert "warning:" in plain.stdout and "VECTEN_GIT_CREDENTIALS" in plain.stdout
+
+
+def test_an_organisation_secret_shared_with_the_repository_counts(invoke, no_cloud, monkeypatch):
+    set_facts(no_cloud, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    _private_git_source(no_cloud)
+    gh = FakeGh()
+    run = gh.run
+
+    def answer(args, cwd, input=None):
+        if args[:2] == ["api", "repos/acme/data/actions/organization-secrets"]:
+            gh.calls.append(list(args))
+            return subprocess.CompletedProcess(args, 0, "VECTEN_GIT_CREDENTIALS\n", "")
+        return run(args, cwd, input=input)
+
+    gh.run = answer
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+
+
+def test_a_public_git_source_or_none_needs_no_ci_credential_check(invoke, no_cloud, monkeypatch):
+    from dataclasses import replace
+
+    from vecten_shared.config import load_config
+
+    from .test_git_ship import git_project, origin
+
+    set_facts(no_cloud, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
+    config = load_config(no_cloud)
+    config.extensions = ["acme-resolution"]
+    git_project(no_cloud, config, replace(origin(), public=True))
+    gh = FakeGh()
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert gh.named("secret", "list") == [] and gh.named("variable", "list") == []
 
 
 def test_laptop_message_says_when_local_commits_were_not_shipped(invoke, no_cloud, monkeypatch):

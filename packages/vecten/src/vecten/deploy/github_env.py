@@ -251,6 +251,54 @@ def set_repository_secrets(
         )
 
 
+def configured_names(
+    gh: ToolRunner, project_root: Path, repository: str, env: str
+) -> tuple[set[str], list[str]]:
+    """The names of the Actions secrets and variables a job of `env` can read: the
+    repository's, the environment's, and the organisation's shared with the repository; and
+    the lists GitHub would not show this person.
+
+    Only names are listed; GitHub never returns a secret's value. Listing secrets and
+    variables needs admin rights, which a person allowed to dispatch may lack."""
+    names: set[str] = set()
+    unread: list[str] = []
+    for kind in ("secret", "variable"):
+        for scope in ((), ("--env", env)):
+            what = f"{kind} list {' '.join(scope)}".strip()
+            result = _gh(
+                gh,
+                project_root,
+                kind,
+                "list",
+                *scope,
+                "--repo",
+                repository,
+                "--json",
+                "name",
+                what=what,
+                tolerate=(403, 404),
+            )
+            if result.returncode == 0:
+                names |= {row["name"] for row in _json(result, f"{kind} list") or []}
+            elif _http_status(result) == 403:
+                unread.append(f"`gh {what}`")
+    for kind in ("secrets", "variables"):
+        result = _gh(
+            gh,
+            project_root,
+            "api",
+            f"repos/{repository}/actions/organization-{kind}",
+            "--paginate",
+            "--jq",
+            f".{kind}[].name",
+            what=f"api organization-{kind}",
+            tolerate=(403, 404),
+        )
+        if result.returncode == 0:
+            names |= set(result.stdout.split())
+    return names, unread
+
+
 def repository_facts(gh: ToolRunner, project_root: Path, repository: str) -> tuple[str, str]:
     """The repository's `owner/name` as GitHub spells it, and its default branch."""
     result = _gh(

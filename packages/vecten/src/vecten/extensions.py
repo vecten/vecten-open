@@ -249,12 +249,12 @@ def install_lock(lock: str, root: Path, editable: tuple[str, ...] | list[str] = 
 
 
 def install_sources(
-    copies: Mapping[str, git_extensions.Copy], record: dict[str, locking.Extension], root: Path
+    directories: Mapping[str, Path], record: dict[str, locking.Extension], root: Path
 ) -> None:
-    """Install each git-sourced extension from its fetched copy, not editable and without
-    resolving, its build backend held to the versions the record pins."""
+    """Install each git-sourced extension from the directory its fetched copy was checked out
+    to, not editable and without resolving, its build backend held to the record's pins."""
     with tempfile.TemporaryDirectory(prefix="vecten-install-") as temp:
-        for name, copy in sorted(copies.items()):
+        for name, directory in sorted(directories.items()):
             constraints = Path(temp) / f"{name}-build-constraints.txt"
             constraints.write_text("".join(f"{line}\n" for line in record[name].build_requires))
             _uv(
@@ -266,7 +266,7 @@ def install_sources(
                     "--no-deps",
                     "--build-constraint",
                     str(constraints),
-                    str(copy.directory),
+                    str(directory),
                 ],
                 root,
             )
@@ -641,7 +641,7 @@ def _lock_project(
         locks[component] = f"{locking.stamp_line(component, digest)}\n{body}"
     install_lock(locks["cli"], root, [e.source_path for e in record.values() if e.source_path])
     if copies:
-        install_sources(copies, record, root)
+        install_sources({name: copy.directory for name, copy in copies.items()}, record, root)
     manifests = load_manifests(config)
     services = load_services(config)
     apps = load_apps(config)
@@ -871,6 +871,42 @@ def lock(root: Path, upgrade: tuple[str, ...] = ()) -> dict:
     files, report = lock_project(root, load_config(root), upgrade=upgrade)
     write_project_files(files)
     return report
+
+
+def sync(root: Path) -> dict:
+    """Install the committed `requirements.lock` into the environment running Vecten, as
+    `vecten lock` left it, and refresh the extensions' skill links; no record changes.
+
+    Every git source is fetched and checked against its recorded hash before anything is
+    installed."""
+    config = load_config(root)
+    stale = locking.lock_problems(root, config)
+    if stale:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"{', '.join(stale)} disagree with vecten.toml and requirements.txt; "
+            "run `vecten lock`, then commit the records",
+        )
+    # The lock's URL lines are left to the fetched sources, so each must be a recorded one.
+    git_extensions.refuse_git_problems(root, config)
+    record = locking.read_record(root) or {}
+    with (
+        _git_project(has_git_sources(root)),
+        tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
+    ):
+        directories = git_extensions.write_sources(root, config, Path(fetched), checked=True)
+        lock = (root / locking.LOCK_FILES["cli"]).read_text(encoding="utf-8")
+        install_lock(lock, root, [e.source_path for e in record.values() if e.source_path])
+        if directories:
+            install_sources(directories, record, root)
+    from vecten.extension_skills import link_extension_skills
+
+    link_extension_skills(root, config)
+    return {
+        "lock": locking.LOCK_FILES["cli"],
+        "extensions": {name: entry.version for name, entry in sorted(record.items())},
+        "sources": {name: record[name].git.commit for name in directories},
+    }
 
 
 def _in_repo_package(root: Path, argument: str) -> tuple[PackageMetadata, str]:

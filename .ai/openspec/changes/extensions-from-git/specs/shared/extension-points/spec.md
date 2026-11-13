@@ -29,6 +29,11 @@ The credential for a private package index SHALL come from the secrets store. Th
 
 #### Scenario: Same commit everywhere
 
+- **WHEN** a project with the in-repo extension `extensions/acme-portal` is shipped at commit `a3f9c2e`
+- **THEN** the CLI, the local images and every host's images run `extensions/acme-portal` as it is at `a3f9c2e`
+
+#### Scenario: Same git commit everywhere
+
 - **WHEN** an extension from a git source is recorded at commit `3f2c…e1`
 - **THEN** the laptop, CI, the Airflow image and the MCP image install the extension built from that commit, whose `source_sha256` is the one recorded
 
@@ -49,8 +54,27 @@ The credential for a private package index SHALL come from the secrets store. Th
 
 #### Scenario: Update
 
-- **WHEN** the extension's version, or its git commit, is changed in the requirements
+- **WHEN** an index extension's version is bumped in the requirements, or an in-repo extension's dependencies change in its `pyproject.toml`, and `vecten lock` runs; or `vecten extension add` records a new commit of a git-sourced extension
 - **THEN** no file under the project changes other than the requirements, the lockfiles and `extensions.lock.json`
+
+### Requirement: An in-repo extension is recorded by its path, and the locks hold only third-party packages
+
+For an in-repo extension, `vecten.toml` SHALL list its name and extras, `requirements.txt` SHALL hold its relative path with its extras (`./extensions/<name>[extras]`), and `extensions.lock.json` SHALL record its path, version, extras and the sha256 of its `pyproject.toml`. `vecten lock` SHALL resolve the locks with each in-repo extension as an input and SHALL write into them only third-party packages and the record line of each git source, so that no lock line carries a path, and only a git source's line carries a URL. Each lock's recorded input hash SHALL include the `pyproject.toml` hash of every in-repo extension in its inputs, so that a change to an in-repo extension's metadata makes the locks stale and a change to its code does not. `vecten lock` SHALL refuse when a lock would pin a package from an index under an in-repo extension's name.
+
+#### Scenario: Dependency added to an in-repo extension
+
+- **WHEN** `httpx` is added to `extensions/acme-portal/pyproject.toml` and `vecten up` runs without `vecten lock`
+- **THEN** `up` exits non-zero naming `vecten lock`, and after `vecten lock` the locks pin `httpx` and hold no line for `acme-portal`
+
+#### Scenario: Code change needs no lock
+
+- **WHEN** only a module under `extensions/acme-portal/src/` changes
+- **THEN** `vecten up` and `vecten ship` accept the existing locks
+
+#### Scenario: Name taken on the index
+
+- **WHEN** another extension depends on `acme-portal`, which is also the name of a package on PyPI
+- **THEN** the locks hold no `acme-portal` line, and every install takes `acme-portal` from `extensions/acme-portal`
 
 ## ADDED Requirements
 

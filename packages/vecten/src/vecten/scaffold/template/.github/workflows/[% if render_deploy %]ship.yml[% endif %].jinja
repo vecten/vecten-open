@@ -33,10 +33,12 @@ jobs:
     uses: ./.github/workflows/deploy-platform.yml
     with:
       environment: prod
-[%- if cloud != 'aws' %]
-    # A called workflow gets an environment secret only when its caller passes it by name;
-    # inheriting instead would also hand the ship job the repository's plan keys.
+    # A called workflow gets a secret only when its caller passes it by name; inheriting
+    # instead would also hand the ship job every other secret of the repository.
     secrets:
+[%- if cloud != 'aws' %]
       VECTEN_SCW_ACCESS_KEY: ${{ secrets.VECTEN_SCW_ACCESS_KEY }}
       VECTEN_SCW_SECRET_KEY: ${{ secrets.VECTEN_SCW_SECRET_KEY }}
 [%- endif %]
+      VECTEN_GIT_CREDENTIALS: ${{ secrets.VECTEN_GIT_CREDENTIALS }}
+      VECTEN_GIT_APP_PRIVATE_KEY: ${{ secrets.VECTEN_GIT_APP_PRIVATE_KEY }}

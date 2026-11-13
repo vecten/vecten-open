@@ -30,6 +30,21 @@ def add(package: str, json_output: bool = JsonFlag) -> None:
     run_command(json_output, run)
 
 
+@extension.command("sync")
+def sync(json_output: bool = JsonFlag) -> None:
+    """Install the committed requirements.lock, the project's extensions included, here."""
+
+    def run(ctx: CliContext) -> Result:
+        from vecten.extensions import sync as sync_project
+
+        data = sync_project(ctx.require_project())
+        lines = [f"installed {data['lock']}"]
+        lines += [f"{name} from {commit}" for name, commit in data["sources"].items()]
+        return Result(data=data, message="\n".join(lines))
+
+    run_command(json_output, run)
+
+
 @extension.command("new")
 def new(
     name: str,

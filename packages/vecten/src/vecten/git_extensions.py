@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -20,8 +21,9 @@ from packaging.version import InvalidVersion, Version
 
 from vecten import in_repo
 from vecten_shared import git_sources
+from vecten_shared.config import VectenConfig
 from vecten_shared.envfile import read_env_values
-from vecten_shared.extension_record import GitOrigin
+from vecten_shared.extension_record import Extension, GitOrigin
 from vecten_shared.git_sources import (
     CREDENTIALS_VARIABLE,
     FORBIDDEN_IN_REF,
@@ -31,6 +33,7 @@ from vecten_shared.git_sources import (
     parse_source,
 )
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.requirements import parse_requirement
 from vecten_shared.versions import normalize_name
 
 TAG_COMMENT = "  # tag "
@@ -246,3 +249,120 @@ def uv_settings(
         env[f"GIT_CONFIG_KEY_{i}"] = key
         env[f"GIT_CONFIG_VALUE_{i}"] = value
     return env
+
+
+def registered_sources(
+    config: VectenConfig, record: Mapping[str, Extension]
+) -> dict[str, tuple[tuple[str, ...], Extension]]:
+    """Each extension `vecten.toml` registers that the record holds from git: its extras and
+    its record entry, by normalised name."""
+    found = {}
+    for registration in config.extensions:
+        req = parse_requirement(registration)
+        name = normalize_name(req.name) if req else None
+        entry = record.get(name) if name else None
+        if entry is not None and entry.git is not None:
+            found[name] = (tuple(sorted(req.extras)), entry)
+    return dict(sorted(found.items()))
+
+
+def _kept(directory: Path, digest: str | None) -> bool:
+    """Whether `directory` still holds exactly the source the record hashed, in place: a link
+    could lead the build anywhere on the machine."""
+    if (
+        directory.is_symlink()
+        or not directory.is_dir()
+        or any(
+            name.casefold() == ".git"
+            for _, dirs, files in os.walk(directory)
+            for name in dirs + files
+        )
+    ):
+        return False
+    try:
+        return git_sources.source_sha256(directory) == digest
+    except Failure:
+        return False
+
+
+def refuse_git_problems(root: Path, config: VectenConfig) -> None:
+    """Refuse records whose git sources disagree, naming `vecten extension add`."""
+    from vecten import locking
+
+    problems = locking.git_problems(root, config)
+    if problems:
+        raise Failure(
+            ExitCode.REFUSED,
+            "; ".join(problems) + "; record each git source again with "
+            "`vecten extension add` and its tag",
+        )
+
+
+def _clear(path: Path) -> None:
+    """Remove `path`; a link is removed itself, never what it points at."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def write_sources(
+    root: Path,
+    config: VectenConfig,
+    into: Path,
+    keep: bool = False,
+    checked: bool = False,
+) -> dict[str, Path]:
+    """Fetch the recorded commit of every registered git-sourced extension and write its
+    source to `into/<name>/`, after checking its `source_sha256` against the record.
+
+    Nothing is fetched, and no credential read, for a project without git sources. With
+    `keep`, a folder already holding the recorded source is used again and any other entry
+    of `into` is removed; `into` itself is never a link, so nothing outside it is written.
+    `checked` says the caller already refused disagreeing records."""
+    from vecten import locking
+
+    record = locking.read_record(root) or {}
+    wanted = registered_sources(config, record)
+    if keep and into.is_symlink():
+        into.unlink()
+    if not wanted:
+        if keep:
+            _clear(into)
+        return {}
+    if not checked:
+        refuse_git_problems(root, config)
+    into.mkdir(parents=True, exist_ok=True)
+    if keep:
+        for entry in into.iterdir():
+            if entry.name not in wanted:
+                _clear(entry)
+    pending = {
+        name: entry
+        for name, (_, entry) in wanted.items()
+        if not (keep and _kept(into / name, entry.source_sha256))
+    }
+    if pending:
+        found = credentials(root)
+        with tempfile.TemporaryDirectory(prefix="vecten-sources-") as work:
+            for name, entry in pending.items():
+                origin = entry.git
+                copy = fetch_copy(
+                    source_for(name, (), origin),
+                    origin.commit,
+                    origin.tag,
+                    origin.public,
+                    found,
+                    Path(work),
+                )
+                if copy.source_sha256 != entry.source_sha256:
+                    raise Failure(
+                        ExitCode.REFUSED,
+                        f"{name} at {origin.commit}: the fetched source has source_sha256 "
+                        f"{copy.source_sha256}, but {locking.RECORD_FILE} records "
+                        f"{entry.source_sha256}",
+                    )
+                target = into / name
+                _clear(target)
+                shutil.copytree(copy.directory, target)
+    return {name: into / name for name in wanted}

@@ -70,7 +70,10 @@ def ship(
 
         root = ctx.require_project()
         data = ship_env(root, env, gh=gh_mod.get_gh(), git=gh_mod.get_git(), check=check)
-        return Result(data=data, message=_facts_message(data) if check else _ship_message(data))
+        if check:
+            return Result(data=data, message=_facts_message(data))
+        warnings = "".join(f"\nwarning: {w}" for w in data.get("warnings", []))
+        return Result(data=data, message=_ship_message(data) + warnings)
 
     run_command(json_output, run)
 

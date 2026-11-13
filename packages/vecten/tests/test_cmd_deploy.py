@@ -636,6 +636,20 @@ def test_laptop_deploy_dispatches_follows_and_records_the_run_commit(
     assert FakeTerraform.calls == []
 
 
+def test_a_laptop_deploy_refuses_a_private_git_source_without_a_ci_credential(
+    invoke, laptop, project, monkeypatch
+):
+    from .test_cmd_ship import _private_git_source
+
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    name = _private_git_source(project)
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code != 0
+    error = doc(r)["error"]
+    assert name in error and "VECTEN_GIT_CREDENTIALS" in error and "VECTEN_GIT_APP_ID" in error
+    assert laptop.named("workflow", "run") == []
+
+
 def test_laptop_deploy_records_the_vm_keys_handed_over(invoke, laptop, project, monkeypatch):
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ids = {"project": "p", "retiring_platform": "SCWOLDPLATFORM", "retiring_deploy": "SCWOLDCI"}

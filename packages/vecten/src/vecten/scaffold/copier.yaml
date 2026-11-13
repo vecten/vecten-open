@@ -39,6 +39,7 @@ action_checkout: {type: str, ask: false}
 action_setup_uv: {type: str, ask: false}
 action_setup_terraform: {type: str, ask: false}
 action_configure_aws_credentials: {type: str, ask: false}
+action_create_github_app_token: {type: str, ask: false}
 convention_version: {type: int, ask: false}
 ossie_spec: {type: str, ask: false}
 warehouse_host: {type: str, default: "", ask: false}
