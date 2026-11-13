@@ -560,7 +560,11 @@ starts on every host.
   says to add hostnames outside busy hours.
 - [The gate adds a round trip per request, across VMs under `standard`] → Measured in the deploy
   tasks. If it matters, NGINX can cache verify answers for a few seconds keyed on the cookie,
-  which bounds how late a group change applies.
+  which bounds how late a group change applies. Task 5.6 measures it as rendered: the verify
+  upstream is a per-request variable with no `upstream` block, so NGINX keeps no connection to
+  `mcp.<domain>` open and each gated request across VMs opens a TLS connection. An `upstream`
+  block with `keepalive` (resolved at start, re-resolved on reload) is the first remedy if the
+  handshake dominates.
 - [The MCP being down takes `login` routes down] → It is the identity provider; `public` routes
   are unaffected. The docs say so.
 - [After a reboot Docker restarts services before the boot unit runs] → The guard unit adds

@@ -270,6 +270,9 @@ def configured_runtime(root, config, extensions):
         pools.idle_timeout = idle_setting["value"]
     admin = Administration(state, adapter, oauth, access, pools=pools)
     runtime = Runtime(state, oauth, extensions, adapter, pools, admin, access)
+    from vecten_mcp.auth.gate import GateService
+
+    runtime.gate = GateService.from_config(oauth, config)
     from vecten_mcp.audit import AuditService
 
     runtime.audit = AuditService(state, start=False, sink=extensions.emit_audit)

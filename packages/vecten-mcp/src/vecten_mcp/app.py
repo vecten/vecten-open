@@ -44,7 +44,7 @@ def create_app(project_root: Path | None = None, runtime=None) -> Starlette:
         from vecten_mcp.assets import asset_routes
 
         app.router.routes.extend(asset_routes())
-        app.router.routes.extend(auth_routes(runtime.oauth))
+        app.router.routes.extend(auth_routes(runtime.oauth, runtime.gate))
         if runtime.administration:
             from vecten_mcp.admin_routes import admin_routes
             from vecten_mcp.panel.routes import panel_routes

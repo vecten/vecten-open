@@ -23,6 +23,7 @@ class Runtime:
     audit: object = None
     queries: object = None
     feedback_resolution: object = None
+    gate: object = None
     maintenance_task: object = field(default=None, init=False)
     last_reconcile: float = field(default=0, init=False)
     last_model_check: float = field(default=0, init=False)
