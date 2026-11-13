@@ -43,7 +43,8 @@ offers each step when it is due; in order:
    `vecten.toml` turns on shipping on merge.
 
 After the first deploy, every push to the default branch ships the DAGs, the dbt project,
-`osi/` and `evals/` without Terraform, and a pull request that changes `deploy/` gets the
+`osi/` and `evals/` without Terraform (to the first environment of a
+[promotion order](operations.md#promotion-order) when the project declares one), and a pull request that changes `deploy/` gets the
 Terraform plan as a comment. `vecten user add-admin <firstname> --env prod` creates a warehouse
 admin login, and `vecten destroy --env prod` tears the environment down after a final snapshot
 of each database. The rendered project's `docs/runbook.md` covers running the environment:

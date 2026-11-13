@@ -362,3 +362,45 @@ def test_tfvars_may_not_set_service_hostnames(project):
     failure = refusal(project)
     assert failure.code == ExitCode.CONFIG
     assert "service_hostnames" in failure.message and "vecten.toml" in failure.message
+
+
+def test_every_environment_builds_in_the_account_its_runtime_connects_to(tmp_path, monkeypatch):
+    import json
+    import tarfile
+
+    import yaml
+
+    from vecten.deploy.bundle import build_host_bundle
+    from vecten_shared.provider import SNOWFLAKE_ACCOUNT_VAR
+    from vecten_shared.provider.environment import EnvironmentOutputs
+    from vecten_shared.provider.runtime import OutputsRuntimeProvider
+
+    from .deploy_fixtures import COMMIT, STANDARD_OUTPUTS
+    from .fixture_project import render_fixture
+
+    root = render_fixture(tmp_path, "snowflake", deploy=True)
+    text = env_tfvars_path(root, "prod").read_text()
+    text = text.replace('environment       = "prod"', 'environment       = "dev"')
+    env_tfvars_path(root, "dev").write_text(text.replace('"ACME-PROD"', '"ACME-DEV"'))
+    # [warehouse] account names prod's account; dev's tfvars names its own.
+    config = load_config(root)
+    assert config.warehouse.account == "ACME-PROD"
+    assert check_tfvars(root, config, "dev")["snowflake_account"] == "ACME-DEV"
+    # `ship` hands each of dev's hosts dev's account, and the runtime there connects to it.
+    outputs = json.loads(json.dumps(STANDARD_OUTPUTS))
+    del outputs["postgres"]["warehouse"]
+    bundle = build_host_bundle(
+        root,
+        config,
+        "dev",
+        EnvironmentOutputs.model_validate(outputs),
+        "mcp",
+        COMMIT,
+        tmp_path / "out",
+    )
+    with tarfile.open(bundle, "r:gz") as tar:
+        compose = yaml.safe_load(tar.extractfile(".vecten/stack/docker-compose.yml").read())
+    shipped = compose["services"]["mcp-server"]["environment"][SNOWFLAKE_ACCOUNT_VAR]
+    assert shipped == "ACME-DEV"
+    monkeypatch.setenv(SNOWFLAKE_ACCOUNT_VAR, shipped)
+    assert OutputsRuntimeProvider(root, "dev")._snowflake_warehouse().account == "ACME-DEV"

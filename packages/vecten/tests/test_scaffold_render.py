@@ -98,6 +98,11 @@ def test_render_layout(tmp_path, params):
     assert served is (params.render_deploy and "platform" not in params.components)
     snowflake_root = params.warehouse == "snowflake" and "platform" in params.components
     assert ("### Snowflake" in runbook) is (params.render_deploy and snowflake_root)
+    assert ("## Promotion order" in runbook) is params.render_deploy
+    assert ("### What a promoted run reads from where" in runbook) is params.render_deploy
+    own_account = "Set `snowflake_account` there to `dev`'s Snowflake account" in runbook
+    assert own_account is (params.render_deploy and snowflake_root)
+    assert "waits for Snowflake accounts per environment" not in runbook
     assert (DEPLOY_ROLE_PRIVILEGES in runbook) is (params.render_deploy and snowflake_root)
     # In a shared account another environment's integration reaches a deploy user without
     # a key-pair-only policy.

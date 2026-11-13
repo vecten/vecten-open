@@ -33,10 +33,16 @@ def existing_warehouse_items(root: Path, config: VectenConfig, env: str) -> list
 
 
 def _script_confirmed(root: Path, config: VectenConfig, env: str) -> bool:
-    facts = config.environments.get(env) or EnvironmentFacts()
-    # Every run grants on the one existing warehouse, so a run confirmed for either counts.
-    return facts.provisioner_script_run or any(
-        (read_record(root, f"provisioner-{name}") or {}).get("confirmed") for name in (env, "local")
+    # Postgres grants on the one existing warehouse whichever environment the script was run
+    # for. Snowflake's External OAuth names an issuer: `env`'s own, or prod's for the laptop.
+    if config.warehouse.kind == "postgres":
+        names = [*config.environments, "local"]
+    else:
+        names = [env, "local"] if env == "prod" else [env]
+    return any(
+        (config.environments.get(name) or EnvironmentFacts()).provisioner_script_run
+        or (read_record(root, f"provisioner-{name}") or {}).get("confirmed")
+        for name in dict.fromkeys([env, *names])
     )
 
 

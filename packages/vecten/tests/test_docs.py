@@ -319,3 +319,35 @@ def test_contributing_quick_start_runs_from_a_checkout():
 def test_contributing_names_the_render_command():
     flat = " ".join(CONTRIBUTING.read_text().split())
     assert "`uv run vecten dev render-plugin --repo .`" in flat
+
+
+def test_operations_page_documents_the_promotion_order():
+    text = " ".join((REPO / "docs" / "operations.md").read_text().split())
+    for phrase in (
+        "## Promotion order",
+        "vecten answer deploy.promotion dev,prod",
+        "vecten answer deploy.promotion none",
+        "`vecten promote --env prod` ships `prod` the commit `dev` shipped last",
+        "the commit status `vecten/ship/<env>`",
+        "whose `success` for that environment was set last",
+        "### Rolling back",
+        "`vecten promote --env prod --commit <sha>`",
+        "### Approval before production",
+        "required reviewers",
+        "naming `vecten update`",
+        'asks "Promote <commit> to <next env>?"',
+    ):
+        assert phrase in text, phrase
+
+
+def test_glossary_defines_promotion():
+    text = (REPO / "docs" / "GLOSSARY.md").read_text()
+    assert "**Promotion order**:" in text and "**Promote**:" in text
+    assert "operations.md#promotion-order" in text
+
+
+def test_changelog_names_the_promotion_feature():
+    text = (REPO / "CHANGELOG.md").read_text()
+    unreleased = text[text.index("## [Unreleased]") : text.index("## [0.1.0]")]
+    for phrase in ("vecten promote --env <env>", "vecten/ship/<env>", "deploy.promotion", "#37"):
+        assert phrase in unreleased, phrase

@@ -132,9 +132,11 @@ request that changes `deploy/` or `vecten.toml` runs the `terraform-plan` workfl
 plan as a comment. No VM accepts SSH: `vecten ship` reaches each VM through AWS Systems Manager
 (SSM) Run Command.
 
-At v0.1 the workflows that run on their own, the pull-request plan and the ship on every push,
-cover `prod` only; any other environment is deployed and shipped when you dispatch it with
-`vecten deploy --env <env>` or `vecten ship --env <env>`. Each ship recreates the stack's
+The pull-request plan covers `prod`. The ship on every push covers the first environment of
+the promotion order, `prod` when `vecten.toml` declares none, and each later environment of the
+order ships only through `vecten promote --env <env>` ("Promotion order" below). Any other
+environment is deployed and shipped when you dispatch it with `vecten deploy --env <env>` or
+`vecten ship --env <env>`. Each ship recreates the stack's
 containers on the host, so Airflow tasks running at that moment restart. A ship that fails
 on the host prints, after its error, the last lines of `docker compose`'s own output (a failed
 pull, build or port) and of each failing container's log, with secrets masked; on a VM without
@@ -469,9 +471,11 @@ request that changes `deploy/` or `vecten.toml` runs the `terraform-plan` workfl
 plan as a comment. No VM accepts SSH and Scaleway offers no run-command API, so each VM pulls
 its bundles from the bucket; "Shipping" below describes how.
 
-At v0.1 the workflows that run on their own, the pull-request plan and the ship on every push,
-cover `prod` only; any other environment is deployed and shipped when you dispatch it with
-`vecten deploy --env <env>` or `vecten ship --env <env>`. Each ship recreates the stack's
+The pull-request plan covers `prod`. The ship on every push covers the first environment of
+the promotion order, `prod` when `vecten.toml` declares none, and each later environment of the
+order ships only through `vecten promote --env <env>` ("Promotion order" below). Any other
+environment is deployed and shipped when you dispatch it with `vecten deploy --env <env>` or
+`vecten ship --env <env>`. Each ship recreates the stack's
 containers on the host, so Airflow tasks running at that moment restart. A ship that fails
 on the host prints, after its error, the last lines of `docker compose`'s own output (a failed
 pull, build or port) and of each failing container's log, with secrets masked; on a VM without
@@ -1178,6 +1182,63 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
 [%- endif %]
 [% endif -%]
 [% endif %][% endif %]
+[% if render_deploy %]
+## Promotion order
+
+Without `[deploy] promotion` in `vecten.toml`, every merge to the default branch ships `prod`.
+With an order such as `["dev", "prod"]`, a merge ships `dev` only, and `prod` receives exactly
+the commit `dev` ran, when you promote it.
+
+### Adopting an order
+
+1. Workflows rendered before promotion existed ship `prod` on every push whatever the order
+   says, so the CLI refuses to record an order under them, naming `vecten update`. Run
+   `vecten update` then, review and commit.
+2. Copy `deploy/envs/prod.tfvars` to `deploy/envs/dev.tfvars`, set `environment = "dev"` and
+   set `domain` to the name `dev` serves under, such as `dev.[[ domain ]]`.
+[%- if warehouse == 'snowflake' and 'platform' in components %]
+   Set `snowflake_account` there to `dev`'s Snowflake account, which `dev`'s hosts, the MCP
+   and dbt connect to; `[warehouse] account` stays `prod`'s.
+[%- if snowflake_shared_account %]
+   In this shared account `dev` may name `prod`'s account: every account-level name `dev`
+   gets ends in `_<BASE>_DEV`.
+[%- else %]
+   With fixed names one account holds one environment, so `dev` names an account of its own;
+   `vecten deploy` refuses an account another environment's tfvars name.
+[%- endif %]
+[%- endif %]
+3. `vecten bootstrap --env dev`, then `vecten deploy --env dev`, as for `prod`.
+4. `vecten answer deploy.promotion dev,prod` records the order; `vecten github push` commits
+   it. From that push on, a merge ships `dev` and sets the commit status `vecten/ship/dev`.
+5. `vecten promote --env prod` ships `prod` the commit `dev` shipped last. The first promotion
+   needs one push shipped to `dev` by these workflows, because only they set the status.
+
+`vecten next` walks the order: `dev` through its deploy, sign-in and first user, then `prod`.
+`vecten promote --status` lists what each environment shipped last and whether it is behind
+the one before it. `vecten answer deploy.promotion none` and a push return to shipping `prod`
+on every merge.
+
+### What a promoted run reads from where
+
+`vecten promote --env prod` dispatches `deploy-platform.yml` on the default branch with
+`environment: prod` and `commit: <sha>`, and `vecten deploy --env prod` dispatches
+`terraform-apply.yml` the same way. Before any host or Terraform changes, the run refuses a
+commit that is not on the default branch, and one whose `vecten/ship/dev` status is not
+`success`. Then:
+
+- From the promoted commit: the bundle (DAGs, connectors, dbt, `osi/`, `evals/`,
+  `vecten.toml`), `deploy/envs/prod.tfvars`, the Terraform roots, and the `vecten` version its
+  `[project] scaffold_version` names, so `prod` gets what `dev` ran, configuration included.
+- From the default branch's head: the workflow file, and the facts the CLI records under
+  `[environments.prod]` in `vecten.toml` (whether `prod` is bootstrapped and deployed, its
+  cloud ids and keys), which describe `prod` as it is now. A fact the promoted commit's CLI
+  does not know is named in a warning and left out.
+
+A `prod`-only tfvars change therefore reaches `prod` on the next promotion, not on the merge
+that carries it. `vecten promote --env prod --commit <sha>` ships an older commit `dev`
+shipped, which is how `prod` rolls back. Required reviewers on the GitHub environment `prod`,
+where the plan offers them, hold every promotion until someone approves it.
+[% endif %]
 [% if render_deploy and 'mcp' in components %]
 ## First sign-in to the MCP
 
