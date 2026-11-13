@@ -7,7 +7,9 @@ from moto import mock_aws
 from vecten.deploy import github_env
 from vecten.deploy.aws import clients
 from vecten.deploy.aws import ship as ship_mod
+from vecten.deploy.tfvars import env_tfvars_path
 from vecten.github import gh as gh_mod
+from vecten_shared.config import load_config, save_config
 
 from .deploy_fixtures import (
     BUCKET,
@@ -300,6 +302,87 @@ def test_a_pending_snowflake_identity_ships_nothing_in_actions(
     assert r.exit_code == 0, r.stdout
     assert doc(r)["hosts"] == [] and ssm.sent == []
     assert "vecten mcp provisioner-script --env prod" in doc(r)["ship_skipped"]
+
+
+def _rename_shared(root, database="lake", *, provisioner_script_run=True):
+    """A shared environment whose first deploy recorded the base ACME, with [warehouse]
+    database now set to `database`."""
+    config = load_config(root)
+    config.warehouse.shared_account = True
+    config.warehouse.database = database
+    facts = config.environments["prod"]
+    facts.snowflake_shared_account = True
+    facts.snowflake_base = "ACME"
+    facts.provisioner_script_run = provisioner_script_run
+    save_config(root, config)
+
+
+def test_check_refuses_a_shared_environment_whose_base_changed(
+    invoke, snowflake_deployed, tmp_path, monkeypatch
+):
+    # The ship workflow's gate runs --check; refusing there ships no host.
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _rename_shared(snowflake_deployed)
+    r = invoke("ship", "--env", "prod", "--check", "--json")
+    assert r.exit_code == 4, r.stdout
+    error = doc(r)["error"]
+    assert "'ACME'" in error and "'LAKE'" in error and "[warehouse] database" in error
+    assert not out.exists() or "deployed=true" not in out.read_text()
+
+
+def test_a_shared_environment_whose_base_changed_is_not_dispatched(
+    invoke, snowflake_deployed, monkeypatch
+):
+    gh = FakeGh()
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    _rename_shared(snowflake_deployed)
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    assert "'LAKE'" in doc(r)["error"]
+    assert gh.named("workflow", "run") == []
+
+
+def test_a_shared_environment_whose_base_changed_ships_no_host_in_actions(
+    invoke, snowflake_deployed, monkeypatch
+):
+    aws_credentials(monkeypatch, snowflake_deployed)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    ssm = FakeSsm()
+    monkeypatch.setattr(clients, "client", lambda svc, region: ssm)
+    _rename_shared(snowflake_deployed)
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    assert "'LAKE'" in doc(r)["error"]
+    assert ssm.sent == []
+
+
+def test_a_shared_environment_keeping_its_base_passes_the_check(
+    invoke, snowflake_deployed, tmp_path, monkeypatch
+):
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    _rename_shared(snowflake_deployed, database="acme")
+    r = invoke("ship", "--env", "prod", "--check", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert "deployed=true" in out.read_text()
+
+
+def test_a_changed_layout_is_refused_before_any_dispatch(invoke, snowflake_deployed, monkeypatch):
+    dev = env_tfvars_path(snowflake_deployed, "prod").read_text().replace('"prod"', '"dev"', 1)
+    env_tfvars_path(snowflake_deployed, "dev").write_text(dev)
+    set_facts(snowflake_deployed, snowflake_shared_account=False, provisioner_script_run=True)
+    config = load_config(snowflake_deployed)
+    config.warehouse.shared_account = True
+    save_config(snowflake_deployed, config)
+    gh = FakeGh()
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    error = doc(r)["error"]
+    assert "snowflake_shared_account = false" in error and "new deployment" in error
+    assert gh.named("workflow", "run") == []
 
 
 def test_check_refuses_a_setting_of_the_wrong_type_for_the_environment(invoke, no_cloud):

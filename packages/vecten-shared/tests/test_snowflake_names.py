@@ -120,6 +120,27 @@ def test_the_layout_an_environment_recorded_wins_over_the_setting(shared):
     assert names.suffix == ("" if shared else "_ACME_PROD")
 
 
+def test_a_recorded_base_names_the_objects_its_first_deploy_created():
+    recorded = {"prod": {"snowflake_shared_account": True, "snowflake_base": "OLD"}}
+    renamed = config("acme", "new", shared=True, environments=recorded)
+    names = snowflake_names(renamed, "prod")
+    assert names.suffix == "_OLD_PROD"
+    assert names.database == "OLD_PROD" and names.warehouse == "OLD_PROD_WH"
+    assert names.loader_user == "LOADER_OLD_PROD"
+    assert names.provisioner_user == "PROVISIONER_OLD_PROD"
+    assert names.integration == "EXTERNAL_OAUTH_OLD_PROD"
+    # An environment that recorded no base takes the configured one.
+    assert snowflake_names(renamed, "dev").suffix == "_NEW_DEV"
+
+
+def test_a_recorded_base_the_configuration_still_gives_changes_no_name():
+    recorded = {"prod": {"snowflake_shared_account": True, "snowflake_base": "ACME_CO"}}
+    with_record = config("acme-co", shared=True, environments=recorded)
+    assert snowflake_names(with_record, "prod") == snowflake_names(
+        config("acme-co", shared=True), "prod"
+    )
+
+
 def test_an_environment_deployed_without_a_record_keeps_its_fixed_names():
     deployed = {"prod": {"deployed_commit": "a" * 40}}
     names = snowflake_names(config("acme", shared=True, environments=deployed), "prod")

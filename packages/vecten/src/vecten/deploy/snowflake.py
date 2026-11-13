@@ -21,6 +21,7 @@ from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import (
     Provider,
     SnowflakeNames,
+    recorded_base,
     recorded_layout,
     shared_base,
     snowflake_names,
@@ -80,8 +81,8 @@ def check_layout(project_root: Path, config: VectenConfig, env: str) -> None:
         return
     recorded = recorded_layout(config, env)
     setting = config.warehouse.shared_account
-    base = config.environments[env].snowflake_base if env in config.environments else None
-    if recorded and base and base != shared_base(config):
+    base = recorded_base(config, env)
+    if base and base != shared_base(config):
         raise Failure(
             ExitCode.REFUSED,
             f"environment {env!r} was first deployed with the Snowflake names based on "
