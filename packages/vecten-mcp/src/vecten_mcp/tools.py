@@ -371,3 +371,12 @@ async def read_settings():
 
 
 read_settings_tool = {"handler": read_settings, "groups": ["*"], "admin": True}
+
+
+async def list_apps():
+    """List the bound analytics apps: title, URL, bound and admitted groups, datasets, state,
+    their principals and access-health failures. Bindings change in vecten.toml only."""
+    return await admin_read("apps", {})
+
+
+list_apps_tool = {"handler": list_apps, "groups": ["*"], "admin": True}

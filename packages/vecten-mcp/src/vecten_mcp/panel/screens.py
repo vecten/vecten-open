@@ -808,6 +808,70 @@ def clients(ctx):
     )
 
 
+def principal_state(app):
+    principal = app["principal"]
+    connect = f"run `vecten app connect {app['app']} --env <env>`"
+    if principal is None:
+        return f"none yet; {connect}"
+    if not principal["enabled"]:
+        return f"{principal['warehouse_name']}, disabled; delete it, then {connect}"
+    if not principal["marked"]:
+        return (
+            f"{principal['warehouse_name']}, not marked as this app's; review who uses it, then "
+            f"run `vecten app connect {app['app']} --env <env> --adopt`"
+        )
+    return principal["warehouse_name"]
+
+
+def apps(ctx):
+    listed = ctx.call("apps")
+    parts = [
+        hint(
+            "Who may open an app is its binding in vecten.toml: change it in a pull request and "
+            "ship. The panel offers no edit."
+        )
+    ]
+    if not listed:
+        parts.append(
+            tag(
+                "p",
+                "No analytics app is bound. An extension declares apps; `vecten extension add` "
+                "binds them in vecten.toml under [apps.<extension>.<app>].",
+                class_="empty",
+            )
+        )
+    for app in listed:
+        if app["url"]:
+            where = link(app["url"], app["url"])
+        else:
+            where = f"{app['state']}: {app['reason']}"
+        rows = [
+            ("Extension", f"{app['extension']} {app['version']}".strip()),
+            ("Kind", app["kind"]),
+            ("URL", where),
+            ("Bound groups", ", ".join(app["groups"])),
+            ("Admitted groups", ", ".join(app["admitted"]) or "none"),
+            ("Datasets", ", ".join(app["datasets"])),
+        ]
+        if app["kind"] == "container":
+            rows.append(("Health", "not reported to the MCP; `vecten ship` prints it"))
+        rows += [
+            ("Principal", principal_state(app)),
+            ("Binding", app["binding"]),
+        ]
+        parts += [
+            h2(app["title"]),
+            tag("p", app["description"] or "No description.", class_="hint"),
+            table(("", ""), rows),
+            table(
+                ("Group", "Access health"),
+                [(f.get("group", ""), f["message"]) for f in app["failures"]],
+                empty="No access-health failures.",
+            ),
+        ]
+    return page(ctx, "Analytics", *parts)
+
+
 def settings(ctx):
     values = ctx.call("settings")
 
@@ -889,6 +953,7 @@ SCREENS = [
     ("/admin/audit", audit, ["GET"]),
     ("/admin/audit/{row_id}", audit_row, ["GET"]),
     ("/admin/clients", clients, ["GET"]),
+    ("/admin/apps", apps, ["GET"]),
     ("/admin/settings", settings, ["GET"]),
     ("/admin/settings", settings_set, ["POST"]),
 ]

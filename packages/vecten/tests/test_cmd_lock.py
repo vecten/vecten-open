@@ -948,6 +948,33 @@ def test_an_app_name_another_extension_binds_is_left_unbound_with_a_note(
     )
 
 
+def test_an_app_whose_principal_name_another_extension_holds_is_left_unbound(
+    invoke, project, fakes, monkeypatch
+):
+    from vecten_shared.apps import parse_app
+
+    fakes["packages"]["acme-other"] = ("1.0.0", ())
+    declared = {"acme-other": {"overview": OVERVIEW}, "acme-demo": {"overview-": OVERVIEW}}
+
+    def load(config, candidates=None, only=None):
+        listed = {e.split("[")[0] for e in config.extensions}
+        return {
+            ext: {n: parse_app(ext, n, v) for n, v in apps.items()}
+            for ext, apps in declared.items()
+            if ext in listed
+        }
+
+    monkeypatch.setattr(extensions, "load_apps", load)
+    assert invoke("extension", "add", "acme-other").exit_code == 0
+    r = invoke("extension", "add", "acme-demo", "--json")
+    assert r.exit_code == 0, r.output
+    assert set(load_config(project).apps) == {"acme-other"}
+    assert (
+        "acme-demo app overview-: acme-other binds an app overview, and both would run as "
+        "svc_app_overview; not bound" in json.loads(r.stdout)["binding_notes"]
+    )
+
+
 def test_a_snowflake_app_takes_no_hostname_label():
     from vecten.extensions import _taken_labels
     from vecten_shared.apps import parse_app
