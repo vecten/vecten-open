@@ -169,7 +169,7 @@ def test_a_snowflake_app_renders_no_service():
     assert bound_services(config({"acme-sales": {"finance": {"groups": ["f"]}}}), record()) == []
 
 
-@pytest.mark.parametrize("key", [{"hostname": "fin"}, {"local": False}])
+@pytest.mark.parametrize("key", [{"hostname": "fin"}, {"local": False}, {"local": True}])
 def test_a_snowflake_app_refuses_host_choices(key):
     with pytest.raises(Failure, match=f"apps.acme-sales.finance.{next(iter(key))}: only a"):
         check_bindings(config({"acme-sales": {"finance": {"groups": ["f"], **key}}}), record())
