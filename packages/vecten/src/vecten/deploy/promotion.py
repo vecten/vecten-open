@@ -42,6 +42,7 @@ from vecten_shared.names import env_name_problem
 from vecten_shared.output import ExitCode, Failure
 
 __all__ = [
+    "FETCHED",
     "SHIPPED_SEARCH_LIMIT",
     "CommitFiles",
     "HeadFacts",
@@ -53,10 +54,14 @@ __all__ = [
     "promoted_tree",
     "promotion_order",
     "read_commit_files",
+    "read_fetched_facts",
+    "show_commit_file",
     "require_shipped_by",
     "ship_context",
 ]
 
+# The default branch's head as `git fetch origin <branch>` left it.
+FETCHED = "FETCH_HEAD"
 # A commit id a person types, abbreviated or full; nothing git would read as an option.
 _COMMIT_REF = re.compile(r"[0-9a-f]{7,40}")
 _FULL_COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -163,8 +168,22 @@ def read_head_facts(project_root: Path) -> HeadFacts:
     """
     path = project_root / CONFIG_FILE
     try:
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Failure(ExitCode.CONFIG, f"{path}: {exc}") from None
+    return _head_facts(text, str(path))
+
+
+def read_fetched_facts(git: ToolRunner, project_root: Path) -> HeadFacts:
+    """`read_head_facts` of the default branch's head as the last fetch of it left FETCH_HEAD:
+    the facts a run dispatched on that branch reads, which this checkout may trail."""
+    return _head_facts(show_commit_file(git, project_root, FETCHED, CONFIG_FILE), _where(FETCHED))
+
+
+def _head_facts(text: str, path: str) -> HeadFacts:
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
         raise Failure(ExitCode.CONFIG, f"{path}: {exc}") from None
     deploy = raw.get("deploy") if isinstance(raw.get("deploy"), dict) else {}
     declared = deploy.get("promotion")
@@ -237,13 +256,23 @@ class CommitFiles:
     record: dict[str, Extension]
 
 
+def _where(commit: str) -> str:
+    return f"{CONFIG_FILE} at {commit[:8] if _FULL_COMMIT.fullmatch(commit) else commit}"
+
+
+def show_commit_file(git: ToolRunner, project_root: Path, commit: str, path: str) -> str:
+    """The text of `path` at `commit`, `FETCHED` or a full commit id."""
+    return _git(git, project_root, "show", f"{commit}:{path}")
+
+
 def read_commit_files(
     git: ToolRunner, project_root: Path, commit: str, facts: dict[str, EnvironmentFacts]
 ) -> CommitFiles:
-    """`vecten.toml` and the extension record of `commit`, which this checkout holds, with
-    `facts` as the environment facts; an unreadable record reads as none, as a checkout's."""
-    where = f"{CONFIG_FILE} at commit {commit[:8]}"
-    text = _git(git, project_root, "show", f"{commit}:{CONFIG_FILE}")
+    """`vecten.toml` and the extension record of `commit`, `FETCHED` or a full commit id this
+    checkout holds, with `facts` as the environment facts; an unreadable record reads as none,
+    as a checkout's."""
+    where = _where(commit)
+    text = show_commit_file(git, project_root, commit, CONFIG_FILE)
     try:
         config = VectenConfig.model_validate(tomllib.loads(text))
     except tomllib.TOMLDecodeError as exc:

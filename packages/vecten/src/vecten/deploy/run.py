@@ -55,6 +55,7 @@ from vecten.deploy.guards import (
     require_on_default_branch,
 )
 from vecten.deploy.promotion import (
+    FETCHED,
     CommitFiles,
     fetch_default_branch,
     given_commit,
@@ -63,6 +64,7 @@ from vecten.deploy.promotion import (
     promoted_tree,
     promotion_order,
     read_commit_files,
+    read_fetched_facts,
     read_head_facts,
     require_shipped_by,
 )
@@ -84,7 +86,7 @@ from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import shared_base, shared_layout, snowflake_names
+from vecten_shared.provider import recorded_base, shared_base, shared_layout, snowflake_names
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
 from vecten_shared.records import write_text_atomic
 from vecten_shared.services import check_bindings, limits_per_host
@@ -451,19 +453,18 @@ def _deploy(
             raise Failure(ExitCode.INTERNAL, "dispatching the apply workflow needs the gh runner")
         branch = require_on_default_branch(project_root, deploy.github_repository, gh, git)
         promoted = _promoted_for_dispatch(gh, git, project_root, config, env, branch, commit)
-        # The run deploys and ships the promoted commit's files, which the fetch of the
-        # default branch brought into this checkout.
-        shipped = (
-            read_commit_files(git, project_root, promoted, config.environments)
-            if promoted is not None
-            else None
-        )
+        # CI reads the facts from the fetched head, which this checkout may trail.
+        facts = read_fetched_facts(git, project_root).environments
+        # The run deploys the promoted commit, else that head.
+        shipped = read_commit_files(git, project_root, promoted or FETCHED, facts)
         warnings = require_ci_git_credential(project_root, config, env, gh, shipped)
-        # The run names the objects by the vecten.toml it deploys: the promoted commit's, else
-        # the default branch's, which require_on_default_branch made this checkout's.
-        named = shipped.config if shipped is not None else config
+        # The run names the objects by the vecten.toml it deploys, under the base the head
+        # records for the environment if it records one.
+        named = shipped.config
         layout = (
-            (shared_layout(named, env), shared_base(named)) if has_snowflake_root(named) else None
+            (shared_layout(named, env), recorded_base(named, env) or shared_base(named))
+            if has_snowflake_root(named)
+            else None
         )
         try:
             followed = dispatch_and_follow(
