@@ -479,7 +479,8 @@ def test_an_environment_another_promotes_from_fails_closed_without_its_status(
     use_gh(monkeypatch, FakeGh(failing=("api",)))
     r = invoke("ship", "--env", "dev", "--commit", repo.a, "--json")
     assert r.exit_code == 5, r.stdout
-    assert "statuses" in doc(r)["error"]
+    error = doc(r)["error"]
+    assert "status" in error and repo.a in error
     assert released(repo.cloud, "mcp") is None
 
 

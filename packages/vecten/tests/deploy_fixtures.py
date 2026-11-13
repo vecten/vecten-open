@@ -297,7 +297,8 @@ class FakeGh:
                 for i, entry in enumerate(found)
             ]
         self._posted = 0
-        # Leading words of `api` calls that fail with HTTP 502 this many times first.
+        # How many times a status write (`statuses`) or a commit's status read (`status`)
+        # fails with HTTP 502 before it answers.
         self.transient: dict[str, int] = {}
         self.watch_code = watch_code
         self.created_at = created_at
@@ -368,6 +369,9 @@ class FakeGh:
     def _get(self, args):
         path = args[1].split("?", 1)[0]
         if path.endswith("/status") and "/commits/" in path:
+            if self.transient.get("status"):
+                self.transient["status"] -= 1
+                return self._fail(args, 502, "Bad Gateway")
             sha = path.split("/")[-2]
             latest = {entry[0]: entry[1] for entry in self.statuses.get(sha, [])}
             body = {"sha": sha, "statuses": [{"context": c, "state": s} for c, s in latest.items()]}

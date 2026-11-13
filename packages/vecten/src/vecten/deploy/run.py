@@ -41,6 +41,7 @@ from vecten.deploy.github_env import (
     set_repository_variables,
     set_ship_status,
     ship_context,
+    ship_status,
     shipped_at,
 )
 from vecten.deploy.guards import (
@@ -480,17 +481,24 @@ def recorded_ship[Shipped](
     required: bool,
 ) -> tuple[Shipped, list[str]]:
     """Run `ship` between a `pending` and a final `vecten/ship/<env>` status on `commit`;
-    what `ship` returned, and a warning for every status that could not be set.
+    what `ship` returned, and a warning for every status that could not be read or set.
 
     A promotion trusts only `success`, so when a later environment promotes from `env`
-    (`required`), a status that cannot be set to `pending` stops the ship before any host
-    changes, and one left `pending` never counts as shipped. Nothing promotes from the last
-    environment of the order, so there a GitHub outage costs only the record.
+    (`required`), a status that cannot be read or set to `pending` stops the ship before any
+    host changes, and one left `pending` never counts as shipped. Nothing promotes from the
+    last environment of the order, so there a GitHub outage costs only the record.
+
+    GitHub keeps one status per commit and context, and the environment's last ship is the
+    commit whose `success` was set last. A commit that already carries `success` therefore
+    keeps it, with its time, until this ship succeeds: hosts that fail a ship keep or restore
+    their previous bundle, which is that commit's when the environment runs it, and a later
+    commit's otherwise, whose `success` is then the later one.
     """
     if gh is None:
         raise Failure(ExitCode.INTERNAL, "recording a ship's commit status needs the gh runner")
     url = _run_url()
     warnings: list[str] = []
+    context = ship_context(env)
 
     def record(state: str) -> None:
         try:
@@ -499,21 +507,31 @@ def recorded_ship[Shipped](
             if required:
                 raise
             warnings.append(
-                f"the {ship_context(env)} status of {commit[:8]} could not be set to {state}: "
-                f"{exc.message}"
+                f"the {context} status of {commit[:8]} could not be set to {state}: {exc.message}"
             )
 
-    record("pending")
+    try:
+        shipped_before = ship_status(gh, project_root, repository, commit, env) == "success"
+    except Failure as exc:
+        if required:
+            raise
+        warnings.append(f"the {context} status of {commit[:8]} could not be read: {exc.message}")
+        shipped_before = False
+    if not shipped_before:
+        record("pending")
     try:
         shipped = ship()
     except Exception as exc:
+        if shipped_before:
+            if isinstance(exc, Failure):
+                exc.message += f"; {commit[:8]} keeps the {context} success an earlier ship set"
+            raise
         try:
             set_ship_status(gh, project_root, repository, commit, env, "failure", target_url=url)
         except Failure as status:
             if isinstance(exc, Failure):
                 exc.message += (
-                    f"; the {ship_context(env)} status of {commit[:8]} stays pending: "
-                    f"{status.message}"
+                    f"; the {context} status of {commit[:8]} stays pending: {status.message}"
                 )
         raise
     record("success")

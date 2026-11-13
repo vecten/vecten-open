@@ -384,21 +384,30 @@ def set_ship_status(
     ]
     if target_url:
         args += ["-f", f"target_url={target_url}"]
+    result = _status_call(gh, project_root, args)
+    if result.returncode != 0:
+        raise Failure(
+            ExitCode.TOOL_FAILED,
+            f"gh api POST {path} failed: {result.stderr.strip()[-300:]}; the job that ships "
+            "needs the `statuses: write` permission",
+        )
+
+
+def _status_call(
+    gh: ToolRunner, project_root: Path, args: list[str]
+) -> subprocess.CompletedProcess:
+    """Run a status call up to `STATUS_ATTEMPTS` times; its last result."""
     for attempt in range(1, STATUS_ATTEMPTS + 1):
         result = gh.run(args, project_root)
         if result.returncode == 0:
-            return
+            return result
         status = _http_status(result)
         # Only GitHub's own trouble or a lost connection is worth another try.
         if status is not None and status < 500 and status != 429:
             break
         if attempt < STATUS_ATTEMPTS:
             sleep(STATUS_RETRY_SECONDS * attempt)
-    raise Failure(
-        ExitCode.TOOL_FAILED,
-        f"gh api POST {path} failed: {result.stderr.strip()[-300:]}; the job that ships needs "
-        "the `statuses: write` permission",
-    )
+    return result
 
 
 def ship_status(
@@ -406,7 +415,12 @@ def ship_status(
 ) -> str | None:
     """The latest `vecten/ship/<env>` state on `commit`, or None when it carries none."""
     path = f"repos/{repository}/commits/{commit}/status?per_page=100"
-    body = _json(_gh(gh, project_root, "api", path, what=f"api GET {path}"), f"api GET {path}")
+    result = _status_call(gh, project_root, ["api", path])
+    if result.returncode != 0:
+        raise Failure(
+            ExitCode.TOOL_FAILED, f"gh api GET {path} failed: {result.stderr.strip()[-300:]}"
+        )
+    body = _json(result, f"api GET {path}")
     statuses = body.get("statuses") if isinstance(body, dict) else None
     # The combined status holds the latest status of each context only.
     for status in statuses or []:
