@@ -160,9 +160,30 @@ Consequences:
   change ships, the same staleness #49's manifest has. `up` re-reads the declaration from the
   editable install and refuses a record that differs ("run `vecten lock`"), so the developer sees
   it on the laptop first. A CI check that would catch it without a laptop is left to the
-  in-repo change, which owns how in-repo records go stale.
+  in-repo change, which owns how in-repo records go stale; the outcome is below.
 - Names: a service name and a route name match `^[a-z][a-z0-9-]{0,30}$`. The Compose service is
   `svc-<extension>-<service>`, truncated with a hash suffix past 63 characters.
+
+**In-repo declarations and CI, settled with `project-extensions` (task 7.2).** What PR A
+built: `up` loads the `vecten.services` declarations of every in-repo extension that Vecten's
+own environment holds as an editable install of this checkout, compares each with
+`extensions.lock.json`, and refuses a difference naming the service and `vecten lock`
+(`refuse_stale_services` in `vecten/extensions.py`). Nothing else compares. `ship`, the bundle
+build and `ship --check` render from the record and never import an extension, and both
+generated workflows (`ci.yml`, `ship.yml`) install `vecten` alone, so they cannot load a
+declaration. The in-repo change's staleness signal, the sha256 of `pyproject.toml` in each
+lock's input hash, does not move when a module changes, and its Decision 4 declines a hash of
+the code. A commit that edits a declaration without `vecten lock` therefore ships the new code
+under the recorded command, port, routes and limits; #49's manifests have the same gap.
+
+Outcome for this release: the laptop check stands, and `docs/extensions.md` tells authors to run
+`vecten lock` after editing a declaration and commit `extensions.lock.json` with it. Catching it
+in CI needs code, not made in this change: a read-only check (for example `vecten lock --check`)
+that loads the manifests and service declarations of the in-repo extensions and compares them
+with the record, without resolving the locks or needing Docker, and a step in the generated
+`ci.yml`, for a project with an in-repo extension, that installs `requirements.lock` with
+`--no-deps` and each in-repo extension editable, then runs it. It is a follow-up owned by the
+in-repo side, for the maintainer to schedule, for example beside #35 (`extensions-from-git`).
 
 ### Decision 2: Every routed service gets its own hostname, never a path on `airflow.` or `mcp.` — *Accepted*
 
@@ -550,6 +571,33 @@ the bundle needs nothing new beyond the `extensions/` entry the in-repo change a
 service authors to `vecten.services` instead, and say that an override service without a profile
 starts on every host.
 
+## Interactions
+
+**#5, Airflow's sign-in through the MCP (task 7.3).** No change folder exists for #5 yet; this
+section is where its open question is recorded until one does. The gate covers Airflow's browser
+sign-in as Decision 4 states: the platform host's NGINX can run the same verify subrequest on
+`airflow.<domain>`, keep PR #58's open health location outside it, proxy `/_vecten/gate/*`
+there to the MCP, strip the gate cookie, and forward the same five headers. Airflow's UI calls
+its own API from the same origin, so the browser sends the gate cookie with those calls too and
+they pass the same check. Against the issue's notes: the identity provider needs no redirect URI
+for `airflow.<domain>`, since it only ever returns to the MCP; and the laptop can keep Airflow's
+password login or use the laptop MCP's password sign-in. What #5 still has to add beyond this
+change: an Airflow auth manager that trusts `X-Vecten-*` from NGINX and maps `X-Vecten-Admin`
+to Airflow's admin role; a verify rule admitting by the admin flag, since a route's `groups` are
+group names and the flag is not one; `airflow.<domain>` among the hostnames the MCP accepts at
+`/gate/authorize`, which this change takes only from `login` routes; and a rule for projects
+without the `mcp` component, which have no gate and keep Airflow's own login.
+
+The open question is how API clients reach Airflow behind the gate, since they cannot follow a
+browser redirect. Today `vecten issues --env` posts `AIRFLOW_ADMIN_PASSWORD` to `/auth/token`
+and calls `/api/v2/` with the token it gets, and `ship` polls the open health path. Options for
+#5's change: (a) leave `/auth/token` and `/api/v2/` outside the gate, behind Airflow's own token
+check and `[airflow] allow`, which keeps today's clients and keeps a second credential; (b) let
+verify also accept a person's MCP access token from `vecten login`, which unifies identity but
+needs a header other than `Authorization`, because Airflow's own UI sends
+`Authorization: Bearer <Airflow token>` on the same paths; (c) reach the API only from inside
+the VM, as the agent does, which ends remote use. The choice belongs to #5's change.
+
 ## Risks / Trade-offs
 
 - [Streamlit and other web stacks may not resolve against the Airflow image] → Spike first
@@ -574,7 +622,8 @@ starts on every host.
   rules. A Docker-tier test proves the block on the agent's own commands; a real deploy proves it
   on each cloud.
 - [In-repo service declarations can go stale against `extensions.lock.json`] → `up` refuses a
-  differing record; the gap for edits never run locally is noted for the in-repo change.
+  differing record; CI does not catch an edit never run locally, and the check that would is a
+  follow-up with #35 (Decision 1, "In-repo declarations and CI").
 - [The memory budget is advisory] → Printed by `ship --check` and `up`; the docs name the sizing
   overrides.
 - [Host-local volumes are lost with the VM] → Stated in the docs, the declaration's docstring
@@ -592,7 +641,15 @@ starts on every host.
 - Landing order: #50's locking PR, then #49's secrets and read API, then the in-repo extensions
   change, then this change's pull requests (tasks.md), then `extension-analytics-apps`. This
   change's deltas to `shared/extension-points` and `cli/cli-lifecycle` are written over #50's
-  text of the same requirements and are rebased if #50 changes.
+  text of the same requirements and are rebased if #50 changes. Checked on 2026-11-12 (task
+  7.1): `extension-declarations` is not archived into `.ai/openspec/specs/` yet. Its text of
+  "Extensions are Python packages with per-layer entry points", "A stub extension proves every
+  layer" and "extension add" is carried word for word in this change's deltas, which only add
+  `vecten.services`, the eleventh group, the service scenarios, and "HTTP routes are declared as
+  part of a service" in place of the v0.1 sentence on route hooks. "up starts the local stack"
+  is modified by no other open change, and `project-extensions` modifies none of the four.
+  Archiving a MODIFIED requirement replaces the whole requirement, so `extension-declarations`
+  is archived before this change.
 
 ## Security considerations
 

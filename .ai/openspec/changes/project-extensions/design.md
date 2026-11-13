@@ -242,7 +242,10 @@ the commit message, as the guide asks.
   the Streamlit templates an analytics-app group. Those are new entry point groups delivered by
   #38 and #39; this change only makes sure that an in-repo extension carries whatever those groups
   will need (its source tree, static files inside the package) to the host, which Decision 3's
-  bundle content already does.
+  bundle content already does. A service declaration is code, so editing one makes no lock
+  stale: `up` catches the difference on the laptop and CI does not yet; the outcome and the
+  follow-up check are in `extension-services`' design, Decision 1 ("In-repo declarations and
+  CI").
 
 ### Decision 8: Where the guides live (*Accepted*)
 

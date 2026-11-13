@@ -1,9 +1,11 @@
 # Installing and writing extensions
 
 A Vecten extension is an installed Python package that contributes connectors, models,
-scheduled work, [semantic documents](GLOSSARY.md), skills or MCP server hooks. Its code stays
-in the package rather than being copied into each project. Only install packages you trust:
-loading their entry points executes Python with the current process's permissions.
+scheduled work, [semantic documents](GLOSSARY.md), skills, MCP server hooks or long-running
+[services](services.md). Its code stays in the package rather than being copied into each
+project. Only install packages you trust: loading their entry points executes Python with the
+current process's permissions, and a service runs the package's code on your hosts, open to the
+internet.
 
 ## Install and update
 
@@ -221,6 +223,7 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.mcp.auth` | Callable identity backend. Selected by `auth = "company_login"` in the `[mcp]` section of `vecten.toml`; the registry refuses a missing backend at startup. Extensions cannot replace the reserved `password`/`oidc` names. |
 | `vecten.mcp.provisioning` | Callable provisioning hook. The registry invokes the named hook with the owning service's arguments. |
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
+| `vecten.services` | A dictionary, or zero-argument factory returning one, declaring one long-running process and its HTTP routes. The entry name is the service's name. `vecten lock` records it; it runs once `vecten.toml` binds it (see [services](#services)). |
 | `vecten.manifest` | A dictionary, or zero-argument factory returning one, with `secrets` and `settings`: what the extension needs, not a part it contributes (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
 
 MCP means Model Context Protocol, the client/server interface for warehouse tools. OAuth login,
@@ -240,7 +243,7 @@ without it, the invocation record can lack SQL, its hash and row count. Prefer
 concurrent submission, and await the query before returning from the handler so the evidence
 is present when the invocation is recorded.
 
-No CLI-command or HTTP-route extension hooks are offered yet.
+HTTP routes are declared as part of a [service](#services). No CLI-command hooks are offered yet.
 
 ### Secrets and settings
 
@@ -393,6 +396,157 @@ strings, an unknown timezone or key) is refused before anything is written. Airf
 cron syntax when it parses the DAG file. The DAG files' other options, such as ordered stages
 and run parameters, are in [orchestration](orchestration.md#changing-a-sync-dag).
 
+### Services
+
+A service is one long-running process that an extension runs on a deployed host and under
+`vecten up`: a chat bot that receives webhooks, a portal of documentation and links, a
+dashboard. The extension declares the facts about its code; the project decides, in
+`vecten.toml`, where and how it runs. That decision is the service's binding. This section
+covers both; [extension services](services.md) covers what happens once a service is bound:
+hostnames, access, the sign-in gate, isolation, limits, volumes and health.
+
+**Declaring a service.** Each entry in the `vecten.services` group declares one service, named
+by the entry:
+
+```python
+# acme_bot/services.py
+bot = {
+    "command": ["python", "-m", "acme_bot.server"],  # exec form: no shell
+    "port": 8000,
+    "health": {"path": "/healthz"},  # or {"command": ["python", "-m", "acme_bot.check"]}
+    "volume": "/var/lib/acme-bot",  # optional
+    "components": ["platform"],
+    "memory_mb": 256,
+    "cpus": 0.5,
+    "routes": {
+        "webhook": {"path": "/api/messages", "access": "public", "max_body_mb": 2},
+        "admin": {"path": "/settings", "access": "login", "groups": ["default"]},
+    },
+}
+```
+
+```toml
+[project.entry-points."vecten.services"]
+bot = "acme_bot.services:bot"
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `command` | yes | A non-empty list of strings, run as it is, without a shell. A `$` stays a literal `$`. |
+| `port` | with routes or a health path | The HTTP port the process listens on, 1 to 65535. Listen on every interface (`0.0.0.0`), not only on `localhost`: NGINX reaches the process over a Docker network. |
+| `health` | yes | `{"path": "/healthz"}`, fetched with `curl` on `http://localhost:<port><path>` inside the container, or `{"command": [...]}`, run there. Docker runs it every 10 seconds, after 30 seconds of start-up grace; three failures mark the service unhealthy. |
+| `volume` | no | An absolute path where a persistent volume is mounted. A path the image lacks is created owned by the image's user, so the service can write there; a path the image already holds keeps its owner. |
+| `components` | no, default `["platform"]` | The components whose project image holds the service's dependencies: `platform`, `mcp` or both. |
+| `memory_mb` | no, default 256 | The memory limit the project starts from, 64 to 65536. |
+| `cpus` | no, default 0.5 | The CPU limit the project starts from, 0.05 to 64. |
+| `routes` | no | The HTTP paths the service serves, each named by its key. |
+
+Each route holds `path`, a suggested `access` (`public` or `login`), suggested `groups` for a
+`login` route (one or more MCP groups, refused for `public`), and optionally `websocket` and
+`max_body_mb`. Every route passes WebSocket upgrades; `websocket = true` raises the time NGINX
+waits for the service to send something from 300 seconds to a day and turns response buffering
+off, which Streamlit needs. `max_body_mb` is the largest request body, 1 to 100, default 1. `access` and
+`groups` are suggestions: the binding below decides. A route path is a prefix covering whole
+segments: `/api` and `/api/` both cover `/api` and everything under `/api/`, never `/apix`, and
+`/` covers every path no other route covers. Paths hold only letters, digits and `. _ ~ -`
+between slashes, no `.` or `..` segment, nothing under `/_vecten/`, which Vecten keeps for
+itself, and no two routes of one service may cover the same path. Service and route names are a
+lowercase letter followed by up to 30 lowercase letters, digits or hyphens.
+
+The command runs in the project image of the component that runs the service: the Airflow
+image (user `airflow`) on `platform`, the MCP image (user `app`) on `mcp`. Put the service's
+Python dependencies in the extra of each component it lists (see
+[dependencies per component](#dependencies-per-component)), and its templates, pages and other
+static files in the package as package data: the images install the package, and NGINX serves
+nothing from disk for a service. Its Compose service, the name NGINX reaches it by, is
+`svc-<extension>-<service>`, shortened with a hash past 63 characters.
+
+The container's environment holds:
+
+| Variable | Value |
+|---|---|
+| `PORT` | The declared `port`. |
+| `VECTEN_PUBLIC_URL` | `https://<hostname>`, the service's own address, when the binding sets a hostname: `https://<label>.localhost:8443` on the laptop. |
+| `VECTEN_ENV` | `local` on the laptop, the environment's name on a VM. |
+| `VECTEN_COMPONENT` | `service`. |
+| `VECTEN_SERVICE` | `<extension>.<service>`. |
+| `VECTEN_PROJECT_ROOT` | Where `vecten.toml` and `extensions.lock.json` are mounted, read-only. |
+| Declared secrets | Each secret the extension's manifest declares for the component the service runs on: names starting with `MCP_` on `mcp`, other names on `platform`, since a secret's prefix decides which host may read it. A service moved from `platform` to `mcp` therefore needs `MCP_` names, and the reverse names without it. |
+
+A service reads its settings and secrets with the same `vecten_shared.context` API as a DAG or a
+tool (see [secrets and settings](#secrets-and-settings)); `secret()` refuses any name its
+extension's manifest does not declare.
+
+**Recording.** `vecten lock` and `extension add` record each declaration in
+`extensions.lock.json`. `up`, `ship` and the [bundle](GLOSSARY.md) render services from that file and
+`vecten.toml`, never by importing the extension, because the ship workflow in CI installs only
+`vecten`. A malformed known key is refused naming the extension, the service and the key, for
+example `extension acme-bot: service bot: routes.webhook.path: /_vecten/ is reserved for Vecten`;
+a key this release does not know is reported and ignored.
+
+For an [in-repo extension](#extensions-in-the-project), a declaration is code, so editing it
+makes no lock stale: run `vecten lock` after changing it and commit `extensions.lock.json`
+with the change. `vecten up` compares the declarations of the in-repo extensions installed
+from this checkout with the record, and refuses a difference, naming the service and
+`vecten lock`, before any container starts. Nothing in CI makes that comparison: a commit that changes a declaration without
+`vecten lock` ships the new code with the recorded command, routes and limits.
+
+**Binding a service.** A declared service runs only while `vecten.toml` binds it, and a route
+is served only while its own table is there:
+
+```toml
+[services.acme-bot.bot]        # [services.<extension>.<service>]
+hostname = "bot"               # bot.<domain>; "@" for <domain> itself
+host = "platform"              # the component whose host runs it
+local = true                   # start it under `vecten up`
+memory_mb = 512                # override the declaration's limits
+cpus = 1.0
+
+[services.acme-bot.bot.routes.webhook]
+access = "public"
+
+[services.acme-bot.bot.routes.admin]
+access = "login"
+groups = ["default"]
+allow = ["203.0.113.0/24"]     # optional; deployed hosts only
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `hostname` | none | A DNS label: the service is served at `<label>.<domain>`, `@` meaning the environment's domain itself. Required when a route is bound. `airflow`, `mcp`, `www` and labels starting with `_` are reserved, a label serves one service, and `@` is refused when the domain is the DNS zone itself. |
+| `host` | `platform` when the declaration lists it and the project enables it | One of the declaration's `components` that the project enables, that is, lists under `components` in `vecten.toml`. |
+| `local` | `true` | `false` keeps the service off the laptop. |
+| `memory_mb`, `cpus` | the declaration's | Resource limits, in the declaration's ranges. |
+| `routes.<route>.access` | | `public` (anyone) or `login` (people signed in to the MCP, in one of `groups`); `login` needs the `mcp` component. |
+| `routes.<route>.groups` | | One or more MCP groups, for `login` only. There is no "anyone signed in": name `default`, the group every principal starts in, for that. |
+| `routes.<route>.allow` | `[]` | Networks, as in [`[airflow] allow`](orchestration.md#airflow-in-a-deployed-environment): IPv4 or IPv6, a bare address meaning that address, an address with host bits set under a mask refused. Every other address gets 403. |
+
+A binding that names an extension not listed under `extensions` in `vecten.toml`, a service or route its record does
+not declare, or any value against the rules above, is refused, naming the key, before anything
+starts. [Extension services](services.md) explains what each choice does once deployed.
+
+**What `extension add` writes.** For each declared service the project does not bind yet,
+`extension add` writes a binding from the declaration's suggestions: `hostname` is the
+service's name, or `<extension>-<service>` when that is reserved or taken, numbered when that is
+taken too, and only when a route is bound; `host` only when the service cannot run on
+`platform` in this project; each
+route with its suggested `access` and `groups`. A service whose components the project does not
+enable, and a `login` route in a project without `mcp`, are left unbound with a note. The output
+names what needs a person's eye:
+
+```text
+public, reachable by anyone: acme-bot.bot route webhook
+new hostnames, served after `vecten deploy`: bot.example.com
+```
+
+A service already bound keeps its binding. An upgrade that adds a route, or suggests another
+`access` for a bound route, is only named (`acme-bot.bot route export: declared, not bound`,
+`acme-bot.bot route webhook: bound login, suggested public`), so no route becomes reachable
+without a line in the project's diff. A changed `groups` suggestion is not named; it shows
+only in the diff of `extensions.lock.json`. `vecten next` lists each declared service and route that
+`vecten.toml` does not bind as a `note:` (under `notes` with `--json`); a note asks for nothing,
+since leaving a route unbound can be deliberate.
+
 ## Private package indexes
 
 Set `[packages] private_index = true` in `vecten.toml`, then put the authenticated HTTPS index
@@ -435,7 +589,7 @@ Exactly three Enterprise extensions sit outside this repository:
 
 They use the same public extension points as any third-party package. Setting `[mcp] auth = "saml"` in `vecten.toml` without
 installing its extension fails startup with the backend's name. No SAML implementation is
-bundled. A test in this repository's CI (`scripts/check_extension_wheels.py`) exercises a fixture declaring all ten groups and scans
+bundled. A test in this repository's CI (`scripts/check_extension_wheels.py`) exercises a fixture declaring every group and scans
 shipped Python for prohibited licence-gating and telemetry symbols/imports. This automated
 scan is a regression guard; code review remains necessary for behavior it cannot recognize.
 

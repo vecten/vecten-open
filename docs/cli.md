@@ -19,7 +19,7 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 | `answer` | Record one answer to an `ask` item: intake and deploy answers in `vecten-answers.yml`, where `none` records no cloud account, domain or GitHub account yet; `access.<connector>`, `mcp.*` and `alert_webhook.<env>` land in `vecten.toml`. | v0.1 |
 | `next` | What is missing, in priority order, as `command`, `skill` and `ask` items: the intake questions outside a project, the local loop, deploy and post-deploy items inside one; reads files, run records and git only. | v0.1 |
 | `init` | Render a project from the intake; `--deploy` adds the deploy layer later. On a Snowflake warehouse the platform builds, `--snowflake-account` or the `snowflake_account` answer names its ORGANIZATION-ACCOUNT, which both `deploy/envs/prod.tfvars` and `[warehouse] account` in `vecten.toml` get. | v0.1 |
-| `up` | Start the local stack for the components in `vecten.toml`; on Snowflake it leaves the MCP out, which runs only deployed there. | v0.1 |
+| `up` | Start the local stack for the components in `vecten.toml`, and the [extension services](services.md) it binds; on Snowflake it leaves the MCP out, which runs only deployed there. | v0.1 |
 | `down` | Stop the local stack; `--volumes` also deletes its data. | v0.1 |
 | `guide` | Print the entry skill or a setup guide (`cloud`, `domain`, `github`). | v0.1 |
 | `estimate` | Approximate monthly hosting cost per cloud and tier. | v0.1 |
@@ -94,7 +94,7 @@ commands need an explicit `--env` and the owner's approval.
 
 ### ship
 
-`--env <env>` sends the project's content to every host of a deployed environment, through SSM on AWS, and on Scaleway by uploading each host's bundle and moving the pointer object its VM's watcher pulls, then waiting for the watcher's status object; it polls each component's health URL and rolls a host back when it does not answer healthy (the VM agent rolls back by itself when it fails after switching releases); inside GitHub Actions it ships, from a laptop it dispatches the ship workflow and follows it. On a platform-built Snowflake with the MCP whose identity script is not yet recorded, it refuses from the laptop and ships nothing inside Actions. `--check` reports `bootstrapped` and `deployed` from `vecten.toml` with no cloud credentials. Never runs Terraform.
+`--env <env>` sends the project's content to every host of a deployed environment, through SSM on AWS, and on Scaleway by uploading each host's bundle and moving the pointer object its VM's watcher pulls, then waiting for the watcher's status object; it polls each component's health URL and rolls a host back when it does not answer healthy (the VM agent rolls back by itself when it fails after switching releases); inside GitHub Actions it ships, from a laptop it dispatches the ship workflow and follows it. On a platform-built Snowflake with the MCP whose identity script is not yet recorded, it refuses from the laptop and ships nothing inside Actions. Inside Actions it then reports the state of each [extension service](services.md) the project binds, the routes waiting for `vecten deploy`, and the volumes of services a host no longer runs, in the workflow's log; a service's state never fails the ship. `--check` reports `bootstrapped` and `deployed` from `vecten.toml` with no cloud credentials, and what each host's services reserve. Never runs Terraform.
 
 ### destroy
 
