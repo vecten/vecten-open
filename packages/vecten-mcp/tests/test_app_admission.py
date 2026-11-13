@@ -272,7 +272,14 @@ def test_the_server_computes_admission_when_it_starts():
 def test_access_health_without_bound_apps_keeps_its_shape():
     _, _, access, _ = setup()
     access.model_changed(SOURCES)
-    assert set(access.health()) == {"checked_at", "failures"}
+    assert set(access.health()) == {
+        "checked_at",
+        "failures",
+        "added",
+        "revoked",
+        "drift",
+        "database_future",
+    }
 
 
 def test_only_a_service_principal_is_marked_as_an_app_principal():

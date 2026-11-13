@@ -1087,9 +1087,10 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
 - Terraform signs in as a deploy user with key-pair authentication. Create that user with a
   default role that holds
   CREATE DATABASE, CREATE WAREHOUSE, CREATE ROLE, CREATE USER and MANAGE GRANTS
-  on the account. MANAGE GRANTS lets the first apply set the future grants in `CORE` and
-  `MARTS` through which `ANALYST[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` reads every table dbt builds there.
-  Then store the user's name and private key:
+  on the account. [% if 'mcp' in components %]`ANALYST[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` reads `CORE` and `MARTS` through the
+  default group's grants, which the MCP applies; the module grants it no schema. [% else %]MANAGE GRANTS lets the first apply set the future grants in `CORE` and
+  `MARTS` through which `ANALYST[% if snowflake_shared_account %]_<BASE>_<ENV>[% endif %]` reads every table dbt builds there. [% endif %]Then store
+  the user's name and private key:
   `vecten secret set DEPLOY_SNOWFLAKE_USER --env <env>` and
   `vecten secret set DEPLOY_SNOWFLAKE_PRIVATE_KEY --env <env> < <private key file>`.
   `vecten deploy` refuses while either is missing.
@@ -1219,6 +1220,15 @@ release before installing a newer release.
 Run `vecten dbt-build-local --check` after the update. It tests the model conventions and
 checks that the generated semantic datasets agree with the models. If model definitions
 changed, run without `--check` first, review the regenerated datasets, then check again.
+[% endif %]
+[% if 'mcp' in components %]
+Read the release notes for steps an upgrade needs beyond the update, such as an administrator's
+rerun of `vecten mcp provisioner-script`. The MCP revokes read grants its state does not hold
+from `analyst` and the group roles, in the convention and `raw_` schemas. A deployment whose
+MCP state an earlier release created starts with the setting `reconcile_drift` at `report`:
+read the drift in `vecten issues`, record the grants to keep with `vecten grant`, remove dbt
+`grants:` configs and granting post-hooks, then set it to `revoke` in the admin panel. A
+`SELECT` on a relation that is not a dataset cannot be recorded and is revoked from then on.
 [% endif %]
 Run `vecten mcp validate`, review and commit the changed files. The next local `vecten up`
 uses the installed release's images. A deployed project ships content when changes reach its

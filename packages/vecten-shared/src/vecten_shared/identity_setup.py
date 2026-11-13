@@ -259,12 +259,26 @@ ALTER USER {user} SET AUTHENTICATION POLICY {service};
 """
 
 
+# An install from before the procedures reported a version is version 1.
+ACCESS_VERSION = 2
+
+
 def snowflake_access_helper(names):
     database = names.database.upper()
     provisioner = _name(names.provisioner_role)
     namespace = f"{_ident(database)}.{_ident(names.access_schema)}"
     signature = f"{namespace}.READ_GRANT(VARCHAR,VARCHAR,VARCHAR,BOOLEAN)"
+    report = f"{namespace}.READ_GRANTS(VARCHAR)"
     handler = resources.files("vecten_shared.sql").joinpath("snowflake_access.js").read_text()
+    constants = (
+        f"var database = {_baked(database)};\n"
+        f"var warehouse = {_baked(names.warehouse.upper())};\n"
+        f"var analystRole = {_baked(_name(names.analyst_role))};\n"
+        f"var provisionerRole = {_baked(provisioner)};\n"
+        f"var loaderRole = {_baked(_name(names.loader_role))};\n"
+        f"var suffix = {_baked(names.suffix)};\n"
+        f"var version = {ACCESS_VERSION};\n"
+    )
     metadata_query = _baked(
         f"SELECT COUNT(*) FROM {_ident(database)}.INFORMATION_SCHEMA.TABLES "
         "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?"
@@ -275,12 +289,7 @@ GRANT USAGE ON SCHEMA {namespace} TO ROLE {provisioner};
 CREATE OR REPLACE PROCEDURE {namespace}.READ_GRANT(
   TARGET VARCHAR, SCHEMA_NAME VARCHAR, RELATION_NAME VARCHAR, ENABLED BOOLEAN)
 RETURNS VARCHAR LANGUAGE JAVASCRIPT EXECUTE AS OWNER AS $$
-var database = {_baked(database)};
-var warehouse = {_baked(names.warehouse.upper())};
-var analystRole = {_baked(_name(names.analyst_role))};
-var provisionerRole = {_baked(provisioner)};
-var loaderRole = {_baked(_name(names.loader_role))};
-var suffix = {_baked(names.suffix)};
+{constants}var mode = 'grant';
 {handler}
 $$;
 GRANT USAGE ON PROCEDURE {signature} TO ROLE {provisioner};
@@ -296,6 +305,12 @@ result.next();
 return result.getColumnValue(1) > 0;
 $$;
 GRANT USAGE ON PROCEDURE {namespace}.SOURCE_EXISTS(VARCHAR,VARCHAR) TO ROLE {provisioner};
+CREATE OR REPLACE PROCEDURE {namespace}.READ_GRANTS(TARGET VARCHAR)
+RETURNS VARIANT LANGUAGE JAVASCRIPT EXECUTE AS OWNER AS $$
+{constants}var mode = 'report';
+{handler}
+$$;
+GRANT USAGE ON PROCEDURE {report} TO ROLE {provisioner};
 """
 
 
@@ -324,15 +339,10 @@ SELECT format('CREATE ROLE impersonator LOGIN NOINHERIT PASSWORD %L', :'imperson
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='impersonator') \\gexec
 GRANT analyst TO provisioner WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
 GRANT CONNECT ON DATABASE {_ident(database)} TO analyst, provisioner, impersonator;
-SELECT format('GRANT USAGE ON SCHEMA %I TO analyst, provisioner', nspname)
-FROM pg_namespace WHERE nspname IN ('core','marts') \\gexec
-SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO analyst', nspname)
+SELECT format('GRANT USAGE ON SCHEMA %I TO provisioner', nspname)
 FROM pg_namespace WHERE nspname IN ('core','marts') \\gexec
 SELECT format('GRANT SELECT ON ALL TABLES IN SCHEMA %I TO provisioner WITH GRANT OPTION', nspname)
 FROM pg_namespace WHERE nspname IN ('core','marts') \\gexec
-SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT ON TABLES TO analyst',
-              r.rolname,n.nspname)
-FROM pg_namespace n JOIN pg_roles r ON r.oid=n.nspowner WHERE n.nspname IN ('core','marts') \\gexec
 SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
               'GRANT SELECT ON TABLES TO provisioner WITH GRANT OPTION',
               r.rolname,n.nspname)
@@ -349,18 +359,19 @@ FROM pg_namespace n JOIN pg_roles r ON r.oid=n.nspowner WHERE n.nspname IN ('cor
     analyst, provisioner = _name(names.analyst_role), _name(names.provisioner_role)
     user, integration = _name(names.provisioner_user), _name(names.integration)
     database = _ident(names.database.upper())
+    # The analyst role's reads are the default group's grants in the MCP's state, which its
+    # reconciliation applies; a grant here would undo a revoke made there on every rerun.
     grants = [f"GRANT USAGE ON DATABASE {database} TO ROLE {analyst};"]
     for role in (analyst, provisioner):
         grants.append(f"GRANT USAGE ON WAREHOUSE {_ident(names.warehouse.upper())} TO ROLE {role};")
     for schema in ("CORE", "MARTS"):
         target = f"{database}.{_ident(schema)}"
-        for role in (analyst, provisioner):
-            grants.append(f"GRANT USAGE ON SCHEMA {target} TO ROLE {role};")
-            suffix = " WITH GRANT OPTION" if role == provisioner else ""
-            for shape in ("ALL", "FUTURE"):
-                grants.append(
-                    f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE {role}{suffix};"
-                )
+        grants.append(f"GRANT USAGE ON SCHEMA {target} TO ROLE {provisioner};")
+        for shape in ("ALL", "FUTURE"):
+            grants.append(
+                f"GRANT SELECT ON {shape} TABLES IN SCHEMA {target} TO ROLE {provisioner} "
+                "WITH GRANT OPTION;"
+            )
     data_grants = "\n".join(grants)
     issuer = issuer.rstrip("/")
     shared = bool(names.suffix)

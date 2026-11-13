@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from vecten_shared.sql import setup_sql_path, setup_variables
@@ -306,6 +307,16 @@ def test_warehouse_instance_only(instance):
         c.execute("insert into core.t values (1)")
     with connect("provisioner", "p1", "warehouse") as c:
         c.execute("create role person login password 'pp' in role analyst")
+    with connect("person", "pp", "warehouse") as c:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            c.execute("select x from core.t")
+    # The MCP's reconciliation applies the default group's `core` grant through the helper.
+    with connect("provisioner", "p1", "warehouse") as c:
+        [(function,)] = c.execute(
+            "select function_name from vecten_access.helpers where schema_name = 'core'"
+        ).fetchall()
+        c.execute(f"select vecten_access.{function}('analyst', true, null)")
+        c.commit()
     with connect("person", "pp", "warehouse") as c:
         assert c.execute("select x from core.t").fetchone() == (1,)
 

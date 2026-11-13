@@ -285,6 +285,25 @@ def test_redaction_toggle_is_saved_as_a_boolean(panel):
     assert panel.runtime.state.get("settings", "redact") == {"value": True}
 
 
+def test_reconcile_drift_is_chosen_from_its_two_values(panel):
+    page = panel.http.get("/admin/settings").text
+    assert '<option value="report"' in page and '<option value="revoke"' in page
+    post(
+        panel,
+        "/admin/settings",
+        {"key": "reconcile_drift", "value": "report"},
+        origin="/admin/settings",
+    )
+    assert panel.runtime.state.get("settings", "reconcile_drift") == {"value": "report"}
+    response = post(
+        panel,
+        "/admin/settings",
+        {"key": "reconcile_drift", "value": "ignore"},
+        origin="/admin/settings",
+    )
+    assert response.status_code == 400
+
+
 def test_invalid_setting_is_refused(panel):
     response = post(
         panel, "/admin/settings", {"key": "row_cap", "value": "0"}, origin="/admin/settings"

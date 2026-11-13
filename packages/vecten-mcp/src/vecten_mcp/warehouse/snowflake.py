@@ -1,5 +1,7 @@
 """Snowflake users keep their own credentials; MCP sessions use External OAuth."""
 
+import json
+import re
 from contextlib import contextmanager
 
 from vecten_mcp.warehouse.base import Account, check_account
@@ -7,6 +9,23 @@ from vecten_mcp.warehouse.base import Account, check_account
 
 def quote(name):
     return '"' + name.upper().replace('"', '""') + '"'
+
+
+# What READ_GRANT answers the version call with when it predates the version, or when no
+# such procedure is installed.
+OLD_INSTALL = re.compile(r"not a bounded reader role|does not exist|unknown user-defined", re.I)
+
+
+def name_parts(name):
+    """The parts of a dotted name as SHOW GRANTS prints it. An unquoted part, or a quoted one
+    naming the same upper-case identifier, is in lower case as the state spells it; any other
+    quoted part keeps its quotes, so it never matches a schema or relation of another case."""
+    parts = []
+    for part in re.findall(r'"(?:[^"]|"")*"|[^.]+', name):
+        inner = part[1:-1].replace('""', '"') if part.startswith('"') else part
+        plain = not part.startswith('"') or re.fullmatch(r"[A-Z_][A-Z0-9_$]*", inner)
+        parts.append(inner.lower() if plain else part)
+    return parts
 
 
 class SnowflakeAdapter:
@@ -212,6 +231,57 @@ class SnowflakeAdapter:
     def _access(self):
         return f"{quote(self.database)}.{quote(self.names.access_schema)}"
 
+    def access_version(self):
+        """The installed procedures' version: READ_GRANT reports it when every argument is
+        NULL, and an install from before that refuses the call."""
+        from snowflake.connector.errors import ProgrammingError
+
+        with self.control() as cursor:
+            try:
+                answer = cursor.execute(
+                    f"CALL {self._access()}.READ_GRANT(NULL,NULL,NULL,NULL)"
+                ).fetchone()[0]
+            except ProgrammingError as exc:
+                if OLD_INSTALL.search(str(exc.msg)):
+                    return 1
+                raise
+        match = re.fullmatch(r"vecten-access (\d+)", str(answer))
+        return int(match.group(1)) if match else 1
+
+    def read_grants(self, roles):
+        """`(role, kind, schema, relation, object kind)` for every USAGE, SELECT and future
+        SELECT the roles hold in this database, read through READ_GRANTS; a database-level
+        future grant has no schema."""
+        for role in roles:
+            if role != self.DEFAULT_ROLE:
+                check_account(role)
+        held = set()
+        with self.control() as cursor:
+            for role in sorted(roles):
+                answer = cursor.execute(
+                    f"CALL {self._access()}.READ_GRANTS(%s)",
+                    (self._role(role),),
+                ).fetchone()[0]
+                answer = answer if isinstance(answer, dict) else json.loads(answer)
+                for grant in answer.get("grants", []):
+                    parts = name_parts(grant["name"])
+                    kind = str(grant["granted_on"]).lower()
+                    if parts[0] != self.database.lower():
+                        continue
+                    if grant["privilege"] == "USAGE" and kind == "schema":
+                        held.add((role, "usage", parts[1], None, "schema"))
+                    elif grant["privilege"] == "SELECT" and len(parts) == 3:
+                        held.add((role, "select", parts[1], parts[2], kind))
+                # A database-level future grant (two parts) reaches every schema that holds
+                # no schema-level one; it has no schema of its own.
+                for grant in answer.get("future", []):
+                    parts = name_parts(grant["name"])
+                    kind = str(grant["grant_on"]).lower()
+                    if parts[0] == self.database.lower() and len(parts) in (2, 3):
+                        schema = parts[1] if len(parts) == 3 else None
+                        held.add((role, "future", schema, None, kind))
+        return held
+
     def check_scope(self, registry):
         provisioner = quote(self.names.provisioner_role)
         access = self.database.upper() + "." + self.names.access_schema.upper()
@@ -276,6 +346,7 @@ class SnowflakeAdapter:
                             access + "." + signature
                             for signature in (
                                 "READ_GRANT(VARCHAR,VARCHAR,VARCHAR,BOOLEAN)",
+                                "READ_GRANTS(VARCHAR)",
                                 "SOURCE_EXISTS(VARCHAR,VARCHAR)",
                             )
                         }

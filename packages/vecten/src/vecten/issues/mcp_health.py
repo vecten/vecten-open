@@ -1,6 +1,7 @@
 """The MCP's own health from the admin API: a semantic model that never became ready, grants
-the last reconciliation could not apply, and bound groups an analytics app does not admit. Each
-clears once the MCP reports it fixed."""
+the last reconciliation could not apply or only listed as drift, access procedures older than
+the MCP, and bound groups an analytics app does not admit. Each clears once the MCP reports it
+fixed."""
 
 from __future__ import annotations
 
@@ -54,11 +55,17 @@ def model_issue(ctx: IssueContext, health: dict[str, Any]) -> Issue | None:
 
 def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> Issue:
     group, kind, target = (str(failure.get(k, "?")) for k in ("group", "kind", "target"))
+    if kind != "drift":
+        title = f"Grant of {kind} {target} to {group} failed"
+    elif failure.get("operation") == "read":
+        title = f"Reading the read grants of {group} failed"
+    else:
+        title = f"Revoking {group}'s drift on {target} failed"
     return Issue(
         id=mcp_issue_id("grant", group, kind, target),
         source="mcp",
         kind="ask",
-        title=cap(f"Grant of {kind} {target} to {group} failed", TITLE_LIMIT),
+        title=cap(title, TITLE_LIMIT),
         resolution=(
             f"The warehouse refused to {failure.get('operation', 'apply')} this grant for the "
             "reason in the evidence. A warehouse administrator fixes that cause; then run "
@@ -161,6 +168,53 @@ def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issu
     )
 
 
+def drift_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
+    role, privilege, schema = (str(entry.get(k, "?")) for k in ("role", "privilege", "schema"))
+    relation = entry.get("relation")
+    place = schema + (f".{relation}" if relation else "")
+    parts = [role, privilege, schema, *([str(relation)] if relation else [])]
+    return Issue(
+        id=mcp_issue_id("drift", *parts),
+        source="mcp",
+        kind="ask",
+        title=cap(
+            f"{entry.get('group', '?')}'s role {role} holds {privilege} on {place}", TITLE_LIMIT
+        ),
+        resolution=(
+            "A managed role holds a read grant the MCP's state does not, and reconcile_drift is "
+            "report, or the access procedures cannot revoke its kind, so it was listed and kept. "
+            "Record it as a grant if it is wanted; otherwise set reconcile_drift to revoke in "
+            "the admin panel's settings, and the next reconciliation "
+            f"(`vecten reconcile --env {ctx.env}`) revokes what the procedures can."
+        ),
+        occurrences=1,
+        first_seen=None,
+        last_seen=iso(checked_at),
+        evidence=untrusted(
+            {k: sanitized(ctx, entry.get(k)) for k in ("group", "role", "privilege", "schema")}
+            | {"relation": sanitized(ctx, relation)}
+        ),
+    )
+
+
+def outdated_issue(ctx: IssueContext, outdated: dict[str, Any], checked_at: Any) -> Issue:
+    return Issue(
+        id=mcp_issue_id("access", "procedures"),
+        source="mcp",
+        kind="command",
+        title="The warehouse's access procedures are older than the MCP",
+        resolution=(
+            "Read grants the MCP's state does not hold are neither listed nor revoked until a "
+            f"warehouse administrator runs the SQL `vecten mcp provisioner-script --env {ctx.env}` "
+            "prints, as ACCOUNTADMIN, and the run is confirmed with --confirm-run."
+        ),
+        occurrences=1,
+        first_seen=None,
+        last_seen=iso(checked_at),
+        evidence=untrusted({k: sanitized(ctx, outdated.get(k)) for k in ("installed", "required")}),
+    )
+
+
 def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     if ctx.admin is None:
         raise SourceUnavailable("the admin API is not reachable from here")
@@ -169,10 +223,16 @@ def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     if model is not None:
         issues.append(model)
     access = _read(ctx, "access-health")
+    checked_at = access.get("checked_at")
     for failure in access.get("failures") or []:
         if isinstance(failure, dict):
-            issues.append(grant_issue(ctx, failure, access.get("checked_at")))
+            issues.append(grant_issue(ctx, failure, checked_at))
+    for entry in access.get("drift") or []:
+        if isinstance(entry, dict):
+            issues.append(drift_issue(ctx, entry, checked_at))
+    if isinstance(access.get("outdated"), dict):
+        issues.append(outdated_issue(ctx, access["outdated"], checked_at))
     for entry in access.get("apps") or []:
         if isinstance(entry, dict):
-            issues.append(app_issue(ctx, entry, access.get("checked_at")))
+            issues.append(app_issue(ctx, entry, checked_at))
     return issues

@@ -542,8 +542,8 @@ def test_only_a_git_sources_files_keep_their_executable_bit():
 # sources built them for this project; gzip's own bytes depend on the zlib build, so they are
 # left out. A change meant to alter every bundle updates these.
 UNCHANGED_BUNDLES = {
-    "platform": "180af1df09fe5935a405eef541e06b1b6da8bc3994ced490ad6b0d41aa978fe8",
-    "mcp": "8f60730b5fc247a54aa42dd46f6016b9ba29fd5a3a26fd0d672fa7944dfc6a08",
+    "platform": "1f457fd87595a57a4e24590558a90783c04be6d9592ad209f5972d4552457bc5",
+    "mcp": "bf3f5f6de530b303d29c30b35637111d10872c571b7e5d86dd0860cc78d30c45",
 }
 
 
