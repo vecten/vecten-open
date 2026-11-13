@@ -1,12 +1,23 @@
 """A group's role can be named at creation, and a group can bind a role the client already has,
 which the server prints the statement for, records once it is in place, and never manages."""
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.base import RoleExists
 from vecten_shared.identity_setup import ACCESS_VERSION
+
+_spec = importlib.util.spec_from_file_location(
+    "groups_warehouse_fakes", Path(__file__).with_name("warehouse_fakes.py")
+)
+fakes = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = fakes
+_spec.loader.exec_module(fakes)
 
 
 class Adapter:
@@ -308,14 +319,7 @@ def test_deleting_a_group_whose_revoke_fails_leaves_no_applied_record():
 
 
 def snowflake_service(*, shared_account):
-    from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
-
-    from .test_warehouse_bindings import Cursor, names
-
-    cursor = Cursor([])
-    adapter = SnowflakeAdapter(
-        lambda: cursor, None, None, names=names(shared_account=shared_account)
-    )
+    adapter, cursor = fakes.snowflake([], shared_account=shared_account)
     access = service(adapter)
     access.create_group("finance")
     access.create_group("marketing")
