@@ -1,6 +1,7 @@
 """On the laptop's Postgres, the MCP's state alone owns `analyst`'s reads: a revoke of `marts`
 from the default group survives the next ship, and reconciliation revokes hand-made read
-grants in the convention schemas while leaving every other schema alone.
+grants in the convention schemas while leaving every other schema alone. A dataset grant that
+a dbt rebuild drops comes back as soon as the dbt DAG records the build.
 
 One container and one server for the module; the tests run in file order.
 """
@@ -83,6 +84,7 @@ def stack(tmp_path_factory):
         environ = {"VECTEN_ARTIFACT_DIR": str(root / "artifacts")}
         with served.serve(root, config, pg, monkeypatch, environ=environ) as stack:
             stack.ada = stack.sign_in("ada@example.com")["access_token"]
+            stack.root = root
             yield stack
 
 
@@ -165,4 +167,38 @@ def test_report_mode_lists_a_hand_grant_and_keeps_it(stack):
     assert [(d["privilege"], d["relation"]) for d in health["drift"]] == [("SELECT", "orders")]
     stack.admin(stack.ada, "settings/set", {"key": "reconcile_drift", "value": "revoke"})
     reconcile(stack)
+    assert analyst_reads(stack, "marts")["tables"] == []
+
+
+# dbt-postgres's table materialization: build beside, swap by renames, drop the old relation.
+REBUILD = """
+CREATE TABLE marts.orders__dbt_tmp AS SELECT * FROM marts.orders;
+ALTER TABLE marts.orders RENAME TO orders__dbt_backup;
+ALTER TABLE marts.orders__dbt_tmp RENAME TO orders;
+DROP TABLE marts.orders__dbt_backup;
+"""
+
+
+def sales_reads_orders(stack):
+    return stack.pg.sql("SELECT has_table_privilege('sales', 'marts.orders', 'SELECT')")[0][0]
+
+
+def test_a_dataset_grant_dropped_by_a_rebuild_returns_once_the_build_is_recorded(stack):
+    from vecten_platform.dbt.artifacts import BUILD_FINISHED_KEY, DirectorySink
+
+    stack.admin(stack.ada, "groups/create", {"name": "sales"})
+    stack.admin(stack.ada, "grant", {"group": "sales", "kind": "dataset", "target": "orders"})
+    reconcile(stack)
+    assert sales_reads_orders(stack)
+    stack.pg.sql(REBUILD, user="loader")
+    assert not sales_reads_orders(stack)
+    runtime = stack.runtime
+    # The fifteen-minute schedule is not due, so only the recorded build can reconcile.
+    runtime.last_reconcile = runtime.oauth.clock()
+    runtime.tick()
+    assert not sales_reads_orders(stack)
+    sink = DirectorySink(Path(stack.root) / "artifacts")
+    sink.put_text(BUILD_FINISHED_KEY, "2026-11-12T10:00:00+00:00\n")
+    runtime.tick()
+    assert sales_reads_orders(stack)
     assert analyst_reads(stack, "marts")["tables"] == []

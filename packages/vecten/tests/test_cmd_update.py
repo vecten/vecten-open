@@ -299,3 +299,41 @@ def test_update_renders_the_runbook_for_the_snowflake_layout_vecten_toml_names(
     runbook = (tmp_path / "docs" / "runbook.md").read_text()
     assert "`PROVISIONER_<BASE>_<ENV>`" in runbook
     assert "One environment per Snowflake account" not in runbook
+
+
+COPY_GRANTS = (
+    "  # A rebuilt relation keeps the grants of the one it replaces, in the same statement.\n"
+    "  +copy_grants: true\n"
+)
+
+
+def test_update_adds_copy_grants_to_a_snowflake_project_and_keeps_its_edits(
+    invoke, tmp_path, monkeypatch
+):
+    old = replace(VERSIONS, vecten="0.0.9", terraform_module_ref="v0.0.9")
+    monkeypatch.setattr(params_module, "VERSIONS", old)
+    answers = {"name": "demo", "users": 3, "sources": ["demo"], "warehouse": "snowflake"}
+    render_project(tmp_path, ScaffoldParams.from_answers(answers, {}))
+    monkeypatch.setattr(params_module, "VERSIONS", VERSIONS)
+    # The earlier release rendered dbt_project.yml without the setting.
+    name = "dbt/dbt_project.yml"
+    baseline_path = tmp_path / BASELINE
+    baseline = json.loads(baseline_path.read_text())
+    assert COPY_GRANTS in baseline["files"][name]
+    baseline["files"][name] = baseline["files"][name].replace(COPY_GRANTS, "")
+    baseline_path.write_text(json.dumps(baseline))
+    edited = (
+        baseline["files"][name].replace(
+            "    marts:\n      +schema: marts\n      +materialized: table\n",
+            "    marts:\n      +schema: marts\n      +materialized: view\n",
+        )
+        + "vars:\n  owner: finance\n"
+    )
+    assert edited != baseline["files"][name] + "vars:\n  owner: finance\n"
+    (tmp_path / name).write_text(edited)
+    result = invoke("update", "--json")
+    assert result.exit_code == 0, result.stdout
+    assert name in json.loads(result.stdout)["changed"]
+    assert (tmp_path / name).read_text() == edited.replace(
+        "\nmodels:\n", "\nmodels:\n" + COPY_GRANTS
+    )

@@ -173,6 +173,7 @@ def import_cmd(
                 database=dataset_database(config),
                 model_name=config.project.name.replace("-", "_"),
                 schema=schema,
+                areas=config.areas,
             )
         except GeneratorError as exc:
             lines = "\n".join(f"  {issue.render()}" for issue in exc.issues)

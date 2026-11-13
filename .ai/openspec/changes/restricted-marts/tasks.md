@@ -29,19 +29,19 @@ ship before areas.
 
 ## 2. Grants survive rebuilds
 
-- [ ] 2.1 Scaffold: `+copy_grants: true` in the Snowflake `dbt_project.yml`; `vecten update` merges it into existing projects; emulation profile per 0.4
-- [ ] 2.2 `vecten_convention`: `convention_no_grants` test (any node with `grants`; on Snowflake any model with `copy_grants` false)
-- [ ] 2.3 dbt DAG: write a finish time beside the built commit; the MCP reconciles when it changes (Postgres; harmless on Snowflake)
-- [ ] 2.4 unit: scaffold render and update merge; the convention test's failures and names; the reconcile trigger
-- [ ] 2.5 docker: Postgres dataset grant restored after a dbt rebuild, by the triggered reconciliation
+- [x] 2.1 Scaffold: `+copy_grants: true` in the Snowflake `dbt_project.yml`; `vecten update` merges it into existing projects; emulation profile per 0.4
+- [x] 2.2 `vecten_convention`: `convention_no_grants` test (any node with `grants`; on Snowflake any model with `copy_grants` false)
+- [x] 2.3 dbt DAG: write a finish time beside the built commit; the MCP reconciles when it changes (Postgres; harmless on Snowflake)
+- [x] 2.4 unit: scaffold render and update merge; the convention test's failures and names; the reconcile trigger
+- [x] 2.5 docker: Postgres dataset grant restored after a dbt rebuild, by the triggered reconciliation
 - [ ] 2.6 live: dataset grant on a mart survives `dbt build` on Snowflake with no reconciliation running
 
 ## 3. Restricted areas
 
-- [ ] 3.1 `vecten_shared.config`: `[areas.<name>]` with `access.groups`; name rule `[a-z][a-z0-9]*`; refuse names colliding with a connector's `raw_` source
-- [ ] 3.2 `vecten_convention`: naming, description and primary-key tests treat `core_<area>` as core and `marts_<area>` as marts; the naming test fails undeclared areas; the declared list arrives as a dbt var from `vecten-platform`
-- [ ] 3.3 `vecten_shared.osi.generate`: marts in `marts_<area>` become datasets; `vecten.next.modelling` described layers include areas
-- [ ] 3.4 `docs/schema-convention.md` template: version 2 and the area rules; the `model` skill's rule for `core_<area>`; then `uv run vecten dev render-plugin --repo .` and commit the plugin and `docs/agent-guide.md`
+- [x] 3.1 `vecten_shared.config`: `[areas.<name>]` with `access.groups`; name rule `[a-z][a-z0-9]*`; refuse names colliding with a connector's `raw_` source
+- [x] 3.2 `vecten_convention`: naming, description and primary-key tests treat `core_<area>` as core and `marts_<area>` as marts; the naming test fails undeclared areas; the declared list arrives as a dbt var from `vecten-platform`
+- [x] 3.3 `vecten_shared.osi.generate`: marts in `marts_<area>` become datasets; `vecten.next.modelling` described layers include areas
+- [x] 3.4 `docs/schema-convention.md` template: version 2 and the area rules; the `model` skill's rule for `core_<area>`; then `uv run vecten dev render-plugin --repo .` and commit the plugin and `docs/agent-guide.md`
 - [ ] 3.5 MCP: `AccessService` area grants (kind `area`, two schemas, applied and revoked together), `_source` accepting declared area schemas; admin API, panel and `vecten grant --area`
 - [ ] 3.6 `snowflake_access.js`: area pattern; Postgres helper installer pattern; setup SQL creates declared areas' schemas as `loader` (host config carries the list)
 - [ ] 3.7 `next`: `ask` for missing `access.groups`; post-deploy `command` item seeding the grant; report relations in convention schemas and areas that no model builds
@@ -49,7 +49,7 @@ ship before areas.
 - [ ] 3.9 docker: Postgres: area granted to `finance`, rebuilt mart readable by `finance` and refused for default, with no reconciliation in between
 - [ ] 3.10 live: the same on Snowflake, plus an area built before any grant is unreadable by every group role
 - [ ] 3.11 deploy: declare an area, ship, grant, rebuild on a sandbox of each cloud
-- [ ] 3.12 Glossary: "Restricted area"; "Mart" covers `marts_<area>`
+- [x] 3.12 Glossary: "Restricted area"; "Mart" covers `marts_<area>`
 
 ## 4. Every relation kind
 

@@ -225,6 +225,12 @@ def add_connector(
     check_connector_name(name)
     config = load_config(project_root)
     _require_platform(config)
+    if name in config.areas:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"area {name} is declared in vecten.toml under the same name; an area and a "
+            "connector are named apart, so choose another connector name or rename the area",
+        )
     connector_dir = project_root / "connectors" / name
     if connector_dir.exists():
         raise Failure(

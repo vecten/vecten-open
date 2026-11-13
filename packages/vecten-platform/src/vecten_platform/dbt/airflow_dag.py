@@ -17,11 +17,12 @@ import json
 import logging
 import os
 from collections.abc import Collection, Sequence
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 from vecten_platform.dbt.artifacts import (
+    BUILD_FINISHED_KEY,
     BUILT_COMMIT_KEY,
     artifact_root,
     run_keys,
@@ -34,6 +35,7 @@ from vecten_platform.dbt.runner import (
     CONVENTION_STEP,
     OSI_PATH_VAR,
     DbtRun,
+    area_vars,
     base_env,
     build_args,
     failed_nodes,
@@ -182,11 +184,33 @@ def build_step(
     *,
     full_refresh: bool = False,
 ) -> None:
-    _raise_for_nodes("build", build_args(select, exclude, full_refresh=full_refresh), run_id)
+    args = (*build_args(select, exclude, full_refresh=full_refresh), *_area_vars())
+    try:
+        _raise_for_nodes("build", args, run_id)
+    finally:
+        _record_finished()
+
+
+def _finished_at() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _record_finished() -> None:
+    # On Postgres a replaced relation loses its per-relation grants, whether the build that
+    # replaced it was narrowed or failed later; the MCP reconciles when this time changes.
+    # Without it the MCP's schedule still restores them, so a failed write fails no build.
+    try:
+        sink_from_environ(os.environ).put_text(BUILD_FINISHED_KEY, f"{_finished_at()}\n")
+    except Exception as exc:
+        log.warning("build finish time not recorded in %s: %s", artifact_root(os.environ), exc)
 
 
 def convention_step(run_id: str) -> None:
-    _raise_for_nodes("convention", CONVENTION_STEP, run_id)
+    _raise_for_nodes("convention", (*CONVENTION_STEP, *_area_vars()), run_id)
+
+
+def _area_vars() -> tuple[str, ...]:
+    return area_vars(load_config(Path(runtime().project_root)).areas)
 
 
 def _stale_sources(path: Path) -> list[str]:
@@ -202,7 +226,8 @@ def _stale_sources(path: Path) -> list[str]:
 def freshness_check(run_id: str) -> None:
     """Staleness is recorded in the archived sources.json; only a missing record fails the task."""
     key = run_keys(run_id)["sources"]
-    run = _run_and_archive("freshness", FRESHNESS_STEP, "sources.json", key, FRESHNESS_TARGET)
+    args = (*FRESHNESS_STEP, *_area_vars())
+    run = _run_and_archive("freshness", args, "sources.json", key, FRESHNESS_TARGET)
     produced = target_dir(FRESHNESS_TARGET) / "sources.json"
     if not produced.is_file():
         raise RuntimeError(f"dbt source freshness failed: {failure_detail([], run)}")

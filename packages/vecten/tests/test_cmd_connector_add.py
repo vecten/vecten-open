@@ -634,3 +634,15 @@ def test_add_without_dependencies_never_relocks_a_legacy_project(invoke, project
     r = invoke("connector", "add", "crm", "--from", "rest", "--json")
     assert r.exit_code == 0, r.stdout + r.stderr
     assert calls == []
+
+
+def test_a_connector_named_like_an_area_is_refused_before_anything_is_written(invoke, project):
+    from vecten_shared.config import AreaDecl, load_config, save_config
+
+    save_config(project, load_config(project).model_copy(update={"areas": {"hubspot": AreaDecl()}}))
+    before = (project / "vecten.toml").read_text()
+    result = invoke("connector", "add", "hubspot", "--json")
+    assert result.exit_code == ExitCode.REFUSED, result.stdout
+    assert "area hubspot" in result.stdout
+    assert not (project / "connectors" / "hubspot").exists()
+    assert (project / "vecten.toml").read_text() == before

@@ -18,7 +18,12 @@ from vecten_platform.dbt.airflow_dag import (
     mark_built,
     narrowed,
 )
-from vecten_platform.dbt.artifacts import BUILT_COMMIT_KEY, DirectorySink, run_keys
+from vecten_platform.dbt.artifacts import (
+    BUILD_FINISHED_KEY,
+    BUILT_COMMIT_KEY,
+    DirectorySink,
+    run_keys,
+)
 from vecten_platform.dbt.runner import DbtRun
 from vecten_platform.sync import context
 from vecten_shared.config import VectenConfig, save_config
@@ -141,6 +146,23 @@ def test_the_dag_steps_use_the_selectors_of_the_local_build(project, monkeypatch
     assert local == calls
 
 
+def test_the_dag_steps_pass_the_declared_areas(project, monkeypatch):
+    from vecten_shared.config import AreaDecl, load_config
+
+    config = load_config(project)
+    save_config(project, config.model_copy(update={"areas": {"finance": AreaDecl()}}))
+    sources = {"results": []}
+    calls = fake_dbt(
+        monkeypatch,
+        {"build": (0, results()), "test": (0, results()), "source": (0, sources)},
+    )
+    build_step(RUN_ID)
+    convention_step(RUN_ID)
+    freshness_check(RUN_ID)
+    areas = ["--vars", '{"vecten_areas": ["finance"]}']
+    assert calls == [BUILD_ARGS + areas, CONVENTION_ARGS + areas, ["source", "freshness", *areas]]
+
+
 def test_build_archives_results_and_raises_naming_the_failed_node(project, monkeypatch):
     doc = results(
         ("model.acme.company", "success", None),
@@ -255,6 +277,41 @@ def test_each_step_logs_dbt_output(project, monkeypatch, caplog):
     logged = {(r.levelno, r.getMessage()) for r in caplog.records}
     assert (logging.INFO, "dbt build output:\ndbt build progress") in logged
     assert (logging.WARNING, "dbt build stderr:\ndbt said no") in logged
+
+
+@pytest.mark.parametrize("code", [0, 1])
+def test_every_build_records_when_it_finished_beside_the_built_commit(project, monkeypatch, code):
+    fake_dbt(monkeypatch, {"build": (code, results())})
+    times = iter(["2026-11-12T10:00:00.000001+00:00", "2026-11-12T10:05:00.000002+00:00"])
+    monkeypatch.setattr(airflow_dag, "_finished_at", lambda: next(times))
+    for select in ("", "tag:intraday"):
+        try:
+            build_step(RUN_ID, select)
+        except RuntimeError:
+            assert code
+        finished = sink(project).get_text(BUILD_FINISHED_KEY)
+        assert BUILD_FINISHED_KEY.rsplit("/", 1)[0] == BUILT_COMMIT_KEY.rsplit("/", 1)[0]
+        # A narrowed or failed build has still replaced relations, so each one records a new time.
+        assert finished == (
+            "2026-11-12T10:00:00.000001+00:00\n"
+            if not select
+            else "2026-11-12T10:05:00.000002+00:00\n"
+        )
+    assert sink(project).get_text(BUILT_COMMIT_KEY) is None
+
+
+def test_an_unwritable_finish_time_leaves_the_build_result_alone(project, monkeypatch, caplog):
+    fake_dbt(monkeypatch, {"build": (0, results())})
+
+    class Refusing(DirectorySink):
+        def put_text(self, key, text):
+            raise OSError("read-only file system")
+
+    monkeypatch.setattr(airflow_dag, "sink_from_environ", lambda environ: Refusing(Path("/")))
+    monkeypatch.setattr(airflow_dag, "_archive", lambda key, path: None)
+    with caplog.at_level(logging.WARNING):
+        build_step(RUN_ID)
+    assert "build finish time not recorded" in caplog.text
 
 
 def test_mark_built_writes_the_bundle_commit(project, monkeypatch):

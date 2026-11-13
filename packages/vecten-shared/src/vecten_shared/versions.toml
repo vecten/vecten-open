@@ -65,8 +65,8 @@ create_github_app_token = "actions/create-github-app-token@64ab729a6294000f5aa4a
 playwright_image = "mcr.microsoft.com/playwright/python:v1.64.1-noble@sha256:330d401ae23c905896a0c26c66c36fc971b621519e7b11b435a8328d7bf6e031"
 
 [dbt_packages]
-vecten_convention = "0.1.0"
+vecten_convention = "0.2.0"
 
 [specs]
 ossie = "0.1.1"
-schema_convention = 1
+schema_convention = 2

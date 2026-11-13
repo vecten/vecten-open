@@ -85,6 +85,20 @@ def test_run_build_is_two_steps(monkeypatch, tmp_path):
     assert len(runs) == 2
 
 
+def test_run_build_passes_the_declared_areas_to_both_steps(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(args, *, project_dir, env, capture=True):
+        calls.append(args)
+        return runner.DbtRun(0, "", "")
+
+    monkeypatch.setattr(runner, "run_dbt", fake_run)
+    runner.run_build(project_dir=tmp_path, env={}, in_process=False, areas={"payroll", "finance"})
+    expected = ["--vars", '{"vecten_areas": ["finance", "payroll"]}']
+    assert [call[-2:] for call in calls] == [expected, expected]
+    assert runner.area_vars([]) == ()
+
+
 def test_run_build_stops_after_a_failed_build(monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "run_dbt", lambda args, **kw: runner.DbtRun(1, "boom", ""))
     runs = runner.run_build(project_dir=tmp_path, env={}, in_process=False)

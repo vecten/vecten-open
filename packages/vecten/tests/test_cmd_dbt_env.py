@@ -549,3 +549,31 @@ def test_the_prod_run_uses_the_target_its_check_parsed(invoke, snowflake, monkey
     assert result.exit_code == 3, result.stderr
     (run,) = snowflake["runs"]
     assert run["env"]["DBT_TARGET"] == "local" and "DBT_ENGINE_TARGET" not in run["env"]
+
+
+def test_prod_passes_the_declared_areas_to_the_run_and_its_check(invoke, snowflake):
+    from vecten_shared.config import AreaDecl, load_config, save_config
+
+    root = snowflake["root"]
+    save_config(root, load_config(root).model_copy(update={"areas": {"finance": AreaDecl()}}))
+    result = invoke("dbt", "--env", "prod", "test")
+    assert result.exit_code == 3, result.stderr
+    areas = ["--vars", '{"vecten_areas": ["finance"]}']
+    assert snowflake["runs"][0]["args"] == ["test", *areas]
+    assert snowflake["parses"][0]["args"] == ["parse", *areas]
+
+
+CONVENTION_HOOK = {
+    "unique_id": "operation.vecten_convention.vecten_convention-on-run-start-0",
+    "resource_type": "operation",
+    "name": "vecten_convention-on-run-start-0",
+    "package_name": "vecten_convention",
+    "config": {},
+}
+
+
+def test_prod_runs_beside_the_convention_packages_grants_check(invoke, snowflake):
+    snowflake["manifest"]["doc"] = _manifest(CONVENTION_HOOK, PLAIN_TEST)
+    result = invoke("dbt", "--env", "prod", "test")
+    assert result.exit_code == 3, result.stderr
+    assert len(snowflake["runs"]) == 1

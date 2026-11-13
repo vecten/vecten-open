@@ -23,6 +23,10 @@ from vecten_shared.versions import VERSIONS
 
 from .scaffold_matrix import DEPLOY, LOCAL, MATRIX, label
 
+COPY_GRANTS = (
+    "  # A rebuilt relation keeps the grants of the one it replaces, in the same statement.\n"
+    "  +copy_grants: true\n"
+)
 SKILL_REFERENCE = re.compile(r"skills/([^/\s`]+)/SKILL\.md")
 BASE_PATHS = [
     "orchestration/docker-compose.override.yml",
@@ -42,6 +46,7 @@ CONVENTION_SECTIONS = [
     "Schemas",
     "Model names",
     "Layers",
+    "Restricted areas",
     "Descriptions and keys",
     "Identity macros",
     "Time",
@@ -123,9 +128,10 @@ def test_render_layout(tmp_path, params):
         assert f"reboot-db-instance --db-instance-identifier <prefix>-{holder}`" in runbook
         assert "-backend-config=encrypt=true" in runbook
     convention = (target / "docs" / "schema-convention.md").read_text()
-    assert convention.startswith("# Schema convention, version 1\n")
+    assert convention.startswith(f"# Schema convention, version {VERSIONS.schema_convention}\n")
+    assert VERSIONS.schema_convention == 2
     assert f"Apache Ossie {VERSIONS.ossie_spec}" in convention
-    assert len(convention.splitlines()) < 120
+    assert len(convention.splitlines()) < 150
     headings = re.findall(r"^## (.+)$", convention, re.M)
     assert headings == CONVENTION_SECTIONS
     platform = "platform" in params.components
@@ -226,6 +232,22 @@ def test_rendered_dbt_project_delegates_schema_names_to_the_convention(tmp_path)
     assert project["snapshots"]["acme"]["+schema"] == "snapshots"
     macro = (dbt_dir / "macros" / "generate_schema_name.sql").read_text()
     assert "vecten_convention.generate_schema_name(custom_schema_name, node)" in macro
+
+
+def test_snowflake_models_keep_their_grants_across_rebuilds(tmp_path):
+    texts = {}
+    for warehouse in ("postgres", "snowflake"):
+        params = ScaffoldParams.from_answers(
+            {"name": "acme", "users": 3, "sources": ["hubspot"], "warehouse": warehouse}, {}
+        )
+        render_project(tmp_path / warehouse, params)
+        texts[warehouse] = (tmp_path / warehouse / "dbt" / "dbt_project.yml").read_text()
+    assert yaml.safe_load(texts["snowflake"])["models"]["+copy_grants"] is True
+    # A Postgres project renders exactly as before; Snowflake adds the setting only.
+    assert "copy_grants" not in texts["postgres"]
+    assert texts["snowflake"] == texts["postgres"].replace(
+        "\nmodels:\n", "\nmodels:\n" + COPY_GRANTS
+    )
 
 
 @pytest.mark.parametrize("warehouse", ["postgres", "snowflake"])

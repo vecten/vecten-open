@@ -18,7 +18,9 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Dataset**: a named, described relation available to the semantic model; generated datasets correspond to dbt marts.
 
-**Mart**: a model in the `marts` warehouse schema, shaped for a business question or reporting use.
+**Mart**: a model in the `marts` warehouse schema, or in a restricted area's `marts_<area>`, shaped for a business question or reporting use.
+
+**Restricted area**: a pair of schemas, `core_<area>` and `marts_<area>`, declared in `vecten.toml` as `[areas.<area>]`, that no warehouse role reads until an admin grants the area to a group, which then reads both; see [the warehouse guide](warehouse.md#modelling).
 
 **Convention / `vecten_convention`**: Vecten's versioned naming, description and key rules, plus the dbt package that tests them.
 

@@ -26,6 +26,7 @@ from vecten_shared.apps import APP_CREDENTIAL, principal_name
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
 from vecten_shared.declarations import is_toml_time, secret_problem
 from vecten_shared.names import (
+    area_name_problem,
     connector_name_problem,
     env_name_problem,
     group_name_problem,
@@ -331,6 +332,13 @@ class ConnectorDecl(Strict):
         return value
 
 
+class AreaDecl(Strict):
+    """A restricted area: the schemas `core_<name>` and `marts_<name>`, which no role reads
+    until an admin grants the area to a group."""
+
+    access: AccessDecl | None = None
+
+
 # Cloud identifiers land in tfvars, workflow variables and API paths.
 _CLOUD_ID_KEY = re.compile(r"[a-z][a-z0-9_]{0,31}")
 _CLOUD_ID_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
@@ -475,6 +483,7 @@ class VectenConfig(Strict):
     mcp: McpSection = Field(default_factory=McpSection)
     airflow: AirflowSection = Field(default_factory=AirflowSection)
     connectors: list[ConnectorDecl] = Field(default_factory=list)
+    areas: dict[str, AreaDecl] = Field(default_factory=dict)
     dependencies: DependenciesSection = Field(default_factory=DependenciesSection)
     # Secret names the project's own DAGs and MCP code read, delivered like an extension's.
     secrets: list[str] = Field(default_factory=list)
@@ -492,6 +501,24 @@ class VectenConfig(Strict):
         for env in value:
             _checked(env_name_problem(env), env)
         return value
+
+    @field_validator("areas")
+    @classmethod
+    def _area_names(cls, value: dict[str, AreaDecl]) -> dict[str, AreaDecl]:
+        for name in value:
+            _checked(area_name_problem(name), name)
+        return value
+
+    @model_validator(mode="after")
+    def _areas_apart_from_connectors(self) -> VectenConfig:
+        # The access answers, the panel and `next` name an area and a connector the same way.
+        for connector in self.connectors:
+            if connector.name in self.areas:
+                raise ValueError(
+                    f"area {connector.name} shares its name with the connector that loads "
+                    f"raw_{connector.name}; choose another area name"
+                )
+        return self
 
     @model_validator(mode="after")
     def _shared_account_needs_the_snowflake_root(self) -> VectenConfig:
@@ -712,8 +739,17 @@ def _plain(item: Any) -> Any:
 def save_config(project_root: Path, config: VectenConfig) -> None:
     import tomlkit
 
+    # A command that adds to a loaded configuration builds it with model_copy, which skips the
+    # validators; what fails them would make every later command refuse the file.
+    try:
+        VectenConfig.model_validate(config.model_dump(mode="json"))
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        loc = ".".join(str(p) for p in first["loc"])
+        where = f"{loc}: " if loc else ""
+        raise Failure(ExitCode.CONFIG, f"{CONFIG_FILE} not saved: {where}{first['msg']}") from None
     data = config.model_dump(mode="json", exclude_none=True)
-    for optional in ("dependencies", "secrets", "settings", "services", "apps"):
+    for optional in ("dependencies", "secrets", "settings", "services", "apps", "areas"):
         if not data.get(optional):
             data.pop(optional, None)
     path = project_root / CONFIG_FILE
