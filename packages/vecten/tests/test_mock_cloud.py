@@ -13,7 +13,7 @@ from vecten.github import gh as gh_mod
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import _REGISTRY
 
-from .deploy_fixtures import COMMIT, FakeGit, render_aws, set_facts
+from .deploy_fixtures import COMMIT, FakeGh, FakeGit, render_aws, set_facts
 
 MOCK_DIR = Path(__file__).parent / "fixtures" / "mock_cloud"
 
@@ -85,6 +85,7 @@ def test_ship_inside_actions_places_one_release_per_host_without_terraform(
     monkeypatch.setenv("VECTEN_TERRAFORM_RUNNER", f"{__name__}:RecordingTerraform")
     RecordingTerraform.created = 0
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
     result = invoke("ship", "--env", "prod", "--json")
     assert result.exit_code == 0, result.stdout
     assert json.loads(result.stdout)["hosts"] == ["mcp", "platform"]

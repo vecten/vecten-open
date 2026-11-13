@@ -369,6 +369,178 @@ def default_branch(gh: ToolRunner, project_root: Path, repository: str) -> str:
     return repository_facts(gh, project_root, repository)[1]
 
 
+SHIP_CONTEXT_PREFIX = "vecten/ship/"
+SHIP_STATES = ("pending", "success", "failure")
+SHIP_STATUS_DESCRIPTIONS = {
+    "pending": "vecten is shipping this commit",
+    "success": "every host answered its health poll",
+    "failure": "the ship failed; the hosts kept or restored their previous bundle",
+}
+STATUS_ATTEMPTS = 3
+STATUS_RETRY_SECONDS = 5
+# How far back the default branch's history is searched for an environment's last ship.
+SHIPPED_SEARCH_LIMIT = 200
+_HISTORY_PAGE = 100
+_SHIPPED_QUERY = """
+query($owner: String!, $name: String!, $branch: String!, $context: String!, $first: Int!,
+      $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    ref(qualifiedName: $branch) {
+      target {
+        ... on Commit {
+          history(first: $first, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { oid status { context(name: $context) { state createdAt } } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def ship_context(env: str) -> str:
+    return f"{SHIP_CONTEXT_PREFIX}{env}"
+
+
+def set_ship_status(
+    gh: ToolRunner,
+    project_root: Path,
+    repository: str,
+    commit: str,
+    env: str,
+    state: str,
+    *,
+    target_url: str | None = None,
+) -> None:
+    """Set `vecten/ship/<env>` on `commit`; the job's token needs `statuses: write`."""
+    if state not in SHIP_STATES:
+        raise Failure(ExitCode.INTERNAL, f"{state!r} is not a ship status")
+    path = f"repos/{repository}/statuses/{commit}"
+    args = [
+        "api",
+        "-X",
+        "POST",
+        path,
+        "-f",
+        f"state={state}",
+        "-f",
+        f"context={ship_context(env)}",
+        "-f",
+        f"description={SHIP_STATUS_DESCRIPTIONS[state]}",
+    ]
+    if target_url:
+        args += ["-f", f"target_url={target_url}"]
+    result = _status_call(gh, project_root, args)
+    if result.returncode != 0:
+        raise Failure(
+            ExitCode.TOOL_FAILED,
+            f"gh api POST {path} failed: {result.stderr.strip()[-300:]}; the job that ships "
+            "needs the `statuses: write` permission",
+        )
+
+
+def _status_call(
+    gh: ToolRunner, project_root: Path, args: list[str]
+) -> subprocess.CompletedProcess:
+    """Run a status call up to `STATUS_ATTEMPTS` times; its last result."""
+    for attempt in range(1, STATUS_ATTEMPTS + 1):
+        result = gh.run(args, project_root)
+        if result.returncode == 0:
+            return result
+        status = _http_status(result)
+        # Only GitHub's own trouble or a lost connection is worth another try.
+        if status is not None and status < 500 and status != 429:
+            break
+        if attempt < STATUS_ATTEMPTS:
+            sleep(STATUS_RETRY_SECONDS * attempt)
+    return result
+
+
+def ship_status(
+    gh: ToolRunner, project_root: Path, repository: str, commit: str, env: str
+) -> str | None:
+    """The latest `vecten/ship/<env>` state on `commit`, or None when it carries none."""
+    path = f"repos/{repository}/commits/{commit}/status?per_page=100"
+    result = _status_call(gh, project_root, ["api", path])
+    if result.returncode != 0:
+        raise Failure(
+            ExitCode.TOOL_FAILED, f"gh api GET {path} failed: {result.stderr.strip()[-300:]}"
+        )
+    body = _json(result, f"api GET {path}")
+    statuses = body.get("statuses") if isinstance(body, dict) else None
+    # The combined status holds the latest status of each context only.
+    for status in statuses or []:
+        if isinstance(status, dict) and status.get("context") == ship_context(env):
+            return str(status.get("state"))
+    return None
+
+
+def last_shipped(
+    gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
+) -> str | None:
+    """The commit among `branch`'s last `SHIPPED_SEARCH_LIMIT` whose `vecten/ship/<env>`
+    `success` was set last, or None.
+
+    Time, not the commit's place in history, decides: a promotion with `--commit` ships an
+    older commit after a newer one, and the hosts then run the older one. A ship that rolled
+    back leaves `failure` on its commit, so the answer is then the commit the hosts went back
+    to.
+    """
+    found = shipped_at(gh, project_root, repository, branch, env)
+    return found[0] if found else None
+
+
+def shipped_at(
+    gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
+) -> tuple[str, str] | None:
+    """`last_shipped`'s commit with the time its `success` status was set."""
+    owner, name = repository.split("/", 1)
+    cursor: str | None = None
+    newest: tuple[str, str] | None = None
+    for start in range(0, SHIPPED_SEARCH_LIMIT, _HISTORY_PAGE):
+        args = [
+            "api",
+            "graphql",
+            "-f",
+            f"query={_SHIPPED_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "-f",
+            f"branch=refs/heads/{branch}",
+            "-f",
+            f"context={ship_context(env)}",
+            "-F",
+            f"first={min(_HISTORY_PAGE, SHIPPED_SEARCH_LIMIT - start)}",
+        ]
+        if cursor:
+            args += ["-f", f"cursor={cursor}"]
+        body = _json(_gh(gh, project_root, *args, what="api graphql"), "api graphql")
+        try:
+            history = body["data"]["repository"]["ref"]["target"]["history"]
+            nodes = history["nodes"]
+            page = history["pageInfo"]
+        except KeyError, TypeError:
+            raise Failure(
+                ExitCode.TOOL_FAILED,
+                f"gh api graphql named no history for {branch} of {repository}",
+            ) from None
+        for node in nodes:
+            context = (node.get("status") or {}).get("context") or {}
+            created = str(context.get("createdAt") or "")
+            if str(context.get("state")).lower() == "success" and created:
+                # GitHub's ISO 8601 UTC times sort as text.
+                if newest is None or created > newest[1]:
+                    newest = (str(node["oid"]), created)
+        if not page.get("hasNextPage"):
+            break
+        cursor = page.get("endCursor")
+    return newest
+
+
 def _created(run: dict) -> datetime:
     return datetime.fromisoformat(str(run["createdAt"]).replace("Z", "+00:00"))
 
@@ -476,12 +648,20 @@ def follow_push_run(
 
 
 def dispatch_and_follow(
-    project_root: Path, workflow: str, env: str, gh: ToolRunner, git: ToolRunner
+    project_root: Path,
+    workflow: str,
+    env: str,
+    gh: ToolRunner,
+    git: ToolRunner,
+    *,
+    commit: str | None = None,
 ) -> dict:
     """Run `workflow` on the default branch for `env` and wait for its conclusion.
 
-    The result's `matches_local_head` says whether the run built this checkout's HEAD; the
-    workflow always runs the default branch as GitHub holds it.
+    The workflow always runs the default branch as GitHub holds it. With `commit` it ships
+    that commit, which the result names as `commit`; the run's `head_sha` stays the default
+    branch's. The result's `matches_local_head` says whether the run's head is this
+    checkout's HEAD.
     """
     config = load_config(project_root)
     if config.deploy is None:
@@ -502,6 +682,7 @@ def dispatch_and_follow(
         branch,
         "-f",
         f"environment={env}",
+        *(["-f", f"commit={commit}"] if commit else []),
         "--repo",
         repository,
     )
@@ -510,7 +691,7 @@ def dispatch_and_follow(
     url, head_sha, conclusion = _follow(
         gh, project_root, repository, workflow, run, f"{workflow} for {env}"
     )
-    return {
+    followed = {
         "run_id": run_id,
         "head_sha": head_sha,
         "conclusion": conclusion,
@@ -518,3 +699,4 @@ def dispatch_and_follow(
         "branch": branch,
         "matches_local_head": head_sha == head_commit(git, project_root),
     }
+    return {**followed, "commit": commit} if commit else followed
