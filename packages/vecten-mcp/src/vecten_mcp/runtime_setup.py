@@ -21,7 +21,7 @@ from vecten_mcp.warehouse.pool import PrincipalPools
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import get_provider
+from vecten_shared.provider import get_provider, snowflake_names
 from vecten_shared.provider.runtime import RUNTIME_WRITABLE
 from vecten_shared.records import write_text_atomic
 
@@ -165,6 +165,33 @@ def state_url(spec, password, cloud):
     )
 
 
+def snowflake_adapter(config, env, secrets, keys, connect=None):
+    """The Snowflake adapter: the provisioner's control connection and people's sessions,
+    each signing in with the environment's names."""
+    if connect is None:
+        import snowflake.connector
+
+        connect = snowflake.connector.connect
+    names = snowflake_names(config, env)
+
+    def provisioner():
+        return connect(
+            account=names.account,
+            user=names.provisioner_user,
+            role=names.provisioner_role,
+            private_key=provisioner_key(secrets),
+            database=names.database,
+            warehouse=names.warehouse,
+        )
+
+    return SnowflakeAdapter(
+        provisioner,
+        connect,
+        lambda **kwargs: keys.snowflake_token(**kwargs, audience=names.audience),
+        names=names,
+    )
+
+
 def configured_runtime(root, config, extensions):
     import psycopg
 
@@ -233,33 +260,7 @@ def configured_runtime(root, config, extensions):
             lambda: connect("impersonator", "MCP_IMPERSONATOR_PASSWORD"),
         )
     else:
-        import snowflake.connector
-
-        from vecten_shared.provider import snowflake_names
-
-        names = snowflake_names(config, env)
-        account = config.warehouse.account
-
-        def provisioner():
-            return snowflake.connector.connect(
-                account=account,
-                user="VECTEN_PROVISIONER",
-                role="PROVISIONER",
-                private_key=provisioner_key(secrets),
-                database=names.database,
-                warehouse=names.warehouse,
-            )
-
-        adapter = SnowflakeAdapter(
-            provisioner,
-            snowflake.connector.connect,
-            lambda **kwargs: keys.snowflake_token(
-                **kwargs, audience="https://" + account + ".snowflakecomputing.com"
-            ),
-            account=account,
-            database=names.database,
-            warehouse=names.warehouse,
-        )
+        adapter = snowflake_adapter(config, env, secrets, keys)
     pools = PrincipalPools(adapter, max_connections=int(os.environ.get("VECTEN_MCP_POOL_CAP", "2")))
     oauth = OAuthService(
         state, keys, issuer, backend, admins=config.mcp.admins, revoke_session=pools.revoke_session

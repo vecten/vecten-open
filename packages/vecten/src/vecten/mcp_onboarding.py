@@ -102,16 +102,13 @@ def setup_script(root, env, confirm=False, public_key=None):
         public_key = public_body(
             load_private_key(_local_key_pair(root, PROVISIONER_KEY), PROVISIONER_KEY)
         )
-    snowflake = snowflake_names(config, env) if config.warehouse.kind == "snowflake" else None
+    snowflake = config.warehouse.kind == "snowflake"
     sql = provisioner_script(
         config.warehouse.kind,
-        database=(
-            snowflake.database if snowflake else config.warehouse.database or config.project.name
-        ),
         issuer=issuer,
-        account=config.warehouse.account,
+        database=None if snowflake else config.warehouse.database or config.project.name,
         public_key=public_key,
-        warehouse=snowflake.warehouse if snowflake else None,
+        names=snowflake_names(config, env) if snowflake else None,
     )
     commands.insert(0, f"vecten mcp provisioner-script{flag} --confirm-run")
     return {"env": env, "sql": sql, "commands": commands, "confirmed": False}

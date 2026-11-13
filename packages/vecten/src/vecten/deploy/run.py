@@ -385,7 +385,7 @@ def _deploy(
             "deployed_commit": deployed,
         }
         if identity_pending(recorded, env):
-            result["ship_skipped"] = identity_pending_note(env)
+            result["ship_skipped"] = identity_pending_note(recorded, env)
         if warnings:
             result["warnings"] = warnings
         return result
@@ -402,7 +402,7 @@ def _deploy(
         "commit": commit,
     }
     if identity_pending(config, env):
-        return {**data, "hosts": [], "ship_skipped": identity_pending_note(env)}
+        return {**data, "hosts": [], "ship_skipped": identity_pending_note(config, env)}
     hosts = plane.ship_hosts(project_root, config, env, outputs, commit)
     report = _services_after_ship(plane, project_root, config, outputs)
     return {**data, "hosts": hosts, **report}
@@ -437,7 +437,7 @@ def ship_env(
     # finishes green with nothing shipped, so the push that records the confirmation ships.
     pending = identity_pending(config, env)
     if pending and not in_actions():
-        raise Failure(ExitCode.PREREQUISITE, identity_pending_note(env))
+        raise Failure(ExitCode.PREREQUISITE, identity_pending_note(config, env))
     if not in_actions():
         if gh is None:
             raise Failure(ExitCode.INTERNAL, "dispatching the ship workflow needs the gh runner")
@@ -449,7 +449,7 @@ def ship_env(
     commit = head_commit(git, project_root)
     if pending:
         data = {"env": env, "dispatched": False, "commit": commit, "hosts": []}
-        return {**data, "ship_skipped": identity_pending_note(env)}
+        return {**data, "ship_skipped": identity_pending_note(config, env)}
     outputs = fetch_outputs(plane)
     hosts = plane.ship_hosts(project_root, config, env, outputs, commit)
     report = _services_after_ship(plane, project_root, config, outputs)
@@ -567,8 +567,8 @@ def _clear_state_facts(config: VectenConfig, env: str) -> list[str]:
     """Reset the facts a new deploy must walk again; the names of those that held a value.
 
     On a Snowflake root the MCP's identity needs the administrator's script again: the
-    `PROVISIONER` role it grants either went with `--delete-data` or still owns accounts
-    the new `state` does not know.
+    provisioner role it grants either went with `--delete-data` or still owns accounts the
+    new `state` does not know.
     """
     facts = config.environments[env]
     names = list(STATE_FACTS)

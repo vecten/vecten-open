@@ -5,15 +5,151 @@ mock_provider "snowflake" {
   }
 }
 
+# The fixed names every environment deployed before shared accounts carries.
 variables {
-  environment       = "prod"
-  project_name      = "acme"
-  size              = "small"
-  components        = ["platform", "mcp"]
-  account           = "ACME-PROD"
-  database_name     = "ACME"
-  warehouse_name    = "ACME_PROD_WH"
-  loader_public_key = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\nMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo\n-----END PUBLIC KEY-----\n"
+  environment           = "prod"
+  project_name          = "acme"
+  size                  = "small"
+  components            = ["platform", "mcp"]
+  account               = "ACME-PROD"
+  database_name         = "ACME"
+  warehouse_name        = "ACME_PROD_WH"
+  analyst_role_name     = "ANALYST"
+  loader_role_name      = "LOADER"
+  loader_user_name      = "LOADER"
+  provisioner_role_name = "PROVISIONER"
+  loader_public_key     = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A\nMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo\n-----END PUBLIC KEY-----\n"
+}
+
+# An existing deployment plans no change only if every address and name stays as it is.
+run "fixed_names_keep_every_address_and_name" {
+  command = plan
+
+  assert {
+    condition     = { for key, role in snowflake_account_role.this : key => role.name } == { ANALYST = "ANALYST", LOADER = "LOADER", PROVISIONER = "PROVISIONER" }
+    error_message = "the roles stay at snowflake_account_role.this[\"ANALYST\"|\"LOADER\"|\"PROVISIONER\"], each named its key"
+  }
+  assert {
+    condition     = snowflake_service_user.loader.name == "LOADER" && snowflake_service_user.loader.default_role == "LOADER"
+    error_message = "the loader stays the LOADER service user acting as LOADER"
+  }
+  assert {
+    condition     = toset(keys(snowflake_grant_account_role.sysadmin)) == toset(["ANALYST", "LOADER", "PROVISIONER"]) && toset(keys(snowflake_grant_account_role.deployer)) == toset(["ANALYST", "LOADER", "PROVISIONER"])
+    error_message = "the role grants stay keyed by today's role names"
+  }
+  assert {
+    condition     = toset(keys(snowflake_grant_privileges_to_account_role.warehouse)) == toset(["ANALYST", "LOADER", "PROVISIONER"]) && toset(keys(snowflake_grant_privileges_to_account_role.database)) == toset(["ANALYST", "LOADER", "PROVISIONER"])
+    error_message = "the warehouse and database grants stay keyed by today's role names"
+  }
+  assert {
+    condition     = alltrue([for key, grant in snowflake_grant_privileges_to_account_role.warehouse : grant.account_role_name == key]) && alltrue([for key, grant in snowflake_grant_privileges_to_account_role.database : grant.account_role_name == key])
+    error_message = "every grant goes to the role its key names"
+  }
+  assert {
+    condition     = alltrue([for g in snowflake_grant_privileges_to_account_role.analyst_schema : g.account_role_name == "ANALYST"]) && toset([for g in snowflake_grant_ownership.schema : g.account_role_name]) == toset(["LOADER"])
+    error_message = "ANALYST reads core and marts and LOADER owns the schemas, as before"
+  }
+  assert {
+    condition     = alltrue([for r in concat(values(snowflake_account_role.this), [snowflake_database.this, snowflake_warehouse.this, snowflake_service_user.loader], values(snowflake_schema.convention)) : r.comment == "vecten acme prod in ACME-PROD"])
+    error_message = "every object keeps its comment"
+  }
+}
+
+run "a_shared_account_names_every_role_and_the_loader_from_the_variables" {
+  command = plan
+
+  variables {
+    environment           = "dev"
+    account               = "ACME-SHARED"
+    database_name         = "ACME_DEV"
+    warehouse_name        = "ACME_DEV_WH"
+    analyst_role_name     = "ANALYST_ACME_DEV"
+    loader_role_name      = "LOADER_ACME_DEV"
+    loader_user_name      = "LOADER_ACME_DEV"
+    provisioner_role_name = "PROVISIONER_ACME_DEV"
+  }
+
+  assert {
+    condition     = { for key, role in snowflake_account_role.this : key => role.name } == { ANALYST = "ANALYST_ACME_DEV", LOADER = "LOADER_ACME_DEV", PROVISIONER = "PROVISIONER_ACME_DEV" }
+    error_message = "each role takes its variable's name, at its purpose's address"
+  }
+  assert {
+    condition     = snowflake_service_user.loader.name == "LOADER_ACME_DEV" && snowflake_service_user.loader.default_role == "LOADER_ACME_DEV" && snowflake_service_user.loader.default_warehouse == "ACME_DEV_WH"
+    error_message = "the loader user takes its variable's name and acts as the loader role"
+  }
+  assert {
+    condition     = snowflake_grant_account_role.loader_user.role_name == "LOADER_ACME_DEV" && snowflake_grant_account_role.loader_user.user_name == "LOADER_ACME_DEV"
+    error_message = "the loader user holds the loader role"
+  }
+  assert {
+    condition     = toset([for g in snowflake_grant_ownership.schema : g.account_role_name]) == toset(["LOADER_ACME_DEV"]) && toset([for g in snowflake_grant_ownership.schema : g.on[0].object_name]) == toset(["\"ACME_DEV\".\"STAGING\"", "\"ACME_DEV\".\"SNAPSHOTS\"", "\"ACME_DEV\".\"CORE\"", "\"ACME_DEV\".\"MARTS\""])
+    error_message = "the loader role owns the environment's schemas"
+  }
+  assert {
+    condition     = alltrue([for g in snowflake_grant_privileges_to_account_role.analyst_schema : g.account_role_name == "ANALYST_ACME_DEV"]) && alltrue([for g in snowflake_grant_privileges_to_account_role.analyst_future : g.account_role_name == "ANALYST_ACME_DEV"])
+    error_message = "the analyst role reads core and marts"
+  }
+  assert {
+    condition     = toset([for g in snowflake_grant_privileges_to_account_role.database : g.account_role_name]) == toset(["ANALYST_ACME_DEV", "LOADER_ACME_DEV", "PROVISIONER_ACME_DEV"])
+    error_message = "the database grants go to the suffixed roles"
+  }
+  assert {
+    condition     = alltrue([for r in concat(values(snowflake_account_role.this), [snowflake_database.this, snowflake_warehouse.this, snowflake_service_user.loader], values(snowflake_schema.convention)) : startswith(r.comment, "vecten acme dev")])
+    error_message = "every object carries the vecten <project> <env> comment"
+  }
+}
+
+run "shared_dev" {
+  command = plan
+
+  variables {
+    environment           = "dev"
+    account               = "ACME-SHARED"
+    database_name         = "ACME_DEV"
+    warehouse_name        = "ACME_DEV_WH"
+    analyst_role_name     = "ANALYST_ACME_DEV"
+    loader_role_name      = "LOADER_ACME_DEV"
+    loader_user_name      = "LOADER_ACME_DEV"
+    provisioner_role_name = "PROVISIONER_ACME_DEV"
+  }
+}
+
+run "shared_prod_shares_no_name_with_shared_dev" {
+  command = plan
+
+  variables {
+    environment           = "prod"
+    account               = "ACME-SHARED"
+    database_name         = "ACME_PROD"
+    warehouse_name        = "ACME_PROD_WH"
+    analyst_role_name     = "ANALYST_ACME_PROD"
+    loader_role_name      = "LOADER_ACME_PROD"
+    loader_user_name      = "LOADER_ACME_PROD"
+    provisioner_role_name = "PROVISIONER_ACME_PROD"
+  }
+
+  # The loader user carries the loader role's name, so disjoint roles keep the users apart.
+  assert {
+    condition     = snowflake_service_user.loader.name == var.loader_role_name
+    error_message = "the loader user carries the loader role's name"
+  }
+  assert {
+    condition = length(setintersection(
+      toset(concat([output.database, output.warehouse], output.roles)),
+      toset(concat([run.shared_dev.database, run.shared_dev.warehouse], run.shared_dev.roles)),
+    )) == 0
+    error_message = "two environments in one account share no database, warehouse, role or loader user"
+  }
+}
+
+run "a_role_name_that_is_no_unquoted_identifier_is_refused" {
+  command = plan
+
+  variables {
+    analyst_role_name = "analyst"
+  }
+
+  expect_failures = [var.analyst_role_name]
 }
 
 run "both_components_build_three_roles_four_schemas_and_a_suspending_warehouse" {

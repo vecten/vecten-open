@@ -231,7 +231,7 @@ def _progress(line: str) -> None:
     print(line, file=sys.stderr, flush=True)
 
 
-def _destroy_message(data: dict) -> str:
+def _destroy_message(data: dict, provisioner_role: str | None) -> str:
     # The snapshot identifiers were printed as progress before Terraform ran.
     lines = []
     if data["data_deleted"]:
@@ -260,9 +260,10 @@ def _destroy_message(data: dict) -> str:
         )
     if data["snowflake"] == "kept" and "provisioner_script_run" in data["facts_cleared"]:
         lines.append(
-            "the users and roles PROVISIONER created stay in Snowflake, and the MCP refuses to "
-            "start beside ones its new state does not know; before the next deploy, restore "
-            f"the state snapshot, or run `vecten mcp provisioner-script --env {data['env']}`, "
+            f"the users and roles {provisioner_role} created stay in Snowflake, and the MCP "
+            "refuses to start beside ones its new state does not know; before the next deploy, "
+            "restore the state snapshot, or run "
+            f"`vecten mcp provisioner-script --env {data['env']}`, "
             "whose last query prints a DROP for each"
         )
     if data["facts_cleared"]:
@@ -323,7 +324,13 @@ def destroy(
             terraform=get_terraform(),
             notify=_progress,
         )
-        return Result(data=data, message=_destroy_message(data))
+        provisioner_role = None
+        if data["snowflake"] == "kept":
+            from vecten_shared.config import load_config
+            from vecten_shared.provider import snowflake_names
+
+            provisioner_role = snowflake_names(load_config(root), env).provisioner_role
+        return Result(data=data, message=_destroy_message(data, provisioner_role))
 
     run_command(json_output, run)
 

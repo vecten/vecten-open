@@ -10,12 +10,18 @@ def quote(name):
 
 
 class SnowflakeAdapter:
-    def __init__(
-        self, provisioner_connect, query_connect, mint_token, *, account, database, warehouse
-    ):
+    def __init__(self, provisioner_connect, query_connect, mint_token, *, names):
         self.provisioner_connect, self.query_connect = provisioner_connect, query_connect
         self.mint_token = mint_token
-        self.account, self.database, self.warehouse = account, database, warehouse
+        self.names = names
+        self.account, self.database, self.warehouse = names.account, names.database, names.warehouse
+
+    # The registry's name of the default group's role, which both warehouses seed.
+    DEFAULT_ROLE = "analyst"
+
+    def _role(self, role):
+        """The Snowflake role a registry role name stands for."""
+        return self.names.analyst_role if role == self.DEFAULT_ROLE else role.upper()
 
     @contextmanager
     def control(self):
@@ -70,7 +76,7 @@ class SnowflakeAdapter:
         with self.control() as cursor:
             return bool(
                 cursor.execute(
-                    f'CALL {quote(self.database)}."VECTEN_ACCESS".SOURCE_EXISTS(%s,%s)',
+                    f"CALL {self._access()}.SOURCE_EXISTS(%s,%s)",
                     (name("db", "PUBLIC"), name("this", "")),
                 ).fetchone()[0]
             )
@@ -96,7 +102,7 @@ class SnowflakeAdapter:
 
     def connect_principal(self, principal, roles, expires_at):
         check_account(principal["warehouse_name"])
-        roles = {r.upper() for r in roles}
+        roles = {self._role(r) for r in roles}
         if not roles:
             raise ValueError("principal has no warehouse group role")
         token = self.mint_token(
@@ -131,7 +137,7 @@ class SnowflakeAdapter:
         check_account(name)
         verb, direction = ("GRANT", "TO") if grant else ("REVOKE", "FROM")
         with self.control() as cursor:
-            cursor.execute(f"{verb} ROLE {quote(role)} {direction} USER {quote(name)}")
+            cursor.execute(f"{verb} ROLE {quote(self._role(role))} {direction} USER {quote(name)}")
 
     def dataset_grant(self, role, source, grant=True):
         parts = source.split(".")
@@ -147,17 +153,22 @@ class SnowflakeAdapter:
         self._grant(role, schema, None, grant)
 
     def _grant(self, role, schema, relation, grant):
-        if role != "analyst":
+        if role != self.DEFAULT_ROLE:
             check_account(role)
         with self.control() as cursor:
             cursor.execute(
-                f'CALL {quote(self.database)}."VECTEN_ACCESS".READ_GRANT(%s,%s,%s,%s)',
-                (role.upper(), schema.upper(), relation.upper() if relation else None, grant),
+                f"CALL {self._access()}.READ_GRANT(%s,%s,%s,%s)",
+                (self._role(role), schema.upper(), relation.upper() if relation else None, grant),
             )
 
+    def _access(self):
+        return f"{quote(self.database)}.{quote(self.names.access_schema)}"
+
     def check_scope(self, registry):
+        provisioner = quote(self.names.provisioner_role)
+        access = self.database.upper() + "." + self.names.access_schema.upper()
         with self.control() as cursor:
-            rows = cursor.execute("SHOW GRANTS TO ROLE PROVISIONER").fetchall()
+            rows = cursor.execute(f"SHOW GRANTS TO ROLE {provisioner}").fetchall()
             columns = [c[0].lower() for c in cursor.description]
             for row in rows:
                 grant = dict(zip(columns, row, strict=True))
@@ -167,7 +178,7 @@ class SnowflakeAdapter:
                     or (
                         kind == "ROLE"
                         and (
-                            name.lower() == "analyst"
+                            name.upper() == self.names.analyst_role.upper()
                             or (
                                 isinstance(registry, dict)
                                 and registry.get(name.lower(), {}).get("kind") == "group"
@@ -193,10 +204,8 @@ class SnowflakeAdapter:
                         kind == "SCHEMA"
                         and privilege == "USAGE"
                         and name.upper()
-                        in {
-                            self.database.upper() + "." + schema
-                            for schema in ("CORE", "MARTS", "VECTEN_ACCESS")
-                        }
+                        in {self.database.upper() + "." + schema for schema in ("CORE", "MARTS")}
+                        | {access}
                     )
                     or (
                         kind == "PROCEDURE"
@@ -204,7 +213,7 @@ class SnowflakeAdapter:
                         and str(grant.get("grant_option")).lower() == "false"
                         and name.upper().replace(" ", "")
                         in {
-                            self.database.upper() + ".VECTEN_ACCESS." + signature
+                            access + "." + signature
                             for signature in (
                                 "READ_GRANT(VARCHAR,VARCHAR,VARCHAR,BOOLEAN)",
                                 "SOURCE_EXISTS(VARCHAR,VARCHAR)",
@@ -219,7 +228,7 @@ class SnowflakeAdapter:
                 )
                 if not valid:
                     raise ValueError(f"provisioner has unexpected grant {privilege} on {name}")
-            rows = cursor.execute("SHOW FUTURE GRANTS TO ROLE PROVISIONER").fetchall()
+            rows = cursor.execute(f"SHOW FUTURE GRANTS TO ROLE {provisioner}").fetchall()
             columns = [c[0].lower() for c in cursor.description]
             for row in rows:
                 grant = dict(zip(columns, row, strict=True))
