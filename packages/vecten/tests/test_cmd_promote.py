@@ -1,6 +1,7 @@
 """`vecten promote`: ship a later environment a commit the environment before it shipped."""
 
 import json
+import shutil
 
 import pytest
 
@@ -260,3 +261,49 @@ def test_promote_refuses_a_private_git_source_without_a_ci_credential(invoke, pr
     error = doc(r)["error"]
     assert name in error and "VECTEN_GIT_CREDENTIALS" in error
     assert gh.named("workflow", "run") == []
+
+
+NO_GIT_CREDENTIAL = {"secret": ["OTHER"], "variable --env prod": ["VECTEN_AWS_ROLE_ARN"]}
+
+
+@pytest.mark.parametrize("command", ["promote", "deploy"])
+def test_a_private_source_only_the_head_adds_needs_no_ci_credential(
+    invoke, project, monkeypatch, tmp_path, command
+):
+    from .test_cmd_ship import _private_git_source
+
+    shipped = tmp_path / "at-shipped"
+    shutil.copytree(project, shipped)
+    _private_git_source(project)
+    gh = use(
+        monkeypatch,
+        FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}, listed=NO_GIT_CREDENTIAL),
+        FakeGit(head=HEAD, shown=shipped),
+    )
+    r = invoke(command, "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    [dispatch] = gh.named("workflow", "run")
+    assert f"commit={SHIPPED}" in dispatch
+
+
+@pytest.mark.parametrize("command", ["promote", "deploy"])
+def test_a_private_source_of_the_promoted_commit_needs_a_ci_credential(
+    invoke, project, monkeypatch, tmp_path, command
+):
+    from .test_cmd_ship import _private_git_source
+
+    shipped = tmp_path / "at-shipped"
+    shutil.copytree(project, shipped)
+    name = _private_git_source(shipped)
+    git = FakeGit(head=HEAD, shown=shipped)
+    gh = use(
+        monkeypatch,
+        FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}, listed=NO_GIT_CREDENTIAL),
+        git,
+    )
+    r = invoke(command, "--env", "prod", "--json")
+    assert r.exit_code == 3, r.stdout
+    error = doc(r)["error"]
+    assert name in error and "VECTEN_GIT_CREDENTIALS" in error
+    assert gh.named("workflow", "run") == []
+    assert ["show", f"{SHIPPED}:extensions.lock.json"] in git.calls

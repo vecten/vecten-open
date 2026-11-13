@@ -37,11 +37,13 @@ from vecten_shared.config import (
     promotion_scaffold_problem,
     save_config,
 )
+from vecten_shared.extension_record import RECORD_FILE, Extension, parse_record
 from vecten_shared.names import env_name_problem
 from vecten_shared.output import ExitCode, Failure
 
 __all__ = [
     "SHIPPED_SEARCH_LIMIT",
+    "CommitFiles",
     "HeadFacts",
     "previous_in",
     "read_head_facts",
@@ -50,6 +52,7 @@ __all__ = [
     "newest_shipped",
     "promoted_tree",
     "promotion_order",
+    "read_commit_files",
     "require_shipped_by",
     "ship_context",
 ]
@@ -223,3 +226,36 @@ def promoted_tree(
         finally:
             git.run(["worktree", "remove", "--force", str(tree)], project_root)
             git.run(["worktree", "prune"], project_root)
+
+
+@dataclass
+class CommitFiles:
+    """The files a dispatched run reads from the commit it ships: its `vecten.toml`, holding
+    the head's environment facts as `promoted_tree` gives them, and its extension record."""
+
+    config: VectenConfig
+    record: dict[str, Extension]
+
+
+def read_commit_files(
+    git: ToolRunner, project_root: Path, commit: str, facts: dict[str, EnvironmentFacts]
+) -> CommitFiles:
+    """`vecten.toml` and the extension record of `commit`, which this checkout holds, with
+    `facts` as the environment facts; an unreadable record reads as none, as a checkout's."""
+    where = f"{CONFIG_FILE} at commit {commit[:8]}"
+    text = _git(git, project_root, "show", f"{commit}:{CONFIG_FILE}")
+    try:
+        config = VectenConfig.model_validate(tomllib.loads(text))
+    except tomllib.TOMLDecodeError as exc:
+        raise Failure(ExitCode.CONFIG, f"{where}: {exc}") from None
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        loc = ".".join(str(p) for p in first["loc"])
+        raise Failure(ExitCode.CONFIG, f"{where}: {loc}: {first['msg']}") from None
+    config.environments.clear()
+    config.environments.update({env: found.model_copy(deep=True) for env, found in facts.items()})
+    # git read the commit's vecten.toml, so a failed read of the record means the commit holds
+    # none.
+    shown = git.run(["show", f"{commit}:{RECORD_FILE}"], project_root)
+    record = parse_record(shown.stdout) if shown.returncode == 0 else None
+    return CommitFiles(config, record or {})
