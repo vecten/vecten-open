@@ -14,7 +14,8 @@ from vecten_mcp.identity import warehouse_name
 from vecten_mcp.state import groups, memberships
 
 logger = logging.getLogger(__name__)
-# Records kind: app principal id -> {"roles": the warehouse roles granted to it}.
+# Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
+# the last sync failure until a sync succeeds}.
 APP_ROLES = "app_roles"
 
 
@@ -47,7 +48,7 @@ class AccessService:
     def sync_app_roles(self, principal_id):
         """Grants an app principal, in the warehouse, the roles of its groups that its app
         admits and revokes the others, so its inherited roles never exceed what admitted
-        viewers may read. APP_ROLES records the roles granted."""
+        viewers may read. APP_ROLES records every role it may hold."""
         principal = self.state.principal(principal_id)
         if principal is None or self.apps is None:
             return
@@ -63,28 +64,37 @@ class AccessService:
             else {self.state.group(g)["warehouse_role"] for g in groups}
         )
         name = principal["warehouse_name"]
-        # A role leaves this superset only once its revoke succeeds.
+        # A role leaves this superset only once its revoke succeeds, and the failure marker
+        # only once every grant and revoke has succeeded.
         recorded = held | wanted
-        self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded)})
+        failed = {"failed": record["failed"]} if record and record.get("failed") else {}
+
+        def save(**marker):
+            self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded), **marker})
+
+        save(**failed)
         try:
-            for role in sorted(wanted - held):
+            # The record names a role before its grant is confirmed, so every wanted role is
+            # granted again; both warehouses accept a grant the account already holds.
+            for role in sorted(wanted):
                 self.adapter.membership(role, name, True)
             for role in sorted(held - wanted):
                 self.adapter.membership(role, name, False)
                 recorded.discard(role)
-                self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded)})
+                save(**failed)
         except Exception as exc:
-            failure = {"at": time.time(), "error": describe_error(exc)}
-            self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded), "failed": failure})
+            save(failed={"at": time.time(), "error": describe_error(exc)})
             raise
         finally:
             if wanted != held:
                 self.invalidate(principal_id)
+        if failed:
+            save()
 
     def app_role_health(self):
-        """Access-health entries for app principals whose warehouse roles may exceed their
-        admitted groups': a role sync that failed, and roles the warehouse reports beyond
-        them, such as one an administrator granted by hand."""
+        """Access-health entries for app principals whose warehouse roles may differ from
+        their admitted groups': a role sync that failed, and roles the warehouse reports
+        beyond them, such as one an administrator granted by hand."""
         entries = []
         for principal_id, _ in self.state.scan(APP_PRINCIPALS):
             principal = self.state.principal(principal_id)
@@ -105,9 +115,10 @@ class AccessService:
                         "error": failed.get("error"),
                         "message": (
                             f"the MCP could not set {name}'s warehouse roles to those of the "
-                            f"groups {app.key} admits ({failed.get('error')}); app queries are "
-                            "refused on Postgres until it succeeds. It retries at every "
-                            "reconciliation; `vecten reconcile --env <env>` retries now"
+                            f"groups {app.key} admits ({failed.get('error')}); until it "
+                            "succeeds app queries may miss an admitted group's data, and are "
+                            "refused on Postgres while a role to revoke remains. It retries "
+                            "at every reconciliation; `vecten reconcile --env <env>` retries now"
                         ),
                     }
                 )

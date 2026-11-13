@@ -336,9 +336,12 @@ reads everything its groups can. Review who uses it, then run `vecten app connec
 Admission is computed now. Once the gate is merged, it admits a person at an app's hostname
 only through these groups.
 
-Access health also lists an app principal whose warehouse roles may exceed its admitted
-groups': a role sync that failed (`vecten reconcile --env <env>` retries it) and roles the
-warehouse reports beyond them (a warehouse administrator revokes those).
+Access health also lists an app principal whose warehouse roles may differ from its admitted
+groups': a role sync that failed and roles the warehouse reports beyond them (a warehouse
+administrator revokes those). After a failed sync the app may miss an admitted group's data,
+or, on Postgres, have its queries refused while a role to revoke remains. Every reconciliation
+grants each admitted group's role again and retries each revoke; `vecten reconcile --env <env>`
+retries now.
 
 An app principal whose groups differ from its app's binding, as after the binding changed, is
 an access-health entry too. `vecten app connect <extension>.<app> --env <env> --groups-only`

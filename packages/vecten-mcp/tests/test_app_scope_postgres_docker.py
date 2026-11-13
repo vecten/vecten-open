@@ -230,6 +230,24 @@ def test_a_bound_group_the_app_does_not_admit_never_feeds_its_queries(stack):
     assert rows(sql(stack, "SELECT sum(amount) FROM marts.orders")) == [["100"]]
 
 
+def test_a_sync_grants_a_role_the_principal_already_holds_again_without_error(stack):
+    from vecten_mcp.access import APP_ROLES
+
+    access, principal_id = stack.runtime.access, stack.principal["id"]
+    for _ in range(2):
+        access.sync_app_roles(principal_id)
+    assert access.held_roles(principal_id) == {"analyst"}
+    assert "failed" not in stack.runtime.state.get(APP_ROLES, principal_id)
+    grants = stack.pg.sql(
+        "SELECT count(*) FROM pg_catalog.pg_auth_members m"
+        " JOIN pg_catalog.pg_roles r ON r.oid = m.roleid"
+        " JOIN pg_catalog.pg_roles u ON u.oid = m.member"
+        " WHERE r.rolname = 'analyst' AND u.rolname = %s",
+        params=(stack.principal["warehouse_name"],),
+    )
+    assert grants == [(1,)]
+
+
 def extra_roles(stack):
     health = stack.admin(stack.ada, "access-health")["data"]
     return [

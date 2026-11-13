@@ -505,6 +505,59 @@ def test_a_role_whose_revoke_failed_stays_recorded_and_is_revoked_later(apps, mo
     assert access.held_roles(pid) == {"analyst"}
 
 
+def failing_grant(apps, monkeypatch, role, failures):
+    """The first `failures` grants of `role` to the app principal fail; returns the grant
+    attempts of `role`."""
+    adapter, attempts = apps.adapter, []
+    original = adapter.membership
+
+    def membership(target, name, grant=True):
+        if target == role and grant and name == "svc_app_overview":
+            attempts.append(target)
+            if len(attempts) <= failures:
+                raise RuntimeError("warehouse unavailable")
+        return original(target, name, grant)
+
+    monkeypatch.setattr(adapter, "membership", membership)
+    return attempts
+
+
+def sync_failure(apps, pid):
+    from vecten_mcp.access import APP_ROLES
+
+    return (apps.runtime.state.get(APP_ROLES, pid) or {}).get("failed")
+
+
+def test_a_grant_that_failed_is_retried_until_it_succeeds(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    attempts = failing_grant(apps, monkeypatch, "sales", failures=2)
+    admit_only(apps, "default", "sales")
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            access.sync_app_roles(pid)
+        assert sync_failure(apps, pid) is not None
+    access.sync_app_roles(pid)
+    assert len(attempts) == 3
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", True)
+    assert sync_failure(apps, pid) is None
+    assert access.held_roles(pid) == {"analyst", "sales"}
+
+
+def test_a_role_whose_grant_failed_is_revoked_once_it_is_not_wanted(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    failing_grant(apps, monkeypatch, "sales", failures=1)
+    admit_only(apps, "default", "sales")
+    with pytest.raises(RuntimeError):
+        access.sync_app_roles(pid)
+    admit_only(apps, "default")
+    access.sync_app_roles(pid)
+    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", False)
+    assert access.held_roles(pid) == {"analyst"}
+    assert sync_failure(apps, pid) is None
+
+
 def test_a_failed_role_sync_during_admission_is_logged(apps, monkeypatch, caplog):
     connected(apps)
     failing_revoke(apps, monkeypatch, "analyst")

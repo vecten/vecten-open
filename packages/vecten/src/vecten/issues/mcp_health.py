@@ -86,9 +86,10 @@ def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issu
         group = f"{name} roles"
         title = f"The MCP could not set the warehouse roles of {name}"
         resolution = (
-            f"{name}, the principal of {app}, may still hold {roles}: setting its roles to "
+            f"{name}, the principal of {app}, may hold some of {roles}: setting its roles to "
             f"those of the groups {app} admits failed ({entry.get('error', 'unknown error')}). "
-            "Its queries are refused on Postgres until it succeeds. The MCP retries at every "
+            "Until it succeeds its queries may miss an admitted group's data, and are refused "
+            "on Postgres while a role to revoke remains. The MCP retries at every "
             f"reconciliation; `vecten reconcile --env {ctx.env}` retries now."
         )
     elif reason == "warehouse roles beyond the admitted groups":
