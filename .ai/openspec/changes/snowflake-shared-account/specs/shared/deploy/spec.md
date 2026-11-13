@@ -2,7 +2,7 @@
 
 ### Requirement: Snowflake layout per environment
 
-A Snowflake project SHALL choose, through `[warehouse] shared_account` in `vecten.toml`, whether its environments' Snowflake accounts may hold anything besides one environment; it SHALL default to `false`. `deploy` SHALL record the value an environment was first deployed with under `[environments.<env>]` as `snowflake_shared_account`, read an environment with no record as deployed with `false`, and refuse, naming the recorded value and the migration, an environment whose record differs from the setting, unless the setting is `true` and the recorded fixed environment's account holds no other environment of the project. `shared_account` SHALL be refused on a project without the `platform` component.
+A Snowflake project SHALL choose, through `[warehouse] shared_account` in `vecten.toml`, whether its environments' Snowflake accounts may hold anything besides one environment; it SHALL default to `false`. `deploy` SHALL record the value an environment was first deployed with under `[environments.<env>]` as `snowflake_shared_account`, read an environment with no record as deployed with `false`, and refuse in `deploy` and `ship`, naming the recorded value and the migration, an environment whose record differs from the setting, unless the setting is `true` and the recorded fixed environment's account holds no other environment of the project. `shared_account` SHALL be refused on a project without the `platform` component.
 
 #### Scenario: Default
 
@@ -44,12 +44,17 @@ Without a shared account the database SHALL be `[warehouse] database` or the pro
 
 ### Requirement: Suffixed Snowflake names in a shared account
 
-With a shared account, where `BASE` is `[warehouse] database` or the project name and `ENV` the environment's name, both upper case with hyphens as underscores, the database SHALL be `<BASE>_<ENV>`, the warehouse `<BASE>_<ENV>_WH`, the procedures' schema `<BASE>_<ENV>.VECTEN_ACCESS` and the authentication policy `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`, and every account-level name SHALL end in the environment's suffix `_<BASE>_<ENV>`: the roles `ANALYST_<BASE>_<ENV>`, `LOADER_<BASE>_<ENV>` and `PROVISIONER_<BASE>_<ENV>`, the users `LOADER_<BASE>_<ENV>` and `PROVISIONER_<BASE>_<ENV>`, the integration `EXTERNAL_OAUTH_<BASE>_<ENV>`, a group's role `<GROUP>_<BASE>_<ENV>` and a principal's user `<WAREHOUSE NAME>_<BASE>_<ENV>`. `deploy` SHALL refuse an environment name holding a hyphen and a suffix longer than 64 characters.
+With a shared account, where `BASE` is `[warehouse] database` or the project name and `ENV` the environment's name, both upper case with hyphens as underscores, the database SHALL be `<BASE>_<ENV>`, the warehouse `<BASE>_<ENV>_WH`, the procedures' schema `<BASE>_<ENV>.VECTEN_ACCESS` and the authentication policy `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`, and every account-level name SHALL end in the environment's suffix `_<BASE>_<ENV>`: the roles `ANALYST_<BASE>_<ENV>`, `LOADER_<BASE>_<ENV>` and `PROVISIONER_<BASE>_<ENV>`, the users `LOADER_<BASE>_<ENV>` and `PROVISIONER_<BASE>_<ENV>`, the integration `EXTERNAL_OAUTH_<BASE>_<ENV>`, a group's role `<GROUP>_<BASE>_<ENV>` and a principal's user `<WAREHOUSE NAME>_<BASE>_<ENV>`. `deploy` SHALL refuse an environment name holding a hyphen and a suffix longer than 64 characters. `deploy` SHALL record the `BASE` a shared environment was first deployed with under `[environments.<env>]` as `snowflake_base`; the environment's names SHALL keep that `BASE`, and `deploy` and `ship`, its `--check` included, SHALL refuse the environment while `[warehouse] database` or the project name gives another, before any Terraform runs, any workflow is dispatched or any host is shipped.
 
 #### Scenario: Names in a shared account
 
 - **WHEN** the names are derived for project `acme`, environment `dev`, with a shared account
 - **THEN** the database is `ACME_DEV`, the warehouse `ACME_DEV_WH`, the roles `ANALYST_ACME_DEV`, `LOADER_ACME_DEV` and `PROVISIONER_ACME_DEV`, the users `LOADER_ACME_DEV` and `PROVISIONER_ACME_DEV`, and the integration `EXTERNAL_OAUTH_ACME_DEV`
+
+#### Scenario: Base changed after the first deploy
+
+- **WHEN** `prod` was first deployed with a shared account and `[warehouse] database = "acme"`, `database` is then set to `lake`, and a push runs the ship workflow
+- **THEN** `ship --env prod --check` exits non-zero naming `ACME` and `LAKE`, no host is shipped, and `deploy --env prod` refuses the same way; the environment's names still end in `_ACME_PROD`
 
 #### Scenario: Environment name with a hyphen
 

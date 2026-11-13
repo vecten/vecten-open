@@ -94,6 +94,10 @@ def test_render_layout(tmp_path, params):
     snowflake_root = params.warehouse == "snowflake" and "platform" in params.components
     assert ("### Snowflake" in runbook) is (params.render_deploy and snowflake_root)
     assert (DEPLOY_ROLE_PRIVILEGES in runbook) is (params.render_deploy and snowflake_root)
+    # In a shared account another environment's integration reaches a deploy user without
+    # a key-pair-only policy.
+    deploy_policy = "SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN" in runbook
+    assert deploy_policy is (params.render_deploy and snowflake_root)
     identity = "`vecten mcp provisioner-script --env <env>`, which stores" in runbook
     assert identity is (params.render_deploy and snowflake_root and "mcp" in params.components)
     managed_warehouse = params.warehouse == "postgres" and "platform" in params.components
@@ -316,7 +320,9 @@ def test_snowflake_root_takes_the_provider_from_the_environment_and_names_by_var
     provider = re.search(r'^provider "snowflake" \{\n(.*?)^\}', main, re.M | re.S)
     assert provider
     assert provider.group(1).strip() == (
-        'preview_features_enabled = ["snowflake_current_role_datasource"]'
+        'preview_features_enabled = ["snowflake_current_role_datasource", '
+        '"snowflake_authentication_policy_resource", '
+        '"snowflake_user_authentication_policy_attachment_resource"]'
     )
     assert f'version = "~> {VERSIONS.terraform_snowflake_provider}.0"' in main
     assert f"vecten-open.git//terraform/snowflake?ref={params.terraform_module_ref}" in main
@@ -329,6 +335,7 @@ def test_snowflake_root_takes_the_provider_from_the_environment_and_names_by_var
         "provisioner_role_name",
         "warehouse_size",
         "loader_public_key",
+        "loader_sign_in",
     ):
         assert re.search(rf"^\s*{name}\s*=\s*var\.{name}\s*$", main, re.M), name
         assert f'variable "{name}"' in (root / "variables.tf").read_text(), name

@@ -21,7 +21,7 @@ from vecten_mcp.warehouse.pool import PrincipalPools
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import get_provider, snowflake_names
+from vecten_shared.provider import get_provider, shipped_account, snowflake_names
 from vecten_shared.provider.runtime import RUNTIME_WRITABLE
 from vecten_shared.records import write_text_atomic
 
@@ -172,7 +172,7 @@ def snowflake_adapter(config, env, secrets, keys, connect=None):
         import snowflake.connector
 
         connect = snowflake.connector.connect
-    names = snowflake_names(config, env)
+    names = snowflake_names(config, env, account=shipped_account())
 
     def provisioner():
         return connect(

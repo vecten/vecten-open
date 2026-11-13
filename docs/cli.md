@@ -18,7 +18,7 @@ runs it again after every step; the [agentic flow](agentic-flow.md) page explain
 |---|---|---|
 | `answer` | Record one answer to an `ask` item: intake and deploy answers in `vecten-answers.yml`, where `none` records no cloud account, domain or GitHub account yet; `access.<connector>`, `mcp.*` and `alert_webhook.<env>` land in `vecten.toml`. | v0.1 |
 | `next` | What is missing, in priority order, as `command`, `skill` and `ask` items: the intake questions outside a project, the local loop, deploy and post-deploy items inside one; reads files, run records and git only. | v0.1 |
-| `init` | Render a project from the intake; `--deploy` adds the deploy layer later. On a Snowflake warehouse the platform builds, `--snowflake-account` or the `snowflake_account` answer names its ORGANIZATION-ACCOUNT, which both `deploy/envs/prod.tfvars` and `[warehouse] account` in `vecten.toml` get. | v0.1 |
+| `init` | Render a project from the intake; `--deploy` adds the deploy layer later. On a Snowflake warehouse the platform builds, `--snowflake-account` or the `snowflake_account` answer names its ORGANIZATION-ACCOUNT, which both `deploy/envs/prod.tfvars` and `[warehouse] account` in `vecten.toml` get, and the `snowflake_shared_account` answer sets `[warehouse] shared_account` until an environment has deployed. | v0.1 |
 | `up` | Start the local stack for the components in `vecten.toml`, and the [extension services](services.md) it binds; on Snowflake it leaves the MCP out, which runs only deployed there. | v0.1 |
 | `down` | Stop the local stack; `--volumes` also deletes its data. | v0.1 |
 | `guide` | Print the entry skill or a setup guide (`cloud`, `domain`, `github`). | v0.1 |

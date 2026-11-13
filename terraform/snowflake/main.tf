@@ -89,6 +89,33 @@ resource "snowflake_service_user" "loader" {
   ])
 }
 
+# A shared account holds other environments' External OAuth integrations, each of which
+# accepts a token for any user it is not kept from; the policy keeps the loader to its key.
+resource "snowflake_schema" "sign_in" {
+  count = var.loader_sign_in == null ? 0 : 1
+
+  database = snowflake_database.this.name
+  name     = var.loader_sign_in.schema
+  comment  = local.comment
+}
+
+resource "snowflake_authentication_policy" "loader" {
+  count = var.loader_sign_in == null ? 0 : 1
+
+  database               = snowflake_database.this.name
+  schema                 = snowflake_schema.sign_in[0].name
+  name                   = var.loader_sign_in.policy
+  authentication_methods = ["KEYPAIR"]
+  comment                = local.comment
+}
+
+resource "snowflake_user_authentication_policy_attachment" "loader" {
+  count = var.loader_sign_in == null ? 0 : 1
+
+  user_name                  = snowflake_service_user.loader.name
+  authentication_policy_name = snowflake_authentication_policy.loader[0].fully_qualified_name
+}
+
 resource "snowflake_grant_account_role" "loader_user" {
   role_name = snowflake_account_role.this["LOADER"].name
   user_name = snowflake_service_user.loader.name

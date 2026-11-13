@@ -8,15 +8,22 @@ from pathlib import Path
 import pytest
 
 from vecten_shared.config import VectenConfig
+from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import SnowflakeNames, snowflake_names
 
 
-def config(name, database=None, account="ACME-PROD"):
+def config(name, database=None, account="ACME-PROD", *, shared=False, environments=None):
     return VectenConfig.model_validate(
         {
             "users": 3,
             "project": {"name": name, "scaffold_version": "0.1.0"},
-            "warehouse": {"kind": "snowflake", "account": account, "database": database},
+            "warehouse": {
+                "kind": "snowflake",
+                "account": account,
+                "database": database,
+                "shared_account": shared,
+            },
+            "environments": environments or {},
         }
     )
 
@@ -48,6 +55,8 @@ def test_fixed_names_are_the_released_literals(project, database, env, db_name, 
     assert names.integration == "VECTEN_EXTERNAL_OAUTH"
     assert names.access_schema == "VECTEN_ACCESS"
     assert names.authentication_policy is None
+    assert names.sign_in_schema is None and names.service_policy is None
+    assert names.comment == f"vecten {project} {env} in ACME-PROD"
     assert names.audience == "https://ACME-PROD.snowflakecomputing.com"
 
 
@@ -72,6 +81,9 @@ def test_names_in_a_shared_account_carry_the_environment_suffix():
         integration="EXTERNAL_OAUTH_ACME_DEV",
         access_schema="VECTEN_ACCESS",
         authentication_policy="MCP_SIGN_IN",
+        comment="vecten acme dev in ACME-PROD",
+        sign_in_schema="VECTEN_SIGN_IN",
+        service_policy="SERVICE_SIGN_IN",
     )
 
 
@@ -87,7 +99,90 @@ def test_two_shared_environments_share_no_name():
     dev = snowflake_names(config("acme"), "dev", shared_account=True)
     prod = snowflake_names(config("acme"), "prod", shared_account=True)
     shared = set(astuple(dev)) & set(astuple(prod))
-    assert shared == {"ACME-PROD", "VECTEN_ACCESS", "MCP_SIGN_IN"}
+    assert shared == {
+        "ACME-PROD",
+        "VECTEN_ACCESS",
+        "MCP_SIGN_IN",
+        "VECTEN_SIGN_IN",
+        "SERVICE_SIGN_IN",
+    }
+
+
+def test_an_undeployed_environment_takes_the_projects_setting():
+    assert snowflake_names(config("acme", shared=True), "dev").suffix == "_ACME_DEV"
+    assert snowflake_names(config("acme"), "dev").suffix == ""
+
+
+@pytest.mark.parametrize("shared", [True, False])
+def test_the_layout_an_environment_recorded_wins_over_the_setting(shared):
+    recorded = {"prod": {"snowflake_shared_account": not shared}}
+    names = snowflake_names(config("acme", shared=shared, environments=recorded), "prod")
+    assert names.suffix == ("" if shared else "_ACME_PROD")
+
+
+def test_a_recorded_base_names_the_objects_its_first_deploy_created():
+    recorded = {"prod": {"snowflake_shared_account": True, "snowflake_base": "OLD"}}
+    renamed = config("acme", "new", shared=True, environments=recorded)
+    names = snowflake_names(renamed, "prod")
+    assert names.suffix == "_OLD_PROD"
+    assert names.database == "OLD_PROD" and names.warehouse == "OLD_PROD_WH"
+    assert names.loader_user == "LOADER_OLD_PROD"
+    assert names.provisioner_user == "PROVISIONER_OLD_PROD"
+    assert names.integration == "EXTERNAL_OAUTH_OLD_PROD"
+    # An environment that recorded no base takes the configured one.
+    assert snowflake_names(renamed, "dev").suffix == "_NEW_DEV"
+
+
+def test_a_recorded_base_the_configuration_still_gives_changes_no_name():
+    recorded = {"prod": {"snowflake_shared_account": True, "snowflake_base": "ACME_CO"}}
+    with_record = config("acme-co", shared=True, environments=recorded)
+    assert snowflake_names(with_record, "prod") == snowflake_names(
+        config("acme-co", shared=True), "prod"
+    )
+
+
+def test_an_environment_deployed_without_a_record_keeps_its_fixed_names():
+    deployed = {"prod": {"deployed_commit": "a" * 40}}
+    names = snowflake_names(config("acme", shared=True, environments=deployed), "prod")
+    assert names.suffix == ""
+    assert names.analyst_role == "ANALYST"
+
+
+@pytest.mark.parametrize("project", ["acme", "acme-co"])
+def test_a_shared_account_refuses_an_environment_name_with_a_hyphen(project):
+    with pytest.raises(Failure) as caught:
+        snowflake_names(config(project, shared=True), "dev-2")
+    assert caught.value.code == ExitCode.CONFIG
+    assert "hyphen" in caught.value.message
+    assert "'dev2'" in caught.value.message
+
+
+def test_a_fixed_environment_keeps_a_hyphen_in_its_warehouse_name():
+    assert snowflake_names(config("acme"), "dev-2").warehouse == "ACME_DEV_2_WH"
+
+
+def test_a_shared_account_refuses_a_suffix_over_64_characters():
+    base = "d" * 59
+    assert len(snowflake_names(config("acme", base, shared=True), "dev").suffix) == 64
+    with pytest.raises(Failure) as caught:
+        snowflake_names(config("acme", base + "x", shared=True), "dev")
+    assert caught.value.code == ExitCode.CONFIG
+    assert "_" + base.upper() + "X_DEV" in caught.value.message
+    assert "64" in caught.value.message
+
+
+@pytest.mark.parametrize("database", ["lake.raw", "lake raw", 'la"ke'])
+def test_a_shared_account_refuses_a_base_that_is_no_plain_identifier(database):
+    with pytest.raises(Failure) as caught:
+        snowflake_names(config("acme", database, shared=True), "dev")
+    assert "[warehouse] database" in caught.value.message
+
+
+def test_the_environments_own_account_wins_over_vecten_toml():
+    names = snowflake_names(config("acme"), "dev", account="ACME-DEV")
+    assert names.account == "ACME-DEV"
+    assert names.audience == "https://ACME-DEV.snowflakecomputing.com"
+    assert snowflake_names(config("acme"), "dev", account=None).account == "ACME-PROD"
 
 
 def test_the_audience_needs_an_account():
@@ -104,7 +199,7 @@ NAMING_MODULE = "packages/vecten-shared/src/vecten_shared/provider/__init__.py"
 # longer word.
 SPELLED = re.compile(
     r"(?<![A-Za-z0-9_])(ANALYST|LOADER|PROVISIONER|VECTEN_PROVISIONER|VECTEN_EXTERNAL_OAUTH"
-    r"|VECTEN_ACCESS|MCP_SIGN_IN)(?![A-Za-z0-9_])|_WH(?![A-Za-z0-9_])"
+    r"|VECTEN_ACCESS|MCP_SIGN_IN|VECTEN_SIGN_IN|SERVICE_SIGN_IN)(?![A-Za-z0-9_])|_WH(?![A-Za-z0-9_])"
 )
 # Constants a caller would keep beside the function, whatever their value.
 CONSTANTS = re.compile(r"\bSNOWFLAKE_(LOADER|ANALYST|PROVISIONER)_(ROLE|USER)\b")

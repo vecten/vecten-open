@@ -294,7 +294,11 @@ def test_rendered_snowflake_root_configures_the_provider_from_the_environment_on
     # Credentials come from the environment only; the block holds the one setting no
     # environment variable can carry.
     assert _block_arguments(main, 'provider "snowflake" {') == {"preview_features_enabled"}
-    assert 'preview_features_enabled = ["snowflake_current_role_datasource"]' in main
+    assert re.search(r"preview_features_enabled = \[([^]]*)\]", main).group(1).split(", ") == [
+        '"snowflake_current_role_datasource"',
+        '"snowflake_authentication_policy_resource"',
+        '"snowflake_user_authentication_policy_attachment_resource"',
+    ]
     assert 'source  = "snowflakedb/snowflake"' in main
     assert f'version = "~> {VERSIONS.terraform_snowflake_provider}.0"' in main
     # deploy sets these with -var on every plan; a tfvars entry would go stale when the key
@@ -304,6 +308,11 @@ def test_rendered_snowflake_root_configures_the_provider_from_the_environment_on
         assert name not in tfvars, name
         block = re.search(rf'variable "{name}" \{{(.*?)\}}', (root / "variables.tf").read_text())
         assert block and "default" not in block.group(1), name
+    # deploy passes it in a shared account only, so a fixed environment plans as before.
+    assert "loader_sign_in" not in tfvars
+    assert re.search(
+        r'variable "loader_sign_in" \{.*?default = null', (root / "variables.tf").read_text(), re.S
+    )
 
 
 SNOWFLAKE_ROOT_TEST = """

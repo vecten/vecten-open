@@ -67,3 +67,18 @@ def test_the_mcp_signs_in_as_the_names_provisioner(monkeypatch):
     assert (login["user"], login["role"]) == ("PROVISIONER_ACME_DEV", "PROVISIONER_ACME_DEV")
     assert (login["database"], login["warehouse"]) == ("ACME_DEV", "ACME_DEV_WH")
     assert adapter.names == shared(_config(), "dev")
+
+
+def test_the_mcp_signs_in_to_the_account_ship_handed_its_host(monkeypatch):
+    monkeypatch.setenv("VECTEN_SNOWFLAKE_ACCOUNT", "ACME-DEV")
+    adapter, logins, keys = _adapter(monkeypatch, snowflake_names, "dev")
+    assert logins[0]["account"] == adapter.account == "ACME-DEV"
+    assert keys.minted[0]["audience"] == "https://ACME-DEV.snowflakecomputing.com"
+
+
+def test_the_mcp_names_its_objects_by_the_layout_vecten_toml_records(monkeypatch):
+    config = _config()
+    config.environments["dev"].snowflake_shared_account = True
+    monkeypatch.setattr(runtime_setup, "provisioner_key", lambda secrets: "KEY")
+    adapter = runtime_setup.snowflake_adapter(config, "dev", secrets=None, keys=Keys())
+    assert adapter.names.provisioner_role == "PROVISIONER_ACME_DEV"

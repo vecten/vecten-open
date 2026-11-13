@@ -11,13 +11,15 @@ import typer
 import yaml
 
 from vecten.cli.context import CliContext
-from vecten.intake.answers import DECLINED, read_answers, read_answers_file
+from vecten.deploy.tfvars import has_snowflake_root
+from vecten.intake.answers import DECLINED, SHARED_ACCOUNT_KEY, read_answers, read_answers_file
 from vecten.scaffold.baseline import BASELINE, checked_path, read_baseline, write_baseline
 from vecten.scaffold.merge import merge_snapshots
 from vecten.scaffold.params import ALLOWED, DEFAULT_REGION, DEPLOY_FIELDS, ScaffoldParams
 from vecten.scaffold.render import DEPLOY_LAYER_PATHS, render_project
-from vecten_shared.config import DeploySection, load_config, save_config
+from vecten_shared.config import DeploySection, VectenConfig, load_config, save_config
 from vecten_shared.output import ExitCode, Failure, Result
+from vecten_shared.provider import recorded_layout
 from vecten_shared.records import write_text_atomic
 from vecten_shared.versions import VERSIONS
 
@@ -83,6 +85,18 @@ def _sync(src: Path, dst: Path) -> bool:
     dst.parent.mkdir(parents=True, exist_ok=True)
     write_text_atomic(dst, text)
     return True
+
+
+def _shared_account(config: VectenConfig, recorded: dict[str, Any]) -> bool | None:
+    """The recorded answer to whether the Snowflake account is shared, while no environment
+    has deployed: a deployed environment keeps the layout it recorded, so a later answer
+    changes nothing."""
+    answer = recorded.get(SHARED_ACCOUNT_KEY)
+    if answer not in ("yes", "no") or not has_snowflake_root(config):
+        return None
+    if any(recorded_layout(config, env) is not None for env in config.environments):
+        return None
+    return answer == "yes"
 
 
 def run_init_deploy(
@@ -184,11 +198,15 @@ def run_init_deploy(
         params.snowflake_account is not None
         and config.warehouse.account != params.snowflake_account
     )
-    if config.deploy != section or account_changed:
+    shared = _shared_account(config, recorded)
+    shared_changed = shared is not None and config.warehouse.shared_account != shared
+    if config.deploy != section or account_changed or shared_changed:
         config.deploy = section
         # The tfvars just rendered name this account, and deploy refuses unless both agree.
         if account_changed:
             config.warehouse.account = params.snowflake_account
+        if shared_changed:
+            config.warehouse.shared_account = shared
         save_config(project_root, config)
         changed.append("vecten.toml")
     if pristine is not None and pristine != baseline["files"]:
