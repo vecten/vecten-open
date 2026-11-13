@@ -192,6 +192,16 @@ def snowflake_adapter(config, env, secrets, keys, connect=None):
     )
 
 
+def model_database(config, adapter):
+    """(the database `osi/` sources name, the environment's database) on Snowflake, where a
+    shared account gives each environment its own; None on Postgres."""
+    if config.warehouse.kind != "snowflake":
+        return None
+    from vecten_shared.osi.generate import dataset_database
+
+    return dataset_database(config), adapter.names.database
+
+
 def configured_runtime(root, config, extensions):
     import psycopg
 
@@ -317,6 +327,7 @@ def configured_runtime(root, config, extensions):
             {name: dataset["source"] for name, dataset in model.datasets.items()}
         ),
         checks=runtime.apps.missing,
+        database=model_database(config, adapter),
     )
     from vecten_mcp.feedback_resolution import FeedbackResolution
 

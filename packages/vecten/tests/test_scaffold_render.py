@@ -21,7 +21,7 @@ from vecten_shared.config import load_config
 from vecten_shared.osi.generate import render_document
 from vecten_shared.versions import VERSIONS
 
-from .scaffold_matrix import MATRIX, label
+from .scaffold_matrix import DEPLOY, LOCAL, MATRIX, label
 
 SKILL_REFERENCE = re.compile(r"skills/([^/\s`]+)/SKILL\.md")
 BASE_PATHS = [
@@ -96,8 +96,11 @@ def test_render_layout(tmp_path, params):
     assert (DEPLOY_ROLE_PRIVILEGES in runbook) is (params.render_deploy and snowflake_root)
     # In a shared account another environment's integration reaches a deploy user without
     # a key-pair-only policy.
+    shared = params.snowflake_shared_account
     deploy_policy = "SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN" in runbook
-    assert deploy_policy is (params.render_deploy and snowflake_root)
+    assert deploy_policy is (params.render_deploy and snowflake_root and shared)
+    fixed_account = "One environment per Snowflake account" in runbook
+    assert fixed_account is (params.render_deploy and snowflake_root and not shared)
     identity = "`vecten mcp provisioner-script --env <env>`, which stores" in runbook
     assert identity is (params.render_deploy and snowflake_root and "mcp" in params.components)
     managed_warehouse = params.warehouse == "postgres" and "platform" in params.components
@@ -763,3 +766,47 @@ def test_rerender_preserves_owner_files_and_pristine_baseline(tmp_path, name):
     render_project(tmp_path, MATRIX[0])
     assert (tmp_path / name).read_text() == "owner contents\n"
     assert json.loads((tmp_path / BASELINE).read_text())["files"][name] == original
+
+
+def _snowflake_runbook(tmp_path, shared):
+    answers = {**LOCAL, **DEPLOY, "sources": ["hubspot"], "warehouse": "snowflake", "cloud": "aws"}
+    params = ScaffoldParams.from_answers(
+        answers, {"components": ["platform", "mcp"], "snowflake_shared_account": shared}
+    )
+    render_project(tmp_path / "p", params)
+    runbook = (tmp_path / "p" / "docs" / "runbook.md").read_text()
+    return runbook, (tmp_path / "p" / ".copier-answers.yml").read_text()
+
+
+def test_the_runbook_states_a_shared_accounts_names_policies_and_trust(tmp_path):
+    runbook, answers = _snowflake_runbook(tmp_path, shared=True)
+    section = runbook[runbook.index("### Snowflake") : runbook.index("## First sign-in")]
+    for text in (
+        "`_<BASE>_<ENV>`",
+        "`ANALYST_<BASE>_<ENV>`",
+        "`PROVISIONER_<BASE>_<ENV>`",
+        "`EXTERNAL_OAUTH_<BASE>_<ENV>`",
+        "`<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`",
+        "SET AUTHENTICATION POLICY <database>.<schema>.DEPLOY_SIGN_IN",
+        "its own deploy user and role",
+        "by ownership, never by a name pattern",
+        "Moving an environment that has fixed names into a shared account is a new deployment",
+        "create `prod` first",
+        "live checks have yet to confirm",
+    ):
+        assert text in section, text
+    for fixed in ("`VECTEN_PROVISIONER`", "One environment per Snowflake account"):
+        assert fixed not in section, fixed
+    # The layout is vecten.toml's; the answers file stays the same in both layouts.
+    assert "snowflake_shared_account" not in answers
+    assert _snowflake_runbook(tmp_path / "fixed", shared=False)[1] == answers.replace(
+        str(tmp_path / "p"), str(tmp_path / "fixed" / "p")
+    )
+
+
+def test_the_runbook_states_that_fixed_names_hold_an_account_alone(tmp_path):
+    runbook, _ = _snowflake_runbook(tmp_path, shared=False)
+    section = runbook[runbook.index("### Snowflake") : runbook.index("## First sign-in")]
+    assert "One environment per Snowflake account" in section
+    assert "`VECTEN_PROVISIONER`" in section and "`ANALYST`" in section
+    assert "_<BASE>_<ENV>" not in section

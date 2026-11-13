@@ -306,6 +306,7 @@ def test_the_shared_account_answer_reaches_vecten_toml(
     assert r.exit_code == 0, r.stdout
     assert load_config(proj).warehouse.shared_account is shared
     assert ("shared_account = true" in (proj / "vecten.toml").read_text()) is shared
+    assert ("`ANALYST_<BASE>_<ENV>`" in (proj / "docs" / "runbook.md").read_text()) is shared
     again = invoke("init", "--deploy", "--json")
     assert json.loads(again.stdout)["changed"] == []
 

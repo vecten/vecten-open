@@ -258,6 +258,50 @@ an ACCOUNTADMIN. The MCP checks its scope as `VECTEN_PROVISIONER` when it starts
 Until the run is recorded, `vecten ship` refuses and the ship workflow finishes without shipping.
 `vecten next` reports each step.
 
+### Several environments in one Snowflake account
+
+With `shared_account = true` under `[warehouse]` in `vecten.toml`, environments of the project may
+share one Snowflake account, and other teams' data may sit beside them. Each environment then has
+its own users, roles and integration, named with the environment's suffix `_<BASE>_<ENV>`
+(`<BASE>` is `[warehouse] database` or the project name, `<ENV>` the environment, both in upper
+case): the provisioner `PROVISIONER_ACME_DEV` (role and user), the integration
+`EXTERNAL_OAUTH_ACME_DEV`, the default group's role `ANALYST_ACME_DEV`, and for people, services
+and groups `JANE_DOE_ACME_DEV`, `SVC_REPORTING_ACME_DEV` and `FINANCE_ACME_DEV`. The MCP state
+keeps the names without the suffix (`jane_doe`, `finance`, `analyst`); the server adds the suffix
+whenever it names a Snowflake user or role, and a grant never targets another environment's role.
+
+- **Per-environment users.** A person added in `dev` and in `prod` has two Snowflake users,
+  `JANE_DOE_ACME_DEV` and `JANE_DOE_ACME_PROD`, each holding only its environment's roles. Query
+  history shows that name, not the person's own corporate user, so row access and masking
+  policies keyed on a person's user do not apply to MCP queries; key them on roles.
+- **Bound to one integration.** The administrator's script creates the authentication policy
+  `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`, which admits OAuth through the environment's own
+  integration only, and the MCP sets it on every user it creates. A token signed with another
+  environment's key names a user that refuses it. The provisioner's user and the loader sign in
+  by key pair only (`SERVICE_SIGN_IN`), and each integration refuses `SYSADMIN` and the role that
+  created the environment's database.
+- **No adoption.** Setting the policy on an existing user would change how its owner signs in, so
+  in a shared account the MCP refuses a user that already exists, naming it.
+- **Checks before change.** The provisioner script runs as one block that changes nothing when a
+  role, user or integration of the environment's names carries another comment or owner or is
+  held by a stranger, or when the access schema or a policy has another owner; the MCP's startup
+  check refuses a stranger holding its provisioner or analyst role.
+- **Destroy.** `vecten destroy` reads by ownership what the provisioner created and lists it as
+  kept; with `--delete-data` it refuses while any of it stays and prints the statements an
+  administrator runs.
+
+What this protects, and what it does not: one environment's keys (its loader key, provisioner key
+and MCP signing key) reach no other environment's data. It does not protect an environment from
+someone who already controls another environment's provisioner, which holds account-level
+`CREATE USER` and `CREATE ROLE` and can create objects named for another environment before that
+environment's first script run. So create `prod` first, or give it an account of its own, put
+every human deploy user on a key-pair-only authentication policy (the runbook gives the
+statement), and give each environment its own deploy user. Several of these guarantees rest on
+Snowflake behaviour that the project's live checks have not yet confirmed (several `CUSTOM`
+integrations in one account, an authentication policy limiting External OAuth to one integration,
+the provisioner setting that policy); until they pass, use a shared account for non-production
+environments.
+
 Introspection uses the existing-warehouse administrator connection to discover catalog objects
 that an unprovisioned MCP identity cannot yet see, as the login `warehouse_url` names or `--user`
 passes. On Postgres it signs in with the password stored locally using

@@ -34,13 +34,13 @@
 
 ## 5. The semantic model's database
 
-- [ ] 5.1 The model loader reads a source naming the project's database as the environment's database, for source checks, compiled SQL, dataset grants and `describe`
-- [ ] 5.2 Tests: one `osi/` loaded for two environments of a shared account; fixed names read as written; a source naming another database untouched
+- [x] 5.1 The model loader reads a source naming the project's database as the environment's database, for source checks, compiled SQL, dataset grants and `describe`
+- [x] 5.2 Tests: one `osi/` loaded for two environments of a shared account; fixed names read as written; a source naming another database untouched
 
 ## 6. Destroy
 
-- [ ] 6.1 With a shared account, `destroy` lists by ownership what stays outside Terraform; `--delete-data` refuses while the provisioner owns a user or role and prints the `DROP` statements; the provisioner user is ACCOUNTADMIN-owned and carries `SERVICE_SIGN_IN`, a policy inside the environment's database, so the printed statements unset that policy and drop the user before the database goes (live check 9.4)
-- [ ] 6.2 Tests: the listing from mocked `SHOW GRANTS`, no name-pattern match, the refusal and the printed statements
+- [x] 6.1 With a shared account, `destroy` lists by ownership what stays outside Terraform; `--delete-data` refuses while the provisioner owns a user or role and prints the `DROP` statements; the provisioner user is ACCOUNTADMIN-owned and carries `SERVICE_SIGN_IN`, a policy inside the environment's database, so the printed statements unset that policy and drop the user before the database goes (live check 9.4)
+- [x] 6.2 Tests: the listing from mocked `SHOW GRANTS`, no name-pattern match, the refusal and the printed statements
 
 ## 7. dbt and #53
 
@@ -49,10 +49,10 @@
 
 ## 8. Docs
 
-- [ ] 8.1 Runbook template: the Snowflake section per layout, the authentication policy, per-environment deploy users, data deletion's cleanup, and moving an environment into a shared account
-- [ ] 8.2 `docs/mcp-identity.md`: per-environment users in a shared account, role-keyed policies, no adoption
-- [ ] 8.3 `docs/GLOSSARY.md`: "Shared account" and "Environment suffix"
-- [ ] 8.4 `CHANGELOG.md` under `[Unreleased]`
+- [x] 8.1 Runbook template: the Snowflake section per layout, the authentication policy, per-environment deploy users, data deletion's cleanup, and moving an environment into a shared account
+- [x] 8.2 `docs/mcp-identity.md`: per-environment users in a shared account, role-keyed policies, no adoption
+- [x] 8.3 `docs/GLOSSARY.md`: "Shared account" and "Environment suffix"
+- [x] 8.4 `CHANGELOG.md` under `[Unreleased]`
 
 ## 9. Proven only on a live Snowflake account (the `snowflake_live` tier and a sandbox deploy)
 
