@@ -409,8 +409,9 @@ def test_the_warehouse_grants_an_app_principal_its_admitted_groups_roles_only(ap
     assert ("sales", True) not in grants
     apps.runtime.access.grant("sales", "dataset", "orders")
     assert member_grants(apps, "svc_app_overview")[-1] == ("sales", True)
+    before = len(member_grants(apps, "svc_app_overview"))
     apps.runtime.access.revoke("sales", "dataset", "orders")
-    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", False)
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")[before:]
     assert apps.runtime.state.groups_for(principal["id"]) == {"sales", "default"}
 
 
@@ -500,8 +501,9 @@ def test_a_role_whose_revoke_failed_stays_recorded_and_is_revoked_later(apps, mo
     assert access.held_roles(pid) == {"analyst", "sales"}
     monkeypatch.setattr(apps.adapter, "membership", original)
     admit_only(apps, "default")
+    before = len(member_grants(apps, "svc_app_overview"))
     access.sync_app_roles(pid)
-    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", False)
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")[before:]
     assert access.held_roles(pid) == {"analyst"}
 
 
@@ -552,10 +554,25 @@ def test_a_role_whose_grant_failed_is_revoked_once_it_is_not_wanted(apps, monkey
     with pytest.raises(RuntimeError):
         access.sync_app_roles(pid)
     admit_only(apps, "default")
+    before = len(member_grants(apps, "svc_app_overview"))
     access.sync_app_roles(pid)
-    assert member_grants(apps, "svc_app_overview")[-1] == ("sales", False)
+    assert ("sales", False) in member_grants(apps, "svc_app_overview")[before:]
     assert access.held_roles(pid) == {"analyst"}
     assert sync_failure(apps, pid) is None
+
+
+def test_a_grant_that_keeps_failing_does_not_block_a_revoke(apps, monkeypatch):
+    connected(apps)
+    access, pid = apps.runtime.access, connected_id(apps)
+    admit_only(apps, "default", "sales")
+    access.sync_app_roles(pid)
+    failing_grant(apps, monkeypatch, "sales", failures=99)
+    admit_only(apps, "sales")
+    with pytest.raises(RuntimeError):
+        access.sync_app_roles(pid)
+    assert ("analyst", False) in member_grants(apps, "svc_app_overview")
+    assert access.held_roles(pid) == {"sales"}
+    assert sync_failure(apps, pid) is not None
 
 
 def test_a_failed_role_sync_during_admission_is_logged(apps, monkeypatch, caplog):

@@ -73,21 +73,31 @@ class AccessService:
             self.state.put(APP_ROLES, principal_id, {"roles": sorted(recorded), **marker})
 
         save(**failed)
+        errors = []
+        # Revokes run first and every call is attempted, so a grant that keeps failing never
+        # keeps a role outside the admitted groups' in place. The record names a role before its
+        # grant is confirmed, so every wanted role is granted again; both warehouses accept a
+        # grant the account already holds.
         try:
-            # The record names a role before its grant is confirmed, so every wanted role is
-            # granted again; both warehouses accept a grant the account already holds.
-            for role in sorted(wanted):
-                self.adapter.membership(role, name, True)
             for role in sorted(held - wanted):
-                self.adapter.membership(role, name, False)
+                try:
+                    self.adapter.membership(role, name, False)
+                except Exception as exc:
+                    errors.append(exc)
+                    continue
                 recorded.discard(role)
                 save(**failed)
-        except Exception as exc:
-            save(failed={"at": time.time(), "error": describe_error(exc)})
-            raise
+            for role in sorted(wanted):
+                try:
+                    self.adapter.membership(role, name, True)
+                except Exception as exc:
+                    errors.append(exc)
         finally:
             if wanted != held:
                 self.invalidate(principal_id)
+        if errors:
+            save(failed={"at": time.time(), "error": describe_error(errors[0])})
+            raise errors[0]
         if failed:
             save()
 
