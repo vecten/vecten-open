@@ -115,6 +115,7 @@ class PasswordBackend:
             for key, row in self.state.scan(kind, conn=conn):
                 if row.get("principal_id") == principal["id"]:
                     self.state.remove(kind, key, conn=conn)
+        self.state.end_gate_sessions(principal["id"], conn=conn)
         return principal["id"]
 
     def authenticate(self, email, password, address):

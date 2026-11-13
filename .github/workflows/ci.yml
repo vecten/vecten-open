@@ -127,6 +127,7 @@ jobs:
             tests: >-
               packages/vecten/tests/test_up_e2e.py
               packages/vecten/tests/test_services_up_docker.py
+              packages/vecten/tests/test_gate_up_docker.py
             images: airflow mcp_base postgres nginx log_cleaner
           - part: images
             build: true
@@ -157,6 +158,7 @@ jobs:
         --ignore=packages/vecten/tests/test_laptop_pipeline_e2e.py
         --ignore=packages/vecten/tests/test_up_e2e.py
         --ignore=packages/vecten/tests/test_services_up_docker.py
+        --ignore=packages/vecten/tests/test_gate_up_docker.py
         --ignore=packages/vecten/tests/test_extension_images_docker.py
         --ignore=packages/vecten/tests/test_component_dependencies_docker.py
         --ignore=packages/vecten/tests/test_in_repo_images_docker.py

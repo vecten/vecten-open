@@ -46,11 +46,11 @@ template can run on; B must land in the same release, before any public route re
 
 ## 5. The gate (PR D)
 
-- [ ] 5.1 `vecten_mcp`: gate sessions in `mcp_state` (hashed ids, principal, hostname, expiry), with a migration
-- [ ] 5.2 Endpoints: `/_vecten/gate/start`, `/gate/authorize`, `/_vecten/gate/callback`, `/_vecten/gate/logout`, verify; hostname and return-path checks against the bundle's `vecten.toml`; one-time codes; reuse of the browser session; exemption of verify from per-address limits
-- [ ] 5.3 Session ends: lifetime, disable and delete, logout, password set (extends the existing revocation)
-- [ ] 5.4 NGINX: `auth_request` on `login` routes, `auth_request_set` into the five headers, 401 to `start`, 403 page; the verify upstream on the Compose network on the MCP's host and over verified HTTPS at `mcp.<domain>` elsewhere; gate paths proxied to the MCP
-- [ ] 5.5 Tests: MCP unit tests for each refusal (unknown hostname, absolute return path, replayed code, code on another host, service principal, disabled person), live group change, password reset ending gate sessions; NGINX rendering of `login` routes; a Docker-tier end-to-end test on the laptop stack: sign in with the password backend, reach a stub service with correct headers, 403 outside groups, forged headers ignored, logout
+- [x] 5.1 `vecten_mcp`: gate sessions in `mcp_state` (hashed ids, principal, hostname, expiry), with a migration
+- [x] 5.2 Endpoints: `/_vecten/gate/start`, `/gate/authorize`, `/_vecten/gate/callback`, `/_vecten/gate/logout`, verify; hostname and return-path checks against the bundle's `vecten.toml`; one-time codes; reuse of the browser session; exemption of verify from per-address limits
+- [x] 5.3 Session ends: lifetime, disable and delete, logout, password set (extends the existing revocation)
+- [x] 5.4 NGINX: `auth_request` on `login` routes, `auth_request_set` into the five headers, 401 to `start`, 403 page; the verify upstream on the Compose network on the MCP's host and over verified HTTPS at `mcp.<domain>` elsewhere; gate paths proxied to the MCP
+- [x] 5.5 Tests: MCP unit tests for each refusal (unknown hostname, absolute return path, replayed code, code on another host, service principal, disabled person), live group change, password reset ending gate sessions; NGINX rendering of `login` routes; a Docker-tier end-to-end test on the laptop stack: sign in with the password backend, reach a stub service with correct headers, 403 outside groups, forged headers ignored, logout
 - [ ] 5.6 **[deploy]** Under `standard` on AWS, the platform VM's NGINX verifies against `https://mcp.<domain>` with the certificate checked; measure the added latency per request and record it in design.md
 - [ ] 5.7 **[deploy]** With the `oidc` backend against a real provider, one sign-in covers two service hostnames, and the provider needs no new redirect URI
 
