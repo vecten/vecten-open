@@ -340,6 +340,16 @@ def test_the_apex_is_refused_where_an_environments_domain_is_its_zone(project):
     assert "services.acme.bot.hostname" in failure.message and "@" in failure.message
 
 
+def test_an_apps_apex_is_refused_where_an_environments_domain_is_its_zone(project):
+    from .services_fixtures import with_apps
+
+    with_apps(project, {"overview": {"groups": ["default"], "hostname": "@"}})
+    _staging(project, "acme.com")
+    failure = refusal(project, "staging")
+    assert failure.code == ExitCode.CONFIG
+    assert "apps.acme.overview.hostname" in failure.message and "@" in failure.message
+
+
 def test_the_apex_is_admitted_where_the_environments_domain_sits_below_its_zone(project):
     _bind_apex(project)
     _staging(project, "staging.acme.com")

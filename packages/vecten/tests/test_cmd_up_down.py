@@ -487,6 +487,48 @@ def test_up_refuses_an_in_repo_service_changed_since_the_lock(invoke, workdir, f
     assert fake.calls == []
 
 
+def test_up_refuses_an_in_repo_app_changed_since_the_lock(invoke, workdir, fake, monkeypatch):
+    from vecten import extensions
+    from vecten_shared.apps import parse_app
+    from vecten_shared.output import ExitCode
+
+    from .services_fixtures import with_services
+
+    invoke("init", "p", *LOCAL, "--json")
+    monkeypatch.chdir(workdir / "p")
+    app = {
+        "title": "Overview",
+        "description": "",
+        "kind": "container",
+        "runtime": "streamlit",
+        "entry": "acme/app.py",
+        "datasets": ["orders"],
+        "groups": ["default"],
+    }
+    with_services(
+        workdir / "p",
+        {},
+        declared={},
+        source_path="extensions/acme",
+        metadata_sha256="0" * 64,
+        apps={"overview": parse_app("acme", "overview", app).app},
+    )
+    changed = {**app, "datasets": ["orders", "customers"]}
+    monkeypatch.setattr(extensions, "load_services", lambda config, candidates=None, only=None: {})
+    monkeypatch.setattr(
+        extensions,
+        "load_apps",
+        lambda config, candidates=None, only=None: {
+            "acme": {"overview": parse_app("acme", "overview", changed)}
+        },
+    )
+    monkeypatch.setattr(extensions, "installed_from", lambda name, path: True)
+    r = invoke("up", "--json")
+    assert r.exit_code == ExitCode.CONFIG, r.stdout
+    assert "app overview differs from extensions.lock.json" in r.stdout
+    assert fake.calls == []
+
+
 def test_up_reads_only_in_repo_declarations_and_accepts_an_unchanged_one(
     invoke, workdir, fake, monkeypatch
 ):
@@ -666,3 +708,21 @@ def test_up_without_services_writes_the_nginx_of_before(invoke, workdir, fake, m
     assert invoke("up", "--json").exit_code == 0
     expected = generate_nginx_conf(["platform", "mcp"], local_hostnames(), "local")
     assert _laptop_conf(root) == expected
+
+
+def test_up_serves_a_bound_container_app_at_its_localhost_name(invoke, workdir, fake, monkeypatch):
+    from .services_fixtures import with_apps
+
+    invoke("init", "p", *LOCAL, "--json")
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    with_apps(root, {"overview": {"groups": ["default"]}})
+    monkeypatch.setattr(up_mod, "write_project_layer", lambda *a, **k: None)
+    r = invoke("up", "--json")
+    assert r.exit_code == 0, r.stdout
+    conf = _laptop_conf(root)
+    assert "server_name overview.localhost;" in conf
+    assert "set $upstream http://svc-acme-app-overview:8501;" in conf
+    doc = json.loads(r.stdout)
+    assert doc["routes"] == {"acme.app-overview.app": "https://overview.localhost:8443/"}
+    assert ["up", "-d", "--no-build", "svc-acme-app-overview"] in fake.calls

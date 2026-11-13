@@ -21,6 +21,7 @@ GROUPS = (
     "vecten.mcp.audit_sinks",
     "vecten.skills",
     "vecten.services",
+    "vecten.apps",
     "vecten.manifest",
 )
 # The manifest says what an extension needs; it contributes no layer of its own.

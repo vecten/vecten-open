@@ -1,0 +1,207 @@
+name: golden
+services:
+  airflow-api-server:
+    build:
+      context: <project>/.vecten/stack/build
+      dockerfile: airflow.Dockerfile
+    command:
+    - bash
+    - -c
+    - airflow db migrate && exec airflow api-server --proxy-headers
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: &id001
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+      AIRFLOW__API__BASE_URL: https://airflow.localhost:8443
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW_API_SECRET_KEY}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'True'
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json.generated
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_ADMIN_USER}:admin
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres/airflow
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      DLT_DATA_DIR: /tmp/vecten-dlt/data
+      FORWARDED_ALLOW_IPS: '*'
+      HUBSPOT_API_KEY: ${HUBSPOT_API_KEY:-}
+      LOADER_PASSWORD: ${LOADER_PASSWORD}
+      RUNTIME__DLTHUB_TELEMETRY: 'false'
+      VECTEN_ARTIFACT_DIR: /opt/airflow/artifacts
+      VECTEN_COMPONENT: platform
+      VECTEN_DLT_DIR: /tmp/vecten-dlt
+      VECTEN_ENV: local
+      VECTEN_INSIDE_COMPOSE: '1'
+      VECTEN_PROJECT_ROOT: /opt/airflow
+      VECTEN_PROVIDER: local
+    healthcheck:
+      interval: 10s
+      retries: 30
+      start_period: 60s
+      test:
+      - CMD
+      - curl
+      - --fail
+      - http://localhost:8080/api/v2/monitor/health
+      timeout: 10s
+    image: golden-airflow:0.1.0
+    ports:
+    - 127.0.0.1:8482:8080
+    profiles: &id002
+    - platform
+    restart: unless-stopped
+    user: '50000:0'
+    volumes: &id003
+    - ../../orchestration/dags:/opt/airflow/dags/project
+    - ../../dbt:/opt/airflow/dbt
+    - ../../connectors:/opt/airflow/connectors
+    - ../../vecten.toml:/opt/airflow/vecten.toml:ro
+    - ./extension_dags.py:/opt/airflow/dags/vecten_extensions.py:ro
+    - ../../osi:/opt/airflow/osi:ro
+    - airflow-logs:/opt/airflow/logs
+    - ../artifacts:/opt/airflow/artifacts
+    - ./airflow_passwords.json:/opt/airflow/simple_auth_manager_passwords.json.generated
+  airflow-dag-processor:
+    command: dag-processor
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+    environment: *id001
+    image: golden-airflow:0.1.0
+    profiles: *id002
+    pull_policy: never
+    restart: unless-stopped
+    user: '50000:0'
+    volumes: *id003
+  airflow-scheduler:
+    command: scheduler
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+    environment: *id001
+    image: golden-airflow:0.1.0
+    profiles: *id002
+    pull_policy: never
+    restart: unless-stopped
+    user: '50000:0'
+    volumes: *id003
+  airflow-triggerer:
+    command: triggerer
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+    environment: *id001
+    image: golden-airflow:0.1.0
+    profiles: *id002
+    pull_policy: never
+    restart: unless-stopped
+    user: '50000:0'
+    volumes: *id003
+  log-cleaner:
+    command:
+    - /bin/sh
+    - -c
+    - while true; do find /opt/airflow/logs -type f -mtime +"${AIRFLOW_LOG_RETENTION_DAYS:-14}"
+      -delete; find /opt/airflow/logs -type d -empty -delete; sleep 86400; done
+    image: alpine:3.24
+    profiles:
+    - platform
+    restart: unless-stopped
+    volumes:
+    - airflow-logs:/opt/airflow/logs
+  mcp-server:
+    build:
+      context: <project>/.vecten/stack/build
+      dockerfile: mcp.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MCP_ADMIN_SETUP_TOKEN: ${MCP_ADMIN_SETUP_TOKEN:-}
+      MCP_IMPERSONATOR_PASSWORD: ${MCP_IMPERSONATOR_PASSWORD:-${IMPERSONATOR_PASSWORD}}
+      MCP_OIDC_CLIENT_SECRET: ${MCP_OIDC_CLIENT_SECRET:-}
+      MCP_PROVISIONER_PASSWORD: ${MCP_PROVISIONER_PASSWORD:-${PROVISIONER_PASSWORD}}
+      MCP_STATE_DB_PASSWORD: ${MCP_STATE_DB_PASSWORD}
+      VECTEN_ARTIFACT_DIR: /opt/airflow/artifacts
+      VECTEN_COMPONENT: mcp
+      VECTEN_ENV: local
+      VECTEN_MCP_PUBLIC_URL: https://mcp.localhost:8443
+      VECTEN_PROJECT_ROOT: /app
+      VECTEN_PROVIDER: local
+    healthcheck:
+      interval: 5s
+      retries: 30
+      test:
+      - CMD
+      - curl
+      - --fail
+      - http://localhost:8001/health
+      timeout: 5s
+    image: golden-mcp:0.1.0
+    profiles:
+    - mcp
+    restart: unless-stopped
+    volumes:
+    - ../../osi:/app/osi:ro
+    - ../../vecten.toml:/app/vecten.toml:ro
+    - ../artifacts:/opt/airflow/artifacts:ro
+    - mcp-secrets:/var/lib/vecten-mcp/secrets
+  nginx:
+    depends_on:
+      airflow-api-server:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+    image: nginx:1.30-alpine
+    ports:
+    - 127.0.0.1:8443:443
+    - 127.0.0.1:8480:80
+    profiles:
+    - platform
+    - mcp
+    - local
+    restart: unless-stopped
+    volumes:
+    - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    - ./certs:/etc/nginx/certs:ro
+  postgres:
+    command:
+    - postgres
+    - -c
+    - 'log_line_prefix=%m [%p] %u@%d app=%a '
+    environment:
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      IMPERSONATOR_PASSWORD: ${IMPERSONATOR_PASSWORD}
+      LOADER_PASSWORD: ${LOADER_PASSWORD}
+      MCP_STATE_DB_PASSWORD: ${MCP_STATE_DB_PASSWORD}
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_MASTER_PASSWORD}
+      POSTGRES_USER: postgres
+      PROVISIONER_PASSWORD: ${PROVISIONER_PASSWORD}
+      VECTEN_WITH_MCP: 'true'
+    healthcheck:
+      interval: 5s
+      retries: 20
+      test:
+      - CMD
+      - pg_isready
+      - -h
+      - 127.0.0.1
+      - -U
+      - postgres
+      timeout: 5s
+    image: postgres:17
+    ports:
+    - 127.0.0.1:55432:5432
+    profiles:
+    - local
+    restart: unless-stopped
+    volumes:
+    - postgres-data:/var/lib/postgresql/data
+    - ./pg-init:/docker-entrypoint-initdb.d:ro
+volumes:
+  airflow-logs: {}
+  mcp-secrets: {}
+  postgres-data: {}

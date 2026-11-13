@@ -47,7 +47,7 @@ def extension(tmp_path, monkeypatch):
     sys.modules.pop("vecten_test_extension", None)
 
 
-def test_all_eleven_groups_land(extension):
+def test_all_twelve_groups_land(extension):
     from vecten.connectors.extensions import extension_connectors
     from vecten.extension_skills import link_extension_skills
     from vecten_mcp.extensions import McpExtensions
@@ -271,7 +271,7 @@ def test_the_stub_service_and_both_routes_reach_the_record_the_binding_and_compo
     import tomlkit
 
     doc = tomlkit.parse((root / "vecten.toml").read_text())
-    _bind_services(doc, config, "vecten-test-extension", entry)
+    _bind_services(doc, config, "vecten-test-extension", entry, {"vecten-test-extension": entry})
     (root / "vecten.toml").write_text(tomlkit.dumps(doc))
     bound = load_config(root)
     assert set(bound.services["vecten-test-extension"]["portal"].routes) == {"hook", "home"}
@@ -283,3 +283,48 @@ def test_the_stub_service_and_both_routes_reach_the_record_the_binding_and_compo
         "-m",
         "vecten_test_extension.portal",
     ]
+
+
+def test_the_stub_apps_reach_the_record_the_binding_compose_and_nginx(extension):
+    import tomlkit
+
+    from vecten.extensions import _bind_apps, load_apps
+    from vecten.stack.compose import generate_compose, local_hostnames
+    from vecten.stack.nginx import generate_nginx_conf, service_site
+    from vecten_shared.config import load_config
+    from vecten_shared.extension_record import Extension, parse_record, record_text
+    from vecten_shared.services import bound_services
+
+    root, config = extension
+    declared = load_apps(config)["vecten-test-extension"]
+    assert {name: d.app.kind for name, d in declared.items()} == {
+        "dashboard": "container",
+        "warehouse": "snowflake",
+    }
+    assert all(d.unknown == () for d in declared.values())
+    entry = Extension("1.0", (), apps={name: d.app for name, d in declared.items()})
+    (root / "extensions.lock.json").write_text(record_text({"vecten-test-extension": entry}))
+    record = parse_record((root / "extensions.lock.json").read_text())
+    assert record["vecten-test-extension"].apps == entry.apps
+
+    doc = tomlkit.parse((root / "vecten.toml").read_text())
+    _bind_apps(doc, config, "vecten-test-extension", entry, {"vecten-test-extension": entry})
+    (root / "vecten.toml").write_text(tomlkit.dumps(doc))
+    bound = load_config(root)
+    assert set(bound.apps["vecten-test-extension"]) == {"dashboard", "warehouse"}
+    [app] = bound_services(bound, record)
+    assert app.app == "dashboard"
+    stack = root / ".vecten" / "stack"
+    stack.mkdir(parents=True)
+    compose = generate_compose(bound, "local", ["platform", "mcp"], stack)
+    assert compose["services"]["svc-vecten-test-extension-app-dashboard"]["command"] == [
+        "python",
+        "-m",
+        "vecten_shared.launch",
+        "streamlit",
+        "vecten_test_extension/dashboard.py",
+    ]
+    site = service_site(app, "dashboard.localhost:8443")
+    nginx = generate_nginx_conf(["platform", "mcp"], local_hostnames(), "local", services=[site])
+    assert "server_name dashboard.localhost;" in nginx
+    assert [(r.path, r.access, r.websocket) for r in site.routes] == [("/", "login", True)]

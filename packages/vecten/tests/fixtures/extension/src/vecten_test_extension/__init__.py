@@ -51,3 +51,22 @@ portal = {
         "home": {"path": "/", "access": "login", "groups": ["analyst"]},
     },
 }
+
+dashboard = {
+    "title": "Fixture dashboard",
+    "description": "A container app",
+    "kind": "container",
+    "runtime": "streamlit",
+    "entry": "vecten_test_extension/dashboard.py",
+    "datasets": ["fixture_dataset"],
+    "groups": ["analyst"],
+}
+
+warehouse = {
+    "title": "Fixture warehouse app",
+    "description": "A Streamlit in Snowflake app",
+    "kind": "snowflake",
+    "entry": "vecten_test_extension/dashboard.py",
+    "datasets": ["fixture_dataset"],
+    "groups": ["analyst"],
+}
