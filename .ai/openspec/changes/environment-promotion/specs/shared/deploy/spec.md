@@ -50,7 +50,7 @@ The apply and ship workflows SHALL take a `commit` input beside `environment`, r
 
 ### Requirement: Every ship records its outcome on the commit
 
-Every ship that runs in GitHub Actions SHALL set the commit status `vecten/ship/<env>` on the commit it ships: `pending` when it starts, `success` once every host it ships answers its health poll, and `failure` otherwise. Among the default branch's last 200 commits, the one whose `vecten/ship/<env>` `success` status was set last SHALL be what that environment shipped last, so a promotion of an older commit with `--commit` makes that older commit what the environment runs.
+Every ship that runs in GitHub Actions SHALL set the commit status `vecten/ship/<env>` on the commit it ships: `pending` when it starts, `success` once every host it ships answers its health poll, and `failure` otherwise. A ship of a commit whose `vecten/ship/<env>` is already `success` SHALL leave that status, and the time it was set, as it is until the ship succeeds, and SHALL then set `success` again; a ship that cannot read the commit's status SHALL stop before any host changes when a later environment promotes from `<env>`. Among the default branch's last 200 commits, the one whose `vecten/ship/<env>` `success` status was set last SHALL be what that environment shipped last, so a promotion of an older commit with `--commit` makes that older commit what the environment runs.
 
 #### Scenario: Ship succeeds
 
@@ -61,6 +61,16 @@ Every ship that runs in GitHub Actions SHALL set the commit status `vecten/ship/
 
 - **WHEN** a ship of `b71d004` to `dev` fails its health poll and the hosts restore `a3f9c2e`
 - **THEN** `b71d004` carries `vecten/ship/dev` with state `failure`, and `a3f9c2e` is what `dev` shipped last
+
+#### Scenario: Retry of the commit the environment runs fails
+
+- **WHEN** `dev` shipped `a3f9c2e` and then `b71d004`, and a second ship of `b71d004` to `dev` fails, before any host changed or after the hosts restored their previous bundle
+- **THEN** `b71d004` keeps its earlier `vecten/ship/dev` `success`, `b71d004` is what `dev` shipped last, and `vecten promote --env prod` ships `b71d004`
+
+#### Scenario: Retry of a commit the environment left fails
+
+- **WHEN** `staging` shipped `b71d004`, then `vecten promote --env staging --commit a3f9c2e` shipped the older `a3f9c2e`, and a later ship of `b71d004` to `staging` fails, before or after its hosts changed
+- **THEN** `b71d004` keeps its earlier `success`, which is older than `a3f9c2e`'s, so `a3f9c2e` is still what `staging` shipped last
 
 #### Scenario: Rollback by commit
 
