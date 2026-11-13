@@ -2,8 +2,10 @@
 
 import json
 import shutil
+import tomllib
 
 import pytest
+import tomli_w
 
 from vecten.deploy import github_env
 from vecten.github import gh as gh_mod
@@ -307,3 +309,63 @@ def test_a_private_source_of_the_promoted_commit_needs_a_ci_credential(
     assert name in error and "VECTEN_GIT_CREDENTIALS" in error
     assert gh.named("workflow", "run") == []
     assert ["show", f"{SHIPPED}:extensions.lock.json"] in git.calls
+
+
+def _edit_toml(root, edit) -> None:
+    path = root / "vecten.toml"
+    doc = tomllib.loads(path.read_text())
+    edit(doc)
+    path.write_text(tomli_w.dumps(doc))
+
+
+@pytest.mark.parametrize("command", ["promote", "deploy"])
+def test_a_promoted_commit_with_keys_this_vecten_does_not_know_is_promoted(
+    invoke, project, monkeypatch, tmp_path, command
+):
+    shipped = tmp_path / "at-shipped"
+    shutil.copytree(project, shipped)
+
+    def retire(doc):
+        # Keys a later release removed: CI ships the commit with the CLI it pins.
+        doc["retired_setting"] = True
+        doc["warehouse"] = {**doc.get("warehouse", {}), "retired_option": "x"}
+        doc["project"]["retired_field"] = 1
+
+    _edit_toml(shipped, retire)
+    gh = use(
+        monkeypatch,
+        FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}),
+        FakeGit(head=HEAD, shown={SHIPPED: shipped}),
+    )
+    r = invoke(command, "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    [dispatch] = gh.named("workflow", "run")
+    assert f"commit={SHIPPED}" in dispatch
+
+
+@pytest.mark.parametrize(
+    ("key", "edit"),
+    [
+        ("extensions", lambda doc: doc.update(extensions="acme-resolution")),
+        ("warehouse.kind", lambda doc: doc.update(warehouse={"kind": "oracle"})),
+        ("warehouse", lambda doc: doc.update(warehouse="snowflake")),
+        ("project.name", lambda doc: doc["project"].update(name=42)),
+    ],
+)
+@pytest.mark.parametrize("command", ["promote", "deploy"])
+def test_a_promoted_commit_whose_needed_values_cannot_be_read_is_refused(
+    invoke, project, monkeypatch, tmp_path, command, key, edit
+):
+    shipped = tmp_path / "at-shipped"
+    shutil.copytree(project, shipped)
+    _edit_toml(shipped, edit)
+    gh = use(
+        monkeypatch,
+        FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}),
+        FakeGit(head=HEAD, shown={SHIPPED: shipped}),
+    )
+    r = invoke(command, "--env", "prod", "--json")
+    assert r.exit_code == 6, r.stdout
+    error = doc(r)["error"]
+    assert f"vecten.toml at {SHIPPED[:8]}" in error and key in error
+    assert gh.named("workflow", "run") == []

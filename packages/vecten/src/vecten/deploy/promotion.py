@@ -15,8 +15,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from vecten.deploy.github_env import (
     SHIPPED_SEARCH_LIMIT,
@@ -31,7 +32,10 @@ from vecten_shared.config import (
     CONFIG_FILE,
     DEFAULT_PROMOTION,
     EnvironmentFacts,
+    ProjectSection,
     VectenConfig,
+    WarehouseKind,
+    WarehouseSection,
     load_config,
     promotion_problem,
     promotion_scaffold_problem,
@@ -44,6 +48,7 @@ from vecten_shared.output import ExitCode, Failure
 __all__ = [
     "FETCHED",
     "SHIPPED_SEARCH_LIMIT",
+    "COMMIT_KEYS",
     "CommitFiles",
     "HeadFacts",
     "previous_in",
@@ -249,11 +254,52 @@ def promoted_tree(
 
 @dataclass
 class CommitFiles:
-    """The files a dispatched run reads from the commit it ships: its `vecten.toml`, holding
-    the head's environment facts as `promoted_tree` gives them, and its extension record."""
+    """What a dispatched run reads from the commit it ships: of its `vecten.toml` only the
+    keys `COMMIT_KEYS` names, the rest left at their defaults, with the head's environment
+    facts as `promoted_tree` gives them; and its extension record."""
 
     config: VectenConfig
     record: dict[str, Extension]
+
+
+# The keys the CI credential check and the Snowflake layout and base read, with their types;
+# every one but `project.name` has a default. A shipped commit pins its own CLI, which may
+# know keys this one does not, so nothing else of its `vecten.toml` is parsed.
+COMMIT_KEYS: dict[str, Any] = {
+    "extensions": list[str],
+    "components": list[str],
+    "project.name": str,
+    "warehouse.kind": WarehouseKind,
+    "warehouse.database": str,
+    "warehouse.shared_account": bool,
+}
+
+
+def _commit_config(text: str, where: str, facts: dict[str, EnvironmentFacts]) -> VectenConfig:
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise Failure(ExitCode.CONFIG, f"{where}: {exc}") from None
+    found: dict[str, dict[str, Any]] = {"": {}, "project": {}, "warehouse": {}}
+    for name, kind in COMMIT_KEYS.items():
+        table, _, key = name.rpartition(".")
+        values = raw.get(table, {}) if table else raw
+        if not isinstance(values, dict):
+            raise Failure(ExitCode.CONFIG, f"{where}: {table}: not a table")
+        if key not in values:
+            if name == "project.name":
+                raise Failure(ExitCode.CONFIG, f"{where}: {name}: missing")
+            continue
+        try:
+            found[table][key] = TypeAdapter(kind).validate_python(values[key], strict=True)
+        except ValidationError as exc:
+            raise Failure(ExitCode.CONFIG, f"{where}: {name}: {exc.errors()[0]['msg']}") from None
+    return VectenConfig.model_construct(
+        **found[""],
+        project=ProjectSection.model_construct(**found["project"]),
+        warehouse=WarehouseSection.model_construct(**found["warehouse"]),
+        environments={env: held.model_copy(deep=True) for env, held in facts.items()},
+    )
 
 
 def _where(commit: str) -> str:
@@ -271,18 +317,8 @@ def read_commit_files(
     """`vecten.toml` and the extension record of `commit`, `FETCHED` or a full commit id this
     checkout holds, with `facts` as the environment facts; an unreadable record reads as none,
     as a checkout's."""
-    where = _where(commit)
     text = show_commit_file(git, project_root, commit, CONFIG_FILE)
-    try:
-        config = VectenConfig.model_validate(tomllib.loads(text))
-    except tomllib.TOMLDecodeError as exc:
-        raise Failure(ExitCode.CONFIG, f"{where}: {exc}") from None
-    except ValidationError as exc:
-        first = exc.errors()[0]
-        loc = ".".join(str(p) for p in first["loc"])
-        raise Failure(ExitCode.CONFIG, f"{where}: {loc}: {first['msg']}") from None
-    config.environments.clear()
-    config.environments.update({env: found.model_copy(deep=True) for env, found in facts.items()})
+    config = _commit_config(text, _where(commit), facts)
     # git read the commit's vecten.toml, so a failed read of the record means the commit holds
     # none.
     shown = git.run(["show", f"{commit}:{RECORD_FILE}"], project_root)
