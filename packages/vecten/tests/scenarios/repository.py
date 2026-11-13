@@ -1,8 +1,8 @@
 """A project repository with real git history, and the GitHub that holds its pull requests.
 
 `ScenarioGh` answers the `gh api` reads that shipping makes for reviewed gap fixes from the
-pull requests `FixtureRepository.merge` recorded, so a ship sees the same review evidence as
-it would on GitHub.
+pull requests `FixtureRepository.merge` recorded, and for a commit's statuses from the ones
+a ship set, so a ship sees the same evidence as it would on GitHub.
 """
 
 from __future__ import annotations
@@ -44,6 +44,14 @@ class ScenarioGh:
         endpoint = args[1]
         if endpoint == prefix:
             return self._answer(args, {"full_name": self.repository})
+        if endpoint.startswith(prefix + "/commits/") and "/status?" in endpoint:
+            commit = endpoint[len(prefix + "/commits/") :].split("/", 1)[0]
+            latest: dict[str, dict] = {}
+            for sha, fields in self.statuses:
+                if sha == commit:
+                    status = dict(f.split("=", 1) for f in fields if f != "-f")
+                    latest[status["context"]] = status
+            return self._answer(args, {"sha": commit, "statuses": list(latest.values())})
         if endpoint.startswith("search/issues?"):
             query = parse_qs(urlparse(endpoint).query)["q"][0]
             gap = json.loads(query.split(" in:body ", 1)[1])
