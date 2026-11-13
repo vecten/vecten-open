@@ -171,7 +171,9 @@ def run_init_deploy(
             else shared,
         },
     )
-    section = DeploySection(**deploy)
+    # The order is no intake answer; only the person who wrote it into vecten.toml changes it.
+    order = config.deploy.promotion if config.deploy is not None else None
+    section = DeploySection(**deploy, promotion=order)
     changed: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         staged = Path(tmp) / "staged"

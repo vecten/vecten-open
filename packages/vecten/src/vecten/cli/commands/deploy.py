@@ -56,24 +56,91 @@ def _service_lines(data: dict) -> list[str]:
 def ship(
     env: str | None = typer.Option(None, "--env", help="The environment to ship to."),
     check: bool = typer.Option(
-        False, "--check", help="Report whether the environment is bootstrapped and deployed."
+        False,
+        "--check",
+        help="Report whether the environment is bootstrapped and deployed; without --env, "
+        "for the first environment of the promotion order.",
+    ),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="Inside GitHub Actions, the default branch's commit to ship instead of the "
+        "checked-out one.",
     ),
     json_output: bool = JsonFlag,
 ) -> None:
     """Send the project's content to every host of an environment; never runs Terraform."""
 
     def run(ctx: CliContext) -> Result:
-        if not env:
+        if not env and not check:
             raise Failure(ExitCode.USAGE, "ship needs --env <env>")
         # Deferred so that importing the CLI loads no deploy machinery or boto3.
         from vecten.deploy.run import ship_env
 
         root = ctx.require_project()
-        data = ship_env(root, env, gh=gh_mod.get_gh(), git=gh_mod.get_git(), check=check)
+        data = ship_env(
+            root, env or None, gh=gh_mod.get_gh(), git=gh_mod.get_git(), check=check, commit=commit
+        )
         if check:
             return Result(data=data, message=_facts_message(data))
         warnings = "".join(f"\nwarning: {w}" for w in data.get("warnings", []))
         return Result(data=data, message=_ship_message(data) + warnings)
+
+    run_command(json_output, run)
+
+
+def _promote_message(data: dict) -> str:
+    return (
+        f"promoted {data['commit'][:8]} from {data['promotes_from']} to {data['env']}: "
+        f"run {data['run_id']} {data['url']}"
+    )
+
+
+def _status_message(data: dict) -> str:
+    lines = []
+    for entry in data["environments"]:
+        shipped = entry["commit"][:8] if entry["commit"] else "nothing"
+        line = f"{entry['env']} {shipped}"
+        if entry["behind"]:
+            line += f", behind {entry['promotes_from']}: `vecten promote --env {entry['env']}`"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def promote(
+    env: str | None = typer.Option(None, "--env", help="The environment to promote to."),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="A commit the environment before it shipped, instead of the newest one; how "
+        "an environment rolls back to a commit it ran earlier.",
+    ),
+    status: bool = typer.Option(
+        False,
+        "--status",
+        help="List each environment of the promotion order with the commit it shipped last.",
+    ),
+    json_output: bool = JsonFlag,
+) -> None:
+    """Ship an environment of the promotion order the commit the environment before it
+    shipped: dispatches the ship workflow on the default branch with that commit and follows
+    it."""
+
+    def run(ctx: CliContext) -> Result:
+        # Deferred so that importing the CLI loads no deploy machinery or boto3.
+        from vecten.deploy.run import promote_env, promotion_status
+
+        if status:
+            if env or commit:
+                raise Failure(ExitCode.USAGE, "--status lists every environment; drop --env")
+            data = promotion_status(ctx.require_project(), gh=gh_mod.get_gh())
+            return Result(data=data, message=_status_message(data))
+        if not env:
+            raise Failure(ExitCode.USAGE, "promote needs --env <env>, or --status")
+        root = ctx.require_project()
+        data = promote_env(root, env, gh=gh_mod.get_gh(), git=gh_mod.get_git(), commit=commit)
+        warnings = "".join(f"\nwarning: {w}" for w in data.get("warnings", []))
+        return Result(data=data, message=_promote_message(data) + warnings)
 
     run_command(json_output, run)
 
@@ -193,6 +260,12 @@ def deploy(
         "--cloud-only",
         help="With --plan-only, plan the cloud root alone and read no Snowflake secret.",
     ),
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="For an environment after the first in the promotion order, a commit the "
+        "environment before it shipped, instead of the newest one.",
+    ),
     json_output: bool = JsonFlag,
 ) -> None:
     """Create or update an environment's infrastructure and ship every host. Inside GitHub
@@ -216,6 +289,7 @@ def deploy(
             git=gh_mod.get_git(),
             terraform=get_terraform(),
             cloud_only=cloud_only,
+            commit=commit,
         )
         return Result(data=data, message=_facts_message(data) if check else _deploy_message(data))
 
@@ -348,4 +422,5 @@ def register(app: typer.Typer) -> None:
     app.command("bootstrap")(bootstrap)
     app.command("deploy")(deploy)
     app.command("ship")(ship)
+    app.command("promote")(promote)
     app.command("destroy")(destroy)

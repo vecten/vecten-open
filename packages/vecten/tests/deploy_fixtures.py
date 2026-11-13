@@ -245,8 +245,33 @@ REPOSITORY_ID = 4242
 BRANCH_POLICIES_SUFFIX = "/deployment-branch-policies"
 
 
+def gh_fields(args: list[str]) -> dict[str, str]:
+    """The `-f`/`-F` fields of a `gh api` call."""
+    found = {}
+    for flag, value in zip(args, args[1:], strict=False):
+        if flag in ("-f", "-F"):
+            key, _, val = value.partition("=")
+            found[key] = val
+    return found
+
+
+def _stamp(seconds: int) -> str:
+    """A status's `createdAt`, `seconds` after a fixed moment."""
+    from datetime import UTC, datetime, timedelta
+
+    moment = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class FakeGh:
-    """Answers the calls `dispatch_and_follow` makes; `watch_code` is the watched run's exit."""
+    """Answers the calls `dispatch_and_follow` makes; `watch_code` is the watched run's exit.
+
+    `history` is the default branch newest first, as the GraphQL history search pages it;
+    `statuses` maps a commit to its `(context, state)` or `(context, state, created_at)`
+    statuses oldest first, and every `api -X POST .../statuses/<sha>` appends to it. A status
+    given without a time was created in history order: a commit nearer the head later. Every
+    status posted is newer than any given.
+    """
 
     def __init__(
         self,
@@ -261,7 +286,22 @@ class FakeGh:
         environment_policies: dict[str, tuple[dict | None, list[str]]] | None = None,
         listed: dict[str, list[str]] | None = None,
         forbidden: tuple[str, ...] = (),
+        history: tuple[str, ...] | list[str] = (),
+        statuses: dict[str, list[tuple]] | None = None,
     ):
+        self.history = list(history)
+        # sha -> [(context, state, created_at)], oldest first.
+        self.statuses: dict[str, list[tuple[str, str, str]]] = {}
+        for sha, found in (statuses or {}).items():
+            rank = len(self.history) - self.history.index(sha) if sha in self.history else 0
+            self.statuses[sha] = [
+                (entry[0], entry[1], entry[2] if len(entry) > 2 else _stamp(rank * 100 + i))
+                for i, entry in enumerate(found)
+            ]
+        self._posted = 0
+        # How many times a status write (`statuses`) or a commit's status read (`status`)
+        # fails with HTTP 502 before it answers.
+        self.transient: dict[str, int] = {}
         self.watch_code = watch_code
         # The names `secret list` and `variable list` answer, by `secret`, `variable`,
         # `secret --env <env>` or `variable --env <env>`; values are never listed.
@@ -296,8 +336,53 @@ class FakeGh:
     def _fail(self, args, status: int, text: str):
         return subprocess.CompletedProcess(args, 1, "", f"gh: {text} (HTTP {status})")
 
+    def _latest(self, sha: str, context: str) -> tuple[str, str, str] | None:
+        found = [entry for entry in self.statuses.get(sha, []) if entry[0] == context]
+        return found[-1] if found else None
+
+    def latest_status(self, sha: str, context: str) -> str | None:
+        found = self._latest(sha, context)
+        return found[1] if found else None
+
+    def posted_statuses(self) -> list[tuple[str, str, str]]:
+        """(commit, context, state) of every status set, in order."""
+        return [
+            (c[3].rsplit("/", 1)[-1], gh_fields(c)["context"], gh_fields(c)["state"])
+            for c in self.calls
+            if c[:3] == ["api", "-X", "POST"] and "/statuses/" in c[3]
+        ]
+
+    def _graphql(self, args):
+        fields = gh_fields(args)
+        start = int(fields["cursor"]) if fields.get("cursor") else 0
+        size = int(fields["first"])
+        nodes = []
+        for sha in self.history[start : start + size]:
+            found = self._latest(sha, fields["context"])
+            status = (
+                None
+                if found is None
+                else {"context": {"state": found[1].upper(), "createdAt": found[2]}}
+            )
+            nodes.append({"oid": sha, "status": status})
+        more = start + size < len(self.history)
+        history = {
+            "pageInfo": {"hasNextPage": more, "endCursor": str(start + size)},
+            "nodes": nodes,
+        }
+        body = {"data": {"repository": {"ref": {"target": {"history": history}}}}}
+        return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
+
     def _get(self, args):
-        path = args[1]
+        path = args[1].split("?", 1)[0]
+        if path.endswith("/status") and "/commits/" in path:
+            if self.transient.get("status"):
+                self.transient["status"] -= 1
+                return self._fail(args, 502, "Bad Gateway")
+            sha = path.split("/")[-2]
+            latest = {entry[0]: entry[1] for entry in self.statuses.get(sha, [])}
+            body = {"sha": sha, "statuses": [{"context": c, "state": s} for c, s in latest.items()]}
+            return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
         if path.lower() == f"repos/{self.canonical}".lower():
             body = {"full_name": self.canonical, "id": REPOSITORY_ID, "owner": {"id": OWNER_ID}}
             return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
@@ -317,9 +402,21 @@ class FakeGh:
         return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
 
     def _api(self, args):
+        if args[:2] == ["api", "graphql"]:
+            return self._graphql(args)
         if "-X" not in args:
             return self._get(args)
         method, path = args[args.index("-X") + 1], args[args.index("-X") + 2]
+        if method == "POST" and "/statuses/" in path:
+            if self.transient.get("statuses"):
+                self.transient["statuses"] -= 1
+                return self._fail(args, 502, "Bad Gateway")
+            fields = gh_fields(args)
+            sha = path.rsplit("/", 1)[-1]
+            self._posted += 1
+            created = _stamp(10**6 + self._posted)
+            self.statuses.setdefault(sha, []).append((fields["context"], fields["state"], created))
+            return subprocess.CompletedProcess(args, 0, "{}", "")
         if method == "PUT":
             restricting = any("deployment_branch_policy[" in a for a in args)
             if not self.branch_policies and restricting:

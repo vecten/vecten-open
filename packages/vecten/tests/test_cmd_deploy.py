@@ -148,6 +148,8 @@ def inside_actions(root: Path, monkeypatch):
     aws_credentials(monkeypatch, root)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    # The gh a ship inside Actions sets its commit status through.
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
     ssm = FakeSsm()
     with mock_aws():
         s3 = boto3.client("s3", region_name=REGION)
@@ -901,6 +903,7 @@ def _scaleway(root: Path, tmp_path: Path, monkeypatch, env: str = "prod", **outp
     monkeypatch.setattr(FakeTerraform, "outputs", outputs)
     monkeypatch.setattr(FakeTerraform, "log", org.log)
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
     watcher = FakeWatcher(org, storage, outputs)
     time = FakeTime()
     monkeypatch.setattr(scw_ship, "sleep", time.sleep)
