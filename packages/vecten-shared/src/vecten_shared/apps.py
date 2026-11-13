@@ -268,7 +268,7 @@ def bound_apps(config: VectenConfig, record: dict[str, Extension], taken: set[st
             service = app.service
             if service is None:
                 for key in ("hostname", "local"):
-                    if key in binding.model_fields_set:
+                    if getattr(binding, key) is not None:
                         raise _fail(f"{where}.{key}", "only a container app runs on a host")
                 continue
             label = binding.hostname or name
@@ -290,7 +290,9 @@ def bound_apps(config: VectenConfig, record: dict[str, Extension], taken: set[st
                     extension=extension,
                     name=app_service_name(name),
                     service=service,
-                    binding=ServiceBinding(hostname=label, local=binding.local, routes=routes),
+                    binding=ServiceBinding(
+                        hostname=label, local=binding.local is not False, routes=routes
+                    ),
                     host=host,
                     memory_mb=service.memory_mb,
                     cpus=service.cpus,
