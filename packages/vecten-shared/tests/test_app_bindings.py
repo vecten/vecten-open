@@ -57,7 +57,7 @@ def test_a_binding_loads_with_defaults():
         "overview"
     ]
     assert binding.groups == ["sales"]
-    assert binding.hostname is None and binding.local is True
+    assert binding.hostname is None and binding.local is None
 
 
 def test_a_project_without_apps_has_none():
@@ -264,3 +264,38 @@ def test_an_apps_principal_name_folds_every_run_of_other_characters():
 
     assert principal_name("a--b") == principal_name("a-b") == "svc_app_a_b"
     assert principal_name("overview-") == "svc_app_overview"
+
+
+def _saved_and_loaded(tmp_path, apps, existing):
+    from vecten_shared.config import load_config, save_config
+
+    if existing:
+        (tmp_path / "vecten.toml").write_text(
+            '[project]\nname = "demo"\nscaffold_version = "0.1.0"\n'
+        )
+    save_config(tmp_path, config(apps))
+    return load_config(tmp_path)
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["new file", "existing file"])
+def test_an_accepted_snowflake_binding_is_accepted_after_a_save(tmp_path, existing):
+    apps = {"acme-sales": {"finance": {"groups": ["finance"]}}}
+    check_bindings(config(apps), record())
+    loaded = _saved_and_loaded(tmp_path, apps, existing)
+    check_bindings(loaded, record())
+    text = (tmp_path / "vecten.toml").read_text()
+    assert "local" not in text and "hostname" not in text
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["new file", "existing file"])
+@pytest.mark.parametrize(
+    "chosen", [{}, {"local": True}, {"local": False}, {"hostname": "board", "local": False}]
+)
+def test_a_container_binding_keeps_its_host_choices_through_a_save(tmp_path, chosen, existing):
+    apps = {"acme-sales": {"overview": {"groups": ["sales"], **chosen}}}
+    loaded = _saved_and_loaded(tmp_path, apps, existing)
+    binding = loaded.apps["acme-sales"]["overview"]
+    assert binding.model_dump(exclude_none=True) == {"groups": ["sales"], **chosen}
+    [bound] = bound_services(loaded, record())
+    assert bound.binding.local is chosen.get("local", True)
+    assert bound.binding.hostname == chosen.get("hostname", "overview")

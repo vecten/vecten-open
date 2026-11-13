@@ -251,7 +251,9 @@ class AppBinding(Strict):
     groups: list[str]
     # A container app's DNS label below the environment's domain; the app's name when unset.
     hostname: str | None = None
-    local: bool = True
+    # Whether a container app runs on the laptop stack too; true when unset. None, not a default
+    # of true, keeps a snowflake app's binding free of a host field once vecten.toml is written.
+    local: bool | None = None
 
     @field_validator("groups")
     @classmethod
