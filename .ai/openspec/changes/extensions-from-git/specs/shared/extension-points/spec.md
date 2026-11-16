@@ -154,7 +154,7 @@ The only lines that may carry a URL in `requirements.txt` and in the locks SHALL
 
 On a laptop, the credential for git repositories SHALL be `GIT_CREDENTIALS` in `.env`. In CI, it SHALL be the `GIT_CREDENTIALS` variable in the environment of the step that runs `vecten`, and in no other step.
 
-Its value SHALL be one or more whitespace-separated entries `https://<username>:<token>@<host>[/<path>]`. An entry with a path SHALL apply only to repositories under that path.
+Its value SHALL be one or more whitespace-separated entries `https://<username>:<token>@<host>[/<path>]`. An entry with a path SHALL apply only to repositories under that path, and SHALL answer for a repository's path both with and without a `.git` suffix, so a host that redirects one spelling to the other before asking for a credential is answered.
 
 `vecten secret set` SHALL refuse `GIT_CREDENTIALS` and `MCP_GIT_CREDENTIALS` with `--env`.
 
@@ -180,6 +180,11 @@ When `GITHUB_ACTIONS` is `true`, `vecten` SHALL register each token found in the
 - **WHEN** `GIT_CREDENTIALS` in `.env` holds a token for `github.com/acme`, and `vecten extension add` names a tag of `github.com/acme/extensions`
 - **THEN** the extension is recorded and installed
 - **AND** the token appears in no process argument, no record, no output and no build backend's environment
+
+#### Scenario: Host redirects the repository path to its `.git` spelling
+
+- **WHEN** `GIT_CREDENTIALS` holds an entry for `gitlab.com/acme`, the source names `gitlab.com/acme/extensions`, and the host redirects that path to `acme/extensions.git` before asking for a credential
+- **THEN** the entry answers for the redirected path and the extension is recorded
 
 #### Scenario: Cloud secret refused
 
@@ -229,7 +234,7 @@ The extension SHALL be built on the host that installs it, as an in-repo extensi
 
 A failed git fetch SHALL exit non-zero naming the host, the repository path, the ref and one of these causes:
 
-- authentication refused, naming the credential to set;
+- authentication refused, naming the credential to set; when the refused entry has a path, also naming a redirect by the host as a possible cause, with the two ways around it (the source URL as the host redirects it, or an entry for the whole host);
 - repository not found, or not visible to the credential;
 - ref not found;
 - commit not reachable;

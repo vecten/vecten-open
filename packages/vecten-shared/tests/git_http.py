@@ -5,7 +5,9 @@ answers anyone; every other path, including one that does not exist, asks for cr
 first, as GitHub does, so a missing repository and a private one look alike to a client
 without a token. A repository named in `version_0` answers in protocol version 0, where git
 refuses to fetch a commit no ref advertises. A repository named in `errors` answers its
-advertisement with that error message, which git prints as `remote error: <message>`.
+advertisement with that error message, which git prints as `remote error: <message>`. A
+repository path named in `redirects` answers every request, before asking for credentials, with
+a 301 to the same request on the path it maps to, as GitLab does for a path without `.git`.
 """
 
 from __future__ import annotations
@@ -97,6 +99,7 @@ class GitServer:
     public: set[str] = field(default_factory=set)
     version_0: set[str] = field(default_factory=set)
     errors: dict[str, str] = field(default_factory=dict)
+    redirects: dict[str, str] = field(default_factory=dict)
     url: str = ""
     ca_path: Path | None = None
     authorizations: list[str | None] = field(default_factory=list)
@@ -171,6 +174,14 @@ class GitServer:
                 repository = _repository(path_info)
                 header = self.headers.get("Authorization")
                 server.authorizations.append(header)
+                if repository in server.redirects:
+                    rest = path_info.strip("/").removeprefix(repository)
+                    location = f"{server.url}/{server.redirects[repository]}{rest}"
+                    self.send_response(301)
+                    self.send_header("Location", f"{location}?{query}" if query else location)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if repository not in server.public and not server._authorized(header):
                     self.send_response(401)
                     self.send_header("WWW-Authenticate", 'Basic realm="git"')
