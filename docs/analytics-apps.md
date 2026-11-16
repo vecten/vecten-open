@@ -17,8 +17,7 @@ Terms used on this page:
 - **Login route**: a route of an extension service that only signed-in members of its groups
   reach; NGINX asks the gate before forwarding a request to it.
 - **Gate**: the MCP's check, at an app's or service's hostname, that a person is signed in and
-  in an admitted group. It is part of the extension services change and not merged on this
-  branch yet.
+  in an admitted group ([the gate](services.md#the-gate-signing-in-for-login-routes)).
 - **Access health**: the MCP's report of access problems, read with the admin API's
   `access-health` operation and shown by `vecten issues`.
 - **Reconciliation**: the MCP reapplying the desired grants to the warehouse, every fifteen
@@ -36,7 +35,7 @@ Terms used on this page:
 | Admission, access health and `vecten issues` entries | Built |
 | The viewer recorded in the audit | Built |
 | The Analytics screen, the admin API read, the `list_apps` tool and the `/apps` page | Built |
-| The gate in front of an app's hostname | Not merged yet. Until it is, NGINX answers every request to the app's login route with `503`; only the service's health path, `/_vecten/health`, is forwarded |
+| The gate in front of an app's hostname, admitting only through the app's admitted groups | Built |
 | Publishing a `snowflake` app (Streamlit in Snowflake) | Specified, not built: it needs warehouse resources that a later change adds ([#40](https://github.com/vecten/vecten-open/issues/40)) |
 | `vecten ship` listing a `snowflake` app as not published | Specified, not built; the Analytics screen lists it as not published |
 | `USAGE` grants on a Streamlit object for the admitted groups | Specified, not built (with #40) |
@@ -113,7 +112,7 @@ import streamlit as st
 from acme_sales.mcp_client import revenue_by_region
 
 st.title("Sales overview")
-# The gate passes the viewer's email as X-Vecten-User once it is merged.
+# The gate passes the viewer's email as X-Vecten-User, already percent-encoded.
 viewer = st.context.headers.get("X-Vecten-User", "")
 
 
@@ -167,6 +166,14 @@ of the first of its `components` that the project enables. It follows every rule
 extension service: isolation, limits and health check. It gets one `login` route at `/` for
 its bound groups, with WebSockets kept open. It needs no `[services]` table. A new hostname
 needs `vecten deploy` once before `ship` serves it.
+
+The gate stands in front of that route. A person signs in at `https://<hostname>.<domain>/`
+through the MCP, as for any [`login` route](services.md#the-gate-signing-in-for-login-routes),
+and passes only through a group the app admits (see [who may open an app](#who-may-open-an-app)),
+not through every bound group. Each request that passes carries the
+[identity headers](services.md#identity-headers-which-to-trust-and-why): `X-Vecten-User`,
+`X-Vecten-Principal`, `X-Vecten-Name`, `X-Vecten-Groups` (the person's current groups) and
+`X-Vecten-Admin`. A signed-in person the app does not admit gets NGINX's 403 "No access" page.
 
 The service receives:
 
@@ -246,9 +253,9 @@ group admitted them. Bind such groups to separate apps. A viewer mode, where the
 the viewing person, is a later change.
 
 **The viewer is audited.** An app may pass the viewing person's email in an
-`X-Vecten-On-Behalf-Of` header; once the gate is merged, the app reads it from the
-`X-Vecten-User` header the gate sends. The MCP records it, lower-cased, as `on_behalf_of` in the
-audit row, and only for an app principal. The header must appear once, hold at most 762 ASCII
+`X-Vecten-On-Behalf-Of` header. It reads it from the `X-Vecten-User` header the gate sends,
+which is already percent-encoded, and passes it on unchanged. The MCP records it, lower-cased,
+as `on_behalf_of` in the audit row, and only for an app principal. The header must appear once, hold at most 762 ASCII
 characters, and percent-decode to one visible `local@domain` of at most 254 characters.
 Otherwise nothing is recorded. The MCP never uses it to decide anything.
 
@@ -262,7 +269,6 @@ extra; with another client library, the protocol is the same:
 import json
 import os
 import time
-from urllib.parse import quote
 
 import httpx2
 from mcp import ClientSession
@@ -296,7 +302,8 @@ async def token():
 async def revenue_by_region(viewer):
     headers = {"Authorization": "Bearer " + await token()}
     if viewer:
-        headers["X-Vecten-On-Behalf-Of"] = quote(viewer, safe="@")
+        # X-Vecten-User as the gate sent it: encoding it again would record `%25` for `%`.
+        headers["X-Vecten-On-Behalf-Of"] = viewer
     async with httpx2.AsyncClient(headers=headers, timeout=httpx2.Timeout(30, read=300)) as http:
         async with streamable_http_client(MCP, http_client=http) as (read, write):
             async with ClientSession(read, write) as session:
@@ -333,8 +340,9 @@ principal named `svc_app_<app>` for a bound app that is not marked as that app's
 reads everything its groups can. Review who uses it, then run `vecten app connect` with
 `--adopt`, or delete it.
 
-Admission is computed now. Once the gate is merged, it admits a person at an app's hostname
-only through these groups.
+The gate admits a person at an app's hostname only through these groups. It reads the
+admission at each request, so a recomputed admission applies to the next request without a
+restart.
 
 Access health also lists an app principal whose warehouse roles may differ from its admitted
 groups': a role sync that failed and roles the warehouse reports beyond them (a warehouse

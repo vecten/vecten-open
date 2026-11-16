@@ -39,6 +39,10 @@ HEADER_SAFE = "".join(chr(c) for c in range(0x20, 0x7F) if chr(c) != "%")
 class GateRoute:
     host: str
     groups: tuple[str, ...]
+    # The bound app this route serves. Its admitted groups (AppScopes.admitted), read at each
+    # request, decide who passes, not `groups`: a bound group that cannot read every declared
+    # dataset is never admitted.
+    app: str | None = None
 
 
 def header_value(value: str) -> str:
@@ -46,21 +50,25 @@ def header_value(value: str) -> str:
 
 
 class GateService:
-    def __init__(self, oauth, routes: dict[str, GateRoute], *, port: str = ""):
+    def __init__(self, oauth, routes: dict[str, GateRoute], *, port: str = "", apps=None):
         self.oauth, self.state = oauth, oauth.state
         self.routes = dict(routes)
         self.hosts = frozenset(route.host for route in self.routes.values())
         self.port = port
+        # The AppScopes whose admission decides an app route; without it no app route admits.
+        self.apps = apps
 
     @classmethod
-    def from_config(cls, oauth, config):
-        """Every `login` route vecten.toml binds, at its hostname below the issuer's domain."""
+    def from_config(cls, oauth, config, apps=None):
+        """Every `login` route vecten.toml binds, and the route of each bound container app in
+        `apps` (AppScopes), at its hostname below the issuer's domain."""
+        from vecten_shared.apps import ROUTE, app_service_name
         from vecten_shared.config import service_hostname
 
         name, colon, port = urlsplit(oauth.issuer).netloc.partition(":")
         if not name.startswith("mcp."):
             # Service hostnames sit beside mcp.<domain>; without that name none can be known.
-            return cls(oauth, {})
+            return cls(oauth, {}, apps=apps)
         domain = name.removeprefix("mcp.")
         routes = {}
         for extension, bindings in config.services.items():
@@ -73,7 +81,15 @@ class GateService:
                         routes[f"{extension}.{service}.{route}"] = GateRoute(
                             host, tuple(bound.groups)
                         )
-        return cls(oauth, routes, port=colon + port)
+        for app in apps.apps.values() if apps else ():
+            if app.hostname is None:
+                continue
+            # The key NGINX names: the app runs as the service `app-<app>` with one route.
+            key = f"{app.extension}.{app_service_name(app.name)}.{ROUTE}"
+            routes[key] = GateRoute(
+                service_hostname(app.hostname, domain), tuple(app.groups), app=app.name
+            )
+        return cls(oauth, routes, port=colon + port, apps=apps)
 
     def origin(self, host):
         return f"https://{host}{self.port}"
@@ -144,9 +160,15 @@ class GateService:
         )
         return sid, pending["rd"]
 
+    def admits(self, route):
+        """The groups through which `route` admits a person now."""
+        if route.app is None:
+            return frozenset(route.groups)
+        return self.apps.admitted(route.app) if self.apps else frozenset()
+
     def verify(self, sid, host, route):
         """(status, headers): 401 without a live session on `host`, 403 when the person is in
-        none of the route's groups, else 200 with the five identity headers."""
+        none of the groups the route admits, else 200 with the five identity headers."""
         session = self.state.gate_session(digest(sid), now=self.oauth.clock()) if sid else None
         principal = self.state.principal(session["principal_id"]) if session else None
         if (
@@ -159,7 +181,7 @@ class GateService:
             return 401, {}
         bound = self.routes.get(route)
         groups = self.state.groups_for(principal["id"])
-        if bound is None or bound.host != host or not groups & set(bound.groups):
+        if bound is None or bound.host != host or not groups & self.admits(bound):
             return 403, {}
         return 200, {
             "X-Vecten-User": header_value(principal["email"]),
