@@ -66,7 +66,8 @@ function readGrant() {
     try {
         return change(enabled, relation);
     } catch (e) {
-        // Asked only after a failure: an owner with MANAGE GRANTS may not list every schema.
+        // Asked only after a failure: an owner granting by an account privilege may not list
+        // every schema it can grant on.
         if (!schemaExists()) return 'absent';
         throw e;
     }
