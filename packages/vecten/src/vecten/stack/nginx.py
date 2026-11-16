@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,11 +29,16 @@ def _upstream(url: str, uri: str = "", variable: str = "$upstream") -> str:
 
 
 AIRFLOW_UPSTREAM = "http://airflow-api-server:8080"
-AIRFLOW_PROXY = (
-    _upstream(AIRFLOW_UPSTREAM) + PROXY_HEADERS + "        proxy_set_header Host $http_host;\n"
-    "        proxy_set_header Upgrade $http_upgrade;\n"
+UPGRADE_HEADERS = (
+    "        proxy_set_header Upgrade $websocket_upgrade;\n"
     "        proxy_set_header Connection $connection_upgrade;\n"
-    "        proxy_read_timeout 300s;\n"
+)
+AIRFLOW_PROXY = (
+    _upstream(AIRFLOW_UPSTREAM)
+    + PROXY_HEADERS
+    + "        proxy_set_header Host $http_host;\n"
+    + UPGRADE_HEADERS
+    + "        proxy_read_timeout 300s;\n"
 )
 AIRFLOW_HEALTH_PATH = "/api/v2/monitor/health"
 # NGINX matches a decoded, normalised URI but forwards the one the client sent, so a request
@@ -45,8 +51,12 @@ AIRFLOW_HEALTH_PROXY = (
     + "        proxy_set_header Host $http_host;\n"
 )
 HOST_KEYS = {"platform": "airflow", "mcp": "mcp"}
+# An upgraded connection carries requests NGINX never sees, so none of its per-request checks
+# (allow, auth_request, the headers it sets) would apply to them; h2c is such an upgrade. Only
+# the WebSocket protocol, whose frames are not requests, is passed on.
 CONNECTION_UPGRADE_MAP = (
-    "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
+    'map $http_upgrade $websocket_upgrade {\n    default "";\n    "~*^websocket$" websocket;\n}\n'
+    "map $websocket_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
 )
 
 
@@ -124,6 +134,8 @@ class ServiceSite:
     upstream: str
     health_path: str | None
     routes: tuple[ServiceRoute, ...]
+    # Prefixes of the routes the service declares and vecten.toml does not bind.
+    unbound: tuple[str, ...] = ()
 
 
 IDENTITY_HEADERS = (
@@ -246,6 +258,13 @@ def service_site(bound: Bound, host: str) -> ServiceSite:
             )
             for name, route in bound.routes.items()
         ),
+        unbound=tuple(
+            sorted(
+                route_prefix(route.path)
+                for name, route in declared.routes.items()
+                if name not in bound.routes
+            )
+        ),
     )
 
 
@@ -301,8 +320,7 @@ def _route_body(
         + (_gate_check(route) if login else "")
         + f"        client_max_body_size {route.max_body_mb}m;\n"
         + _service_proxy(site.upstream, identity=IDENTITY_FROM_GATE if login else IDENTITY_CLEARED)
-        + "        proxy_set_header Upgrade $http_upgrade;\n"
-        + "        proxy_set_header Connection $connection_upgrade;\n"
+        + UPGRADE_HEADERS
         + timeout
     )
 
@@ -403,17 +421,53 @@ def _service_locations(site: ServiceSite, mode: str, gate: GateUpstream | None) 
             out.append(_location("/", body))
         else:
             out += [_location(f"= {prefix}", body), _location(f"{prefix}/", body)]
+    # A bound route whose prefix covers an unbound one would otherwise forward its paths, with
+    # that route's access. The longest prefix wins, so a bound route deeper still is served.
+    for prefix in site.unbound:
+        if prefix != "/":
+            out += [_location(f"= {prefix}", reserved), _location(f"{prefix}/", reserved)]
     if not covered:
         out.append(_location("/", reserved))
     return "".join(out)
 
 
-def _service_servers(site: ServiceSite, mode: str, gate: GateUpstream | None) -> list[str]:
+def _literal_regex(prefix: str) -> str:
+    # PCRE reads a backslash before any character other than a letter or digit as that
+    # character itself.
+    return re.sub(r"[^A-Za-z0-9/]", lambda m: "\\" + m.group(), prefix)
+
+
+def _case_map(site: ServiceSite, variable: str) -> str:
+    """1 for a path whose longest declared prefix, compared ignoring case, is not its own
+    spelling: NGINX's locations compare case, a service's router may not, so such a path could
+    reach that prefix's code through another route's access. The first matching entry wins,
+    so longer prefixes come first, and exact spellings before variants of the same length."""
+    declared = {route_prefix(r.path) for r in site.routes} | set(site.unbound)
+    prefixes = sorted(declared - {"/"})
+    if not prefixes:
+        return ""
+    entries = []
+    for length in sorted({len(p) for p in prefixes}, reverse=True):
+        same = [_literal_regex(p) for p in prefixes if len(p) == length]
+        entries += [f'    "~^{p}(?:/|$)" 0;\n' for p in same]
+        entries += [f'    "~*^{p}(?:/|$)" 1;\n' for p in same]
+    return f"map $uri {variable} {{\n    default 0;\n" + "".join(entries) + "}\n"
+
+
+def _service_servers(
+    site: ServiceSite, mode: str, gate: GateUpstream | None, index: int
+) -> list[str]:
     host = _bare(site.host)
+    variable = f"$vecten_case_{index}"
+    case_map = _case_map(site, variable)
+    # The server's rewrite phase runs before a location is chosen, so no route sees the path.
+    case_check = f"    if ({variable}) {{\n        return 404;\n    }}\n" if case_map else ""
     return [
+        *([case_map] if case_map else []),
         _redirect_server(site.host),
         f"server {{\n    listen 443 ssl;\n    server_name {host};\n"
         + _tls(host, mode)
+        + case_check
         + _service_locations(site, mode, gate)
         + "}\n",
     ]
@@ -477,8 +531,8 @@ def generate_nginx_conf(
             + MCP_PROXY
             + "    }\n}\n"
         )
-    for site in services:
-        out += _service_servers(site, mode, gate)
+    for index, site in enumerate(services):
+        out += _service_servers(site, mode, gate, index)
     return "\n".join(out)
 
 

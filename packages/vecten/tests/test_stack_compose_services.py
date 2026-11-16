@@ -2,7 +2,12 @@
 
 import pytest
 
-from vecten.stack.compose import SERVICES_BRIDGE, SERVICES_NETWORK, generate_compose
+from vecten.stack.compose import (
+    SERVICE_PIDS_LIMIT,
+    SERVICES_BRIDGE,
+    SERVICES_NETWORK,
+    generate_compose,
+)
 from vecten_shared.config import VectenConfig
 from vecten_shared.extension_record import Extension, record_text
 from vecten_shared.services import parse_service
@@ -74,6 +79,10 @@ def test_a_bound_service_runs_from_its_host_components_project_image(tmp_path):
     assert svc["command"] == ["python", "-m", "acme.bot", "--token", "$$HOME"]
     assert svc["restart"] == "unless-stopped"
     assert (svc["mem_limit"], svc["cpus"]) == ("256m", 0.5)
+    assert svc["pids_limit"] == SERVICE_PIDS_LIMIT
+    assert svc["security_opt"] == ["no-new-privileges:true"]
+    assert svc["cap_drop"] == ["ALL"]
+    assert "cap_add" not in svc and "privileged" not in svc
     assert svc["networks"] == [SERVICES_NETWORK]
     assert "ports" not in svc and "depends_on" not in svc
     assert svc["environment"] == {

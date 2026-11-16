@@ -79,6 +79,8 @@ def test_a_container_app_runs_the_launcher_from_the_platform_image(tmp_path):
     assert svc["profiles"] == ["platform"]
     assert svc["command"] == ["python", "-m", "vecten_shared.launch", "streamlit", "acme/app.py"]
     assert (svc["mem_limit"], svc["cpus"]) == ("512m", 0.5)
+    assert (svc["cap_drop"], svc["security_opt"]) == (["ALL"], ["no-new-privileges:true"])
+    assert svc["pids_limit"] > 0
     assert svc["networks"] == [SERVICES_NETWORK]
     assert svc["healthcheck"]["test"] == [
         "CMD",

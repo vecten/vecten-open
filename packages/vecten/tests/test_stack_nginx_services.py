@@ -9,7 +9,11 @@ from vecten.stack.nginx import (
     ServiceRoute,
     ServiceSite,
     generate_nginx_conf,
+    service_site,
 )
+from vecten_shared.config import VectenConfig
+from vecten_shared.extension_record import Extension
+from vecten_shared.services import bound_services, parse_service
 
 VM_HOSTS = {"airflow": "airflow.data.acme.com", "mcp": "mcp.data.acme.com"}
 LOCAL_HOSTS = {"airflow": "airflow.localhost:8443", "mcp": "mcp.localhost:8443"}
@@ -73,7 +77,7 @@ def test_a_public_route_forwards_to_the_service_with_upgrade_and_the_default_lim
         body = found[key]
         assert f"set $upstream {UPSTREAM};" in body
         assert "proxy_pass $upstream;" in body
-        assert "proxy_set_header Upgrade $http_upgrade;" in body
+        assert "proxy_set_header Upgrade $websocket_upgrade;" in body
         assert "proxy_set_header Connection $connection_upgrade;" in body
         assert "proxy_set_header X-Forwarded-For $remote_addr;" in body
         assert "proxy_read_timeout 300s;" in body
@@ -292,3 +296,185 @@ def test_a_gate_cookie_left_after_the_strip_refuses_the_request():
     for key, body in locations(tls(text, "bot.data.acme.com")).items():
         refuses = "if ($vecten_cookie_repeated) {\n            return 400;\n        }" in body
         assert refuses == ("proxy_pass" in body), key
+
+
+_WORD = r"""(?:"([^"]*)"|'([^']*)'|(\S+?))"""
+
+
+def map_value(text: str, source: str, target: str, value: str) -> str:
+    """What NGINX's `map <source> <target>` gives for `value`: the first matching regex, else
+    the exact string, else the default."""
+    found = re.search(
+        rf"^map {re.escape(source)} {re.escape(target)} {{\n(.*?)\n}}", text, re.S | re.M
+    )
+    assert found, (source, target)
+    table = {}
+    for match in re.finditer(rf"^\s+{_WORD}\s+{_WORD};$", found.group(1), re.M):
+        key = next(g for g in match.groups()[:3] if g is not None)
+        table[key] = next(g for g in match.groups()[3:] if g is not None)
+    for key, result in table.items():
+        if key.startswith("~*") and re.search(key[2:], value, re.I):
+            return result
+        if key.startswith("~") and not key.startswith("~*") and re.search(key[1:], value):
+            return result
+    return table.get(value, table["default"])
+
+
+@pytest.mark.parametrize("components", [("platform", "mcp"), ("platform",)])
+def test_only_a_websocket_upgrade_is_forwarded(components):
+    # A server accepting another protocol on the upgraded connection, such as h2c, would take
+    # its later requests past every check NGINX makes per request.
+    text = conf(site(routes=[ServiceRoute("/", "public", websocket=True)]), components=components)
+    for sent in ("websocket", "WebSocket", "WEBSOCKET"):
+        assert map_value(text, "$http_upgrade", "$websocket_upgrade", sent) == "websocket"
+    for sent in ("h2c", "websocket, h2c", "h2c, websocket", "websocketx", "", "HTTP/2.0"):
+        assert map_value(text, "$http_upgrade", "$websocket_upgrade", sent) == "", sent
+    assert map_value(text, "$websocket_upgrade", "$connection_upgrade", "websocket") == "upgrade"
+    assert map_value(text, "$websocket_upgrade", "$connection_upgrade", "") == "close"
+    assert "$http_upgrade" not in text.replace("map $http_upgrade ", "")
+    upgrades = re.findall(r"proxy_set_header Upgrade .*", text)
+    assert upgrades and set(upgrades) == {"proxy_set_header Upgrade $websocket_upgrade;"}
+
+
+def bound_site(declared_routes: dict, bound_routes: dict) -> ServiceSite:
+    declared = {
+        "command": ["python", "-m", "acme.portal"],
+        "port": 8000,
+        "health": {"path": "/healthz"},
+        "routes": declared_routes,
+    }
+    config = VectenConfig.model_validate(
+        {
+            "users": 5,
+            "project": {"name": "acme", "scaffold_version": "0.1.0"},
+            "extensions": ["acme"],
+            "deploy": {
+                "cloud": "scaleway",
+                "region": "fr-par",
+                "domain": "data.acme.com",
+                "dns_zone": "acme.com",
+                "github_repository": "acme/platform",
+            },
+            "services": {"acme": {"portal": {"hostname": "portal", "routes": bound_routes}}},
+        }
+    )
+    service = parse_service("acme", "portal", declared).service
+    record = {"acme": Extension("1.0", (), services={"portal": service})}
+    (bound,) = bound_services(config, record)
+    return service_site(bound, "portal.data.acme.com")
+
+
+HOME = {"path": "/", "access": "public"}
+ADMIN = {"path": "/admin", "access": "login", "groups": ["default"]}
+
+
+def test_a_declared_route_left_unbound_answers_404_under_a_bound_route_covering_it():
+    site = bound_site({"home": HOME, "admin": ADMIN}, {"home": {"access": "public"}})
+    found = locations(tls(conf(site), "portal.data.acme.com"))
+    assert "proxy_pass $upstream;" in found["/"]
+    for key in ("= /admin", "/admin/"):
+        assert "return 404;" in found[key], key
+        assert "proxy_pass" not in found[key] and "auth_request" not in found[key], key
+        for header in IDENTITY_HEADERS:
+            assert f'proxy_set_header {header} "";' in found[key], (key, header)
+
+
+def test_a_bound_route_under_an_unbound_one_is_still_served():
+    nested = {"path": "/admin/api", "access": "public"}
+    site = bound_site(
+        {"home": HOME, "admin": ADMIN, "api": nested},
+        {"home": {"access": "public"}, "api": {"access": "public"}},
+    )
+    found = locations(tls(conf(site), "portal.data.acme.com"))
+    assert "return 404;" in found["/admin/"] and "proxy_pass" not in found["/admin/"]
+    assert "proxy_pass $upstream;" in found["/admin/api/"]
+    assert "proxy_pass $upstream;" in found["= /admin/api"]
+
+
+def case_refused(text: str, host: str, uri: str) -> bool:
+    """Whether the server for `host` answers `uri` (NGINX's decoded, merged $uri) with 404
+    before any location is chosen."""
+    block = tls(text, host)
+    check = r"^    if \((\$vecten_case_\w+)\) {\n        return 404;\n    }$"
+    found = re.search(check, block, re.M)
+    if not found:
+        return False
+    return map_value(text, "$uri", found.group(1), uri) == "1"
+
+
+PORTAL = "portal.data.acme.com"
+
+
+def test_a_case_variant_of_a_declared_prefix_is_refused_before_any_route():
+    site = bound_site(
+        {"home": HOME, "admin": ADMIN, "settings": {**ADMIN, "path": "/settings.v2"}},
+        {"home": {"access": "public"}, "admin": {"access": "login", "groups": ["default"]}},
+    )
+    text = conf(site)
+    for uri in ("/ADMIN", "/Admin/x", "/aDmIn/users", "/SETTINGS.V2/a", "/Settings.v2"):
+        assert case_refused(text, PORTAL, uri), uri
+    for uri in ("/", "/admin", "/admin/x", "/settings.v2/a", "/adminx", "/ADMINX", "/docs/x"):
+        assert not case_refused(text, PORTAL, uri), uri
+    # A regex metacharacter in a prefix matches only itself.
+    assert not case_refused(text, PORTAL, "/settingsXv2/a")
+    # The check runs in the server's rewrite phase, ahead of every location.
+    block = tls(text, PORTAL)
+    assert block.index("if ($vecten_case_") < block.index("location ")
+
+
+def test_a_case_variant_is_judged_by_the_longest_declared_prefix():
+    nested = {"path": "/admin/public", "access": "public"}
+    secret = {"path": "/docs/secret", "access": "login", "groups": ["default"]}
+    docs = {"path": "/docs", "access": "public"}
+    site = bound_site(
+        {"admin": ADMIN, "public": nested, "docs": docs, "secret": secret},
+        {
+            "admin": {"access": "login", "groups": ["default"]},
+            "public": {"access": "public"},
+            "docs": {"access": "public"},
+            "secret": {"access": "login", "groups": ["default"]},
+        },
+    )
+    text = conf(site)
+    for uri in ("/admin/public/x", "/admin/x", "/docs/x", "/docs/secret/x", "/docs/SECRETx"):
+        assert not case_refused(text, PORTAL, uri), uri
+    for uri in ("/ADMIN/public/x", "/admin/PUBLIC/x", "/docs/SECRET/x", "/DOCS/secret"):
+        assert case_refused(text, PORTAL, uri), uri
+
+
+def test_prefixes_differing_only_in_case_each_keep_their_own_path():
+    site = bound_site(
+        {"lower": {"path": "/docs", "access": "public"}, "upper": {**ADMIN, "path": "/Docs"}},
+        {"lower": {"access": "public"}, "upper": {"access": "login", "groups": ["default"]}},
+    )
+    text = conf(site)
+    assert not case_refused(text, PORTAL, "/docs/x")
+    assert not case_refused(text, PORTAL, "/Docs/x")
+    assert case_refused(text, PORTAL, "/DOCS/x")
+
+
+def test_a_site_whose_only_route_is_the_root_needs_no_case_check():
+    text = conf(site(routes=[ServiceRoute("/", "public")]))
+    assert "$vecten_case_" not in text
+
+
+def test_each_site_gets_its_own_case_check():
+    text = conf(
+        site(host="bot.data.acme.com", routes=[ServiceRoute("/a", "public")]),
+        site(host="portal.data.acme.com", routes=[ServiceRoute("/b", "public")]),
+    )
+    assert case_refused(text, "bot.data.acme.com", "/A/x")
+    assert not case_refused(text, "bot.data.acme.com", "/B/x")
+    assert case_refused(text, "portal.data.acme.com", "/B/x")
+
+
+def test_an_unbound_route_at_the_root_leaves_one_fallback():
+    site = bound_site(
+        {"home": HOME, "hook": {"path": "/hook", "access": "public"}},
+        {"hook": {"access": "public"}},
+    )
+    block = tls(conf(site), "portal.data.acme.com")
+    assert block.count("    location / {") == 1
+    found = locations(block)
+    assert "return 404;" in found["/"] and "proxy_pass" not in found["/"]
+    assert "proxy_pass $upstream;" in found["/hook/"]

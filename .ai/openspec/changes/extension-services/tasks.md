@@ -43,6 +43,9 @@ template can run on; B must land in the same release, before any public route re
 - [ ] 4.8 **[deploy]** On AWS (standard) and on Scaleway (minimal): `vecten deploy` creates `portal.<domain>`, the next ship issues its certificate, the renewal timer's dry run (`certbot renew --dry-run`) covers it, and a public route answers over HTTPS
 - [ ] 4.9 **[deploy]** A ship from a GitHub-hosted runner reports a routed service's health while its route's `allow` excludes the runner
 - [ ] 4.10 **[deploy]** Apex binding (`@`) on a domain below its zone, on both clouds
+- [x] 4.11 Review of #89, items 2 and 3: forward `Upgrade` only for `websocket` (services and Airflow); a declared route left unbound answers 404 under a bound route's path; unit and Docker-tier tests
+- [x] 4.12 Issue #91: service containers run with `cap_drop: [ALL]`, `no-new-privileges` and `pids_limit: 512`; a Docker-tier test reads them from the running service
+- [x] 4.13 A case variant of a declared route prefix (judged by the longest prefix matching without regard to case) answers 404 at the server's rewrite phase, through a per-hostname `map` on `$uri`; unit tests for nesting and case-only-different prefixes, Docker-tier test with written and percent-encoded variants
 
 ## 5. The gate (PR D)
 

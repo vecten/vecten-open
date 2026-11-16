@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from vecten.stack.compose import STACK_DIR, compose_project_name
+from vecten.stack.compose import SERVICE_PIDS_LIMIT, STACK_DIR, compose_project_name
 from vecten_shared.config import load_config
 
 from .test_up_e2e import REPO, docker_ok, drop_volumes, front_door, service_container, vecten
@@ -125,6 +125,26 @@ def test_up_runs_services_isolated_and_keeps_their_volume(tmp_path):
             text=True,
         ).stdout.strip()
         assert image.startswith(f"{project}-airflow:")
+
+        # The service ran to healthy with no capability, no privilege gain and a pid limit.
+        host_config = json.loads(
+            subprocess.run(
+                ["docker", "inspect", "--format", "{{json .HostConfig}}", web],
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        assert host_config["CapDrop"] == ["ALL"]
+        assert not host_config["CapAdd"]
+        assert "no-new-privileges:true" in host_config["SecurityOpt"]
+        assert host_config["PidsLimit"] == SERVICE_PIDS_LIMIT
+        status = subprocess.run(
+            ["docker", "exec", web, "cat", "/proc/1/status"], capture_output=True, text=True
+        ).stdout
+        fields = dict(line.split(":\t", 1) for line in status.splitlines() if ":\t" in line)
+        assert fields["NoNewPrivs"].strip() == "1", status
+        for field in ("CapEff", "CapPrm", "CapBnd"):
+            assert int(fields[field], 16) == 0, (field, status)
 
         # The service crash-loops while the stack keeps serving.
         with httpx.Client(verify=False, timeout=10) as client:

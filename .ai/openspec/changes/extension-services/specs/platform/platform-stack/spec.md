@@ -2,12 +2,17 @@
 
 ### Requirement: A service runs from its host component's project image
 
-Each bound service SHALL run as one Compose service named `svc-<extension>-<service>`, from the project image of its `host` component (the Airflow project image for `platform`, the MCP project image for `mcp`), with the declared command, in the Compose profile of that component, with `restart: unless-stopped`. Its environment SHALL hold `VECTEN_ENV`, `VECTEN_COMPONENT=service`, `VECTEN_SERVICE` (`<extension>.<service>`), `VECTEN_PROJECT_ROOT`, `PORT` and, when a hostname is bound, `VECTEN_PUBLIC_URL` (`https://<hostname>`), and it SHALL mount `vecten.toml` and `extensions.lock.json` read-only, so the shared read API resolves its settings. It SHALL run with the memory and CPU limits of its binding. When `volume` is declared, the named volume `svc-<extension>-<service>-data` SHALL be mounted at that path, writable by the image's runtime user. No other service SHALL depend on it, and `nginx` SHALL NOT wait for it.
+Each bound service SHALL run as one Compose service named `svc-<extension>-<service>`, from the project image of its `host` component (the Airflow project image for `platform`, the MCP project image for `mcp`), with the declared command, in the Compose profile of that component, with `restart: unless-stopped`. Its environment SHALL hold `VECTEN_ENV`, `VECTEN_COMPONENT=service`, `VECTEN_SERVICE` (`<extension>.<service>`), `VECTEN_PROJECT_ROOT`, `PORT` and, when a hostname is bound, `VECTEN_PUBLIC_URL` (`https://<hostname>`), and it SHALL mount `vecten.toml` and `extensions.lock.json` read-only, so the shared read API resolves its settings. It SHALL run with the memory and CPU limits of its binding, a limit of 512 processes and threads, every Linux capability dropped and `no-new-privileges` set, as its image's non-root user. When `volume` is declared, the named volume `svc-<extension>-<service>-data` SHALL be mounted at that path, writable by the image's runtime user. No other service SHALL depend on it, and `nginx` SHALL NOT wait for it.
 
 #### Scenario: Bot on the platform host
 
 - **WHEN** `acme-bot`'s service `bot` is bound with `host = "platform"` and the platform host is shipped
 - **THEN** `svc-acme-bot-bot` runs from the platform project image in the `platform` profile, with a 256 MB memory limit and its declared command
+
+#### Scenario: No privileges
+
+- **WHEN** a bound service, or a container app, is running and healthy
+- **THEN** its main process has no effective, permitted or bounding capability, `NoNewPrivs` is set, and its container's pid limit is 512
 
 #### Scenario: Volume survives a ship
 
@@ -40,7 +45,7 @@ Services SHALL join only the Compose network `vecten-services`, whose bridge nam
 
 ### Requirement: Routes and their access modes
 
-For each bound route whose hostname the environment serves, NGINX SHALL serve the route's path prefix on that hostname and forward it to the service's port, passing `Upgrade` and `Connection` for WebSockets. A route with `websocket = true` SHALL use a one-day read timeout with proxy buffering off; any other route a 300-second read timeout. The request body limit SHALL be the route's `max_body_mb`, 1 MB by default. A `public` route SHALL be forwarded for any client. A `login` route SHALL be forwarded only after the gate admits the request, as the `mcp/mcp-auth` spec states, and SHALL redirect an unauthenticated browser to the gate's sign-in on the same hostname and answer 403 to a person outside the route's groups. A non-empty `allow` SHALL answer 403 to every other address before any gate check, on deployed hosts only. On every service hostname, a path no bound route covers SHALL answer 404 and reach no service.
+For each bound route whose hostname the environment serves, NGINX SHALL serve the route's path prefix on that hostname and forward it to the service's port, passing `Upgrade: websocket` and `Connection: upgrade` only when the client's `Upgrade` is `websocket`, in any letter case; any other request, including one asking to upgrade to another protocol such as `h2c`, SHALL be forwarded with `Connection: close` and no `Upgrade`. The Airflow hostname SHALL forward upgrades on the same rule. A route with `websocket = true` SHALL use a one-day read timeout with proxy buffering off; any other route a 300-second read timeout. The request body limit SHALL be the route's `max_body_mb`, 1 MB by default. A `public` route SHALL be forwarded for any client. A `login` route SHALL be forwarded only after the gate admits the request, as the `mcp/mcp-auth` spec states, and SHALL redirect an unauthenticated browser to the gate's sign-in on the same hostname and answer 403 to a person outside the route's groups. A non-empty `allow` SHALL answer 403 to every other address before any gate check, on deployed hosts only. On every service hostname, a path no bound route covers SHALL answer 404 and reach no service, and so SHALL a path whose longest covering declared route is one `vecten.toml` does not bind, even when a bound route's shorter prefix covers it. Route prefixes SHALL be compared case-sensitively: a request whose longest declared prefix compared ignoring case (after NGINX decodes and normalises the path) is not spelled as declared SHALL answer 404 before any route is chosen; a route at `/` SHALL never cause this answer.
 
 #### Scenario: Webhook
 
@@ -56,6 +61,26 @@ For each bound route whose hostname the environment serves, NGINX SHALL serve th
 
 - **WHEN** a client requests `https://bot.<domain>/internal/debug` and no route covers it
 - **THEN** NGINX answers 404 and nothing is forwarded
+
+#### Scenario: Unbound route under a bound one
+
+- **WHEN** a service declares `/` as `public` and `/admin` as `login`, the project binds only `/`, and a client requests `https://portal.<domain>/admin/users`
+- **THEN** NGINX answers 404 and nothing is forwarded
+
+#### Scenario: Case variant of a protected prefix
+
+- **WHEN** a service binds `/` as `public` and `/admin` as `login`, and a client requests `https://portal.<domain>/ADMIN/users` or `/%41dmin/users`
+- **THEN** NGINX answers 404 and nothing is forwarded, while `/admin/users` still goes through the gate
+
+#### Scenario: Public route nested under a login route
+
+- **WHEN** a service binds `/admin` as `login` and `/admin/public` as `public`
+- **THEN** `/admin/public/x` is served without sign-in, `/admin/x` requires it, and `/ADMIN/public/x` answers 404
+
+#### Scenario: Upgrade to another protocol
+
+- **WHEN** a client sends a request with `Upgrade: h2c` to a route
+- **THEN** the service receives the request without an `Upgrade` header, and later requests on that connection still pass through NGINX's checks
 
 #### Scenario: Streamlit WebSocket
 

@@ -320,6 +320,8 @@ SERVICES_NETWORK = "vecten-services"
 SERVICES_BRIDGE = "vecten-services"
 SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
 SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
+# Processes and threads together; it bounds a fork loop, not a threaded server's pool.
+SERVICE_PIDS_LIMIT = 512
 
 
 def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str]:
@@ -441,6 +443,10 @@ def _service(
         "volumes": volumes,
         "mem_limit": f"{bound.memory_mb}m",
         "cpus": bound.cpus,
+        "pids_limit": SERVICE_PIDS_LIMIT,
+        # Both images run as a non-root user, which holds no effective capability anyway.
+        "cap_drop": ["ALL"],
+        "security_opt": ["no-new-privileges:true"],
         "networks": [SERVICES_NETWORK],
         "healthcheck": {
             "test": test,

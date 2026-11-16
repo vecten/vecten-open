@@ -152,7 +152,11 @@ Consequences:
 
 - `ship` and `up` render from `vecten.toml` and `extensions.lock.json` alone. A service or route
   that the record declares but `vecten.toml` does not list does not run; `next` reports it as
-  unwired. A table in `vecten.toml` naming a service or route the record does not declare is
+  unwired. An unlisted route nested under a listed one's path answers 404 rather than fall to
+  the listed route's access; a listed route deeper still is served, by NGINX's longest-prefix
+  match. NGINX compares prefixes with their case and a service's router may not, so a path
+  whose longest declared prefix, compared ignoring case, is spelled otherwise answers 404 at
+  the server's rewrite phase, through one `map` on `$uri` per hostname. A table in `vecten.toml` naming a service or route the record does not declare is
   refused when the configuration loads.
 - A package upgrade that adds a public route changes nothing until a person adds it to
   `vecten.toml`, and that addition shows in the project's diff.
@@ -444,6 +448,18 @@ delivers); it cannot call the provider for anything else; it reaches the MCP thr
 `https://mcp.<domain>` like any client (Decision 13). DAG code and the MCP server keep their
 identity.
 
+**No privileges.** Every service container runs with
+`cap_drop: [ALL]`, `security_opt: ["no-new-privileges:true"]` and `pids_limit: 512`. Both
+project images run as a non-root user (`airflow`, `app`), whose process Docker starts with no
+effective or permitted capability, and Docker lets an unprivileged process bind any port in the
+container's network namespace, so dropping the bounding set changes nothing a service does
+today; the Docker-tier tests run a service that writes its volume, and a Streamlit app, with
+these settings. No declaration field adds a capability back: under a non-root user with
+`no-new-privileges`, Docker's `cap_add` would reach no process, since Docker grants no ambient
+capability and the kernel ignores file capabilities, so such a field would promise what it
+cannot give. A service that needs a capability would need a root user, which this design
+refuses. `read_only` is left out of this step: it needs a writable tmpfs layout per image.
+
 ### Decision 7: Placement: the platform host by default, the MCP host only by choice — *Accepted*
 
 **Context.** `minimal` puts everything on one VM. Under `standard`, the platform VM runs DAG code
@@ -536,7 +552,10 @@ the declaration.
   `.env` through the same declared names. A bot that needs a public webhook URL on the laptop
   needs a tunnel the developer runs; the docs say so and suggest `local = false` otherwise.
 - **WebSockets.** Every route forwards `Upgrade` and `Connection` through the existing
-  `$connection_upgrade` map, so a WebSocket needs no flag. `websocket = true` raises the read
+  `$connection_upgrade` map, so a WebSocket needs no flag. Only the value `websocket` (any
+  letter case) is forwarded: a server that accepted `h2c` would carry
+  later requests on the upgraded connection past `allow`, the gate and the identity headers,
+  which NGINX applies per request. The Airflow hostname follows the same rule. `websocket = true` raises the read
   timeout to one day and turns proxy buffering off, which Streamlit needs. Without it the read
   timeout is 300 seconds. An open WebSocket survives a gate session's end until it reconnects; the
   docs say so.
