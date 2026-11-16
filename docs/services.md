@@ -96,7 +96,13 @@ On a service's hostname NGINX answers each request this way:
 | `/_vecten/gate/...` | The gate's sign-in, on a hostname with a `login` route. |
 | Any other path under `/_vecten` | 404. |
 | A path a bound route covers | The route's access mode, below. |
+| A path a declared route that `vecten.toml` does not bind covers | 404, even under a bound route's path. |
 | Anything else | 404; nothing reaches the service. |
+
+A route the service declares and the project leaves out of `vecten.toml` is closed, not handed
+to whichever bound route covers its path: with `/` bound as `public` and `/admin` declared but
+not bound, `/admin` and everything below it answer 404. A bound route deeper still, such as
+`/admin/api`, is served as its binding says.
 
 A request whose raw path holds an encoded slash or backslash (`%2F`, `%5C`), a backslash, a `;`
 (or `%3B`), `//`, or a `.` or `..` segment, encoded or not, is answered 400 on every path a
@@ -117,7 +123,10 @@ A forwarded request carries `X-Forwarded-For` and `X-Real-IP` set to the address
 (whatever the client sent there is replaced), `X-Forwarded-Proto`, and the `Host` the browser
 sent. Its body may be at most the route's `max_body_mb`, else NGINX answers 413. WebSocket
 upgrades pass on every route; NGINX closes a connection on which the service sends nothing for
-300 seconds, or for a day with `websocket = true`.
+300 seconds, or for a day with `websocket = true`. An upgrade to any other protocol, such as
+`h2c` (HTTP/2 over plain HTTP), is not passed on: the service sees an ordinary request without
+an `Upgrade` header. Requests sent over an upgraded connection would bypass NGINX's checks
+(`allow`, the gate and the identity headers), and WebSocket messages are not requests.
 
 ## The gate: signing in for `login` routes
 
@@ -283,6 +292,12 @@ little as possible:
   from the secrets the host may read, passes them to that service's container only, and masks
   them in every line `ship` prints. The extension's other secrets, the project's own, and the
   stack's are not passed.
+- **No privileges.** A service runs as the image's non-root user (`airflow` in the Airflow
+  image, `app` in the MCP image) with every Linux capability dropped (`cap_drop: [ALL]`) and
+  `no-new-privileges` set, so a setuid program in the image cannot make it root. A service that
+  needs a capability, such as binding a raw socket, cannot be run. It may start at most 512
+  processes and threads together (`pids_limit`), so a runaway loop of forks stops there
+  instead of exhausting the host.
 
 When the firewall rule cannot be added, the host fails closed. A ship fails, naming its
 `service isolation` step, and the version of the project already running on the host stays. At boot a failed guard unit
@@ -294,7 +309,11 @@ with the rest of the stack: install only extensions you trust.
 
 Every service runs with a memory limit and a CPU limit: the declaration's, 256 MB and half a
 CPU unless it says otherwise, or the binding's `memory_mb` and `cpus`. A service that exceeds its
-memory is killed and restarted; one that wants more CPU is slowed down.
+memory is killed and restarted; one that wants more CPU is slowed down. Every service also runs
+with a fixed limit of 512 processes and threads; past it, starting another one fails inside
+the service, and no binding raises it. Libraries that size a thread pool from the machine's
+CPU count rather than the service's `cpus` (DuckDB, Arrow, BLAS) can approach it on a large VM;
+cap their threads, for example with `OMP_NUM_THREADS` or the library's own setting.
 
 Nothing compares the limits with the VM's size or refuses them; Vecten prints the sums for you
 to compare. `vecten up` prints what the laptop's services reserve, and
