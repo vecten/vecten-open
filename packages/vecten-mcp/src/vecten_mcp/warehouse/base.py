@@ -21,6 +21,15 @@ class RoleExists(ValueError):
         self.role = role
 
 
+class Absent(ValueError):
+    """The schema, or the relation, a grant names does not exist in the warehouse. A revoke
+    on it has nothing to remove: a dropped object takes its grants with it."""
+
+    def __init__(self, place):
+        super().__init__(f"{place} does not exist in the warehouse")
+        self.place = place
+
+
 class WarehouseAdapter(Protocol):
     def inspect_account(self, name: str) -> Account | None: ...
     def create_account(self, name: str, kind: str) -> None: ...

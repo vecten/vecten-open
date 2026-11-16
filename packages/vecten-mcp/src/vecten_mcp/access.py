@@ -14,7 +14,7 @@ from vecten_mcp.apps import APP_PRINCIPALS
 from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
-from vecten_mcp.warehouse.base import RoleExists
+from vecten_mcp.warehouse.base import Absent, RoleExists
 from vecten_shared.identity_setup import ACCESS_VERSION
 
 logger = logging.getLogger(__name__)
@@ -515,22 +515,46 @@ class AccessService:
             return {"installed": installed, "required": ACCESS_VERSION, "fix": OUTDATED_FIX}
         return None
 
-    def _apply(self, grant, source, allowed, done=None):
+    def _apply(self, grant, source, allowed, done=None, missing=None):
         """The relation kinds the warehouse refused a grant, each with its message; the grant
         holds for every other kind. A revoke that leaves anything refused raises, so its
         applied record stays for the next pass. `done` collects the schemas attempted, the
-        failing one included."""
+        failing one included, and `missing` the area schemas that do not exist yet.
+
+        A revoke on a schema or relation that does not exist is done: dropping an object
+        drops its grants. An area grant skips a schema dbt has not created, since dbt creates
+        one only when a model lands in it, and every reconciliation tries it again; a schema
+        or dataset grant on a missing object fails, naming it."""
         done = [] if done is None else done
+        missing = [] if missing is None else missing
         role = self.require_group(grant["group"])["warehouse_role"]
         if grant["kind"] == "dataset":
-            refused = list(self.adapter.dataset_grant(role, source, allowed) or [])
+            try:
+                refused = list(self.adapter.dataset_grant(role, source, allowed) or [])
+            except Absent:
+                if allowed:
+                    raise
+                refused = []
         else:
             refused = []
             for schema in source if grant["kind"] == "area" else [source]:
                 # Listed before the call: a refusal can follow a part of the grant.
                 done.append(schema)
-                kinds = self.adapter.schema_grant(role, schema, allowed) or []
+                try:
+                    kinds = self.adapter.schema_grant(role, schema, allowed) or []
+                except Absent:
+                    if allowed and grant["kind"] != "area":
+                        raise
+                    missing.append(schema)
+                    continue
                 refused += [f"{schema}: {kind}" for kind in kinds]
+            if allowed and missing:
+                logger.info(
+                    "Area %s for %s waits for %s, which does not exist yet",
+                    grant["target"],
+                    grant["group"],
+                    ", ".join(missing),
+                )
         if refused and not allowed:
             raise RuntimeError("the warehouse refused part of the revoke: " + "; ".join(refused))
         if refused:
@@ -552,9 +576,9 @@ class AccessService:
         row = {"group": group, "kind": kind, "target": target}
         key = self._key(group, kind, target)
         with self.lock:
-            done = []
+            done, missing = [], []
             try:
-                refused = self._apply(row, source, True, done)
+                refused = self._apply(row, source, True, done, missing)
             except Exception:
                 # A grant held before this call stays; reconciliation retries it.
                 if kind == "area" and done and not self.state.get("applied_grants", key):
@@ -563,7 +587,8 @@ class AccessService:
             self.state.put("grants", key, row)
             self.state.put("applied_grants", key, dict(row, source=source))
             self.admit()
-        return dict(row, refused=refused) if refused else row
+        result = dict(row, refused=refused) if refused else dict(row)
+        return dict(result, waiting=missing) if missing else result
 
     def _roll_back(self, row, schemas):
         """Revoke the schemas of an area grant that failed part-way; what cannot be revoked is
@@ -574,6 +599,8 @@ class AccessService:
             try:
                 if self.adapter.schema_grant(role, schema, False):
                     raise RuntimeError("the warehouse refused part of the revoke")
+            except Absent:
+                continue
             except Exception as exc:
                 logger.warning("Rolling back %s on %s failed: %s", row, schema, describe_error(exc))
                 left.append(schema)
@@ -655,17 +682,20 @@ class AccessService:
                 if outdated and self._current(row["kind"], source):
                     failed(key, row, "grant", outdated["fix"])
                     continue
-                done = []
+                done, missing = [], []
                 try:
                     role = self.require_group(row["group"])["warehouse_role"]
-                    pieces = self._pieces(role, row["kind"], source)
-                    absent = key not in applied if held is None else not pieces <= _folded(held)
-                    refused = self._apply(row, source, True, done)
+                    refused = self._apply(row, source, True, done, missing)
+                    # Compared with what the roles held before this grant: an area schema
+                    # that does not exist yet is no part of it.
+                    reached = [s for s in source if s not in missing] if missing else source
+                    pieces = self._pieces(role, row["kind"], reached)
+                    new = key not in applied if held is None else not pieces <= _folded(held)
                     self.state.put("applied_grants", key, dict(row, source=source))
                     reconciled += 1
                     if refused:
                         failures.append(dict(row, operation="grant", error="; ".join(refused)))
-                    if absent:
+                    if new:
                         report["added"].append(dict(row))
                         logger.info("Granted %s %s to %s", row["kind"], row["target"], row["group"])
                 except Exception as exc:
@@ -831,6 +861,8 @@ class AccessService:
             if any(kind != "select" for _, kind, *_ in grants):
                 try:
                     self.adapter.schema_grant(role, schema, False)
+                except Absent:
+                    pass
                 except Exception as exc:
                     failure(role, schema, exc)
                 continue
@@ -841,6 +873,8 @@ class AccessService:
                     continue
                 try:
                     self.adapter.dataset_grant(role, f"{schema}.{relation}", False)
+                except Absent:
+                    pass
                 except Exception as exc:
                     failure(role, f"{schema}.{relation}", exc)
         # What a revoke removed is read back: a kind the procedures do not cover stays.

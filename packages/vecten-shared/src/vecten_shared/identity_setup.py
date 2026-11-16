@@ -261,7 +261,7 @@ ALTER USER {user} SET AUTHENTICATION POLICY {service};
 
 # The version the installed procedures must report for every feature this server uses; it
 # changes with their text, and an install that reports none is version 1.
-ACCESS_VERSION = 4
+ACCESS_VERSION = 5
 
 
 def snowflake_access_helper(names):

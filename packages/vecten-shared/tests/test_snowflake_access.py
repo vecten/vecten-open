@@ -111,6 +111,9 @@ const statements = [];
 // The relation's SELECT as SHOW GRANTS TO ROLE reads it back: held before a revoke.
 let selects = p.enabled === false && p.relation !== null;
 const snowflake = {execute: ({sqlText, binds}) => {
+    if (sqlText.indexOf('INFORMATION_SCHEMA.SCHEMATA') !== -1) {
+        return {next: () => true, getColumnValue: () => 1};
+    }
     if (sqlText.startsWith('SHOW GRANTS ON ROLE')) {
         let first = true;
         return {next: () => {const value = first && p.owned; first = false; return value;},
@@ -318,6 +321,9 @@ const fs = require('fs');
 const p = JSON.parse(fs.readFileSync(0, 'utf8'));
 const statements = [];
 const snowflake = {execute: ({sqlText}) => {
+    if (sqlText.indexOf('INFORMATION_SCHEMA.SCHEMATA') !== -1) {
+        return {next: () => true, getColumnValue: () => 1};
+    }
     statements.push(sqlText);
     if (sqlText.startsWith('SHOW GRANTS')) {
         let first = true;
@@ -587,6 +593,7 @@ const snowflake = {execute: ({sqlText}) => {
         return rows([{privilege:'OWNERSHIP', granted_to:'ROLE', grantee_name:'PROVISIONER'}]);
     }
     if (sqlText.startsWith('SELECT TABLE_TYPE')) return rows([{1: p.tableType}]);
+    if (sqlText.indexOf('INFORMATION_SCHEMA.SCHEMATA') !== -1) return rows([{1: 1}]);
     if (sqlText.startsWith('SHOW GRANTS TO ROLE')) return rows(held);
     if (sqlText.startsWith('SHOW FUTURE GRANTS TO ROLE')) return rows(future);
     const refused = p.refuse.find(part => sqlText.indexOf(part) !== -1);
@@ -747,3 +754,137 @@ def test_a_dataset_grant_no_object_type_changes_fails(enabled):
 def test_a_base_table_no_object_type_accepts_fails_with_the_first_refusal():
     output = _kinds(relation="ORDERS", refuse=("ON TABLE", "ON DYNAMIC TABLE", "ON ICEBERG TABLE"))
     assert "ON TABLE is not supported" in output["error"]
+
+
+ABSENT_RUN = r"""
+const fs = require('fs');
+const p = JSON.parse(fs.readFileSync(0, 'utf8'));
+// Every query, and the GRANT and REVOKE statements the account accepted.
+const statements = [];
+const rows = (list) => {
+    let i = -1;
+    return {next: () => ++i < list.length, getColumnValue: (key) => list[i][key]};
+};
+const snowflake = {execute: ({sqlText, binds}) => {
+    if (sqlText.startsWith('SHOW GRANTS ON ROLE')) {
+        statements.push({sqlText, binds: null});
+        return rows(p.owned ? [{privilege:'OWNERSHIP', granted_to:'ROLE',
+                                grantee_name:'PROVISIONER'}] : []);
+    }
+    if (sqlText.indexOf('INFORMATION_SCHEMA.SCHEMATA') !== -1) {
+        statements.push({sqlText, binds});
+        return rows([{1: p.schemas.indexOf(binds[0]) !== -1 ? 1 : 0}]);
+    }
+    if (sqlText.startsWith('SELECT TABLE_TYPE')) {
+        const known = p.schemas.indexOf(binds[0]) !== -1 && p.relations.indexOf(binds[1]) !== -1;
+        return rows(known ? [{1: 'BASE TABLE'}] : []);
+    }
+    // A statement naming a schema the database lacks fails as Snowflake's does.
+    if (sqlText.indexOf('"D"."' + p.schema + '"') !== -1 && p.schemas.indexOf(p.schema) === -1) {
+        throw new Error("Schema 'D." + p.schema + "' does not exist or not authorized.");
+    }
+    statements.push({sqlText, binds: binds || null});
+    return rows([]);
+}};
+const arg = v => v === null ? undefined : (typeof v === 'boolean' ? Number(v) : v);
+let value = null, error = null;
+try {
+    value = new Function('snowflake','TARGET','SCHEMA_NAME','RELATION_NAME','ENABLED',p.handler)(
+        snowflake, p.target, p.schema, arg(p.relation), arg(p.enabled));
+} catch (e) { error = String(e); }
+process.stdout.write(JSON.stringify({value, error, statements}));
+"""
+
+
+def _absent(
+    schema, enabled, *, relation=None, schemas=(), relations=(), target="FINANCE", owned=True
+):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
+    result = subprocess.run(
+        [node, "-e", ABSENT_RUN],
+        input=json.dumps(
+            dict(
+                handler=_script().split("$$")[1],
+                schema=schema,
+                relation=relation,
+                enabled=enabled,
+                schemas=list(schemas),
+                relations=list(relations),
+                target=target,
+                owned=owned,
+            )
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def _lookups(output):
+    return [s for s in output["statements"] if "SCHEMATA" in s["sqlText"]]
+
+
+def _touching(output, schema):
+    """The GRANT and REVOKE statements the account accepted on `schema`."""
+    texts = [s["sqlText"] for s in output["statements"]]
+    return [t for t in texts if t.startswith(("GRANT", "REVOKE")) and f'"{schema}"' in t]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("relation", [None, "INVOICE"])
+def test_read_grant_on_a_schema_that_does_not_exist_answers_absent_and_changes_nothing(
+    enabled, relation
+):
+    output = _absent("CORE_FINANCE", enabled, relation=relation, schemas=["MARTS_FINANCE"])
+    assert output["error"] is None and output["value"] == "absent", output
+    assert _touching(output, "CORE_FINANCE") == []
+    if relation and not enabled:
+        # A revoke on a relation the database does not list has nothing to remove.
+        assert _lookups(output) == []
+        return
+    [lookup] = _lookups(output)
+    # The schema's name is bound, never spliced into the query.
+    assert lookup["sqlText"] == (
+        'SELECT COUNT(*) FROM "D".INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=?'
+    )
+    assert lookup["binds"] == ["CORE_FINANCE"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_read_grant_on_a_schema_that_exists_never_asks_whether_it_exists(enabled):
+    # An owner holding MANAGE GRANTS may change grants on a schema it cannot list.
+    output = _absent("MARTS_FINANCE", enabled, schemas=["MARTS_FINANCE"])
+    assert output["error"] is None and output["value"] == "ok", output
+    assert _touching(output, "MARTS_FINANCE")
+    assert _lookups(output) == []
+
+
+@pytest.mark.parametrize(
+    ("schema", "target", "owned", "error"),
+    [
+        ("PRIVATE", "FINANCE", True, "outside the approved convention"),
+        ("CORE_FINANCE", "FINANCE", False, "not owned by provisioner"),
+        ("CORE_FINANCE", "SECURITYADMIN", True, "not a bounded reader role"),
+    ],
+)
+def test_read_grant_refuses_a_target_or_schema_before_telling_whether_a_schema_exists(
+    schema, target, owned, error
+):
+    output = _absent(schema, True, target=target, owned=owned)
+    assert error in output["error"], output
+    assert _lookups(output) == []
+
+
+def test_read_grant_revoke_on_a_relation_that_does_not_exist_answers_absent():
+    output = _absent("MARTS_FINANCE", False, relation="INVOICE", schemas=["MARTS_FINANCE"])
+    assert output["error"] is None and output["value"] == "absent", output
+    assert _touching(output, "MARTS_FINANCE") == []
+
+
+def test_read_grant_grant_on_a_relation_that_does_not_exist_fails_naming_it():
+    output = _absent("MARTS_FINANCE", True, relation="INVOICE", schemas=["MARTS_FINANCE"])
+    assert "dataset relation does not exist: MARTS_FINANCE.INVOICE" in output["error"]
+    assert _touching(output, "MARTS_FINANCE") == []

@@ -4,7 +4,7 @@ import json
 import re
 from contextlib import contextmanager
 
-from vecten_mcp.warehouse.base import Account, RoleExists, check_account
+from vecten_mcp.warehouse.base import Absent, Account, RoleExists, check_account
 
 
 def quote(name):
@@ -315,7 +315,9 @@ class SnowflakeAdapter:
 
     def _grant(self, role, schema, relation, grant):
         """`<shape> <kind>: <warehouse message>` for each relation kind READ_GRANT reports the
-        account refused; the other kinds were applied."""
+        account refused; the other kinds were applied. READ_GRANT answers `absent`, changing
+        nothing, for a schema that does not exist and for a revoke on a missing relation: the
+        provisioner sees no schema it holds nothing on, so only the owner can tell."""
         if role != self.DEFAULT_ROLE:
             check_account(role)
         with self.control() as cursor:
@@ -324,6 +326,8 @@ class SnowflakeAdapter:
                 (self._role(role), schema.upper(), relation.upper() if relation else None, grant),
             ).fetchone()
         answer = str(row[0]) if row else ""
+        if answer == "absent":
+            raise Absent(f"{schema}.{relation}" if relation else schema)
         if not answer.startswith("refused: "):
             return []
         return [f"{r['kind']}: {r['error']}" for r in json.loads(answer.removeprefix("refused: "))]

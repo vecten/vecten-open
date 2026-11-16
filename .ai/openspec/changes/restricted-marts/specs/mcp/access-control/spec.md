@@ -69,7 +69,7 @@ The default group SHALL be granted the `core` and `marts` schemas as schema gran
 ## ADDED Requirements
 
 ### Requirement: Restricted areas are closed until granted
-A restricted area SHALL be a pair of schemas, `core_<area>` and `marts_<area>`, declared in `vecten.toml`. No role SHALL hold a read grant in an area until an admin grants the area to a group. An area grant SHALL be a schema grant on both schemas, applied and revoked together, from the admin panel and `vecten grant --area <area>`. Each schema SHALL get its own schema-level future grant, so a relation dbt creates or replaces in the area is readable by the granted groups and by no one else.
+A restricted area SHALL be a pair of schemas, `core_<area>` and `marts_<area>`, declared in `vecten.toml`. No role SHALL hold a read grant in an area until an admin grants the area to a group. An area grant SHALL be a schema grant on both schemas, applied and revoked together, from the admin panel and `vecten grant --area <area>`. Each schema SHALL get its own schema-level future grant, so a relation dbt creates or replaces in the area is readable by the granted groups and by no one else. dbt creates a schema only when a model lands in it, so an area grant SHALL cover the area's schemas that exist, be recorded whole, and name the schemas it waits for; reconciliation SHALL grant a waiting schema once it exists. A revoke on a schema or relation that does not exist SHALL count as done: dropping an object drops its grants. A schema or dataset grant on a missing object SHALL be refused, naming it.
 
 #### Scenario: Restricted mart rebuilt
 - **WHEN** `finance` is granted the area `finance` and dbt rebuilds `marts_finance.finance_revenue` with `CREATE OR REPLACE`
@@ -79,6 +79,15 @@ A restricted area SHALL be a pair of schemas, `core_<area>` and `marts_<area>`, 
 #### Scenario: Area built before any grant
 - **WHEN** dbt creates `marts_payroll` for a declared area that no group has been granted
 - **THEN** no group's role can read anything in it
+
+#### Scenario: Marts-only area
+- **WHEN** an admin runs `vecten grant --area finance --group finance` and the warehouse has `marts_finance` but no `core_finance`
+- **THEN** the grant is recorded, `finance` can read `marts_finance`, and the command names `core_finance` as waiting
+- **AND** the first reconciliation after dbt creates `core_finance` grants it to `finance`
+
+#### Scenario: Revoke on a schema that does not exist
+- **WHEN** the `finance` area grant is revoked while `core_finance` does not exist
+- **THEN** the revoke completes, and no reconciliation lists a failed revoke on `core_finance`
 
 #### Scenario: Grant of an undeclared area
 - **WHEN** an admin runs `vecten grant --area hr --group people` and `vecten.toml` declares no area `hr`

@@ -358,6 +358,86 @@ def test_postgres_schema_grants_fail_closed_until_owner_authority_is_configured(
     assert all(statement.startswith("SELECT") for statement, _ in connection.statements)
 
 
+class CatalogConnection(SQLConnection):
+    """Answers the Postgres adapter's grant path: the helpers table exists, `schemas` and
+    `relations` are what the catalogs hold, and every schema has one helper."""
+
+    def __init__(self, schemas=(), relations=()):
+        super().__init__()
+        self.schemas, self.relations = set(schemas), set(relations)
+
+    def transaction(self):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        text = self.statements[-1][0]
+        if "to_regclass" in text:
+            return Cursor([("vecten_access.helpers",)])
+        if "FROM pg_namespace WHERE nspname" in text:
+            return Cursor([(1,)] if params[0] in self.schemas else [])
+        if "FROM vecten_access.helpers" in text:
+            return Cursor([("grant_" + params[0], 10)])
+        if "CROSS JOIN pg_roles" in text:
+            return Cursor([(10,)])
+        if "FROM pg_class c JOIN pg_namespace" in text:
+            return Cursor([(1,)] if tuple(params) in self.relations else [])
+        return Cursor([])
+
+
+@pytest.mark.parametrize("grant", [True, False])
+def test_postgres_grant_on_a_schema_that_does_not_exist_names_it_and_calls_no_helper(grant):
+    from vecten_mcp.warehouse.base import Absent
+
+    connection = CatalogConnection(schemas={"marts_finance"})
+    adapter = PostgresAdapter(lambda: connection, lambda: connection)
+    with pytest.raises(Absent, match="core_finance"):
+        adapter.schema_grant("finance", "core_finance", grant)
+    with pytest.raises(Absent, match="core_finance"):
+        adapter.dataset_grant("finance", "core_finance.invoice", grant)
+    assert not [s for s, _ in connection.statements if "vecten_access" in s and "helpers" not in s]
+    adapter.schema_grant("finance", "marts_finance", grant)
+    assert any('"vecten_access"."grant_marts_finance"' in s for s, _ in connection.statements)
+
+
+def test_postgres_revoke_on_a_relation_that_does_not_exist_is_absent_and_its_grant_refused():
+    from vecten_mcp.warehouse.base import Absent
+
+    connection = CatalogConnection(schemas={"marts"})
+    adapter = PostgresAdapter(lambda: connection, lambda: connection)
+    with pytest.raises(Absent, match="marts.orders"):
+        adapter.dataset_grant("finance", "marts.orders", False)
+    with pytest.raises(ValueError, match="dataset relation does not exist: marts.orders") as raised:
+        adapter.dataset_grant("finance", "marts.orders", True)
+    assert not isinstance(raised.value, Absent)
+
+
+@pytest.mark.parametrize("grant", [True, False])
+def test_snowflake_grant_the_procedure_answers_absent_raises_absent(grant):
+    from vecten_mcp.warehouse.base import Absent
+
+    class Connection:
+        def cursor(self):
+            return self
+
+        def execute(self, sql, params=None):
+            return self
+
+        def fetchone(self):
+            return ("absent",)
+
+        def close(self):
+            pass
+
+    adapter = SnowflakeAdapter(Connection, None, None, names=names())
+    with pytest.raises(Absent, match="core_finance"):
+        adapter.schema_grant("finance", "core_finance", grant)
+    with pytest.raises(Absent, match="core_finance.invoice"):
+        adapter.dataset_grant("finance", "D.core_finance.invoice", grant)
+
+
 @pytest.mark.parametrize("grant", [True, False])
 def test_snowflake_grants_call_bounded_owner_procedure(grant):
     statements = []

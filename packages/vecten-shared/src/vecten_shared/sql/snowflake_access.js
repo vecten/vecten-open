@@ -63,6 +63,26 @@ function readGrant() {
         throw new Error('schema is outside the approved convention');
     }
     owned(TARGET);
+    try {
+        return change(enabled, relation);
+    } catch (e) {
+        // Asked only after a failure: an owner with MANAGE GRANTS may not list every schema.
+        if (!schemaExists()) return 'absent';
+        throw e;
+    }
+}
+// The provisioner sees no schema it holds nothing on, so only the owner can tell that one does
+// not exist: it holds no grant to revoke and takes none.
+function schemaExists() {
+    var schemata = snowflake.execute({
+        sqlText: 'SELECT COUNT(*) FROM ' + quoted(database) +
+            '.INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=?',
+        binds: [SCHEMA_NAME]
+    });
+    return schemata.next() && schemata.getColumnValue(1) > 0;
+}
+// The grant or revoke itself, once the target and the schema have passed every check.
+function change(enabled, relation) {
     var target = ' ROLE ' + quoted(TARGET);
     var schema = quoted(database) + '.' + quoted(SCHEMA_NAME);
     var action = enabled ? 'GRANT' : 'REVOKE';
@@ -74,7 +94,11 @@ function readGrant() {
             sqlText: 'SELECT TABLE_TYPE FROM ' + quoted(database) + '.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?',
             binds: [SCHEMA_NAME, relation]
         });
-        if (!table.next()) throw new Error('dataset relation does not exist');
+        if (!table.next()) {
+            // A relation that does not exist holds no grant to revoke.
+            if (!enabled) return 'absent';
+            throw new Error('dataset relation does not exist: ' + SCHEMA_NAME + '.' + relation);
+        }
         var tableType = table.getColumnValue(1);
         // A base table may be a dynamic or Iceberg table, whose GRANT names another object
         // type; a statement naming the wrong one can succeed and change nothing, so each type

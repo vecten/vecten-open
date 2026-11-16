@@ -40,12 +40,25 @@ def _grant(ctx, env, dataset, schema, area, group, revoke=False):
         )
     if kind != "dataset" and not revoke:
         _record_declared_access(root, env, client, kind, target)
+    waiting = ""
+    if data.get("waiting"):
+        names = " and ".join(data["waiting"])
+        verb, it = ("do", "them") if len(data["waiting"]) > 1 else ("does", "it")
+        waiting = (
+            f" {names} {verb} not exist yet; the first reconciliation after dbt creates {it} "
+            f"grants {it} too."
+        )
     if data.get("refused"):
         raise Failure(
             ExitCode.TOOL_FAILED,
-            "Grant applied except where the warehouse refused it: " + "; ".join(data["refused"]),
+            "Grant applied except where the warehouse refused it: "
+            + "; ".join(data["refused"])
+            + "."
+            + waiting,
             data,
         )
+    if waiting:
+        return Result(data=data, message="Grant recorded." + waiting)
     return Result(data=data, message="Grant revoked." if revoke else "Grant applied.")
 
 

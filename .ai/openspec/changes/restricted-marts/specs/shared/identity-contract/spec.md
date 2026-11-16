@@ -63,7 +63,7 @@ as `loader`, before it installs the helpers.
 
 ### Requirement: Provisioner scope on Snowflake
 
-On Snowflake the `provisioner` SHALL be a custom role holding `CREATE USER` and `CREATE ROLE` on the account, ownership of the roles it creates, and grant option on `analyst` and on `SELECT` over core/marts, plus USAGE on the protected `VECTEN_ACCESS` schema and its `READ_GRANT`, `READ_GRANTS` and `SOURCE_EXISTS` procedures, and nothing else. The administrator-owned `READ_GRANT` procedure SHALL limit operations to `USAGE` and `SELECT` grants in the configured database. It SHALL cover tables, views, materialized views, dynamic tables, external tables and Iceberg tables. The schema SHALL be a convention schema, a `RAW_<SOURCE>` schema, or one matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$`. The procedure SHALL accept as target only ANALYST or a role owned by PROVISIONER, and never `READER`. The administrator-owned `READ_GRANTS` procedure SHALL return the read grants and schema-level future grants that one such target holds in the configured database, and change nothing. Neither procedure SHALL delegate MANAGE GRANTS or ownership to provisioner. Each procedure SHALL report a version, and the `mcp` component SHALL refuse area grants and drift revocation while the installed version is older than its own, naming `vecten mcp provisioner-script`. Startup checks SHALL include future grants.
+On Snowflake the `provisioner` SHALL be a custom role holding `CREATE USER` and `CREATE ROLE` on the account, ownership of the roles it creates, and grant option on `analyst` and on `SELECT` over core/marts, plus USAGE on the protected `VECTEN_ACCESS` schema and its `READ_GRANT`, `READ_GRANTS` and `SOURCE_EXISTS` procedures, and nothing else. The administrator-owned `READ_GRANT` procedure SHALL limit operations to `USAGE` and `SELECT` grants in the configured database. It SHALL cover tables, views, materialized views, dynamic tables, external tables and Iceberg tables. The schema SHALL be a convention schema, a `RAW_<SOURCE>` schema, or one matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$`. The procedure SHALL accept as target only ANALYST or a role owned by PROVISIONER, and never `READER`. Once the target and schema pass those checks, the procedure SHALL answer `absent` and change nothing when the schema does not exist, or when a revoke names a relation that does not exist; the provisioner cannot see a schema it holds nothing on, so only the owner can tell. The administrator-owned `READ_GRANTS` procedure SHALL return the read grants and schema-level future grants that one such target holds in the configured database, and change nothing. Neither procedure SHALL delegate MANAGE GRANTS or ownership to provisioner. Each procedure SHALL report a version, and the `mcp` component SHALL refuse area grants and drift revocation while the installed version is older than its own, naming `vecten mcp provisioner-script`. Startup checks SHALL include future grants.
 
 #### Scenario: Snowflake provisioner checked
 
@@ -75,6 +75,11 @@ On Snowflake the `provisioner` SHALL be a custom role holding `CREATE USER` and 
 - **WHEN** the `mcp` component starts and `READ_GRANT` reports an older version
 - **THEN** existing dataset and schema grants keep reconciling
 - **AND** an area grant is refused, and access health names `vecten mcp provisioner-script` as the fix
+
+#### Scenario: Schema not created yet
+
+- **WHEN** `READ_GRANT` is called for `CORE_FINANCE` and the database has no such schema
+- **THEN** it answers `absent` and changes nothing, for a grant and for a revoke
 
 #### Scenario: Target outside the bound
 
