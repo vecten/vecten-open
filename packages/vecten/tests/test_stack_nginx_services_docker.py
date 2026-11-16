@@ -75,6 +75,8 @@ SITE = ServiceSite(
         ServiceRoute("/office", "public", allow=("192.0.2.0/24",)),
         ServiceRoute("/settings", "login", groups=("finance",)),
     ),
+    # Declared and left unbound, under the bound /api/messages.
+    unbound=("/api/messages/admin",),
 )
 
 
@@ -175,6 +177,8 @@ def test_nginx_serves_a_service_hostname_as_the_routes_and_the_health_path_say(t
         # A plain prefix would also cover these; whole segments do not.
         assert status(port, ca, "GET", "/api/messagesx") == 404
         assert status(port, ca, "GET", "/internal/debug") == 404
+        assert status(port, ca, "GET", "/api/messages/admin") == 404
+        assert status(port, ca, "GET", "/api/messages/admin/users") == 404
         assert status(port, ca, "GET", "/_vecten/anything") == 404
         assert status(port, ca, "HEAD", "/_vecten/health") == 200
         assert status(port, ca, "POST", "/_vecten/health") == 403
@@ -197,6 +201,16 @@ def test_nginx_serves_a_service_hostname_as_the_routes_and_the_health_path_say(t
             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
         )
         assert upgrade.startswith("HTTP/1.1 101"), upgrade
+        # Any other protocol is answered as a plain request: no Upgrade reaches the service.
+        for path, protocol in (("/api/messages", "h2c"), ("/live", "websocket, h2c")):
+            plain = request(
+                port,
+                ca,
+                f"GET {path} HTTP/1.1\r\nHost: {HOST}\r\nUpgrade: {protocol}\r\n"
+                "Connection: Upgrade, HTTP2-Settings\r\n"
+                "HTTP2-Settings: AAMAAABkAARAAAAAAAIAAAAA\r\n\r\n",
+            )
+            assert plain.startswith("HTTP/1.1 200"), plain
         received = seen(stub)[before:]
     assert [(r["method"], r["path"]) for r in received] == [
         ("POST", "/api/messages"),
@@ -204,10 +218,16 @@ def test_nginx_serves_a_service_hostname_as_the_routes_and_the_health_path_say(t
         ("HEAD", "/healthz"),
         ("GET", "/healthz"),
         ("GET", "/live"),
+        ("GET", "/api/messages"),
+        ("GET", "/live"),
     ]
     for answered in received[:2]:
         headers = answered["headers"]
         assert not [h for h in headers if h.replace("_", "-").startswith("x-vecten")], headers
         assert headers["cookie"] == "a=1; b=2"
         assert headers["x-forwarded-for"]
-    assert received[-1]["headers"]["upgrade"].lower() == "websocket"
+    assert received[4]["headers"]["upgrade"].lower() == "websocket"
+    for answered in received[5:]:
+        headers = answered["headers"]
+        assert "upgrade" not in headers, headers
+        assert headers["connection"] == "close", headers

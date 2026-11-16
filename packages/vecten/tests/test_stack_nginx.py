@@ -25,7 +25,7 @@ def test_both_components_local():
     assert (
         "proxy_buffering off" in mcp and "ssl_certificate /etc/nginx/certs/mcp.localhost.crt" in mcp
     )
-    assert "proxy_set_header Upgrade $http_upgrade" in airflow
+    assert "proxy_set_header Upgrade $websocket_upgrade;" in airflow
     assert "proxy_set_header Host $http_host;" in airflow
     assert "proxy_set_header Connection $connection_upgrade;" in airflow
     assert "chunked_transfer_encoding" not in conf
@@ -41,7 +41,9 @@ def test_default_server_rejects_unknown_sni_without_a_certificate():
 def test_connection_upgrade_map_is_emitted_once_at_the_top():
     conf = generate_nginx_conf(["platform", "mcp"], HOSTS, "local")
     assert conf.startswith(
-        "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
+        "map $http_upgrade $websocket_upgrade {\n"
+        '    default "";\n    "~*^websocket$" websocket;\n}\n'
+        "map $websocket_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
     )
     assert conf.count("map $http_upgrade") == 1
 

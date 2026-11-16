@@ -28,11 +28,16 @@ def _upstream(url: str, uri: str = "", variable: str = "$upstream") -> str:
 
 
 AIRFLOW_UPSTREAM = "http://airflow-api-server:8080"
-AIRFLOW_PROXY = (
-    _upstream(AIRFLOW_UPSTREAM) + PROXY_HEADERS + "        proxy_set_header Host $http_host;\n"
-    "        proxy_set_header Upgrade $http_upgrade;\n"
+UPGRADE_HEADERS = (
+    "        proxy_set_header Upgrade $websocket_upgrade;\n"
     "        proxy_set_header Connection $connection_upgrade;\n"
-    "        proxy_read_timeout 300s;\n"
+)
+AIRFLOW_PROXY = (
+    _upstream(AIRFLOW_UPSTREAM)
+    + PROXY_HEADERS
+    + "        proxy_set_header Host $http_host;\n"
+    + UPGRADE_HEADERS
+    + "        proxy_read_timeout 300s;\n"
 )
 AIRFLOW_HEALTH_PATH = "/api/v2/monitor/health"
 # NGINX matches a decoded, normalised URI but forwards the one the client sent, so a request
@@ -45,8 +50,12 @@ AIRFLOW_HEALTH_PROXY = (
     + "        proxy_set_header Host $http_host;\n"
 )
 HOST_KEYS = {"platform": "airflow", "mcp": "mcp"}
+# An upgraded connection carries requests NGINX never sees, so none of its per-request checks
+# (allow, auth_request, the headers it sets) would apply to them; h2c is such an upgrade. Only
+# the WebSocket protocol, whose frames are not requests, is passed on.
 CONNECTION_UPGRADE_MAP = (
-    "map $http_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
+    'map $http_upgrade $websocket_upgrade {\n    default "";\n    "~*^websocket$" websocket;\n}\n'
+    "map $websocket_upgrade $connection_upgrade {\n    default upgrade;\n    '' close;\n}\n"
 )
 
 
@@ -124,6 +133,8 @@ class ServiceSite:
     upstream: str
     health_path: str | None
     routes: tuple[ServiceRoute, ...]
+    # Prefixes of the routes the service declares and vecten.toml does not bind.
+    unbound: tuple[str, ...] = ()
 
 
 IDENTITY_HEADERS = (
@@ -246,6 +257,13 @@ def service_site(bound: Bound, host: str) -> ServiceSite:
             )
             for name, route in bound.routes.items()
         ),
+        unbound=tuple(
+            sorted(
+                route_prefix(route.path)
+                for name, route in declared.routes.items()
+                if name not in bound.routes
+            )
+        ),
     )
 
 
@@ -301,8 +319,7 @@ def _route_body(
         + (_gate_check(route) if login else "")
         + f"        client_max_body_size {route.max_body_mb}m;\n"
         + _service_proxy(site.upstream, identity=IDENTITY_FROM_GATE if login else IDENTITY_CLEARED)
-        + "        proxy_set_header Upgrade $http_upgrade;\n"
-        + "        proxy_set_header Connection $connection_upgrade;\n"
+        + UPGRADE_HEADERS
         + timeout
     )
 
@@ -403,6 +420,11 @@ def _service_locations(site: ServiceSite, mode: str, gate: GateUpstream | None) 
             out.append(_location("/", body))
         else:
             out += [_location(f"= {prefix}", body), _location(f"{prefix}/", body)]
+    # A bound route whose prefix covers an unbound one would otherwise forward its paths, with
+    # that route's access. The longest prefix wins, so a bound route deeper still is served.
+    for prefix in site.unbound:
+        if prefix != "/":
+            out += [_location(f"= {prefix}", reserved), _location(f"{prefix}/", reserved)]
     if not covered:
         out.append(_location("/", reserved))
     return "".join(out)
