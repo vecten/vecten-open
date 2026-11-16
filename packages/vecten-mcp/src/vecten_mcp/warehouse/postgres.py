@@ -276,8 +276,8 @@ class PostgresAdapter:
         with conn.transaction():
             if not conn.execute("SELECT to_regclass('vecten_access.helpers')").fetchone()[0]:
                 raise ValueError("administrator must install schema access helpers")
-            # Every role reads pg_namespace and pg_class, so a missing schema or relation is
-            # told apart from one the provisioner may not use.
+            # pg_namespace and pg_class list every object to every role, so an object they
+            # lack is gone, and a revoke on it is done.
             if not conn.execute(
                 "SELECT 1 FROM pg_namespace WHERE nspname=%s", (schema,)
             ).fetchone():

@@ -600,7 +600,9 @@ def test_a_failed_grant_again_of_a_held_area_rolls_nothing_back():
 
 class Unbuilt(Adapter):
     """A warehouse where the schemas in `absent` do not exist: dbt creates a schema only when
-    a model lands in it, so a marts-only area has `marts_<area>` and no `core_<area>`."""
+    a model lands in it, so a marts-only area has `marts_<area>` and no `core_<area>`. Like
+    Postgres, whose catalogs show every schema to every role, it tells a missing object on a
+    revoke too."""
 
     def __init__(self, absent=(), **kwargs):
         super().__init__(**kwargs)
@@ -620,6 +622,22 @@ class Unbuilt(Adapter):
             self.ops.append(("dataset", role, source, grant))
             raise Absent(source)
         return super().dataset_grant(role, source, grant)
+
+
+class Invisible(Unbuilt):
+    """Snowflake: the procedure tells a schema it cannot list only on a grant, which then
+    waits. A revoke it cannot make fails, whether the schema is gone or only invisible."""
+
+    def schema_grant(self, role, schema, grant=True):
+        if schema in self.absent and not grant:
+            self.ops.append(("schema", role, schema, grant))
+            raise RuntimeError(f"Schema 'D.{schema.upper()}' does not exist or not authorized.")
+        return super().schema_grant(role, schema, grant)
+
+
+def _applied_area(access):
+    [row] = [r for _, r in access.state.scan("applied_grants") if r["kind"] == "area"]
+    return row
 
 
 def test_an_area_grant_covers_the_schemas_that_exist_and_names_the_others():
@@ -669,29 +687,61 @@ def test_an_area_schema_that_appears_later_is_granted_by_the_next_reconciliation
     assert {"group": "finance", "kind": "area", "target": "finance"} in access.health()["added"]
 
 
-def test_a_revoke_on_a_schema_that_does_not_exist_is_done():
-    adapter = Unbuilt(absent={"core_finance"})
+@pytest.mark.parametrize("warehouse", [Unbuilt, Invisible])
+def test_a_waiting_schema_is_dropped_from_the_record_without_a_revoke(warehouse):
+    adapter = warehouse(absent={"core_finance"})
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     access.grant("finance", "area", "finance")
+    assert _applied_area(access)["granted"] == ["marts_finance"]
+    adapter.ops.clear()
     result = access.revoke("finance", "area", "finance")
     assert "reconciliation" not in result, result
     assert ("schema", "finance", "marts_finance", False) in adapter.ops
+    assert not [op for op in adapter.ops if op[2] == "core_finance"]
     assert not [row for _, row in access.state.scan("applied_grants") if row["kind"] == "area"]
 
 
-def test_a_recorded_revoke_on_a_missing_schema_stops_failing():
-    adapter = Unbuilt(absent={"core_finance"})
+def test_a_granted_schema_whose_revoke_fails_keeps_the_retry_record():
+    adapter = Invisible()
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
-    # An applied record naming only a schema that does not exist, as an area grant refused on
-    # that schema, with its rollback refused too, records it.
+    access.grant("finance", "area", "finance")
+    # The procedure's owner no longer sees core_finance: gone or only invisible, the revoke
+    # it cannot make stays a failure.
+    adapter.absent.add("core_finance")
+    result = access.revoke("finance", "area", "finance")
+    failures = result["reconciliation"]["failures"]
+    assert [(f["target"], f["operation"]) for f in failures] == [("finance", "revoke")]
+    assert _applied_area(access)["granted"] == ["core_finance", "marts_finance"]
+    adapter.ops.clear()
+    access.reconcile()
+    assert ("schema", "finance", "core_finance", False) in adapter.ops
+
+
+def test_a_schema_granted_once_stays_recorded_when_a_later_grant_cannot_see_it():
+    adapter = Invisible()
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
+    access.grant("finance", "area", "finance")
+    adapter.absent.add("core_finance")
+    access.reconcile()
+    assert _applied_area(access)["granted"] == ["core_finance", "marts_finance"]
+
+
+@pytest.mark.parametrize(("warehouse", "cleared"), [(Unbuilt, True), (Invisible, False)])
+def test_a_record_written_before_granted_was_kept_revokes_every_listed_schema(warehouse, cleared):
+    adapter = warehouse(absent={"core_finance"})
+    access = service(adapter, areas={"finance"})
+    access.create_group("finance")
     row = {"group": "finance", "kind": "area", "target": "finance"}
     key = access._key("finance", "area", "finance")
     access.state.put("applied_grants", key, dict(row, source=["core_finance"]))
     result = access.reconcile()
-    assert result["complete"], result
-    assert not [r for _, r in access.state.scan("applied_grants") if r["kind"] == "area"]
+    assert ("schema", "finance", "core_finance", False) in adapter.ops
+    assert result["complete"] is cleared, result
+    left = [r for _, r in access.state.scan("applied_grants") if r["kind"] == "area"]
+    assert bool(left) is not cleared
 
 
 def test_a_failed_area_grant_rolls_back_and_leaves_no_missing_schema_to_revoke():
@@ -739,7 +789,7 @@ def test_a_drift_revoke_on_a_schema_dropped_since_the_read_is_done():
     assert [r["schema"] for r in access.health()["revoked"]] == ["raw_old"]
 
 
-def test_a_dataset_revoke_in_a_missing_schema_is_done():
+def test_a_dataset_revoke_in_a_missing_schema_is_done_where_the_catalogs_show_it():
     adapter = Unbuilt()
     access = service(adapter, areas={"finance"})
     access.create_group("finance")

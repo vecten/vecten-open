@@ -270,16 +270,20 @@ schema names.
 An area grant (`vecten grant --area finance --group finance`) is a schema grant on both
 `core_finance` and `marts_finance`, applied and revoked together; one that fails on the second
 schema is rolled back on the first. dbt creates a schema only when a model lands in it, so an
-area with marts only has no `core_<area>`: the grant covers the schemas that exist, its result
-names the others as waiting, and the first reconciliation after dbt creates one grants it. A
-revoke on a schema or relation that does not exist counts as done, since dropping an object
-drops its grants; a schema or dataset grant on one is refused, naming it. On Snowflake the
-provisioner sees no schema it holds nothing on, so `READ_GRANT` makes that check as its owner,
-once a statement on the schema has failed. An area grant is refused for an area with no
-`[areas.<area>]` entry, and an area removed from `vecten.toml` has its grants revoked and
-forgotten, so declaring it again starts with none. Each granted schema carries its own future or default grant, so a
-relation dbt rebuilds there is readable by the granted groups and no group without the grant,
-with no reconciliation in between. No group reads an area until it is granted, with these
+area with marts only has no `core_<area>`: the grant covers the schemas the warehouse finds,
+its result names the others as waiting, and the first reconciliation after dbt creates one
+grants it. The MCP's state records which of the area's schemas were granted, and revoking or
+rolling back the grant revokes only those, so a schema that only ever waited needs no revoke.
+On Snowflake the provisioner sees no schema it holds nothing on, so `READ_GRANT` looks the
+schema up as its owner once a grant on it has failed. `INFORMATION_SCHEMA` lists only what that
+owner may use, so a waiting schema is missing or not visible to it, and a revoke never relies
+on the lookup: one Snowflake refuses stays a failure and is retried. On Postgres, whose catalogs
+show every object to every role, a revoke on a schema or relation that is gone counts as done.
+A schema or dataset grant on a missing object is refused, naming it. An area grant is refused
+for an area with no `[areas.<area>]` entry, and an area removed from `vecten.toml` has its
+grants revoked and forgotten, so declaring it again starts with none. Each granted schema
+carries its own future or default grant, so a relation dbt rebuilds there is readable by the
+granted groups and no group without the grant, with no reconciliation in between. No group reads an area until it is granted, with these
 exceptions, which the warehouse and not the MCP decides:
 
 - a dataset grant on a mart in the area, which reaches that one relation;

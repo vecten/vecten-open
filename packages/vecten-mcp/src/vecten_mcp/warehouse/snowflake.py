@@ -315,9 +315,10 @@ class SnowflakeAdapter:
 
     def _grant(self, role, schema, relation, grant):
         """`<shape> <kind>: <warehouse message>` for each relation kind READ_GRANT reports the
-        account refused; the other kinds were applied. READ_GRANT answers `absent`, changing
-        nothing, for a schema that does not exist and for a revoke on a missing relation: the
-        provisioner sees no schema it holds nothing on, so only the owner can tell."""
+        account refused; the other kinds were applied. On a grant READ_GRANT answers `absent`,
+        changing nothing on the schema, when its owner cannot find the schema or relation:
+        INFORMATION_SCHEMA lists only what that owner may use, so a schema may also be there
+        and invisible to it. A revoke never answers it, and fails where it cannot revoke."""
         if role != self.DEFAULT_ROLE:
             check_account(role)
         with self.control() as cursor:
@@ -327,7 +328,8 @@ class SnowflakeAdapter:
             ).fetchone()
         answer = str(row[0]) if row else ""
         if answer == "absent":
-            raise Absent(f"{schema}.{relation}" if relation else schema)
+            place = f"{schema}.{relation}" if relation else schema
+            raise Absent(place, "is missing or not visible to the access procedures' owner")
         if not answer.startswith("refused: "):
             return []
         return [f"{r['kind']}: {r['error']}" for r in json.loads(answer.removeprefix("refused: "))]

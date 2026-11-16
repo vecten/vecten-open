@@ -43,10 +43,10 @@ def _grant(ctx, env, dataset, schema, area, group, revoke=False):
     waiting = ""
     if data.get("waiting"):
         names = " and ".join(data["waiting"])
-        verb, it = ("do", "them") if len(data["waiting"]) > 1 else ("does", "it")
+        verb, it = ("are", "them") if len(data["waiting"]) > 1 else ("is", "it")
         waiting = (
-            f" {names} {verb} not exist yet; the first reconciliation after dbt creates {it} "
-            f"grants {it} too."
+            f" {names} {verb} missing or not visible to the warehouse's access procedures; "
+            f"every reconciliation tries {it} again, and grants {it} once dbt creates {it}."
         )
     if data.get("refused"):
         raise Failure(
