@@ -2,12 +2,17 @@
 
 ### Requirement: Snowflake layout per environment
 
-A Snowflake project SHALL choose, through `[warehouse] shared_account` in `vecten.toml`, whether its environments' Snowflake accounts may hold anything besides one environment; it SHALL default to `false`. `deploy` SHALL record the value an environment was first deployed with under `[environments.<env>]` as `snowflake_shared_account`, read an environment with no record as deployed with `false`, and refuse in `deploy` and `ship`, naming the recorded value and the migration, an environment whose record differs from the setting, unless the setting is `true` and the recorded fixed environment's account holds no other environment of the project. `shared_account` SHALL be refused on a project without the `platform` component.
+A Snowflake project SHALL choose, through `[warehouse] shared_account` in `vecten.toml`, whether its environments' Snowflake accounts may hold anything besides one environment; it SHALL default to `false`. `deploy` SHALL record the value an environment was first deployed with under `[environments.<env>]` as `snowflake_shared_account`, once GitHub has accepted the dispatch of that deploy and never when the dispatch itself fails, read an environment with no record as deployed with `false`, and refuse in `deploy` and `ship`, naming the recorded value and the migration, an environment whose record differs from the setting, unless the setting is `true` and the recorded fixed environment's account holds no other environment of the project. `shared_account` SHALL be refused on a project without the `platform` component.
 
 #### Scenario: Default
 
 - **WHEN** a Snowflake project with no `shared_account` setting deploys `prod`
 - **THEN** every Snowflake object carries the name "Fixed Snowflake names" lists, and `[environments.prod]` records `snowflake_shared_account = false`
+
+#### Scenario: Dispatch refused
+
+- **WHEN** `deploy --env prod` runs for the first time with `shared_account = true` and `gh workflow run` fails, so no run exists
+- **THEN** it exits non-zero and `[environments.prod]` records no layout, so `shared_account` may still be changed
 
 #### Scenario: Setting changed after the first deploy
 

@@ -51,13 +51,16 @@ from vecten.deploy.guards import (
     is_deployed,
     require_bootstrapped,
     require_commit_on_default_branch,
+    require_commit_on_fetched_branch,
     require_deployed,
     require_on_default_branch,
 )
 from vecten.deploy.promotion import (
     FETCHED,
     CommitFiles,
+    checkout_repository,
     fetch_default_branch,
+    fetched_commit,
     given_commit,
     newest_shipped,
     previous_in,
@@ -65,7 +68,6 @@ from vecten.deploy.promotion import (
     promotion_order,
     read_commit_files,
     read_fetched_facts,
-    read_head_facts,
     require_shipped_by,
 )
 from vecten.deploy.shipping import service_report
@@ -466,17 +468,20 @@ def _deploy(
             if has_snowflake_root(named)
             else None
         )
-        try:
-            followed = dispatch_and_follow(
-                project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted
-            )
-        except Failure:
-            # A failed run may already have created Snowflake objects under these names.
-            if layout is not None:
+        on_dispatched = None
+        if layout is not None:
+            shared, base = layout
+
+            def on_dispatched() -> None:
+                # The run exists from here, and may create Snowflake objects under these
+                # names before it fails; a dispatch GitHub refused created nothing.
                 recorded = load_config(project_root)
-                if record_layout(recorded, env, *layout):
+                if record_layout(recorded, env, shared, base):
                     save_config(project_root, recorded)
-            raise
+
+        followed = dispatch_and_follow(
+            project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted, on_dispatched=on_dispatched
+        )
         try:
             deployed = check_commit(promoted or followed["head_sha"])
         except Failure:
@@ -526,7 +531,12 @@ def _deploy_in_actions(
 ) -> dict:
     """Apply the roots and ship every host of `env` from the commit `ref` names, else the
     checked-out one; every refusal comes before the first Terraform call."""
-    with actions_view(git, project_root, ref) as view:
+    from vecten import git_extensions
+
+    with (
+        actions_view(gh, git, project_root, ref) as view,
+        tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
+    ):
         config, tree = view.config, view.root
         deploy = require_deploy_cloud(config)
         plane = get_control_plane(deploy.cloud, tree, env)
@@ -540,6 +550,12 @@ def _deploy_in_actions(
             check_bindings(config, record)
         require_terraform(terraform)
         require_promotable(gh, git, project_root, view, env)
+        ships = not identity_pending(config, env)
+        # A credential or a hash that fails the ship fails it here, before Terraform changes
+        # anything.
+        sources = (
+            git_extensions.write_sources(tree, config, Path(fetched) / "sources") if ships else {}
+        )
         provisioned = provision_environment(plane, env, terraform)
         outputs = EnvironmentOutputs.model_validate(provisioned["outputs"])
         # CI never writes vecten.toml: the laptop that dispatched this run records the commit.
@@ -551,7 +567,7 @@ def _deploy_in_actions(
             "commit": view.commit,
         }
         warnings = list(view.warnings)
-        if identity_pending(config, env):
+        if not ships:
             data = {**data, "hosts": [], "ship_skipped": identity_pending_note(config, env)}
         else:
             hosts, recorded = recorded_ship(
@@ -560,7 +576,7 @@ def _deploy_in_actions(
                 deploy.github_repository,
                 env,
                 view.commit,
-                lambda: plane.ship_hosts(tree, config, env, outputs, view.commit),
+                lambda: plane.ship_hosts(tree, config, env, outputs, view.commit, sources=sources),
                 required=env in view.order[:-1],
             )
             warnings += recorded
@@ -657,60 +673,63 @@ def recorded_ship[Shipped](
 @dataclass
 class ActionsView:
     """What a run inside Actions ships: the checkout to read content, tfvars and roots from,
-    its configuration with the head's facts, the head's promotion order, and the commit."""
+    its configuration with the head's facts, the head's promotion order, the commit, and the
+    default branch with the head it was fetched at."""
 
     root: Path
     config: VectenConfig
     order: tuple[str, ...]
-    named: bool
-    git: ToolRunner
+    commit: str
+    branch: str
+    head: str
     warnings: list[str] = field(default_factory=list)
-    resolved: str | None = None
-
-    @property
-    def commit(self) -> str:
-        # Read only once a refusal that needs no git has had its chance.
-        if self.resolved is None:
-            self.resolved = head_commit(self.git, self.root)
-        return self.resolved
 
 
 @contextmanager
-def actions_view(git: ToolRunner, project_root: Path, ref: str | None) -> Iterator[ActionsView]:
-    """The checked-out commit read as it stands, or the commit `ref` names in a worktree.
+def actions_view(
+    gh: ToolRunner | None, git: ToolRunner, project_root: Path, ref: str | None
+) -> Iterator[ActionsView]:
+    """The commit `ref` names, else the checked-out one, with the promotion order and the
+    environment facts of the remote default branch's head, fetched here.
 
-    The promoted commit pins the CLI that runs, possibly older than the one that wrote the
-    head's `vecten.toml`, so of the head only the order and the environment facts are read,
-    leniently.
+    A run may check out another commit than that head: a re-run checks out the commit its
+    first attempt ran, and a dispatch on another ref checks out that ref. Their `vecten.toml`
+    can predate the order or the facts, which only the head holds. The commit pins the CLI
+    that runs, possibly older than the one that wrote the head's `vecten.toml`, so of the head
+    only the order and the facts are read, leniently. The checkout is read as it stands only
+    when it is both the commit and the head.
     """
-    if ref is not None:
-        commit = given_commit(git, project_root, ref)
-        if commit != head_commit(git, project_root):
-            found = read_head_facts(project_root)
-            with promoted_tree(git, project_root, commit, found.environments) as tree:
-                config = load_config(tree)
-                yield ActionsView(tree, config, found.order, True, git, found.warnings, commit)
-            return
-    config = load_config(project_root)
-    order = promotion_order(project_root, config)
-    yield ActionsView(project_root, config, order, ref is not None, git)
+    if gh is None:
+        raise Failure(ExitCode.INTERNAL, "reading the default branch's head needs the gh runner")
+    checked_out = head_commit(git, project_root)
+    commit = checked_out if ref is None else given_commit(git, project_root, ref)
+    # Inside Actions GH_TOKEN authenticates gh; there is no login to check.
+    branch = default_branch(gh, project_root, checkout_repository(project_root))
+    fetch_default_branch(git, project_root, branch)
+    head = fetched_commit(git, project_root)
+    if commit == checked_out == head:
+        config = load_config(project_root)
+        order = promotion_order(project_root, config)
+        yield ActionsView(project_root, config, order, commit, branch, head)
+        return
+    found = read_fetched_facts(git, project_root)
+    with promoted_tree(git, project_root, commit, found.environments) as tree:
+        config = load_config(tree)
+        yield ActionsView(tree, config, found.order, commit, branch, head, found.warnings)
 
 
 def require_promotable(
     gh: ToolRunner | None, git: ToolRunner, project_root: Path, view: ActionsView, env: str
 ) -> None:
-    """Refuse a named commit the remote default branch does not hold, and, for an environment
-    after the first in the order, one the environment before it did not ship."""
+    """Refuse a commit the remote default branch does not hold, whatever ref the run checked
+    out, and, for an environment after the first in the order, one the environment before it
+    did not ship."""
+    require_commit_on_fetched_branch(project_root, git, view.branch, view.commit, view.head)
     previous = previous_in(view.order, env)
-    if not view.named and previous is None:
-        return
-    if gh is None:
-        raise Failure(ExitCode.INTERNAL, "checking a promoted commit needs the gh runner")
-    repository = require_deploy_cloud(view.config).github_repository
-    # Inside Actions GH_TOKEN authenticates gh; there is no login to check.
-    branch = default_branch(gh, project_root, repository)
-    require_commit_on_default_branch(project_root, git, branch, view.commit)
     if previous is not None:
+        if gh is None:
+            raise Failure(ExitCode.INTERNAL, "checking a promoted commit needs the gh runner")
+        repository = require_deploy_cloud(view.config).github_repository
         require_shipped_by(gh, project_root, repository, view.commit, env, previous)
 
 
@@ -789,7 +808,7 @@ def ship_env(
 def _ship_in_actions(
     project_root: Path, env: str, *, gh: ToolRunner | None, git: ToolRunner, ref: str | None
 ) -> dict:
-    with actions_view(git, project_root, ref) as view:
+    with actions_view(gh, git, project_root, ref) as view:
         config, tree = view.config, view.root
         record = read_extension_record(tree) or {}
         # The settings this commit would ship are checked before any host or cloud is touched.

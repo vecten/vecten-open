@@ -12,7 +12,7 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -231,9 +231,13 @@ class ControlPlane(Protocol):
         env: str,
         outputs: EnvironmentOutputs,
         commit: str,
+        *,
+        sources: Mapping[str, Path] | None = None,
     ) -> list[str]:
         """Build and ship one bundle per host at `commit`, setup host first, and return the
-        hosts shipped in order; stops at the first failure, which raises."""
+        hosts shipped in order; stops at the first failure, which raises. `sources` holds the
+        git sources `git_extensions.write_sources` wrote, by name; without it they are fetched
+        and checked before any host changes."""
         ...
 
     def final_snapshots(

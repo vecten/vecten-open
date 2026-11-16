@@ -211,7 +211,8 @@ two environments, each with its own `deploy/envs/<env>.tfvars`, without repeats,
 `dev,staging,prod`. `vecten answer deploy.promotion none` removes the order.
 
 - **A merge ships the first environment.** The rendered `ship.yml` reads the order from the
-  pushed commit when it runs, so changing the order needs no re-render. `vecten github push`
+  pushed commit when it runs, so changing the order needs no re-render; the ship then checks
+  it against the order on the default branch's head. `vecten github push`
   follows that ship and then, once the next environment is deployed, names
   `vecten promote --env <next env>`.
 - **A later environment ships only by promotion.** `vecten promote --env prod` ships `prod`
@@ -240,8 +241,14 @@ last shipped commit is the one its hosts went back to.
 Inside Actions the CLI refuses, before any host or Terraform changes, a commit that is not on
 the default branch and, for an environment after the first, a commit the environment before
 it did not ship. A promoted run builds the bundle, reads the tfvars and Terraform roots, and
-installs the `vecten` version from the promoted commit; it reads the facts under
-`[environments.<env>]` from the default branch's head, where the CLI records them.
+installs the `vecten` version from the promoted commit. Every ship and deploy inside Actions
+fetches the default branch and reads the promotion order, and the facts under
+`[environments.<env>]`, from its head, where the CLI records them, not from the commit the run
+checked out, and refuses a commit the default branch does not hold for every environment. So
+re-running an old ship run, or dispatching a workflow on a branch, ships `prod` only a commit
+of the default branch that `dev` shipped, even when that commit predates the order. The check
+runs in the CLI the commit pins: a re-run of a commit that pins a release before 0.1.1 still
+runs that release's checks.
 
 Statuses guard against mistakes, not against people: anyone who can write statuses can also
 push to the default branch and dispatch a deploy.

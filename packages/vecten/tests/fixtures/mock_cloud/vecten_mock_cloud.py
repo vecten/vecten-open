@@ -209,6 +209,8 @@ class MockCloud:
         env: str,
         outputs: EnvironmentOutputs,
         commit: str,
+        *,
+        sources=None,
     ) -> list[str]:
         metadata = prepare_bundle_metadata(
             project_root,
@@ -220,7 +222,15 @@ class MockCloud:
         with tempfile.TemporaryDirectory(prefix="vecten-mock-bundles-") as tmp:
             for host in ship_order(outputs):
                 bundle = build_host_bundle(
-                    project_root, config, env, outputs, host, commit, Path(tmp), metadata=metadata
+                    project_root,
+                    config,
+                    env,
+                    outputs,
+                    host,
+                    commit,
+                    Path(tmp),
+                    metadata=metadata,
+                    sources=sources,
                 )
                 target = self.root / "hosts" / host / "releases" / commit
                 target.mkdir(parents=True, exist_ok=True)

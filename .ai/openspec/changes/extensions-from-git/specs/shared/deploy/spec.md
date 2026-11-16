@@ -2,7 +2,7 @@
 
 ### Requirement: Git-sourced extensions ship as verified source in the bundle
 
-`vecten ship`, run in CI, SHALL fetch the recorded commit of every git-sourced extension the records hold, as the `shared/extension-points` spec states, and SHALL refuse, before any host changes, a fetched source whose `source_sha256` differs from `extensions.lock.json`.
+`vecten ship`, run in CI, SHALL fetch the recorded commit of every git-sourced extension the records hold, as the `shared/extension-points` spec states, and SHALL refuse, before any host changes, a fetched source whose `source_sha256` differs from `extensions.lock.json`. `vecten deploy`, run in CI, SHALL fetch and check them the same way before its first Terraform call, so a failed fetch or a mismatch changes no infrastructure.
 
 The ship SHALL place each git-sourced extension's source in every host bundle at `extensions/<name>/`, beside the in-repo extensions, together with `extensions.lock.json`.
 

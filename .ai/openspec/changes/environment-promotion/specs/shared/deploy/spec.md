@@ -26,7 +26,7 @@
 
 ### Requirement: A later environment ships only a commit the environment before it shipped
 
-The apply and ship workflows SHALL take a `commit` input beside `environment`, run on the default branch, and check out that commit. Inside GitHub Actions, before any Terraform or ship, the CLI SHALL refuse a commit that is not an ancestor of the remote default branch, and, for an environment after the first in the order, a commit whose `vecten/ship/<previous env>` status is not `success`, naming the commit and the environment. A promoted run SHALL build its bundle and read the environment's tfvars and Terraform roots from the promoted commit, SHALL read the facts under `[environments.<env>]` from the default branch's head, and SHALL install the `vecten` version the promoted commit's `[project] scaffold_version` names.
+The apply and ship workflows SHALL take a `commit` input beside `environment`, run on the default branch, and check out that commit. Inside GitHub Actions, before any Terraform or ship, the CLI SHALL refuse a commit that is not an ancestor of the remote default branch, and, for an environment after the first in the order, a commit whose `vecten/ship/<previous env>` status is not `success`, naming the commit and the environment. A promoted run SHALL build its bundle and read the environment's tfvars and Terraform roots from the promoted commit, and SHALL install the `vecten` version the promoted commit's `[project] scaffold_version` names. Every ship and deploy inside GitHub Actions SHALL fetch the remote default branch and read the promotion order and the facts under `[environments.<env>]` from its head, not from the commit the run checked out, which a re-run or a dispatch on another ref can make an older or an unreviewed one.
 
 #### Scenario: Promotion of what dev shipped
 
@@ -42,6 +42,21 @@ The apply and ship workflows SHALL take a `commit` input beside `environment`, r
 
 - **WHEN** the ship workflow is dispatched with a commit that only a feature branch holds
 - **THEN** the run exits non-zero naming the commit and the default branch, and no host changes
+
+#### Scenario: Re-run of a ship from before the order
+
+- **WHEN** commit `9c01d2e` was pushed and shipped to `prod` before `[deploy] promotion = ["dev", "prod"]` was adopted on the default branch, and its ship run is re-run, so the run checks out `9c01d2e`, whose `vecten.toml` declares no order
+- **THEN** the run reads the order from the default branch's head, exits non-zero naming `9c01d2e` and `vecten/ship/dev`, and no host changes, provided `9c01d2e` pins a `vecten` release that reads the order from the head
+
+#### Scenario: Dispatch on a branch without the order
+
+- **WHEN** the default branch declares `[deploy] promotion = ["dev", "prod"]` and the ship or apply workflow is dispatched for `prod` on a branch whose `vecten.toml` declares no order, without a commit
+- **THEN** the run exits non-zero naming the checked-out commit and the default branch, and no host or Terraform changes
+
+#### Scenario: Dispatch on a branch for the first environment
+
+- **WHEN** the ship workflow is dispatched for the first environment of the order, or for an environment outside it, on a feature branch, without a commit
+- **THEN** the run exits non-zero naming the checked-out commit and the default branch, and no host changes
 
 #### Scenario: Facts recorded after the promoted commit
 

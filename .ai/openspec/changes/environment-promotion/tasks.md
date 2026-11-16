@@ -18,6 +18,7 @@
 - [x] 3.3 `deploy --env <later env> [--commit]`: resolve the commit, dispatch the apply workflow with it, record it as `deployed_commit`; Terraform roots and tfvars from the commit
 - [x] 3.4 `dispatch_and_follow` passes `commit`, and the result reports the commit that was shipped rather than the run's `head_sha`
 - [x] 3.5 Tests: every refusal, the facts read from the head while content comes from the commit, the dispatch arguments
+- [x] 3.6 Inside Actions, `ship` and `deploy` fetch the default branch and read the order and the facts from its head for every run, not only a promoted one, so a re-run of an old ship run or a dispatch on another ref is checked against the order in force (item 4 of the review of #89)
 
 ## 4. `vecten promote`
 

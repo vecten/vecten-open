@@ -2,7 +2,8 @@
 
 `ScenarioGh` answers the `gh api` reads that shipping makes for reviewed gap fixes from the
 pull requests `FixtureRepository.merge` recorded, and for a commit's statuses from the ones
-a ship set, so a ship sees the same evidence as it would on GitHub.
+a ship set, so a ship sees the same evidence as it would on GitHub. The repository's `main`
+is pushed to a local `origin`, which a ship inside Actions fetches as GitHub's default branch.
 """
 
 from __future__ import annotations
@@ -35,6 +36,9 @@ class ScenarioGh:
 
     def run(self, args, cwd, input=None) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
+        if args[:3] == ["repo", "view", self.repository]:
+            body = {"nameWithOwner": self.repository, "defaultBranchRef": {"name": "main"}}
+            return self._answer(args, body)
         if args[:1] != ["api"]:
             return subprocess.CompletedProcess(args, 1, "", "gh: not answered by the scenario")
         prefix = f"repos/{self.repository}"
@@ -85,11 +89,16 @@ class FixtureRepository:
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Scenario")
         self.git("config", "user.email", "scenario@acme.test")
+        origin = self.root.parent / f"{self.root.name}-origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+        self.git("remote", "add", "origin", str(origin))
         return self.commit("Initial project")
 
     def commit(self, message: str) -> str:
         self.git("add", "-A")
         self.git("commit", "-q", "-m", message)
+        if self.git("rev-parse", "--abbrev-ref", "HEAD") == "main":
+            self.git("push", "-q", "origin", "main")
         return self.git("rev-parse", "HEAD")
 
     def branch(self, name: str) -> None:
@@ -100,6 +109,7 @@ class FixtureRepository:
         head = self.git("rev-parse", branch)
         self.git("checkout", "-q", "main")
         self.git("merge", "-q", "--no-ff", branch, "-m", f"Merge pull request #{number}")
+        self.git("push", "-q", "origin", "main")
         merge = self.git("rev-parse", "HEAD")
         merged_at = datetime.now(UTC)
         self.gh.pulls[number] = {

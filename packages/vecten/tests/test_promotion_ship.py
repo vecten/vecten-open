@@ -11,10 +11,12 @@ from pathlib import Path
 
 import pytest
 
+from vecten import git_extensions
 from vecten.deploy import github_env
 from vecten.deploy import run as run_mod
 from vecten.github import gh as gh_mod
 from vecten_shared.config import load_config
+from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import _REGISTRY
 
 from .deploy_fixtures import COMMIT, FakeGh, FakeGit, render_aws, set_facts
@@ -196,6 +198,194 @@ def test_the_checked_out_commit_ships_from_the_checkout_itself(invoke, repo, mon
     assert r.exit_code == 0, r.stdout
     assert (released(repo.cloud, "mcp") / MARKER).read_text() == "b\n"
     assert gh.posted_statuses()[-1] == (repo.b, "vecten/ship/prod", "success")
+
+
+# Inside Actions: the order and the facts come from the default branch's head, whatever the
+# run checked out
+
+
+REDEPLOYED = "fedcba9876543210fedcba9876543210fedcba98"
+
+
+class Adopted:
+    """`old` shipped prod before the order existed; `head`, the default branch's head, adopts
+    `["dev", "prod"]`; `legacy` is a branch off `old`, with no order, that main never took."""
+
+    root: Path
+    cloud: Path
+    old: str
+    head: str
+    legacy: str
+
+
+@pytest.fixture
+def adopted(tmp_path, monkeypatch) -> Adopted:
+    root = render_aws(tmp_path / "proj")
+    set_facts(root, "prod", bootstrapped=True, state_bucket="mock-state", deployed_commit=COMMIT)
+    (root / MARKER).parent.mkdir(exist_ok=True)
+    (root / MARKER).write_text("old\n")
+    git(root, "init", "-q", "-b", "main")
+    git(root, "config", "user.name", "Promotion")
+    git(root, "config", "user.email", "promotion@acme.test")
+    old = commit_all(root, "Content before the order")
+    ordered(root)
+    set_facts(root, "dev", bootstrapped=True, state_bucket="mock-state", deployed_commit=COMMIT)
+    set_facts(root, "prod", deployed_commit=REDEPLOYED)
+    (root / MARKER).write_text("head\n")
+    head = commit_all(root, "Adopt dev before prod")
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", str(origin))
+    git(root, "remote", "add", "origin", str(origin))
+    git(root, "push", "-q", "origin", "main")
+    git(root, "checkout", "-q", "-b", "legacy", old)
+    (root / MARKER).write_text("legacy\n")
+    legacy = commit_all(root, "Unreviewed, without the order")
+    git(root, "checkout", "-q", "main")
+
+    cloud = tmp_path / "cloud"
+    monkeypatch.syspath_prepend(str(MOCK_DIR))
+    monkeypatch.setenv("VECTEN_CONTROL_PLANE", "vecten_mock_cloud:MockCloud")
+    monkeypatch.setenv("VECTEN_MOCK_CLOUD_DIR", str(cloud))
+    monkeypatch.setattr("vecten_shared.provider._REGISTRY", dict(_REGISTRY))
+    from vecten_mock_cloud import MockCloud
+
+    for env in ("dev", "prod"):
+        MockCloud(root, env).store_outputs(MockCloud.OUTPUTS)
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("VECTEN_GIT_RUNNER", raising=False)
+    found = Adopted()
+    found.root, found.cloud, found.old, found.head, found.legacy = root, cloud, old, head, legacy
+    return found
+
+
+def no_terraform(monkeypatch) -> None:
+    def provision(plane, env, terraform):
+        raise AssertionError("terraform ran")
+
+    monkeypatch.setattr(run_mod, "provision_environment", provision)
+    monkeypatch.setattr(run_mod, "require_terraform", lambda terraform: None)
+
+
+def test_a_rerun_ship_of_a_commit_from_before_the_order_needs_dev(invoke, adopted, monkeypatch):
+    # A re-run of a push's ship run checks out the pushed commit and passes it as --commit;
+    # that commit declares no order, so it reads prod as the first environment.
+    git(adopted.root, "checkout", "-q", "--detach", adopted.old)
+    gh = use_gh(monkeypatch, FakeGh(history=[adopted.head, adopted.old]))
+    r = invoke("ship", "--env", "prod", "--commit", adopted.old, "--json")
+    assert r.exit_code == 4, r.stdout
+    error = doc(r)["error"]
+    assert adopted.old[:8] in error and "vecten/ship/dev" in error
+    assert released(adopted.cloud, "mcp") is None
+    assert gh.posted_statuses() == []
+
+
+def test_a_rerun_deploy_of_a_head_from_before_the_order_needs_dev(invoke, adopted, monkeypatch):
+    # A re-run of a dispatched apply run checks out the head it first ran on, without --commit.
+    git(adopted.root, "checkout", "-q", "--detach", adopted.old)
+    no_terraform(monkeypatch)
+    gh = use_gh(monkeypatch, FakeGh(history=[adopted.head, adopted.old]))
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    assert adopted.old[:8] in doc(r)["error"] and "dev" in doc(r)["error"]
+    assert gh.posted_statuses() == []
+
+
+def test_a_dispatch_on_a_branch_without_the_order_is_refused(invoke, adopted, monkeypatch):
+    # A workflow_dispatch on another ref checks that ref out and passes no --commit.
+    git(adopted.root, "checkout", "-q", "legacy")
+    gh = use_gh(monkeypatch, FakeGh(statuses={adopted.legacy: [DEV_OK]}))
+    r = invoke("ship", "--env", "prod", "--json")
+    assert r.exit_code == 4, r.stdout
+    error = doc(r)["error"]
+    assert adopted.legacy[:8] in error and "origin/main" in error
+    assert released(adopted.cloud, "mcp") is None
+    assert gh.posted_statuses() == []
+
+
+def test_a_dispatch_on_a_branch_is_refused_for_the_first_environment(invoke, repo, monkeypatch):
+    # A workflow_dispatch on a feature branch, without --commit, ships that branch's head.
+    git(repo.root, "checkout", "-q", "feature")
+    gh = use_gh(monkeypatch, FakeGh())
+    r = invoke("ship", "--env", "dev", "--json")
+    assert r.exit_code == 4, r.stdout
+    assert repo.feature[:8] in doc(r)["error"] and "origin/main" in doc(r)["error"]
+    assert released(repo.cloud, "mcp") is None
+    assert gh.posted_statuses() == []
+
+
+def test_a_rerun_takes_the_facts_from_the_heads_vecten_toml(invoke, adopted, monkeypatch):
+    # The old commit records prod's deploy; the head, where the CLI records facts, says prod
+    # was destroyed since.
+    set_facts(adopted.root, "prod", deployed_commit=None)
+    commit_all(adopted.root, "prod destroyed")
+    git(adopted.root, "push", "-q", "origin", "main")
+    git(adopted.root, "checkout", "-q", "--detach", adopted.old)
+    gh = use_gh(monkeypatch, FakeGh(statuses={adopted.old: [DEV_OK]}))
+    r = invoke("ship", "--env", "prod", "--commit", adopted.old, "--json")
+    assert r.exit_code == 4, r.stdout
+    assert "vecten deploy --env prod" in doc(r)["error"]
+    assert released(adopted.cloud, "mcp") is None
+    assert gh.posted_statuses() == []
+
+
+def test_a_commit_dev_shipped_from_before_the_order_ships_to_prod(invoke, adopted, monkeypatch):
+    git(adopted.root, "checkout", "-q", "--detach", adopted.old)
+    gh = use_gh(monkeypatch, FakeGh(statuses={adopted.old: [DEV_OK]}))
+    r = invoke("ship", "--env", "prod", "--commit", adopted.old, "--json")
+    assert r.exit_code == 0, r.stdout
+    release = released(adopted.cloud, "mcp")
+    assert (release / MARKER).read_text() == "old\n"
+    # The old commit records prod's first deploy; the head records its latest.
+    assert load_config(release).environments["prod"].deployed_commit == REDEPLOYED
+    assert gh.posted_statuses()[-1] == (adopted.old, "vecten/ship/prod", "success")
+    assert git(adopted.root, "worktree", "list").count("\n") == 0
+
+
+# Inside Actions: a deploy's git sources are fetched and checked before Terraform
+
+
+def test_a_deploy_whose_git_source_fails_to_fetch_runs_no_terraform(invoke, repo, monkeypatch):
+    fetched = []
+
+    def write_sources(root, config, into, **kwargs):
+        fetched.append(into)
+        raise Failure(ExitCode.TOOL_FAILED, "git fetch of acme-resolution failed (exit 128)")
+
+    monkeypatch.setattr(git_extensions, "write_sources", write_sources)
+    no_terraform(monkeypatch)
+    gh = use_gh(monkeypatch, FakeGh(statuses={repo.a: [DEV_OK]}))
+    r = invoke("deploy", "--env", "prod", "--commit", repo.a, "--json")
+    assert r.exit_code == 5, r.stdout
+    assert "acme-resolution" in doc(r)["error"]
+    assert len(fetched) == 1
+    assert released(repo.cloud, "mcp") is None
+    assert gh.posted_statuses() == []
+
+
+def test_a_deploy_ships_the_git_sources_it_fetched_before_terraform(invoke, repo, monkeypatch):
+    from vecten_mock_cloud import MockCloud
+
+    events = []
+    fetch = git_extensions.write_sources
+
+    def write_sources(*args, **kwargs):
+        events.append("sources")
+        return fetch(*args, **kwargs)
+
+    def provision(plane, env, terraform):
+        events.append("terraform")
+        return {"roots": ["aws"], "outputs": MockCloud.OUTPUTS}
+
+    monkeypatch.setattr(git_extensions, "write_sources", write_sources)
+    monkeypatch.setattr(run_mod, "provision_environment", provision)
+    monkeypatch.setattr(run_mod, "require_terraform", lambda terraform: None)
+    use_gh(monkeypatch, FakeGh(statuses={repo.a: [DEV_OK]}))
+    r = invoke("deploy", "--env", "prod", "--commit", repo.a, "--json")
+    assert r.exit_code == 0, r.stdout
+    assert events == ["sources", "terraform"]
+    assert (released(repo.cloud, "mcp") / MARKER).read_text() == "a\n"
 
 
 def test_a_commit_that_is_no_commit_id_is_usage(invoke, repo, monkeypatch):

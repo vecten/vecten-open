@@ -178,7 +178,8 @@ the repository, the environment or the organisation, when any extension's reposi
 credential at `extension add`. Otherwise it refuses and names what is missing. Listing secrets
 and variables needs admin rights on the repository: for a person without them, the check skips
 the lists it may not read, says so in a warning, and dispatches. It cannot read a secret's
-value: a missing, wrong or expired token fails the ship in CI, before any host changes.
+value: a missing, wrong or expired token fails the ship in CI, before any host changes, and
+fails `vecten deploy` in CI before Terraform changes anything.
 
 ### Rotating the credential
 

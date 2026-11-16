@@ -108,7 +108,14 @@ def require_commit_on_default_branch(
     branch holds has not passed review.
     """
     _git(git, project_root, "fetch", "origin", branch)
-    ancestry_args = ["merge-base", "--is-ancestor", commit, "FETCH_HEAD"]
+    require_commit_on_fetched_branch(project_root, git, branch, commit, "FETCH_HEAD")
+
+
+def require_commit_on_fetched_branch(
+    project_root: Path, git: ToolRunner, branch: str, commit: str, head: str
+) -> None:
+    """Refuse `commit` unless `head`, the remote default branch `branch` as fetched, holds it."""
+    ancestry_args = ["merge-base", "--is-ancestor", commit, head]
     ancestry = git.run(ancestry_args, project_root)
     # `--is-ancestor` exits 1 for "not an ancestor"; any other non-zero exit is an error.
     if ancestry.returncode == 1:

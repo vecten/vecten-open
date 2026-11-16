@@ -16,7 +16,7 @@ import binascii
 import json
 import os
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -474,11 +474,13 @@ class ScalewayProvider(ScalewayRuntimeProvider):
         env: str,
         outputs: EnvironmentOutputs,
         commit: str,
+        *,
+        sources: Mapping[str, Path] | None = None,
     ) -> list[str]:
         """Build and ship one bundle per host, setup host first; stops at the first failure."""
         self._check_env(env)
         return ship_mod.ship_hosts(
-            self, project_root, config, env, outputs, commit, keyed=self._keyed
+            self, project_root, config, env, outputs, commit, keyed=self._keyed, sources=sources
         )
 
     # --- destroy -----------------------------------------------------------------------------

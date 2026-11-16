@@ -32,6 +32,7 @@ import json
 import re
 import tempfile
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -228,11 +229,13 @@ def ship_hosts(
     outputs: EnvironmentOutputs,
     commit: str,
     keyed: frozenset[str] = frozenset(),
+    sources: Mapping[str, Path] | None = None,
 ) -> list[str]:
     """Build and ship one bundle per host, setup host first; stops at the first failure.
 
     A host in `keyed` was handed its key in this run, so its server may be new and still
-    booting: it gets the first-ship window whatever its pointer says.
+    booting: it gets the first-ship window whatever its pointer says. `sources` holds the git
+    sources already fetched and checked, by name; without it they are fetched here.
     """
     metadata = prepare_bundle_metadata(
         project_root,
@@ -244,8 +247,9 @@ def ship_hosts(
     shipped: list[str] = []
     plane.orphaned_volumes = {}
     with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
-        # Every source is fetched and checked before any host changes.
-        sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
+        if sources is None:
+            # Every source is fetched and checked before any host changes.
+            sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
         for host in ship_order(outputs):
             bundle = build_host_bundle(
                 project_root,
