@@ -21,7 +21,7 @@ Each bound app SHALL read data only through the MCP as its app principal `svc_ap
 
 ### Requirement: An app admits only groups that may read all of its data
 
-The server SHALL compute, for each bound app, its admitted groups: the bound groups that may read every declared dataset through a dataset grant, a schema grant or a restricted-area grant. The gate SHALL admit a person to the app only through an admitted group. Each bound group that is not admitted SHALL be listed in access health with the app and the first dataset it cannot read. The computation SHALL run at every grant reconciliation, every model swap and every ship that changes the app's binding or declaration.
+The server SHALL compute, for each bound app, its admitted groups: the bound groups that may read every declared dataset through a dataset grant, a schema grant or a restricted-area grant. The gate SHALL admit a person to the app only through an admitted group: it SHALL know each bound container app's route (`<extension>.app-<app>.app`) and hostname from the shipped `vecten.toml` and `extensions.lock.json`, and SHALL read the app's admitted groups at each request, never the bound groups. Each bound group that is not admitted SHALL be listed in access health with the app and the first dataset it cannot read. The computation SHALL run at every grant reconciliation, every model swap and every ship that changes the app's binding or declaration.
 
 #### Scenario: Default group bound to a finance dashboard
 
@@ -32,6 +32,11 @@ The server SHALL compute, for each bound app, its admitted groups: the bound gro
 
 - **WHEN** an admin then grants the `finance` area to `default`
 - **THEN** after the next reconciliation a person only in `default` opens the app and the access-health entry is gone
+
+#### Scenario: Signing in at an app's hostname
+
+- **WHEN** a member of an admitted group opens `https://sales.<domain>/`, the hostname of the container app `acme-sales.overview`
+- **THEN** the gate signs them in at that hostname and answers NGINX's check of `acme-sales.app-overview.app` with 200 and the identity headers, and a person in no admitted group, or in none of the app's groups, is answered 403
 
 ### Requirement: The viewer is audited, never trusted
 

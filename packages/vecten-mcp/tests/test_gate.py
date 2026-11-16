@@ -20,6 +20,7 @@ with warnings.catch_warnings():
     )
     from starlette.testclient import TestClient
 
+from vecten_mcp.apps import ADMISSION, AppScopes, BoundApp
 from vecten_mcp.auth.gate import GateRoute, GateService
 from vecten_mcp.auth.identity import OIDCBackend, PasswordBackend, challenge, digest
 from vecten_mcp.auth.keys import SigningKeys
@@ -35,11 +36,24 @@ DASH = "dash.data.acme.com"
 HOME = "acme-portal.web.home"
 BOOKS = "acme-portal.web.books"
 DASH_HOME = "acme-dash.app.home"
+SALES = "sales.data.acme.com"
+# The route NGINX names for the container app `acme-sales.overview`.
+OVERVIEW = "acme-sales.app-overview.app"
 ROUTES = {
     HOME: GateRoute(PORTAL, ("default",)),
     BOOKS: GateRoute(PORTAL, ("finance",)),
     DASH_HOME: GateRoute(DASH, ("default",)),
+    OVERVIEW: GateRoute(SALES, ("default", "finance"), app="overview"),
 }
+OVERVIEW_APP = BoundApp(
+    extension="acme-sales",
+    name="overview",
+    title="Sales overview",
+    kind="container",
+    datasets=("orders",),
+    groups=("default", "finance"),
+    hostname="sales",
+)
 PASSWORD = "long-fixture-password"
 GATE = "__Host-vecten-gate"
 STATE = "__Host-vecten-gate-state"
@@ -133,7 +147,8 @@ def gate():
     oauth = OAuthService(
         state, SigningKeys(Secrets(), ISSUER), ISSUER, backend, clock=lambda: now[0]
     )
-    service = GateService(oauth, ROUTES)
+    apps = AppScopes(state, {"overview": OVERVIEW_APP}, kind="postgres")
+    service = GateService(oauth, ROUTES, apps=apps)
     app = Starlette(routes=auth_routes(oauth, service))
     yield service, Browser(app), now
     state.close()
@@ -442,6 +457,79 @@ def test_verify_refuses_a_route_the_server_does_not_bind_on_that_hostname(gate):
     assert browser.verify(PORTAL, "acme-portal.web.gone").status_code == 403
 
 
+def admit(service, *admitted):
+    """Records the app's admission as AppScopes.admit leaves it."""
+    service.state.put(
+        ADMISSION, "acme-sales.overview", {"admitted": list(admitted), "excluded": []}
+    )
+
+
+def member(service, email, *names):
+    """Puts the person in exactly these groups."""
+    principal = person(service, email)
+    with service.state.transaction() as conn:
+        for name in names:
+            if not service.state.group(name):
+                conn.execute(groups.insert().values(name=name, warehouse_role=name))
+        conn.execute(memberships.delete().where(memberships.c.principal_id == principal["id"]))
+        for name in names:
+            conn.execute(memberships.insert().values(principal_id=principal["id"], group_name=name))
+
+
+def test_an_app_admits_a_member_of_an_admitted_group_with_the_identity_headers(gate):
+    service, browser, _ = gate
+    admit(service, "default")
+    landed = browser.sign_in(SALES, "ada@acme.com", rd="/")
+    assert landed.status_code == 303 and landed.headers["location"] == "/"
+    answer = browser.verify(SALES, OVERVIEW)
+    assert answer.status_code == 200
+    assert answer.headers["x-vecten-user"] == "ada@acme.com"
+    assert answer.headers["x-vecten-principal"] == person(service, "ada@acme.com")["id"]
+    assert answer.headers["x-vecten-groups"] == "default"
+
+
+def test_an_app_refuses_a_bound_group_it_does_not_admit_and_a_non_member(gate):
+    service, browser, _ = gate
+    # `finance` is bound but cannot read every declared dataset, so the app leaves it out.
+    admit(service, "default")
+    browser.sign_in(SALES, "bob@acme.com", rd="/")
+    member(service, "bob@acme.com", "finance")
+    refused = browser.verify(SALES, OVERVIEW)
+    assert refused.status_code == 403
+    assert not [h for h in refused.headers if h.lower().startswith("x-vecten")]
+    member(service, "bob@acme.com", "ops")
+    assert browser.verify(SALES, OVERVIEW).status_code == 403
+
+
+def test_an_app_follows_its_admission_as_it_changes_without_a_restart(gate):
+    service, browser, _ = gate
+    browser.sign_in(SALES, "bob@acme.com", rd="/")
+    member(service, "bob@acme.com", "finance")
+    # Before any admission is computed the app admits no one.
+    assert browser.verify(SALES, OVERVIEW).status_code == 403
+    admit(service, "default", "finance")
+    assert browser.verify(SALES, OVERVIEW).status_code == 200
+    admit(service, "default")
+    assert browser.verify(SALES, OVERVIEW).status_code == 403
+
+
+def test_an_app_route_admits_no_one_on_a_gate_without_the_apps(gate):
+    service, browser, _ = gate
+    admit(service, "default")
+    browser.sign_in(SALES, "ada@acme.com", rd="/")
+    bare = GateService(service.oauth, ROUTES)
+    assert bare.verify(browser.jars[SALES][GATE], SALES, OVERVIEW) == (403, {})
+
+
+def test_an_app_hostname_refuses_a_route_it_does_not_serve(gate):
+    service, browser, _ = gate
+    admit(service, "default")
+    browser.sign_in(SALES, "ada@acme.com", rd="/")
+    assert browser.verify(SALES, "acme-sales.app-overview.home").status_code == 403
+    assert browser.verify(SALES, "acme-sales.app-other.app").status_code == 403
+    assert browser.verify(SALES, HOME).status_code == 403
+
+
 def test_verify_is_not_limited_per_address(gate):
     service, browser, _ = gate
     browser.sign_in(PORTAL, "ada@acme.com")
@@ -581,6 +669,26 @@ def test_the_server_reads_its_login_routes_from_vecten_toml(gate):
         "acme-portal.apex.home": GateRoute("data.acme.com", ("sales",)),
     }
     assert built.origin("portal.data.acme.com") == "https://portal.data.acme.com"
+
+
+def test_the_server_reads_its_container_apps_routes_and_hostnames(gate):
+    service, browser, _ = gate
+    finance = BoundApp("acme-sales", "finance", "Finance", "snowflake", ("revenue",), ("finance",))
+    apex = BoundApp("acme-hook", "home", "Home", "container", ("orders",), ("sales",), hostname="@")
+    scopes = AppScopes(
+        service.state,
+        {"overview": OVERVIEW_APP, "finance": finance, "home": apex},
+        kind="postgres",
+    )
+    services = {"acme-portal": {"web": SERVICES["acme-portal"]["web"]}}
+    built = GateService.from_config(service.oauth, config(services), apps=scopes)
+    assert {k: v for k, v in built.routes.items() if v.app} == {
+        OVERVIEW: GateRoute(SALES, ("default", "finance"), app="overview"),
+        "acme-hook.app-home.app": GateRoute("data.acme.com", ("sales",), app="home"),
+    }
+    assert built.routes["acme-portal.web.home"] == GateRoute("portal.data.acme.com", ("default",))
+    assert SALES in built.hosts
+    assert built.check(SALES, "c" * 43, "/") == {"host": SALES, "challenge": "c" * 43, "rd": "/"}
 
 
 def test_on_the_laptop_a_service_hostname_keeps_the_published_port(gate):

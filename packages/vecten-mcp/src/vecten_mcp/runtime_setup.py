@@ -299,9 +299,6 @@ def configured_runtime(root, config, extensions):
     runtime = Runtime(
         state, oauth, extensions, adapter, pools, admin, access, build_finished=build_watch(config)
     )
-    from vecten_mcp.auth.gate import GateService
-
-    runtime.gate = GateService.from_config(oauth, config)
     from vecten_mcp.audit import AuditService
 
     runtime.audit = AuditService(state, start=False, sink=extensions.emit_audit)
@@ -325,6 +322,9 @@ def configured_runtime(root, config, extensions):
         database=getattr(adapter, "database", None),
     )
     access.apps = runtime.apps
+    from vecten_mcp.auth.gate import GateService
+
+    runtime.gate = GateService.from_config(oauth, config, apps=runtime.apps)
     pools.validate = session_validator(state, oauth.clock, narrow=runtime.apps.query_groups)
     runtime.queries.narrow = runtime.apps.query_groups
     from vecten_mcp.model import ModelService

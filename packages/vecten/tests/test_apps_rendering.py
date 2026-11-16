@@ -163,6 +163,44 @@ def test_nginx_serves_the_app_at_its_hostname_with_one_login_route_and_its_healt
     assert "proxy_pass $upstream/_stcore/health;" in tls(text, "overview.data.acme.example")
 
 
+@pytest.mark.parametrize(
+    ("mode", "label", "issuer"),
+    [
+        ("vm", "dash", "https://mcp.data.acme.example"),
+        ("vm", "@", "https://mcp.data.acme.example"),
+        ("local", "dash", "https://mcp.localhost:8443"),
+        ("local", "@", "https://mcp.localhost:8443"),
+    ],
+)
+def test_nginx_asks_the_gate_for_the_route_and_hostname_the_mcp_knows_the_app_by(
+    tmp_path, mode, label, issuer
+):
+    from vecten.stack.compose import local_hostnames, service_host_name
+    from vecten.stack.nginx import _bare
+    from vecten_mcp.apps import AppScopes, read_bound_apps
+    from vecten_mcp.auth.gate import GateService
+
+    stack(tmp_path)
+    root = tmp_path / "proj"
+    bound_config = config({"overview": {"groups": ["sales"], "hostname": label}})
+    [bound] = bound_services(bound_config, read_record(root))
+    hosts = VM_HOSTS if mode == "vm" else local_hostnames()
+    site = service_site(bound, service_host_name(mode, label, hosts))
+    [route] = site.routes
+    text = generate_nginx_conf(["platform", "mcp"], hosts, mode, services=[site])
+    assert f"auth_request /_vecten/gate/verify/{route.key};" in text
+    assert f"proxy_set_header X-Vecten-Gate-Host {_bare(site.host)};" in text
+
+    class OAuth:
+        state = None
+
+    OAuth.issuer = issuer
+    scopes = AppScopes(None, read_bound_apps(root, bound_config), kind="postgres")
+    gate = GateService.from_config(OAuth(), bound_config, apps=scopes)
+    assert gate.routes[route.key].host == _bare(site.host)
+    assert gate.routes[route.key].app == "overview"
+
+
 def test_nginx_limits_no_request_rate_by_address_for_the_app_or_the_mcp(tmp_path):
     # An app's MCP calls arrive from its host's one public address, so no
     # per-address rate limit may stand between the app and the MCP.

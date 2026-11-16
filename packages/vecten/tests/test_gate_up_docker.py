@@ -1,5 +1,6 @@
 """The laptop stack's gate: a person signs in with the password backend and reaches a login
-route of an in-repo extension's service, which sees who they are and nothing forged."""
+route of an in-repo extension's service, and its container app, which see who they are and
+nothing forged."""
 
 import base64
 import hashlib
@@ -9,6 +10,7 @@ import secrets
 import ssl
 import subprocess
 import sys
+import time
 import uuid
 from html import unescape
 from http.cookies import SimpleCookie
@@ -23,7 +25,7 @@ from vecten_shared.provider.local import LocalProvider
 from vecten_shared.versions import VERSIONS
 
 from .docker_util import remove_stack_images
-from .test_up_e2e import REPO, docker_ok, drop_volumes, vecten
+from .test_up_e2e import REPO, docker_ok, drop_volumes, service_container, vecten
 
 pytestmark = pytest.mark.docker
 
@@ -40,6 +42,8 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 [project.entry-points."vecten.services"]
 web = "acme_gate:web"
+[project.entry-points."vecten.apps"]
+board = "acme_gate:board"
 """
 PACKAGE = """\
 web = {
@@ -52,14 +56,38 @@ web = {
         "hook": {"path": "/hook", "access": "public"},
     },
 }
+board = {
+    "title": "Board",
+    "description": "A container app behind the gate",
+    "kind": "container",
+    "command": ["python", "-m", "acme_gate.web"],
+    "port": 8000,
+    "health": {"path": "/healthz"},
+    "datasets": ["orders"],
+    "groups": ["default"],
+}
 """
-# Answers every request with the headers it received, as JSON.
+# Answers every request with the headers it received, as JSON, and a WebSocket opening
+# handshake with its 101.
 WEB = """\
-import http.server, json
+import base64, hashlib, http.server, json
+
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 class Echo(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if self.headers.get("Upgrade", "").lower() == "websocket" and key:
+            accept = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
+            self.protocol_version = "HTTP/1.1"
+            self.send_response(101)
+            self.send_header("Upgrade", "websocket")
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Sec-WebSocket-Accept", accept)
+            self.end_headers()
+            self.close_connection = True
+            return
         body = json.dumps({k.lower(): v for k, v in self.headers.items()}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -73,6 +101,27 @@ class Echo(http.server.BaseHTTPRequestHandler):
 http.server.ThreadingHTTPServer(("", 8000), Echo).serve_forever()
 """
 WEB_HOST = "web.localhost:8443"
+APP_HOST = "board.localhost:8443"
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+WEBSOCKET_KEY = base64.b64encode(b"gate-fixture-key").decode()
+WEBSOCKET = {
+    "Connection": "Upgrade",
+    "Upgrade": "websocket",
+    "Sec-WebSocket-Key": WEBSOCKET_KEY,
+    "Sec-WebSocket-Version": "13",
+}
+# The `orders` dataset the app declares, on a table in a schema the `default` group's seeded
+# grant covers.
+ORDERS = {
+    "name": "orders",
+    "source": "marts.orders",
+    "fields": [
+        {
+            "name": "order_id",
+            "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "order_id"}]},
+        }
+    ],
+}
 MCP_HOST = "mcp.localhost:8443"
 FORGED = {"X-Vecten-User": "mallory@evil.example", "X-Vecten-Groups": "finance"}
 
@@ -85,6 +134,9 @@ class Browser:
         self.jars: dict[str, dict[str, str]] = {}
 
     def go(self, method, url, *, headers=None, data=None, json=None):
+        # The client stores every cookie under 127.0.0.1, whatever the Host; only this
+        # browser's jar for the host may be sent.
+        self.client.cookies.clear()
         target = urlsplit(url)
         host = target.netloc
         jar = self.jars.setdefault(host, {})
@@ -169,6 +221,100 @@ def _sign_in(browser):
     )
 
 
+def _until(seconds, check, describe):
+    """`check()`'s first truthy answer within `seconds`."""
+    deadline = time.monotonic() + seconds
+    while True:
+        result = check()
+        if result:
+            return result
+        assert time.monotonic() < deadline, describe()
+        time.sleep(3)
+
+
+def _hold_the_apps_dataset(proj, project):
+    """The model holds `orders` and its table exists, so the app admits `default`: the table
+    in the laptop warehouse, the dataset in osi/, the build marker that lets the MCP load that
+    model, and a restart, at which the MCP loads it and computes admission."""
+    warehouse = service_container(project, "postgres")
+    created = subprocess.run(
+        ["docker", "exec", warehouse, "psql", "-U", "postgres", "-d", "warehouse",
+         "-v", "ON_ERROR_STOP=1",
+         "-c", "SET ROLE loader; CREATE TABLE marts.orders (order_id integer)"],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    assert created.returncode == 0, created.stderr
+    datasets = proj / "osi" / "datasets.json"
+    document = json.loads(datasets.read_text())
+    document["semantic_model"][0]["datasets"] = [ORDERS]
+    datasets.write_text(json.dumps(document, indent=2))
+    mcp = service_container(project, "mcp-server")
+    # Computed where the MCP reads the model, so the marker names exactly that revision.
+    revision = subprocess.run(
+        ["docker", "exec", mcp, "python", "-c",
+         "from vecten_shared.osi.revision import content_revision; "
+         "print(content_revision('/app/osi'))"],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    assert revision.returncode == 0, revision.stderr
+    marker = proj / ".vecten" / "artifacts" / "dbt" / "built_commit"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(revision.stdout.strip())
+    subprocess.run(["docker", "restart", mcp], capture_output=True, check=True)
+
+    def health():
+        return subprocess.run(
+            ["docker", "inspect", "--format", "{{.State.Health.Status}}", mcp],
+            capture_output=True, text=True,
+        ).stdout.strip()  # fmt: skip
+
+    _until(180, lambda: health() == "healthy", health)
+
+
+def _the_app_behind_the_gate(browser, proj, project):
+    """The container app at its own hostname: a person already signed in passes the gate
+    there only through a group the app admits, and the app's WebSocket opens through NGINX."""
+    first = browser.go("GET", f"https://{APP_HOST}/")
+    assert first.status_code == 302, first.text
+    started = browser.go("GET", browser.follow(f"https://{APP_HOST}/", first))
+    assert started.status_code == 303, started.text
+    # The server's own sign-in is still open, so it answers with the app's code at once.
+    passed = browser.go("GET", started.headers["location"])
+    assert passed.status_code == 303, passed.text
+    callback = passed.headers["location"]
+    assert callback.startswith(f"https://{APP_HOST}/_vecten/gate/callback?code=")
+    landed = browser.go("GET", callback)
+    assert landed.status_code == 303 and landed.headers["location"] == "/"
+    assert "__Host-vecten-gate" in browser.jars[APP_HOST]
+
+    # `default` is bound, but until the model holds `orders` it cannot read the app's data,
+    # so the app admits no one while the service's route bound to `default` admits Ada.
+    refused = browser.go("GET", f"https://{APP_HOST}/")
+    assert refused.status_code == 403 and "No access" in refused.text
+    assert browser.go("GET", f"https://{WEB_HOST}/").status_code == 200
+
+    _hold_the_apps_dataset(proj, project)
+
+    def opened():
+        answer = browser.go("GET", f"https://{APP_HOST}/", headers=FORGED)
+        return answer if answer.status_code == 200 else None
+
+    seen = _until(180, opened, lambda: browser.go("GET", f"https://{APP_HOST}/").text)
+    echoed = seen.json()
+    assert echoed["x-vecten-user"] == ADMIN
+    assert echoed["x-vecten-groups"] == "default"
+    assert echoed["x-vecten-principal"] and echoed["x-vecten-name"]
+    assert "vecten-gate" not in echoed.get("cookie", "")
+
+    upgraded = browser.go("GET", f"https://{APP_HOST}/_stcore/stream", headers=WEBSOCKET)
+    assert upgraded.status_code == 101, upgraded.text
+    accept = base64.b64encode(hashlib.sha1((WEBSOCKET_KEY + GUID).encode()).digest()).decode()
+    assert upgraded.headers["sec-websocket-accept"] == accept
+    stranger = Browser(browser.client)
+    refused = stranger.go("GET", f"https://{APP_HOST}/_stcore/stream", headers=WEBSOCKET)
+    assert refused.status_code == 302
+
+
 def _provision(admin):
     """`vecten user add` over the admin API, with a token from the authorization code flow:
     the first admin is invited at start and has no warehouse account until then."""
@@ -247,14 +393,17 @@ def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monk
     _extension(proj)
     added = vecten("extension", "add", "./extensions/acme-gate", "--json", cwd=proj)
     assert added.returncode == 0, added.stdout + added.stderr
-    routes = load_config(proj).services["acme-gate"]["web"].routes
+    config = load_config(proj)
+    routes = config.services["acme-gate"]["web"].routes
     assert routes["books"].groups == ["finance"] and routes["home"].access == "login"
+    board = config.apps["acme-gate"]["board"]
+    assert (board.groups, board.hostname) == (["default"], "board")
     try:
         up = vecten("up", "--json", cwd=proj)
         assert up.returncode == 0, up.stdout + up.stderr
         assert json.loads(up.stdout)["routes"]["acme-gate.web.home"] == f"https://{WEB_HOST}/"
         trusted = ssl.create_default_context()
-        for name in ("web.localhost", "mcp.localhost"):
+        for name in ("web.localhost", "board.localhost", "mcp.localhost"):
             trusted.load_verify_locations(proj / STACK_DIR / "certs" / f"{name}.crt")
         with httpx.Client(verify=trusted, timeout=30) as client:
             browser = Browser(client)
@@ -297,6 +446,8 @@ def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monk
             hook = browser.go("POST", f"https://{WEB_HOST}/hook", headers=FORGED)
             assert hook.status_code == 200
             assert not [h for h in hook.json() if h.startswith("x-vecten")]
+
+            _the_app_behind_the_gate(browser, proj, project)
 
             session = dict(browser.jars[WEB_HOST])
             asked = browser.go("GET", f"https://{WEB_HOST}/_vecten/gate/logout")

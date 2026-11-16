@@ -13,7 +13,7 @@ publishing is a later change with #40 (section 5).
 - [x] 1.3 Render a bound container app as the #38 service `svc-<extension>-app-<app>` with one `login` route at `/`, `websocket = true`, its credential names and `VECTEN_MCP_URL`
 - [x] 1.4 `vecten_shared.launch`: standard library only; resolves `entry` inside the installed package, refuses a path outside it, and execs Streamlit with the flags in the spec
 - [x] 1.5 Tests: declaration and binding validation; rendered Compose and NGINX for a container app; byte-identical output without apps; the launcher's argument list and path checks; the stub extension's twelve groups; a Docker-tier test that a minimal Streamlit app from a fixture extension starts as its generated service from the platform image, answers `/_stcore/health`, keeps its WebSocket (directly), and that its page makes no request to Streamlit's usage-statistics endpoint
-- [ ] 1.6 Docker-tier test of the app under `up` with its WebSocket kept through NGINX: needs the gate (extension-services PR D), since a `login` route answers 503 until the gate serves it
+- [x] 1.6 Docker-tier test of the app under `up` with its WebSocket kept through NGINX: a container app beside the gate's fixture service in `test_gate_up_docker.py` (a `command` app answering the WebSocket handshake, so the test needs no Streamlit install)
 
 ## 2. Data scoping, admission and audit in the MCP (PR G)
 
@@ -23,7 +23,7 @@ publishing is a later change with #40 (section 5).
 - [x] 2.4 `X-Vecten-On-Behalf-Of` recorded in the audit for app principals only (state migration for the audit column)
 - [x] 2.5 Check that no per-address limit applies to app principals' tool calls (design.md, Risks)
 - [x] 2.6 Tests: refusals for undeclared relations (including a CTE, a subquery and a quoted name), an undeclared metric, filtered `describe` and `search`; admission with a group lacking a grant and after the grant is added; header recorded for an app principal and ignored for a person; Postgres and Snowflake warehouse fixtures where the repository's test tiers allow
-- [ ] 2.7 The gate's verify admits a person to an app's route only through the app's admitted groups (`AppScopes.admitted`), and the gate reads app routes from `[apps]`: needs the gate (extension-services PR D), which this branch does not carry yet
+- [x] 2.7 The gate's verify admits a person to an app's route only through the app's admitted groups (`AppScopes.admitted`, read at each request), and the gate reads each bound container app's route and hostname from the bundle's `[apps]` and record
 
 ## 3. Listing and app connect (PR H)
 
