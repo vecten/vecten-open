@@ -38,6 +38,7 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 - [x] 3.5 `vecten lock` and the record checks: accept a URL line only for a registered extension, `git+https`, full commit, no user information, identical in `requirements.txt` and every lock, agreeing with `extensions.lock.json`; never re-resolve a tag.
 - [x] 3.6 `vecten secret set` refuses `GIT_CREDENTIALS` and `MCP_GIT_CREDENTIALS` with `--env`.
 - [x] 3.7 Tests, unit tier: every scenario of the extension-points delta against the local `git http-backend`.
+- [x] 3.8 A path entry answers for the repository's path with and without `.git`; its refusal names a redirect by the host (#97). Tests against the local `git http-backend` with a 301.
 
 ## 4. Ship, images and workflows
 

@@ -124,6 +124,13 @@ spaces. An entry with a path covers only repositories under that path, so one ho
 token per organisation; the entry with the longest matching path wins. When `.env` holds no
 `GIT_CREDENTIALS`, Vecten reads it from the environment.
 
+git asks for the credential of the path the host finally answers on. An entry with a path
+answers for the source's path both with and without `.git`, which covers a host such as GitLab
+that redirects `acme/extensions` to `acme/extensions.git`. A host that redirects to any other
+path, as GitHub does for a renamed or transferred repository, gets no credential, and the fetch
+fails with `authentication refused` although the token is valid: write the source URL as the
+host now names the repository, or use an entry for the whole host.
+
 On GitHub, use a fine-grained personal access token limited to the extensions repository with
 read access to its contents. Other hosts take their own user names with an access token:
 

@@ -225,9 +225,24 @@ def test_the_credential_file_is_private_names_one_repository_and_is_deleted():
         stored = run.credential_file
         assert stat.S_IMODE(stored.stat().st_mode) == 0o600
         assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
-        assert stored.read_text() == f"https://o:{token}@github.com/acme/extensions.git\n"
+        assert stored.read_text() == (
+            f"https://o:{token}@github.com/acme/extensions.git\n"
+            f"https://o:{token}@github.com/acme/extensions\n"
+        )
     assert not stored.exists()
     assert not stored.parent.exists()
+
+
+def test_a_path_entry_also_answers_for_the_repository_with_the_git_suffix():
+    # A host that redirects `<repository>` to `<repository>.git` before asking for a
+    # credential makes git ask for the redirected path.
+    credentials = Credentials.parse("https://o:t0k@github.com/acme")
+    source = parse_source("acme @ git+https://github.com/acme/extensions@v1")
+    with git_sources.credential_environment(source, credentials) as run:
+        assert run.credential_file.read_text() == (
+            "https://o:t0k@github.com/acme/extensions\n"
+            "https://o:t0k@github.com/acme/extensions.git\n"
+        )
 
 
 def test_a_host_entry_is_written_for_the_host_alone():
@@ -494,6 +509,10 @@ def remote(tmp_path_factory):
         users={"x-access-token": token},
         public={"public/tools.git"},
         version_0={"legacy/old.git"},
+        redirects={
+            "acme/extensions": "acme/extensions.git",
+            "acme/old-name": "acme/extensions.git",
+        },
         errors={"acme/broken.git": f"internal error for token {token}"},
     ).start(base / "tls")
     yield commits, server, token
@@ -600,6 +619,39 @@ def test_a_missing_repository_behind_an_accepted_token(served):
         resolve(source("acme/nothing.git", "v1"), good)
     assert caught.value.cause == Cause.REPOSITORY
     assert "repository not found" in caught.value.message
+
+
+def test_a_path_entry_follows_the_hosts_redirect_to_the_git_suffix(served, tmp_path):
+    commits, _, _, good, source, _ = served
+    s = source("acme/extensions", "acme/v1.2.0")
+    assert resolve(s, good).commit == commits.tagged
+    bare = fetch(s, commits.tagged, tmp_path / "r", good, tag="acme/v1.2.0")
+    assert _git("rev-parse", "refs/vecten/source", cwd=bare) == commits.tagged
+
+
+def test_a_path_entry_refused_after_a_redirect_names_the_redirect(served, tmp_path):
+    commits, _, token, good, source, host = served
+    s = source("acme/old-name", "acme/v1.2.0")
+    with pytest.raises(GitSourceFailure) as caught:
+        resolve(s, good)
+    failure = caught.value
+    assert failure.cause == Cause.AUTHENTICATION
+    assert f"the GIT_CREDENTIALS entry for https://{host}/acme" in failure.message
+    assert "redirects" in failure.message
+    assert "host-wide entry" in failure.message
+    assert _leaks(token, failure.message) == []
+    host_wide = Credentials.parse(f"https://x-access-token:{token}@{host}")
+    assert resolve(s, host_wide).commit == commits.tagged
+
+
+def test_a_host_entry_refused_does_not_mention_redirects(served):
+    _, _, _, _, source, host = served
+    with pytest.raises(GitSourceFailure) as caught:
+        resolve(
+            source("acme/extensions.git", "acme/v1.2.0"),
+            Credentials.parse(f"https://x-access-token:{_token()}@{host}"),
+        )
+    assert "redirect" not in caught.value.message
 
 
 def test_an_unreachable_host_is_a_network_failure_with_gits_words_masked(served, tmp_path):

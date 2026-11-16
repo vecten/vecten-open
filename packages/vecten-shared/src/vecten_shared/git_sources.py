@@ -189,11 +189,19 @@ class Credential:
         mine, theirs = _repository_key(self.path), _repository_key(repository)
         return theirs == mine or theirs.startswith(f"{mine}/")
 
-    def store_line(self, repository: str) -> str:
-        """The credential-store line answering for `repository` alone, or for the host when
-        the entry has no path."""
-        where = f"{self.host}/{repository}" if self.path else self.host
-        return f"https://{self.raw_username}:{self.raw_token}@{where}\n"
+    def store_lines(self, repository: str) -> str:
+        """The credential-store lines answering for `repository` alone, or for the host when
+        the entry has no path.
+
+        git asks for the path it ends up on, and a host may redirect a repository's path to
+        its spelling with or without `.git` before asking for a credential, so a path entry
+        answers for both spellings."""
+        prefix = f"https://{self.raw_username}:{self.raw_token}@"
+        if not self.path:
+            return f"{prefix}{self.host}\n"
+        bare = repository.removesuffix(".git")
+        other = bare if repository.endswith(".git") else f"{bare}.git"
+        return "".join(f"{prefix}{self.host}/{where}\n" for where in (repository, other))
 
 
 def _entry(position: int, raw: str) -> Credential:
@@ -397,7 +405,7 @@ def credential_environment(source: GitSource, credentials: Credentials | None) -
         stored = directory / "credentials"
         descriptor = os.open(stored, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w") as handle:
-            handle.write(entry.store_line(source.repository))
+            handle.write(entry.store_lines(source.repository))
         # git appends the action to the helper; only `get` reaches the store, so a refused
         # token is never erased from it and an accepted one never written back.
         helper = (
@@ -519,8 +527,18 @@ def _hint(cause: Cause, source: GitSource, entry: Credential | None) -> str:
                 f"set {CREDENTIALS_VARIABLE} with an entry for https://{source.host}, or for "
                 "the organisation's path on it, whose token can read the repository"
             )
-        covered = f"https://{entry.host}/{entry.path}" if entry.path else f"https://{entry.host}"
-        return f"the {CREDENTIALS_VARIABLE} entry for {covered} was refused; replace its token"
+        if not entry.path:
+            return (
+                f"the {CREDENTIALS_VARIABLE} entry for https://{entry.host} was refused; "
+                "replace its token"
+            )
+        # A path entry answers only for the source's path and its other `.git` spelling, so
+        # git asks in vain after a host redirects the source to any other path.
+        return (
+            f"the {CREDENTIALS_VARIABLE} entry for https://{entry.host}/{entry.path} was "
+            f"refused; replace its token, or, if the host redirects {source.url} to another "
+            "path, write the source URL as the host redirects it, or use a host-wide entry"
+        )
     if cause is Cause.REPOSITORY:
         return f"check the repository path, and that the {CREDENTIALS_VARIABLE} token can read it"
     if cause is Cause.COMMIT:

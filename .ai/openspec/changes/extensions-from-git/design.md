@@ -247,6 +247,11 @@ authentication. Decision 2 stands as written; the laptop fallback is not needed.
   picks the `GIT_CREDENTIALS` entry itself (the longest path prefix on the host) and writes that
   one entry into the fetch's credential file at the repository's exact path, with
   `credential.useHttpPath` on; an entry without a path is written for the host alone.
+- git asks the helper for the path it ends up on after a redirect of `info/refs`. GitLab, and
+  GitHub for a renamed repository, redirect before asking for a credential, so a path entry is
+  also written for the repository's other spelling (with `.git` added or removed), which covers
+  GitLab. A redirect to any other path reaches git with no credential; the refusal for a path
+  entry names that possibility, the source URL as the host redirects it, and a host-wide entry.
 
 ## Risks and trade-offs
 
