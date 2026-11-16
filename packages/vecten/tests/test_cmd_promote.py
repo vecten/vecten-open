@@ -445,3 +445,21 @@ def test_promote_refuses_while_the_identity_confirmation_is_not_on_the_default_b
     r = invoke("promote", "--env", "prod", "--json")
     assert r.exit_code == 0, r.stdout
     assert len(gh.named("workflow", "run")) == 1
+
+
+def test_a_promotion_without_the_fetch_keeps_the_owed_ship(invoke, snowflake_project, monkeypatch):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten_shared.records import read_record, write_record
+
+    set_facts(snowflake_project, "prod", provisioner_script_run=True)
+    write_record(snowflake_project, owed_ship_record("prod"), {})
+    gh = use(
+        monkeypatch,
+        FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}),
+        FakeGit(head=HEAD, answers={("fetch",): (128, "")}),
+    )
+    r = invoke("promote", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert len(gh.named("workflow", "run")) == 1
+    # Without the default branch's facts the run may have shipped nothing.
+    assert read_record(snowflake_project, owed_ship_record("prod"))

@@ -93,8 +93,15 @@ def setup_script(root, env, confirm=False, public_key=None):
         commands = [f"vecten secret set {name}{flag}" for name in provisioner_secret_names(config)]
     if confirm:
         write_record(root, f"provisioner-{env}", {"confirmed": True})
-        # `next` walks only the order's environments, and a later one's deploy shipped no host.
-        if then and config.promoted_from(env):
+        # A deploy of a later environment of the order while its identity was pending shipped
+        # no host, and `next` walks only the order's environments.
+        before = config.environments.get(env) or EnvironmentFacts()
+        if (
+            platform
+            and config.promoted_from(env)
+            and before.deployed_commit
+            and not before.provisioner_script_run
+        ):
             write_record(root, owed_ship_record(env), {"command": then})
         if env != "local":
             facts = config.environments.setdefault(env, EnvironmentFacts())

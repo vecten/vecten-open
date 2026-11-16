@@ -455,9 +455,9 @@ def _deploy(
         branch = require_on_default_branch(project_root, deploy.github_repository, gh, git)
         promoted = _promoted_for_dispatch(gh, git, project_root, config, env, branch, commit)
         # CI reads the facts from the fetched head, which this checkout may trail.
-        facts = read_fetched_facts(git, project_root).environments
+        head_facts = read_fetched_facts(git, project_root).environments
         # The run deploys the promoted commit, else that head.
-        shipped = read_commit_files(git, project_root, promoted or FETCHED, facts)
+        shipped = read_commit_files(git, project_root, promoted or FETCHED, head_facts)
         warnings = require_ci_git_credential(project_root, config, env, gh, shipped)
         # The run names the objects by the vecten.toml it deploys, under the base the head
         # records for the environment if it records one.
@@ -510,6 +510,9 @@ def _deploy(
         }
         if identity_pending(recorded, env):
             result["ship_skipped"] = identity_pending_note(recorded, env)
+        # The run read the facts of the fetched head, which settle whether it shipped.
+        if not identity_pending(recorded.model_copy(update={"environments": head_facts}), env):
+            remove_record(project_root, owed_ship_record(env))
         if warnings:
             result["warnings"] = warnings
         return result
@@ -909,8 +912,10 @@ def promote_env(
     shipped = read_commit_files(git, project_root, promoted, config.environments)
     warnings += require_ci_git_credential(project_root, config, env, gh, shipped)
     followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git, commit=promoted)
-    # The run shipped every host: the default branch carries the identity's confirmation.
-    remove_record(project_root, owed_ship_record(env))
+    # Only a fetched default branch shows the run read the identity's confirmation; without
+    # it, the run may have finished green with no host shipped.
+    if fetched:
+        remove_record(project_root, owed_ship_record(env))
     result = {"env": env, "promotes_from": previous, "dispatched": True, **followed}
     return {**result, "warnings": warnings} if warnings else result
 
@@ -1044,6 +1049,8 @@ def destroy_env(
         # and the people still owed a password link.
         remove_record(project_root, login_record(env))
         remove_record(project_root, record_name(env))
+        # A new deploy ships no host until the identity is confirmed again.
+        remove_record(project_root, owed_ship_record(env))
     return {
         "env": env,
         "state_bucket": state_bucket,

@@ -1417,3 +1417,16 @@ def test_a_destroy_passes_no_hostnames_and_needs_no_lock(project):
     root_dir = project / "deploy" / "terraform" / "aws"
     config = load_config(project)
     assert service_hostname_vars(project, config, root_dir, read_only=True) == ()
+
+
+def test_a_laptop_deploy_that_ships_settles_the_ship_owed_since_the_identity(
+    invoke, laptop, project, monkeypatch
+):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten_shared.records import read_record, write_record
+
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    write_record(project, owed_ship_record("prod"), {})
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert read_record(project, owed_ship_record("prod")) is None

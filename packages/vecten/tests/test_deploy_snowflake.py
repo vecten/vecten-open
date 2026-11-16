@@ -313,6 +313,9 @@ def test_the_pending_identity_note_names_the_command_that_ships_the_environment(
     assert identity_pending_note(config, "prod").endswith(
         "then `vecten github push` and `vecten promote --env prod`, which ships it"
     )
+    assert identity_pending_note(config, "staging").endswith(
+        "then `vecten github push` and `vecten ship --env staging`, which ships it"
+    )
 
 
 def test_the_destroy_message_names_the_environments_provisioner_role():

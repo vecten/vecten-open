@@ -431,3 +431,17 @@ def test_the_script_for_a_later_environment_lists_its_promotion(tmp_path, monkey
         "vecten github push",
         "vecten promote --env prod",
     ]
+
+
+def test_no_ship_is_owed_where_the_deploy_has_not_run_or_the_identity_was_confirmed(tmp_path):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.records import read_record
+
+    root = _snowflake_dev_prod(tmp_path)
+    facts(root, "prod", deployed_commit=None)
+    setup_script(root, "prod", confirm=True)
+    assert read_record(root, owed_ship_record("prod")) is None
+    facts(root, "prod", deployed_commit="abc123")
+    setup_script(root, "prod", confirm=True)
+    assert read_record(root, owed_ship_record("prod")) is None
