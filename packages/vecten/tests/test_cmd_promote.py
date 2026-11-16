@@ -394,3 +394,72 @@ def test_a_promoted_commit_this_checkout_lacks_is_refused_with_the_fetch(
     assert f"git fetch origin {SHIPPED}" in error and "--unshallow" in error
     assert "invalid object name" not in error
     assert gh.named("workflow", "run") == []
+
+
+# The ship a later environment owes once its Snowflake identity is confirmed
+
+
+def test_a_promotion_settles_the_ship_owed_since_the_identity(invoke, project, monkeypatch):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten_shared.records import read_record, write_record
+
+    write_record(project, owed_ship_record("prod"), {"command": "vecten promote --env prod"})
+    use(monkeypatch, FakeGh(watch_code=1, history=[SHIPPED], statuses={SHIPPED: [DEV_OK]}))
+    assert invoke("promote", "--env", "prod", "--json").exit_code == 5
+    assert read_record(project, owed_ship_record("prod"))
+    use(monkeypatch, FakeGh(history=[SHIPPED], statuses={SHIPPED: [DEV_OK]}))
+    assert invoke("promote", "--env", "prod", "--json").exit_code == 0
+    assert read_record(project, owed_ship_record("prod")) is None
+
+
+@pytest.fixture
+def snowflake_project(tmp_path, monkeypatch):
+    from .test_deploy_snowflake import render_snowflake
+
+    root = ordered(render_snowflake(tmp_path / "snow"))
+    for env in ("dev", "prod"):
+        set_facts(root, env, bootstrapped=True, state_bucket="mock-state", deployed_commit=COMMIT)
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(github_env, "sleep", lambda seconds: None)
+    return root
+
+
+def test_promote_refuses_while_the_identity_confirmation_is_not_on_the_default_branch(
+    invoke, snowflake_project, monkeypatch, tmp_path
+):
+    pushed = tmp_path / "pushed"
+    shutil.copytree(snowflake_project, pushed)
+    set_facts(snowflake_project, "prod", provisioner_script_run=True)
+    gh = use(
+        monkeypatch,
+        FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}),
+        FakeGit(head=HEAD, shown={"FETCH_HEAD": pushed}),
+    )
+    r = invoke("promote", "--env", "prod", "--json")
+    assert r.exit_code == 3, r.stdout
+    error = doc(r)["error"]
+    assert "vecten github push" in error and "main" in error
+    assert gh.named("workflow", "run") == []
+    set_facts(pushed, "prod", provisioner_script_run=True)
+    r = invoke("promote", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert len(gh.named("workflow", "run")) == 1
+
+
+def test_a_promotion_without_the_fetch_keeps_the_owed_ship(invoke, snowflake_project, monkeypatch):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten_shared.records import read_record, write_record
+
+    set_facts(snowflake_project, "prod", provisioner_script_run=True)
+    write_record(snowflake_project, owed_ship_record("prod"), {})
+    gh = use(
+        monkeypatch,
+        FakeGh(history=[HEAD, SHIPPED], statuses={SHIPPED: [DEV_OK]}),
+        FakeGit(head=HEAD, answers={("fetch",): (128, "")}),
+    )
+    r = invoke("promote", "--env", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert len(gh.named("workflow", "run")) == 1
+    # Without the default branch's facts the run may have shipped nothing.
+    assert read_record(snowflake_project, owed_ship_record("prod"))

@@ -3,7 +3,7 @@
 import json
 import re
 
-from vecten.deploy.snowflake import environment_names
+from vecten.deploy.snowflake import environment_names, identity_ship_command, owed_ship_record
 from vecten.mcp_url import mcp_url
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, load_config, save_config
@@ -81,16 +81,28 @@ def setup_script(root, env, confirm=False, public_key=None):
     # On an existing Snowflake warehouse the laptop holds the provisioner's key, unless the
     # administrator brings a public key whose private half they keep themselves.
     generated = not platform and config.warehouse.kind == "snowflake" and public_key is None
+    then = identity_ship_command(config, env) if platform else None
     if platform:
         # The confirmation is a change to vecten.toml, and the push carrying it runs the
-        # ship workflow, which ships the MCP once the identity is confirmed.
-        commands = ["vecten github push"]
+        # ship workflow, which ships the order's first environment alone; a run that ships
+        # any other environment reads the confirmation from the default branch.
+        commands = ["vecten github push", *([then] if then else [])]
     elif generated:
         commands = [f"vecten secret set {PROVISIONER_KEY}{flag} --from-local"] if flag else []
     else:
         commands = [f"vecten secret set {name}{flag}" for name in provisioner_secret_names(config)]
     if confirm:
         write_record(root, f"provisioner-{env}", {"confirmed": True})
+        # A deploy of a later environment of the order while its identity was pending shipped
+        # no host, and `next` walks only the order's environments.
+        before = config.environments.get(env) or EnvironmentFacts()
+        if (
+            platform
+            and config.promoted_from(env)
+            and before.deployed_commit
+            and not before.provisioner_script_run
+        ):
+            write_record(root, owed_ship_record(env), {"command": then})
         if env != "local":
             facts = config.environments.setdefault(env, EnvironmentFacts())
             facts.provisioner_script_run = True

@@ -1159,7 +1159,8 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
   `EXTERNAL_OAUTH_<BASE>_<ENV>` and the policy `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN`,
   which binds every user the MCP creates to that integration. Have an ACCOUNTADMIN run it,
   record it with `--confirm-run`, and `vecten github push`: the ship workflow then ships every
-  host.
+  host. For an environment after the first in `[deploy] promotion`, that push ships the first
+  environment only; `vecten promote --env <env>` then ships this one.
 - People's and services' users are `<NAME>_<BASE>_<ENV>` and groups' roles
   `<GROUP>_<BASE>_<ENV>`, one per environment; the MCP adopts no existing user here. Row
   access and masking policies keyed on a person's own Snowflake user do not apply to these
@@ -1178,7 +1179,9 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
   in the database the first deploy creates. So the first deploy ships no host. Then run
   `vecten mcp provisioner-script --env <env>`, which stores the provisioner's key pair as
   `MCP_PROVISIONER_PRIVATE_KEY` and prints the SQL. Have an ACCOUNTADMIN run it, record it with
-  `--confirm-run`, and `vecten github push`: the ship workflow then ships every host.
+  `--confirm-run`, and `vecten github push`: the ship workflow then ships every host. For an
+  environment after the first in `[deploy] promotion`, that push ships the first environment
+  only; `vecten promote --env <env>` then ships this one.
 [%- endif %]
 [% endif -%]
 [% endif %][% endif %]

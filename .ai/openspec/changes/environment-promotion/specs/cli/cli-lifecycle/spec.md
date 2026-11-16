@@ -19,6 +19,11 @@
 - **WHEN** `vecten promote --env dev` runs and `dev` is first in the order
 - **THEN** the command exits non-zero, saying that a push to the default branch ships `dev`
 
+#### Scenario: Identity confirmed on this machine alone
+
+- **WHEN** on a platform and MCP project over Snowflake, `vecten mcp provisioner-script --env prod --confirm-run` ran but the fetched default branch still records `prod`'s identity as pending, and `vecten promote --env prod` runs
+- **THEN** the command exits non-zero naming `vecten github push`, and dispatches nothing, because the promoted run reads the environment facts from the default branch
+
 #### Scenario: Status
 
 - **WHEN** `vecten promote --status --json` runs after `dev` shipped `b71d004` and `prod` last shipped `a3f9c2e`

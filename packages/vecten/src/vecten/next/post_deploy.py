@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from vecten.deploy.snowflake import identity_pending
+from vecten.deploy.snowflake import identity_pending, owed_ship_record
 from vecten.intake.facts import OIDC_REGISTERED_PREFIX
 from vecten.mcp_url import mcp_url
 from vecten.next.areas import area_access_apply_items
@@ -191,6 +191,13 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
     if identity_pending(config, env):
         title = "Set up the MCP's Snowflake identity"
         return [*items, Item("command", title, f"vecten mcp provisioner-script --env {env}")]
+    # The push carrying the confirmation ships the order's first environment alone, and the
+    # items below reach hosts of this one that its deploy left unshipped.
+    if config.promoted_from(env) and read_record(root, owed_ship_record(env)) is not None:
+        title = (
+            f"Ship {env} now that its MCP has its Snowflake identity; its deploy shipped no host"
+        )
+        return [*items, Item("command", title, f"vecten promote --env {env}")]
     mcp = config.mcp
     if mcp.auth == "oidc" and not (mcp.oidc_issuer and mcp.oidc_client_id):
         items.append(OIDC)

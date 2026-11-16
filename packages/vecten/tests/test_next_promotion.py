@@ -359,3 +359,89 @@ def test_without_a_deploy_layer_a_deployed_prod_waits_for_the_deploy_questions(p
     config.deploy = None
     save_config(project, config)
     assert [i.answer_keys for i in next_items(project)] == [("cloud",)]
+
+
+# A later environment's ship once its Snowflake identity is confirmed
+
+
+def _snowflake_dev_prod(tmp_path):
+    from .test_deploy_snowflake import render_snowflake
+
+    root = ordered(render_snowflake(tmp_path / "snow"))
+    for env in ("dev", "prod"):
+        facts(root, env, bootstrapped=True, deployed_commit="abc123")
+    config = load_config(root)
+    config.mcp.oidc_issuer, config.mcp.oidc_client_id = "https://id.acme.com", "vecten"
+    config.mcp.admins = ["ana@acme.com"]
+    save_config(root, config)
+    return root
+
+
+def _post_deploy(root, env):
+    from vecten.next.gitstate import GitState
+
+    clean = GitState(has_repo=True, has_origin=True, dirty=False, ahead=False)
+    return post_deploy_items(root, load_config(root), env, clean)
+
+
+PROMOTE_PROD = Item(
+    "command",
+    "Ship prod now that its MCP has its Snowflake identity; its deploy shipped no host",
+    "vecten promote --env prod",
+)
+
+
+def test_a_later_environment_waits_for_its_promotion_after_the_identity(tmp_path):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.records import read_record, remove_record
+
+    root = _snowflake_dev_prod(tmp_path)
+    data = setup_script(root, "prod", confirm=True)
+    assert data["commands"] == ["vecten github push", "vecten promote --env prod"]
+    assert read_record(root, owed_ship_record("prod"))
+    items = _post_deploy(root, "prod")
+    assert items == [PROMOTE_PROD]
+    remove_record(root, owed_ship_record("prod"))
+    resolutions = [i.resolution for i in _post_deploy(root, "prod")]
+    assert "vecten promote --env prod" not in resolutions
+    assert any(r.startswith("vecten user add") for r in resolutions)
+
+
+def test_the_first_environment_is_shipped_by_the_push_that_carries_its_identity(tmp_path):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.records import read_record
+
+    root = _snowflake_dev_prod(tmp_path)
+    assert setup_script(root, "dev", confirm=True)["commands"] == ["vecten github push"]
+    assert read_record(root, owed_ship_record("dev")) is None
+    resolutions = [i.resolution for i in _post_deploy(root, "dev")]
+    assert not [r for r in resolutions if r.startswith("vecten promote")]
+    assert any(r.startswith("vecten user add") for r in resolutions)
+
+
+def test_the_script_for_a_later_environment_lists_its_promotion(tmp_path, monkeypatch):
+    from vecten import mcp_onboarding
+
+    root = _snowflake_dev_prod(tmp_path)
+    monkeypatch.setattr(mcp_onboarding, "_platform_public_key", lambda root, env: "AAAA")
+    assert mcp_onboarding.setup_script(root, "prod")["commands"] == [
+        "vecten mcp provisioner-script --env prod --confirm-run",
+        "vecten github push",
+        "vecten promote --env prod",
+    ]
+
+
+def test_no_ship_is_owed_where_the_deploy_has_not_run_or_the_identity_was_confirmed(tmp_path):
+    from vecten.deploy.snowflake import owed_ship_record
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.records import read_record
+
+    root = _snowflake_dev_prod(tmp_path)
+    facts(root, "prod", deployed_commit=None)
+    setup_script(root, "prod", confirm=True)
+    assert read_record(root, owed_ship_record("prod")) is None
+    facts(root, "prod", deployed_commit="abc123")
+    setup_script(root, "prod", confirm=True)
+    assert read_record(root, owed_ship_record("prod")) is None

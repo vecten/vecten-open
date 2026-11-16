@@ -1152,3 +1152,13 @@ def test_scaleway_destroy_with_a_held_lock_refuses(invoke, scaleway):
     assert f"s3://{scw_state_bucket()}/prod/scaleway.tfstate.tflock" in doc(r)["error"]
     assert scaleway.org.snapshots == {}
     assert FakeTerraform.calls() == []
+
+
+def test_destroy_forgets_the_ship_owed_since_the_identity(invoke, project, monkeypatch):
+    from vecten.deploy.snowflake import owed_ship_record
+
+    write_record(project, owed_ship_record("prod"), {})
+    with cloud(project, monkeypatch):
+        r = invoke("destroy", "--env", "prod", "--confirm", "prod", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert read_record(project, owed_ship_record("prod")) is None

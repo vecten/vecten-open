@@ -2,7 +2,7 @@
 
 ### Requirement: next walks the environments of the promotion order
 
-Inside a project with a deploy layer, `next` SHALL walk the environments of the promotion order, `prod` alone when none is declared, one at a time: it SHALL report the deploy prerequisites, the deploy gate and the post-deploy items of the first environment in the order whose items are not all clear, naming that environment in each item's resolution, and SHALL report nothing for a later environment until they are clear. Key renewal and key handover items SHALL cover every environment with recorded facts. `next` SHALL report no pending promotion, because knowing one needs GitHub; `vecten promote --status` reports it.
+Inside a project with a deploy layer, `next` SHALL walk the environments of the promotion order, `prod` alone when none is declared, one at a time: it SHALL report the deploy prerequisites, the deploy gate and the post-deploy items of the first environment in the order whose items are not all clear, naming that environment in each item's resolution, and SHALL report nothing for a later environment until they are clear. Key renewal and key handover items SHALL cover every environment with recorded facts. `next` SHALL report no pending promotion, because knowing one needs GitHub; `vecten promote --status` reports it. The one exception is a later environment of the order on a Snowflake warehouse the platform builds, with the MCP: once `vecten mcp provisioner-script --env <env> --confirm-run` recorded its identity on this machine after a deploy that shipped no host, `next` SHALL report `vecten promote --env <env>` before that environment's other post-deploy items, until a promotion of it from this machine succeeds.
 
 #### Scenario: No order
 
@@ -18,6 +18,11 @@ Inside a project with a deploy layer, `next` SHALL walk the environments of the 
 
 - **WHEN** `dev` is deployed, its first user added, every connector's access applied for it, its connection shown and its alert webhook answered, and `prod` is not bootstrapped
 - **THEN** the first item is `bootstrap --env prod`
+
+#### Scenario: prod's identity confirmed after its deploy
+
+- **WHEN** `[deploy] promotion = ["dev", "prod"]` on a platform and MCP project over Snowflake, `prod`'s deploy shipped no host because its identity was pending, and `vecten mcp provisioner-script --env prod --confirm-run` then ran
+- **THEN** the confirmation lists `vecten github push` and `vecten promote --env prod`, and `next` reports `vecten promote --env prod` for `prod` and no `vecten user add --env prod` until that promotion succeeds
 
 #### Scenario: Key expiring in dev
 

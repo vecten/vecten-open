@@ -77,6 +77,7 @@ from vecten.deploy.snowflake import (
     has_snowflake_root,
     identity_pending,
     identity_pending_note,
+    owed_ship_record,
     record_layout,
 )
 from vecten.deploy.snowflake_leftovers import read_leftovers
@@ -90,7 +91,7 @@ from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import recorded_base, shared_base, shared_layout, snowflake_names
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file
-from vecten_shared.records import write_text_atomic
+from vecten_shared.records import remove_record, write_text_atomic
 from vecten_shared.services import check_bindings, limits_per_host
 
 SHIP_WORKFLOW = "deploy-platform.yml"
@@ -456,9 +457,9 @@ def _deploy(
         branch = require_on_default_branch(project_root, deploy.github_repository, gh, git)
         promoted = _promoted_for_dispatch(gh, git, project_root, config, env, branch, commit)
         # CI reads the facts from the fetched head, which this checkout may trail.
-        facts = read_fetched_facts(git, project_root).environments
+        head_facts = read_fetched_facts(git, project_root).environments
         # The run deploys the promoted commit, else that head.
-        shipped = read_commit_files(git, project_root, promoted or FETCHED, facts)
+        shipped = read_commit_files(git, project_root, promoted or FETCHED, head_facts)
         warnings = require_ci_git_credential(project_root, config, env, gh, shipped)
         # The run names the objects by the vecten.toml it deploys, under the base the head
         # records for the environment if it records one.
@@ -514,6 +515,9 @@ def _deploy(
         }
         if identity_pending(recorded, env):
             result["ship_skipped"] = identity_pending_note(recorded, env)
+        # The run read the facts of the fetched head, which settle whether it shipped.
+        if not identity_pending(recorded.model_copy(update={"environments": head_facts}), env):
+            remove_record(project_root, owed_ship_record(env))
         if warnings:
             result["warnings"] = warnings
         return result
@@ -865,6 +869,25 @@ def _promoted_from(config: VectenConfig, project_root: Path, env: str) -> str:
     return previous
 
 
+def _require_identity_pushed(
+    git: ToolRunner, project_root: Path, config: VectenConfig, env: str, branch: str
+) -> None:
+    """Refuse while the confirmation of `env`'s identity is on this checkout alone: the run
+    reads the environment facts from the fetched default branch, and without it there the run
+    finishes green with no host shipped."""
+    if not (has_snowflake_root(config) and config.has("mcp")):
+        return
+    head = config.model_copy(
+        update={"environments": read_fetched_facts(git, project_root).environments}
+    )
+    if identity_pending(head, env):
+        raise Failure(
+            ExitCode.PREREQUISITE,
+            f"the confirmation that {env}'s MCP identity is set up is not on {branch} yet, and "
+            "the promotion reads it there; push it with `vecten github push`, then promote",
+        )
+
+
 def promote_env(
     project_root: Path, env: str, *, gh: ToolRunner, git: ToolRunner, commit: str | None
 ) -> dict:
@@ -885,16 +908,22 @@ def promote_env(
     branch = default_branch(gh, project_root, repository)
     # The promoted commit is on the default branch, which this checkout may trail.
     warnings = []
+    fetched = True
     if commit is None:
         # GitHub names the commit; its files are read from this checkout's objects, which
         # may hold it already.
         try:
             fetch_default_branch(git, project_root, branch)
         except Failure as exc:
+            fetched = False
             warnings.append(f"{exc.message}; promote reads the commit from this checkout")
-        promoted = newest_shipped(gh, project_root, repository, branch, previous)
     else:
         fetch_default_branch(git, project_root, branch)
+    if fetched:
+        _require_identity_pushed(git, project_root, config, env, branch)
+    if commit is None:
+        promoted = newest_shipped(gh, project_root, repository, branch, previous)
+    else:
         promoted = given_commit(git, project_root, commit)
         require_commit_on_default_branch(project_root, git, branch, promoted)
         require_shipped_by(gh, project_root, repository, promoted, env, previous)
@@ -902,6 +931,10 @@ def promote_env(
     shipped = read_commit_files(git, project_root, promoted, config.environments)
     warnings += require_ci_git_credential(project_root, config, env, gh, shipped)
     followed = dispatch_and_follow(project_root, SHIP_WORKFLOW, env, gh, git, commit=promoted)
+    # Only a fetched default branch shows the run read the identity's confirmation; without
+    # it, the run may have finished green with no host shipped.
+    if fetched:
+        remove_record(project_root, owed_ship_record(env))
     result = {"env": env, "promotes_from": previous, "dispatched": True, **followed}
     return {**result, "warnings": warnings} if warnings else result
 
@@ -1035,6 +1068,8 @@ def destroy_env(
         # and the people still owed a password link.
         remove_record(project_root, login_record(env))
         remove_record(project_root, record_name(env))
+        # A new deploy ships no host until the identity is confirmed again.
+        remove_record(project_root, owed_ship_record(env))
     return {
         "env": env,
         "state_bucket": state_bucket,
