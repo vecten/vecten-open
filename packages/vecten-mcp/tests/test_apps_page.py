@@ -1,8 +1,6 @@
 """`/apps`: a signed-in person sees the apps one of their current groups is admitted to."""
 
 import importlib.util
-import re
-from html import unescape
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -101,28 +99,7 @@ def page(builtins):
 
 
 def sign_in(http, email="ana@example.com"):
-    start = http.get("/apps/login", follow_redirects=False)
-    assert start.status_code == 303, start.text
-    form = http.get(start.headers["location"])
-    consent = http.post(
-        "/login",
-        data={
-            "flow": session.hidden(form, "flow"),
-            "csrf": session.hidden(form, "csrf"),
-            "email": email,
-            "password": session.PASSWORD,
-        },
-    )
-    redirect = http.post(
-        "/consent",
-        data={
-            "flow": session.hidden(consent, "flow"),
-            "csrf": session.hidden(consent, "csrf"),
-            "decision": "approve",
-        },
-    )
-    target = urlparse(unescape(re.search(r'<a href="([^"]+)"', redirect.text)[1]))
-    return http.get(target.path + "?" + target.query, follow_redirects=False)
+    return http.get(session.panel_authorized(http, email, base="/apps"), follow_redirects=False)
 
 
 def test_a_person_not_signed_in_is_sent_to_sign_in(page):
@@ -130,7 +107,7 @@ def test_a_person_not_signed_in_is_sent_to_sign_in(page):
     assert response.status_code == 303 and response.headers["location"] == "/apps/login"
 
 
-def test_sign_in_uses_its_own_client_with_pkce_and_a_cookie_for_apps_only(page):
+def test_sign_in_uses_its_own_client_with_pkce_and_a_cookie_of_its_own(page):
     start = page.http.get("/apps/login", follow_redirects=False)
     query = parse_qs(urlparse(start.headers["location"]).query)
     assert query["client_id"] == [APPS_CLIENT]
@@ -139,7 +116,8 @@ def test_sign_in_uses_its_own_client_with_pkce_and_a_cookie_for_apps_only(page):
     callback = sign_in(page.http)
     assert callback.status_code == 303 and callback.headers["location"] == "/apps"
     cookie = callback.headers["set-cookie"].lower()
-    assert "path=/apps" in cookie and "httponly" in cookie and "samesite=strict" in cookie
+    assert cookie.startswith("__host-vecten_apps=") and "path=/;" in cookie + ";"
+    assert "httponly" in cookie and "samesite=strict" in cookie
 
 
 def test_a_person_in_sales_sees_the_sales_app_and_nothing_about_finance(page):
@@ -211,15 +189,15 @@ def cookie(http, name):
 
 def test_the_apps_cookie_is_secure(page):
     sign_in(page.http)
-    assert cookie(page.http, "vecten_apps").secure
+    assert cookie(page.http, "__Host-vecten_apps").secure
 
 
 def test_a_panel_cookie_replayed_as_the_apps_cookie_is_not_a_session(page):
     session.person(page, "admin@example.com")
     assert session.panel_login(page.http).status_code == 303
-    value = cookie(page.http, "vecten_panel").value
+    value = cookie(page.http, "__Host-vecten_panel").value
     page.http.cookies.clear()
-    page.http.cookies.set("vecten_apps", value, domain="mcp.example", path="/apps")
+    page.http.cookies.set("__Host-vecten_apps", value, domain="mcp.example")
     response = page.http.get("/apps", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/apps/login"
 
@@ -227,9 +205,9 @@ def test_a_panel_cookie_replayed_as_the_apps_cookie_is_not_a_session(page):
 def test_an_apps_cookie_replayed_as_the_panel_cookie_is_not_a_session(page):
     session.person(page, "admin@example.com")
     sign_in(page.http, "admin@example.com")
-    value = cookie(page.http, "vecten_apps").value
+    value = cookie(page.http, "__Host-vecten_apps").value
     page.http.cookies.clear()
-    page.http.cookies.set("vecten_panel", value, domain="mcp.example", path="/admin")
+    page.http.cookies.set("__Host-vecten_panel", value, domain="mcp.example")
     response = page.http.get("/admin", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/admin/login"
 
@@ -256,3 +234,87 @@ def test_app_text_on_the_page_is_escaped(page):
     body = page.http.get("/apps").text
     assert "<script>" not in body
     assert "&lt;script&gt;alert(1)" in body and "&lt;script&gt;alert(2)" in body
+
+
+SURFACES = {"/admin": "vecten_panel", "/apps": "vecten_apps"}
+
+
+def stranger(page):
+    """Another browser on the same server."""
+    from vecten_mcp.app import create_app
+
+    return session.fixture.TestClient(
+        create_app(runtime=page.runtime), base_url="https://mcp.example"
+    )
+
+
+@pytest.mark.parametrize("base", SURFACES)
+def test_a_planted_login_cookie_does_not_finish_the_planters_sign_in(page, base):
+    # A sibling hostname can set a cookie of any name but a __Host- one for the whole domain.
+    session.person(page, "mallory@example.com")
+    callback = session.panel_authorized(page.http, "mallory@example.com", base=base)
+    login = SURFACES[base] + "_login"
+    nonce = next(c.value for c in page.http.cookies.jar if c.name.endswith(login))
+    with stranger(page) as victim:
+        planted = {"Cookie": f"{login}={nonce}"}
+        assert victim.get(callback, headers=planted, follow_redirects=False).status_code == 400
+        assert victim.get(base, follow_redirects=False).status_code == 303
+    # The planter's own browser still holds the flow.
+    assert page.http.get(callback, follow_redirects=False).status_code == 303
+
+
+@pytest.mark.parametrize("base", SURFACES)
+def test_a_planted_session_cookie_is_not_a_session(page, base):
+    session.person(page, "mallory@example.com")
+    callback = session.panel_authorized(page.http, "mallory@example.com", base=base)
+    assert page.http.get(callback, follow_redirects=False).status_code == 303
+    name = SURFACES[base]
+    token = next(c.value for c in page.http.cookies.jar if c.name.endswith(name))
+    with stranger(page) as victim:
+        response = victim.get(base, headers={"Cookie": f"{name}={token}"}, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == base + "/login"
+
+
+@pytest.mark.parametrize("base", SURFACES)
+def test_a_loopback_tunnel_signs_in_with_path_scoped_cookies(page, base):
+    from vecten_mcp.app import create_app
+
+    session.person(page, "mallory@example.com")
+    with session.fixture.TestClient(
+        create_app(runtime=page.runtime), base_url="http://127.0.0.1:8001"
+    ) as tunnel:
+        start = tunnel.get(base + "/login", follow_redirects=False)
+        callback = tunnel.get(
+            session.panel_authorized(tunnel, "mallory@example.com", base=base),
+            follow_redirects=False,
+        )
+        assert callback.status_code == 303
+        assert tunnel.get(base).status_code == 200
+    name = SURFACES[base]
+    for response, cookie in ((start, name + "_login"), (callback, name)):
+        line = next(
+            line.lower()
+            for line in response.headers.get_list("set-cookie")
+            if line.startswith(cookie + "=")
+        )
+        assert f"path={base}" in line and "secure" not in line
+
+
+@pytest.mark.parametrize("base", SURFACES)
+def test_signing_in_and_out_clear_the_host_only_cookies(page, base):
+    # A browser keeps a __Host- cookie unless the clearing header is Secure with Path=/.
+    session.person(page, "mallory@example.com")
+    name = "__host-" + SURFACES[base]
+    callback = page.http.get(
+        session.panel_authorized(page.http, "mallory@example.com", base=base),
+        follow_redirects=False,
+    )
+    csrf = session.hidden(page.http.get(base), "csrf")
+    out = page.http.post(base + "/logout", data={"csrf": csrf}, follow_redirects=False)
+    for response, cleared in ((callback, name + "_login"), (out, name)):
+        line = next(
+            line.lower()
+            for line in response.headers.get_list("set-cookie")
+            if line.lower().startswith(cleared + "=")
+        )
+        assert "max-age=0" in line and "path=/;" in line + ";" and "secure" in line

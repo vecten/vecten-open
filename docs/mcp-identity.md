@@ -127,6 +127,32 @@ issuer. For cloud, run
 transport is unavailable. Use the connected-clients page at `/connected-clients` to review and
 revoke the browser user's client sessions.
 
+### Browser cookies
+
+Any hostname under your domain, such as Airflow, an extension service or an analytics app, can
+set a cookie for the whole domain. So on HTTPS every cookie the MCP sets on `mcp.<domain>`
+carries the `__Host-` prefix: a browser accepts such a cookie only from `mcp.<domain>` itself,
+only `Secure`, with `Path=/` and no `Domain`. The server reads each cookie only under its
+prefixed name, so a cookie another hostname planted cannot finish a sign-in or sign a browser
+in. All of these cookies are `HttpOnly`.
+
+| Cookie | What it holds | SameSite | Lasts |
+| --- | --- | --- | --- |
+| `__Host-vecten_csrf` | Ties a sign-in to the browser that started it | Lax | 10 minutes |
+| `__Host-vecten_browser` | The browser's sign-in to the server's own pages, which the gate reuses | Lax | 1 hour |
+| `__Host-vecten_clients_csrf`, `__Host-vecten_setup_csrf` | Form tokens of `/connected-clients` and `/set-password` | Strict | 10 minutes |
+| `__Host-vecten_panel_login`, `__Host-vecten_apps_login` | An [admin panel](admin-panel.md) or `/apps` sign-in in progress | Strict | 10 minutes |
+| `__Host-vecten_panel`, `__Host-vecten_apps` | The admin panel or `/apps` session | Strict | Up to 8 hours |
+
+The admin panel and `/apps` sessions keep apart by name: each page reads only its own cookie.
+The gate's cookies on service hostnames are described in [services](services.md).
+
+Over plain HTTP a cookie cannot be `Secure`, so it cannot take the prefix. That applies to an
+issuer with an `http://` URL and to the loopback tunnel to `http://127.0.0.1:8001`. There the
+same cookies go by their names without `__Host-` and without `Secure`, and the panel's and
+`/apps` page's are scoped to `/admin` and `/apps`. Browsers do not separate cookies by port, so
+on a loopback address any other local server could set them.
+
 ## People, services, and warehouse roles
 
 `vecten user add --email jane@example.com --name 'Jane Doe' --env local` invites a person and

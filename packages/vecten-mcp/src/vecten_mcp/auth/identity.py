@@ -27,6 +27,27 @@ def challenge(value):
     return base64.urlsafe_b64encode(hashlib.sha256(value.encode()).digest()).rstrip(b"=").decode()
 
 
+def cookie_name(name, secure):
+    """The name a browser cookie of the server's goes by. Any hostname under the domain can
+    set a cookie for the whole domain, but a browser accepts a `__Host-` one only from this
+    hostname, Secure, with Path=/ and no Domain; over plain HTTP it cannot be Secure, so it
+    keeps the bare name."""
+    return "__Host-" + name if secure else name
+
+
+def cookie_value(request, name):
+    """The value of the one cookie named exactly `name`, or "" when there is none or several.
+    Starlette's own parser strips latin-1 whitespace from names, so "\\xa0__Host-x", which a
+    browser takes for an unprefixed name another hostname may set, would read as "__Host-x"."""
+    found = [
+        value.strip(" \t")
+        for header in request.headers.getlist("cookie")
+        for key, sep, value in (pair.strip(" \t").partition("=") for pair in header.split(";"))
+        if sep and key == name
+    ]
+    return found[0] if len(found) == 1 else ""
+
+
 class PasswordBackend:
     def __init__(self, state, *, clock=time.time, admin_link=None, admins=()):
         """`admin_link` returns the raw MCP_ADMIN_LINK secret or None; it is called on every

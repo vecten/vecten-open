@@ -372,7 +372,7 @@ def test_a_service_principal_gets_no_gate_session(gate):
     )
     browser.start(PORTAL, "/")
     verifier = browser.jars[PORTAL][STATE]
-    browser.mcp.cookies.set("vecten_browser", "robot-browser", domain="mcp.data.acme.com")
+    browser.mcp.cookies.set("__Host-vecten_browser", "robot-browser", domain="mcp.data.acme.com")
     refused = browser.mcp.get(
         "/gate/authorize",
         params={"host": PORTAL, "challenge": challenge(verifier), "rd": "/"},
@@ -397,7 +397,7 @@ def test_a_person_without_a_warehouse_account_yet_is_refused_a_code(gate):
     service.state.put(
         "browser_sessions", digest("carl-browser"), {"principal_id": carl["id"]}, expires_at=1e9
     )
-    browser.mcp.cookies.set("vecten_browser", "carl-browser", domain="mcp.data.acme.com")
+    browser.mcp.cookies.set("__Host-vecten_browser", "carl-browser", domain="mcp.data.acme.com")
     passed = browser.mcp.get(browser.start(PORTAL, "/"), follow_redirects=False)
     assert passed.status_code == 400
     assert service.state.scan("gate_codes") == []

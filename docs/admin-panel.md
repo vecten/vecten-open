@@ -27,7 +27,10 @@ Afterwards you land on the overview. The first admins are the addresses listed u
   disabling them takes effect on their next click.
 - A panel session lasts up to eight hours, or until the underlying sign-in session ends.
   **Sign out** ends both.
-- The session cookie is `HttpOnly`, `SameSite=Strict` and `Secure`, and is scoped to `/admin`.
+- The session cookie, `__Host-vecten_panel`, is `HttpOnly`, `SameSite=Strict` and `Secure`.
+  Its `__Host-` prefix means no other hostname under your domain can set it. Through the
+  loopback tunnel it is `vecten_panel`, scoped to `/admin`; see
+  [browser cookies](mcp-identity.md#browser-cookies).
   Every form carries a token tied to the session, and a submission without it is refused.
   The pages load no scripts.
 

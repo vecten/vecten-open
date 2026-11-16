@@ -428,11 +428,9 @@ Develop the app's data access against a deployed environment.
   through the MCP's own sign-in with a client of its own (`vecten-apps-page`). The admin flag
   plays no part.
 
-The `/apps` session cookie, `vecten_apps`, is `HttpOnly`, `Secure` and `SameSite=Strict`. It
-is scoped to `/apps`, and it cannot be replayed as an admin panel session or the other way
-round. It cannot use the `__Host-` prefix, which requires `Path=/` and would send the cookie
-to `/mcp` and `/admin` too. As a result, another hostname under the same domain could plant one.
-The only effect would be to sign that browser in to `/apps` as the person who planted it,
-who sees only their own list.
+The `/apps` session cookie, `__Host-vecten_apps`, is `HttpOnly`, `Secure` and
+`SameSite=Strict`, and it cannot be replayed as an admin panel session or the other way round.
+Its `__Host-` prefix means no other hostname under the same domain, such as an app's own, can
+set it. See [browser cookies](mcp-identity.md#browser-cookies).
 
 Back to the [docs index](README.md).

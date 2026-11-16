@@ -36,7 +36,12 @@ def hidden(page, name):
 
 def panel_login(http, email="admin@example.com", password=PASSWORD):
     """Drive the panel's first-party authorization code flow; return the callback response."""
-    start = http.get("/admin/login", follow_redirects=False)
+    return http.get(panel_authorized(http, email, password), follow_redirects=False)
+
+
+def panel_authorized(http, email="admin@example.com", password=PASSWORD, *, base="/admin"):
+    """The flow up to the approved consent; returns the callback path and query, unvisited."""
+    start = http.get(base + "/login", follow_redirects=False)
     assert start.status_code == 303, start.text
     page = http.get(start.headers["location"])
     assert page.status_code == 200, page.text
@@ -60,7 +65,7 @@ def panel_login(http, email="admin@example.com", password=PASSWORD):
     )
     target = unescape(re.search(r'<a href="([^"]+)"', redirect.text)[1])
     parsed = urlparse(target)
-    return http.get(parsed.path + "?" + parsed.query, follow_redirects=False)
+    return parsed.path + "?" + parsed.query
 
 
 def csrf_of(http):
@@ -93,7 +98,7 @@ def test_login_redirect_uses_the_first_party_client_with_pkce(builtins):
 
 
 def test_admin_signs_in_and_sees_the_panel(builtins, signed_in):
-    cookie = [c for c in builtins.http.cookies.jar if c.name == "vecten_panel"]
+    cookie = [c for c in builtins.http.cookies.jar if c.name == "__Host-vecten_panel"]
     assert cookie and cookie[0].secure
     home = builtins.http.get("/admin")
     assert home.status_code == 200
@@ -106,7 +111,7 @@ def test_session_cookie_is_strict_and_http_only(builtins):
     person(builtins)
     callback = panel_login(builtins.http)
     header = callback.headers["set-cookie"].lower()
-    assert "vecten_panel=" in header
+    assert header.startswith("__host-vecten_panel=") and "path=/;" in header + ";"
     assert "samesite=strict" in header and "httponly" in header and "secure" in header
 
 
@@ -115,7 +120,7 @@ def test_non_admin_is_refused_after_signing_in(builtins):
     person(builtins, "admin@example.com")
     callback = panel_login(builtins.http, "jane@example.com")
     assert callback.status_code == 403
-    assert "vecten_panel" not in {c.name for c in builtins.http.cookies.jar}
+    assert "__Host-vecten_panel" not in {c.name for c in builtins.http.cookies.jar}
     assert builtins.http.get("/admin", follow_redirects=False).status_code == 303
 
 

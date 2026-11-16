@@ -10,8 +10,6 @@ from vecten_mcp.panel.html import form, join, layout, link, tag
 from vecten_mcp.panel.session import PanelSessions
 
 APPS_CLIENT = "vecten-apps-page"
-# The __Host- prefix requires Path=/, which would send the cookie to /mcp and /admin too; with
-# Path=/apps a sibling hostname can plant one, which signs the browser in as the planter only.
 SESSION_COOKIE = "vecten_apps"
 LOGIN_COOKIE = "vecten_apps_login"
 BRAND = "Vecten"
@@ -91,7 +89,7 @@ def people_routes(runtime):
         runtime.oauth.event(caller.principal["id"], "apps/login", "", "allowed")
         response = RedirectResponse("/apps", status_code=303)
         sessions.cookie(response, SESSION_COOKIE, token, max_age, origin)
-        response.delete_cookie(LOGIN_COOKIE, path="/apps")
+        sessions.clear(response, LOGIN_COOKIE, origin)
         return response
 
     async def logout(request):
@@ -108,7 +106,7 @@ def people_routes(runtime):
         sessions.close(record)
         runtime.oauth.event(caller.principal["id"], "apps/logout", "", "allowed")
         response = page("Signed out", tag("p", link("/apps", "Sign in again")))
-        response.delete_cookie(SESSION_COOKIE, path="/apps")
+        sessions.clear(response, SESSION_COOKIE, sessions.origin(request))
         return response
 
     return [
