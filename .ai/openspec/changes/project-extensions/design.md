@@ -149,7 +149,11 @@ form for projects without locks.
 **Build backends.** Building from source needs the package's backend, which pip fetches from the
 index into an isolated build environment. `vecten lock` resolves each in-repo extension's
 `[build-system] requires` to exact versions and the Dockerfile applies them as build constraints,
-so every build of a commit uses the same backend. pip's handling of constraints in isolated builds
+so every build of a commit uses the same backend. Pins are taken when each extension is locked, so
+two extensions may pin different versions of one backend: each is built by its own install with
+its own constraints file, never one file for all, which pip could not satisfy. Each is built from
+a copy its image user owns, because setuptools and maturin write into the tree they build and the
+mounted context belongs to another user. pip's handling of constraints in isolated builds
 is to be confirmed by the spike; if it does not apply them, the fallback is a two-stage build that
 installs the pinned backend in a throwaway stage and builds with `--no-build-isolation`, copying
 only the wheel out through a mount.

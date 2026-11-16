@@ -84,29 +84,37 @@ def test_the_layer_verifies_then_installs_a_git_source_like_an_in_repo_extension
     stack = tmp_path / ".vecten" / "stack"
     write_project_layer(stack, c, None)
     build = stack / "build"
-    assert (build / "build-constraints.txt").read_text() == "hatchling==1.26.3\npluggy==1.5.0\n"
+    assert (build / "build-constraints" / f"{NAME}.txt").read_text() == (
+        "hatchling==1.26.3\npluggy==1.5.0\n"
+    )
     record = (tmp_path / locking.RECORD_FILE).read_bytes()
     assert (build / locking.RECORD_FILE).read_bytes() == record
     for kind in ("airflow", "mcp"):
         # The git line is installed from the bundled source, never fetched by pip.
         assert (build / f"requirements-{kind}.txt").read_text() == "httpx==0.28.1\n"
         text = (build / f"{kind}.Dockerfile").read_text()
-        assert "--mount=type=bind,from=sources,target=/tmp/sources,rw" in text
+        assert "--mount=type=bind,from=sources,target=/tmp/sources " in text
+        assert ",rw" not in text
         assert (
             "--mount=type=bind,source=extensions.lock.json,target=/tmp/extensions.lock.json"
         ) in text
         assert "from=extensions," not in text
         # The hash is checked before anything builds, outside the hidden pip log.
         assert f"{VERIFY} && python -c" in text
+        # Built from a copy the image user owns, never in the bundled tree it verified.
         assert (
-            "--no-deps --build-constraint /tmp/build-constraints.txt "
-            f"/tmp/sources/{NAME} && pip check"
+            f"cp -R /tmp/sources/{NAME} /tmp/vecten-build/{NAME} "
+            f"&& chmod -R u+w /tmp/vecten-build/{NAME} "
+            f"&& pip install --no-cache-dir --no-deps --build-constraint "
+            f"/tmp/build-constraints/{NAME}.txt /tmp/vecten-build/{NAME} && pip check"
         ) in text
         assert "COPY extensions.lock.json" not in text
         assert "git+" not in text
 
 
-def test_in_repo_and_git_sources_install_in_one_step(tmp_path):
+def test_each_source_extension_builds_with_only_its_own_build_pins(tmp_path):
+    """Two extensions locked at different times pin different versions of one backend, and
+    one set of constraints holding both could never be satisfied."""
     from vecten import in_repo
 
     from .test_in_repo import make
@@ -118,16 +126,37 @@ def test_in_repo_and_git_sources_install_in_one_step(tmp_path):
         info.extras,
         source_path=info.path,
         metadata_sha256=info.metadata_sha256,
-        build_requires=("hatchling==1.26.3",),
+        build_requires=("hatchling==1.28.0", "pluggy==1.6.0"),
     )
     c = config(extensions=[NAME, "acme-portal"])
-    git_project(tmp_path, c, others={"acme-portal": portal})
+    git_project(
+        tmp_path, c, others={"acme-portal": portal}, build=("hatchling==1.27.0", "pluggy==1.5.0")
+    )
     stack = tmp_path / ".vecten" / "stack"
     write_project_layer(stack, c, None)
-    text = (stack / "build" / "airflow.Dockerfile").read_text()
-    assert "from=extensions,target=/tmp/extensions,rw" in text
-    assert "from=sources,target=/tmp/sources,rw" in text
-    assert f"/tmp/extensions/acme-portal /tmp/sources/{NAME} && pip check" in text
+    pins = stack / "build" / "build-constraints"
+    assert sorted(p.name for p in pins.iterdir()) == ["acme-portal.txt", f"{NAME}.txt"]
+    assert (pins / "acme-portal.txt").read_text() == "hatchling==1.28.0\npluggy==1.6.0\n"
+    assert (pins / f"{NAME}.txt").read_text() == "hatchling==1.27.0\npluggy==1.5.0\n"
+    first = (stack / "build" / "airflow.Dockerfile").read_text()
+    for kind in ("airflow", "mcp"):
+        text = (stack / "build" / f"{kind}.Dockerfile").read_text()
+        assert "from=extensions,target=/tmp/extensions " in text
+        assert "from=sources,target=/tmp/sources " in text
+        # One pip install per extension, each held to its own file; one pip check after both.
+        assert text.count("--build-constraint") == 2
+        assert (
+            "&& pip install --no-cache-dir --no-deps "
+            "--build-constraint /tmp/build-constraints/acme-portal.txt "
+            "/tmp/vecten-build/acme-portal && cp -R"
+        ) in text
+        assert (
+            "--build-constraint /tmp/build-constraints/acme-resolution.txt "
+            f"/tmp/vecten-build/{NAME} && pip check;"
+        ) in text
+        assert text.count("pip check") == 1
+    write_project_layer(stack, c, None)
+    assert (stack / "build" / "airflow.Dockerfile").read_text() == first
 
 
 def test_a_url_line_the_record_does_not_hold_still_fails_the_layer(tmp_path):

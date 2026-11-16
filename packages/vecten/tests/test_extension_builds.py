@@ -329,18 +329,40 @@ def test_an_in_repo_extension_is_built_from_the_extra_context_without_resolving(
     _in_repo_project(tmp_path, c)
     stack = tmp_path / ".vecten" / "stack"
     write_project_layer(stack, c, None)
-    assert (stack / "build" / "build-constraints.txt").read_text() == (
+    assert (stack / "build" / "build-constraints" / "acme-portal.txt").read_text() == (
         "hatchling==1.26.3\npluggy==1.5.0\n"
     )
     for kind in ("airflow", "mcp"):
         text = (stack / "build" / f"{kind}.Dockerfile").read_text()
-        assert "--mount=type=bind,from=extensions,target=/tmp/extensions,rw" in text
+        # Read-only: the build works on a copy the image user owns.
+        assert "--mount=type=bind,from=extensions,target=/tmp/extensions " in text
+        assert ",rw" not in text
+        assert "--mount=type=bind,source=build-constraints,target=/tmp/build-constraints " in text
+        assert "COPY build-constraints" not in text
         assert "--no-deps" in text and "-r /tmp/requirements.txt" in text
         assert (
-            "--no-deps --build-constraint /tmp/build-constraints.txt /tmp/extensions/acme-portal"
-            in text
+            "&& mkdir /tmp/vecten-build "
+            "&& cp -R /tmp/extensions/acme-portal /tmp/vecten-build/acme-portal "
+            "&& chmod -R u+w /tmp/vecten-build/acme-portal "
+            "&& pip install --no-cache-dir --no-deps "
+            "--build-constraint /tmp/build-constraints/acme-portal.txt "
+            "/tmp/vecten-build/acme-portal && pip check; }"
+        ) in text
+        assert text.endswith(
+            "rm -rf /tmp/vecten-pip.log /tmp/vecten-base-constraints.txt /tmp/vecten-build\n"
         )
-        assert "pip check" in text
+
+
+def test_build_constraints_of_a_removed_extension_are_not_kept(tmp_path):
+    c = config(extensions=["acme-portal"])
+    _in_repo_project(tmp_path, c)
+    build = tmp_path / ".vecten" / "stack" / "build"
+    (build / "build-constraints").mkdir(parents=True)
+    (build / "build-constraints" / "gone.txt").write_text("hatchling==1.0\n")
+    (build / "build-constraints.txt").write_text("hatchling==1.0\n")
+    write_project_layer(build.parent, c, None)
+    assert sorted(p.name for p in (build / "build-constraints").iterdir()) == ["acme-portal.txt"]
+    assert not (build / "build-constraints.txt").exists()
 
 
 def test_a_locked_project_without_in_repo_extensions_installs_its_lock_without_resolving(
@@ -353,8 +375,9 @@ def test_a_locked_project_without_in_repo_extensions_installs_its_lock_without_r
     for kind in ("airflow", "mcp"):
         text = (stack / "build" / f"{kind}.Dockerfile").read_text()
         assert "--no-deps" in text
-        assert "from=extensions" not in text
-    assert not (stack / "build" / "build-constraints.txt").exists()
+        assert "from=extensions" not in text and "vecten-build" not in text
+        assert text.endswith("rm -f /tmp/vecten-pip.log /tmp/vecten-base-constraints.txt\n")
+    assert not (stack / "build" / "build-constraints").exists()
 
 
 def test_an_unlocked_or_legacy_project_keeps_todays_install(tmp_path):

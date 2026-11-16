@@ -9,7 +9,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 from vecten_shared.config import VectenConfig
-from vecten_shared.extension_record import RECORD_FILE
+from vecten_shared.extension_record import RECORD_FILE, Extension
 from vecten_shared.extensions import requirement
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
@@ -106,20 +106,55 @@ def lock_lines(
 
 
 STALE = "project dependency records are stale; run `vecten lock`"
-BUILD_CONSTRAINTS = "build-constraints.txt"
+# One file per source-built extension, named after it: each was pinned when it was locked, and
+# two extensions locked at different times may pin different versions of one build backend.
+BUILD_CONSTRAINTS = "build-constraints"
+# `up` reuses the build directory, where a single constraints file for every extension may remain.
+LEGACY_BUILD_CONSTRAINTS = "build-constraints.txt"
+# Where each source is copied before it is built: a backend such as setuptools or maturin writes
+# into the tree it builds, and the mounted trees belong to another user.
+BUILD_COPIES = "/tmp/vecten-build"
 
 
-def _in_repo_extensions(root: Path) -> list:
-    """The recorded in-repo extensions, each checked again against the folder rules."""
+def _in_repo_extensions(root: Path) -> list[tuple[str, Extension]]:
+    """The recorded in-repo extensions by name, each checked again against the folder rules."""
     from pathlib import PurePosixPath
 
     from vecten import in_repo
     from vecten_shared.extension_record import read_record
 
-    local = [e for e in (read_record(root) or {}).values() if e.source_path]
-    for entry in local:
+    local = [(n, e) for n, e in (read_record(root) or {}).items() if e.source_path]
+    for _, entry in local:
         in_repo.read(root, PurePosixPath(entry.source_path))
-    return sorted(local, key=lambda e: e.source_path)
+    return sorted(local, key=lambda item: item[1].source_path)
+
+
+def _write_build_constraints(directory: Path, pins: dict[str, tuple[str, ...]]) -> None:
+    """Write each extension's pinned build requirements to its own file, and nothing else."""
+    import shutil
+
+    (directory.parent / LEGACY_BUILD_CONSTRAINTS).unlink(missing_ok=True)
+    shutil.rmtree(directory, ignore_errors=True)
+    if not pins:
+        return
+    directory.mkdir()
+    for name, lines in pins.items():
+        write_text_atomic(directory / f"{name}.txt", "".join(f"{line}\n" for line in lines))
+
+
+def _build_sources(sources: list[tuple[str, str]], secret: str) -> str:
+    """Build and install each source extension on its own, from a copy the image user owns and
+    held to its own pinned build requirements; the lock has already installed every dependency."""
+    steps = [f"mkdir {BUILD_COPIES}"]
+    for name, path in sources:
+        copy = f"{BUILD_COPIES}/{name}"
+        # cp keeps each mode, and a read-only directory in the copy would fail the build too.
+        steps.append(
+            f"cp -R {path} {copy} && chmod -R u+w {copy} && "
+            f"{secret}pip install --no-cache-dir --no-deps "
+            f"--build-constraint /tmp/{BUILD_CONSTRAINTS}/{name}.txt {copy}"
+        )
+    return " && ".join([*steps, "pip check"])
 
 
 def _git_sources(config: VectenConfig, record: dict) -> dict[str, str]:
@@ -303,13 +338,14 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     local = _in_repo_extensions(root) if closure else []
     fetched = list(_git_sources(config, record)) if closure else []
     build_dir.mkdir(parents=True, exist_ok=True)
-    constraints = build_dir / BUILD_CONSTRAINTS
-    if local or fetched:
-        entries = [*local, *(record[name] for name in fetched)]
-        build = sorted({line for entry in entries for line in entry.build_requires})
-        write_text_atomic(constraints, "".join(f"{line}\n" for line in build))
-    else:
-        constraints.unlink(missing_ok=True)
+    built = [
+        *((name, f"/tmp/extensions/{e.source_path.split('/', 1)[1]}") for name, e in local),
+        *((name, f"{SOURCES}/{name}") for name in fetched),
+    ]
+    _write_build_constraints(
+        build_dir / BUILD_CONSTRAINTS,
+        {name: e.build_requires for name, e in [*local, *((n, record[n]) for n in fetched)]},
+    )
     # The build checks each bundled source against the record the bundle carries.
     bundled_record = build_dir / RECORD_FILE
     if fetched:
@@ -341,28 +377,23 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
         no_deps = "--no-deps " if closure else ""
         copies = f"COPY {source} /tmp/requirements.txt\n"
         extra = verify = ""
-        if local or fetched:
-            copies += f"COPY {BUILD_CONSTRAINTS} /tmp/{BUILD_CONSTRAINTS}\n"
-            paths = " ".join(
-                [
-                    *(f"/tmp/extensions/{e.source_path.split('/', 1)[1]}" for e in local),
-                    *(f"{SOURCES}/{name}" for name in fetched),
-                ]
-            )
+        cleanup = "rm -f /tmp/vecten-pip.log /tmp/vecten-base-constraints.txt"
+        if built:
+            # Bind mounts, so no source tree, build pin or record stays in a layer.
             if local:
-                mount += "--mount=type=bind,from=extensions,target=/tmp/extensions,rw "
+                mount += "--mount=type=bind,from=extensions,target=/tmp/extensions "
             if fetched:
-                # Bind mounts, so neither the source tree nor the record stays in a layer.
                 mount += (
-                    f"--mount=type=bind,from=sources,target={SOURCES},rw "
+                    f"--mount=type=bind,from=sources,target={SOURCES} "
                     f"--mount=type=bind,source={RECORD_FILE},"
                     f"target=/tmp/{RECORD_FILE} "
                 )
                 verify = VERIFY
-            extra = (
-                f" && {secret}pip install --no-cache-dir --no-deps "
-                f"--build-constraint /tmp/{BUILD_CONSTRAINTS} {paths} && pip check"
+            mount += (
+                f"--mount=type=bind,source={BUILD_CONSTRAINTS},target=/tmp/{BUILD_CONSTRAINTS} "
             )
+            extra = f" && {_build_sources(built, secret)}"
+            cleanup = f"rm -rf /tmp/vecten-pip.log /tmp/vecten-base-constraints.txt {BUILD_COPIES}"
         # Keep every package supplied by the base image; a changed base must never be silently
         # downgraded to satisfy a lock generated against a different environment.
         install = (
@@ -372,12 +403,11 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
             "--constraint /tmp/vecten-base-constraints.txt "
             f"-r /tmp/requirements.txt{extra}; }} > /tmp/vecten-pip.log 2>&1 "
             f"|| {{ {diagnostic}rm -f /tmp/vecten-pip.log "
-            "/tmp/vecten-base-constraints.txt; exit 1; }; "
-            "rm -f /tmp/vecten-pip.log /tmp/vecten-base-constraints.txt\n"
+            f"/tmp/vecten-base-constraints.txt; exit 1; }}; {cleanup}\n"
         )
         write_text_atomic(
             build_dir / f"{kind}.Dockerfile",
             f"FROM {base_image(kind, registry)}\n"
-            f"{_system_step(config, kind)}{install if lines or local or fetched else ''}"
+            f"{_system_step(config, kind)}{install if lines or built else ''}"
             f"{volume_step(config, root, kind)}",
         )
