@@ -27,4 +27,5 @@ jobs:
       # Without them every test skips and the run would look green.
       - name: the account and key are configured
         run: test -n "$VECTEN_SF_CI_ACCOUNT" && test -n "$VECTEN_SF_CI_PRIVATE_KEY"
-      - run: uv run pytest -m snowflake_live -p no:randomly -rs -q packages/vecten-mcp/tests/test_snowflake_live.py
+      # Selected by marker over the configured testpaths, so every live test file runs.
+      - run: uv run pytest -m snowflake_live -p no:randomly -rs -q
