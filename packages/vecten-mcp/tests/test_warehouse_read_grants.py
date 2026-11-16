@@ -68,9 +68,10 @@ def test_snowflake_version_is_what_read_grant_reports_with_every_argument_null()
 
 
 def test_a_snowflake_install_of_the_previous_release_is_older_than_this_server():
-    # Versions 2 and 3 were installed by builds before this procedure text: version 2
-    # refuses area schemas, version 3 counts a refused revoke as done.
-    for installed in (2, 3):
+    # Versions 2 to 4 were installed by builds before this procedure text: version 2
+    # refuses area schemas, version 3 counts a refused revoke as done, and version 4 fails on
+    # a schema that does not exist.
+    for installed in (2, 3, 4):
         adapter, _ = snowflake(lambda sql, params, v=installed: f"vecten-access {v}")
         assert adapter.access_version() == installed < ACCESS_VERSION
 

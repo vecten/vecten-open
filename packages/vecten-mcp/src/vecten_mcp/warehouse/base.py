@@ -21,6 +21,16 @@ class RoleExists(ValueError):
         self.role = role
 
 
+class Absent(ValueError):
+    """The warehouse found no schema or relation of the name a grant gives. An adapter raises
+    it on a revoke only where every role sees every object, so that the object is gone and
+    took its grants with it."""
+
+    def __init__(self, place, reason="does not exist in the warehouse"):
+        super().__init__(f"{place} {reason}")
+        self.place = place
+
+
 class WarehouseAdapter(Protocol):
     def inspect_account(self, name: str) -> Account | None: ...
     def create_account(self, name: str, kind: str) -> None: ...

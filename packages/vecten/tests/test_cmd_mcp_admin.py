@@ -164,6 +164,34 @@ def test_a_grant_the_warehouse_applied_only_in_part_names_the_refusals_and_fails
     assert result.exit_code == 5 and "ICEBERG" in result.output
 
 
+def test_an_area_grant_on_a_marts_only_area_succeeds_and_names_the_schema_it_waits_for(
+    invoke, workdir, monkeypatch
+):
+    from vecten_shared.config import load_config
+
+    _areas_project(invoke, workdir)
+    held = [{"group": "finance", "kind": "area", "target": "finance"}]
+
+    class Client:
+        def __init__(self, root, env):
+            pass
+
+        def call(self, operation, data=None):
+            if operation == "grants":
+                return held
+            return dict(data or {}, waiting=["core_finance"])
+
+    monkeypatch.setattr("vecten.mcp_client.AdminClient", Client)
+    result = invoke("grant", "--area", "finance", "--group", "finance", "--json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["waiting"] == ["core_finance"]
+    result = invoke("grant", "--area", "finance", "--group", "finance")
+    assert result.exit_code == 0, result.output
+    assert "core_finance" in result.output and "reconciliation" in result.output
+    # The grant `next` seeds counts as applied: the missing schema is the grant's to pick up.
+    assert load_config(workdir).environments["prod"].area_access_applied == ["finance"]
+
+
 def test_group_add_names_the_role_and_bind_prints_then_confirms(invoke, workdir, monkeypatch):
     assert (
         invoke("init", ".", "--name", "demo", "--users", "5", "--source", "hubspot").exit_code == 0

@@ -63,6 +63,27 @@ function readGrant() {
         throw new Error('schema is outside the approved convention');
     }
     owned(TARGET);
+    try {
+        return change(enabled, relation);
+    } catch (e) {
+        // A schema the owner cannot list may be gone or only invisible to it, so a revoke's
+        // failure stands; a grant then waits, which grants nothing.
+        if (enabled && !schemaListed()) return 'absent';
+        throw e;
+    }
+}
+// The provisioner sees no schema it holds nothing on, and INFORMATION_SCHEMA lists only what
+// this procedure's owner may use; it is asked only once a statement has failed.
+function schemaListed() {
+    var schemata = snowflake.execute({
+        sqlText: 'SELECT COUNT(*) FROM ' + quoted(database) +
+            '.INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=?',
+        binds: [SCHEMA_NAME]
+    });
+    return schemata.next() && schemata.getColumnValue(1) > 0;
+}
+// The grant or revoke itself, once the target and the schema have passed every check.
+function change(enabled, relation) {
     var target = ' ROLE ' + quoted(TARGET);
     var schema = quoted(database) + '.' + quoted(SCHEMA_NAME);
     var action = enabled ? 'GRANT' : 'REVOKE';
@@ -74,12 +95,20 @@ function readGrant() {
             sqlText: 'SELECT TABLE_TYPE FROM ' + quoted(database) + '.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?',
             binds: [SCHEMA_NAME, relation]
         });
-        if (!table.next()) throw new Error('dataset relation does not exist');
-        var tableType = table.getColumnValue(1);
+        var listed = table.next();
+        if (!listed && enabled) {
+            throw new Error('dataset relation does not exist or is not visible: ' +
+                SCHEMA_NAME + '.' + relation);
+        }
+        var tableType = listed ? table.getColumnValue(1) : null;
         // A base table may be a dynamic or Iceberg table, whose GRANT names another object
         // type; a statement naming the wrong one can succeed and change nothing, so each type
-        // is tried until the grant reads back as wanted.
-        relationTypes = ['VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE'].indexOf(tableType) !== -1
+        // is tried until the grant reads back as wanted. A relation the owner cannot list may
+        // still hold the grant, so its revoke tries every type and fails if none applies.
+        relationTypes = tableType === null
+            ? ['TABLE', 'VIEW', 'MATERIALIZED VIEW', 'DYNAMIC TABLE', 'EXTERNAL TABLE',
+               'ICEBERG TABLE']
+            : ['VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE'].indexOf(tableType) !== -1
             ? [tableType] : ['TABLE', 'DYNAMIC TABLE', 'ICEBERG TABLE'];
     }
     if (enabled) {

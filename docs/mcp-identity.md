@@ -265,6 +265,27 @@ manage, is left alone. While the installed procedures are older than the MCP, th
 skipped, grants that reach an area are refused and wait, and access health names
 `vecten mcp provisioner-script`. Memberships combine the permissions of all assigned groups. Removing a grant from one group does not remove access provided by another.
 
+A new MCP state starts with `revoke`, and "new" means the MCP's state database, not the
+warehouse. The first reconciliation therefore revokes, with no report first, every read grant
+in scope that a managed role holds and the state does not. Two cases meet this:
+
+- A deployment that ran without the `mcp` component adds it. `analyst` is the role people
+  already use, and grants an administrator made it by hand, such as `staging` or a `raw_`
+  schema, are revoked; `core` and `marts` stay, as the default group's grants.
+- An MCP-only project over a warehouse that already has an `ANALYST` role (`analyst` on
+  Postgres). The setup script's `CREATE ROLE IF NOT EXISTS` adopts that role, and the first
+  reconciliation revokes its `USAGE` and `SELECT` in `staging`, `snapshots` and every `raw_`
+  schema of the environment's database, and in the schemas of declared areas.
+
+The first reconciliation runs as the MCP starts, before anyone can sign in to change the
+setting, so list the role's grants before the MCP's first start: on Snowflake
+`SHOW GRANTS TO ROLE ANALYST;` and `SHOW FUTURE GRANTS TO ROLE ANALYST;`, on Postgres psql's
+`\dn+` for schema `USAGE`, and `\dp <schema>.*` and `\ddp` for table and default privileges.
+Access health and `vecten issues` list every grant the reconciliation revoked. Record each one
+to keep as an MCP grant, such as `vecten grant --schema staging --group default`, and the next
+reconciliation applies it again. A grant outside the convention schemas, `raw_` schemas and
+declared areas is never touched.
+
 Use `vecten group`, `vecten grant`, `vecten revoke`, and `vecten reconcile` for group membership
 and desired grants. A dataset grant names one dataset in the semantic model under `osi/`;
 a schema grant covers an entire schema. This implementation accepts only the literal schemas
@@ -274,11 +295,21 @@ schema names.
 
 An area grant (`vecten grant --area finance --group finance`) is a schema grant on both
 `core_finance` and `marts_finance`, applied and revoked together; one that fails on the second
-schema is rolled back on the first. It is refused for an area with no `[areas.<area>]` entry,
-and an area removed from `vecten.toml` has its grants revoked and forgotten, so declaring it
-again starts with none. Each granted schema carries its own future or default grant, so a
-relation dbt rebuilds there is readable by the granted groups and no group without the grant,
-with no reconciliation in between. No group reads an area until it is granted, with these
+schema is rolled back on the first. dbt creates a schema only when a model lands in it, so an
+area with marts only has no `core_<area>`: the grant covers the schemas the warehouse finds,
+its result names the others as waiting, and the first reconciliation after dbt creates one
+grants it. The MCP's state records which of the area's schemas were granted, and revoking or
+rolling back the grant revokes only those, so a schema that only ever waited needs no revoke.
+On Snowflake the provisioner sees no schema it holds nothing on, so `READ_GRANT` looks the
+schema up as its owner once a grant on it has failed. `INFORMATION_SCHEMA` lists only what that
+owner may use, so a waiting schema is missing or not visible to it, and a revoke never relies
+on the lookup: one Snowflake refuses stays a failure and is retried. On Postgres, whose catalogs
+show every object to every role, a revoke on a schema or relation that is gone counts as done.
+A schema or dataset grant on a missing object is refused, naming it. An area grant is refused
+for an area with no `[areas.<area>]` entry, and an area removed from `vecten.toml` has its
+grants revoked and forgotten, so declaring it again starts with none. Each granted schema
+carries its own future or default grant, so a relation dbt rebuilds there is readable by the
+granted groups and no group without the grant, with no reconciliation in between. No group reads an area until it is granted, with these
 exceptions, which the warehouse and not the MCP decides:
 
 - a dataset grant on a mart in the area, which reaches that one relation;

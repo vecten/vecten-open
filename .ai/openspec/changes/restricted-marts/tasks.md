@@ -49,6 +49,8 @@ ship before areas.
 - [x] 3.9 docker: Postgres: area granted to `finance`, rebuilt mart readable by `finance` and refused for default, with no reconciliation in between
 - [ ] 3.10 live: the same on Snowflake, plus an area built before any grant is unreadable by every group role
 - [ ] 3.11 deploy: declare an area, ship, grant, rebuild on a sandbox of each cloud
+- [x] 3.13 A marts-only area ([#94](https://github.com/vecten/vecten-open/issues/94)): an area grant covers the area schemas the warehouse finds and names the others, which reconciliation grants once found; the applied record keeps the granted schemas, and a revoke or rollback revokes only those. On a grant `READ_GRANT` answers `absent` when `INFORMATION_SCHEMA` does not list the schema to its owner; a revoke never does, so the access procedures are version 5. The Postgres adapter reads `pg_namespace` and `pg_class`, so a revoke on an object that is gone there is done. Unit: fake adapters, the adapters over recorded answers, the procedure under Node
+- [ ] 3.14 live: `vecten grant --area` on a Snowflake area with `MARTS_<AREA>` only; then dbt creates `CORE_<AREA>` and the next reconciliation grants it
 - [x] 3.12 Glossary: "Restricted area"; "Mart" covers `marts_<area>`
 
 ## 4. Every relation kind

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import psycopg
 from psycopg import sql
 
-from vecten_mcp.warehouse.base import Account, RoleExists, check_account
+from vecten_mcp.warehouse.base import Absent, Account, RoleExists, check_account
 from vecten_shared.identity_setup import ACCESS_VERSION
 
 READ_GRANTS = """
@@ -276,6 +276,12 @@ class PostgresAdapter:
         with conn.transaction():
             if not conn.execute("SELECT to_regclass('vecten_access.helpers')").fetchone()[0]:
                 raise ValueError("administrator must install schema access helpers")
+            # pg_namespace and pg_class list every object to every role, so an object they
+            # lack is gone, and a revoke on it is done.
+            if not conn.execute(
+                "SELECT 1 FROM pg_namespace WHERE nspname=%s", (schema,)
+            ).fetchone():
+                raise Absent(f"{schema}.{relation}" if relation else schema)
             helpers = conn.execute(
                 "SELECT function_name, owner_oid FROM vecten_access.helpers "
                 "WHERE schema_name=%s ORDER BY function_name",
@@ -306,7 +312,9 @@ class PostgresAdapter:
                     (schema, relation),
                 ).fetchone()
             ):
-                raise ValueError("dataset relation does not exist")
+                if not grant:
+                    raise Absent(f"{schema}.{relation}")
+                raise ValueError(f"dataset relation does not exist: {schema}.{relation}")
             for function, _ in helpers:
                 conn.execute(
                     sql.SQL("SELECT {}(%s,%s,%s)").format(
