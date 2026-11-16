@@ -47,6 +47,7 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 - [x] 4.3 Rendered `deploy-platform.yml`, `ship.yml`, `terraform-apply.yml`: optional secrets passed by name, the App token step, `GIT_CREDENTIALS` only on the `vecten ship` step; `actions/create-github-app-token` pinned in the versions table.
 - [x] 4.4 Laptop dispatch checks (Decision 13).
 - [x] 4.5 Tests: rendered workflows (only the `vecten` step gets the credential); byte-identical bundles for projects without git sources; `docker` tier: both images from a bundled git source, no layer holds the token or the fetched source tree, a tampered source fails the build naming both hashes.
+- [x] 4.5a `vecten deploy` in CI fetches and checks every git source before its first Terraform call and ships those same sources (#98)
 - [ ] 4.6 **[private repo]** `extension add` from a private monorepo with two extensions under subdirectories and prefixed tags, then `vecten up`.
 - [ ] 4.7 **[deploy]** AWS and Scaleway sandboxes: ship with an App token and with `VECTEN_GIT_CREDENTIALS`; no VM secret store, host file or container holds a git credential; an arm64 VM builds the source an amd64 runner bundled; a promotion of the same commit fetches again with the CI credential; a revoked token fails the ship in CI before any host changes.
 - [x] 4.8 Each source extension builds with its own `build_requires` and from a copy the image user owns (`project-extensions` task 2.7), so pins taken at different times never conflict and any backend can write into its tree.

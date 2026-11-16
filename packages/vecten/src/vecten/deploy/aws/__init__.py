@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -480,6 +480,8 @@ class AwsProvider(AwsRuntimeProvider):
         env: str,
         outputs: EnvironmentOutputs,
         commit: str,
+        *,
+        sources: Mapping[str, Path] | None = None,
     ) -> list[str]:
         """Build and ship one bundle per host, setup host first; stops at the first failure."""
         self._check_env(env)
@@ -492,8 +494,9 @@ class AwsProvider(AwsRuntimeProvider):
             with_mcp=any("mcp" in host.components for host in outputs.hosts.values()),
         )
         with tempfile.TemporaryDirectory(prefix="vecten-bundles-") as tmp:
-            # Every source is fetched and checked before any host changes.
-            sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
+            if sources is None:
+                # Every source is fetched and checked before any host changes.
+                sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
             for host in ship_order(outputs):
                 bundle = build_host_bundle(
                     project_root,

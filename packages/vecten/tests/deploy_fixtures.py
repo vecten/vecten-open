@@ -239,6 +239,9 @@ class FakeGit:
         self.calls.append(list(args))
         if args == ["rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(args, 0, self.head + "\n", "")
+        if args == ["rev-parse", "FETCH_HEAD"] and ("rev-parse", "FETCH_HEAD") not in self.answers:
+            # The checkout is the default branch's head unless a test says otherwise.
+            return subprocess.CompletedProcess(args, 0, self.head + "\n", "")
         for prefix, (code, stdout) in self.answers.items():
             if tuple(args[: len(prefix)]) == prefix:
                 stderr = "" if code == 0 else f"fatal: git {args[0]} failed"

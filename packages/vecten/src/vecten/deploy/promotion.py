@@ -51,8 +51,9 @@ __all__ = [
     "COMMIT_KEYS",
     "CommitFiles",
     "HeadFacts",
+    "checkout_repository",
+    "fetched_commit",
     "previous_in",
-    "read_head_facts",
     "fetch_default_branch",
     "given_commit",
     "newest_shipped",
@@ -164,24 +165,40 @@ class HeadFacts:
     warnings: list[str] = field(default_factory=list)
 
 
-def read_head_facts(project_root: Path) -> HeadFacts:
-    """The head's promotion order and `[environments.*]` facts, read leniently.
-
-    A promoted run's CLI is the release the promoted commit pins, which may be older than the
-    one that wrote the head's `vecten.toml`. It takes only what it knows from the head, names
-    every fact it does not, and never parses the rest of that file.
-    """
+def checkout_repository(project_root: Path) -> str:
+    """`[deploy] github_repository` of the checkout's `vecten.toml`, the only key read: the
+    CLI that runs may be older than the one that wrote the file."""
     path = project_root / CONFIG_FILE
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise Failure(ExitCode.CONFIG, f"{path}: {exc}") from None
-    return _head_facts(text, str(path))
+    deploy = raw.get("deploy")
+    repository = deploy.get("github_repository") if isinstance(deploy, dict) else None
+    if not isinstance(repository, str) or not repository:
+        raise Failure(
+            ExitCode.REFUSED, "this project has no deploy layer; run `vecten init --deploy` first"
+        )
+    return repository
+
+
+def fetched_commit(git: ToolRunner, project_root: Path) -> str:
+    """The full id of the commit the last fetch of the default branch left in FETCH_HEAD."""
+    commit = _git(git, project_root, "rev-parse", FETCHED).strip()
+    if not _FULL_COMMIT.fullmatch(commit):
+        raise Failure(ExitCode.TOOL_FAILED, f"git rev-parse {FETCHED} named no commit: {commit!r}")
+    return commit
 
 
 def read_fetched_facts(git: ToolRunner, project_root: Path) -> HeadFacts:
-    """`read_head_facts` of the default branch's head as the last fetch of it left FETCH_HEAD:
-    the facts a run dispatched on that branch reads, which this checkout may trail."""
+    """The promotion order and `[environments.*]` facts of the default branch's head as the
+    last fetch of it left FETCH_HEAD, read leniently: what a run reads from that head, which
+    this checkout may trail.
+
+    The CLI that runs is the release the shipped commit pins, which may be older than the one
+    that wrote the head's `vecten.toml`. It takes only what it knows from the head, names every
+    fact it does not, and never parses the rest of that file.
+    """
     return _head_facts(show_commit_file(git, project_root, FETCHED, CONFIG_FILE), _where(FETCHED))
 
 

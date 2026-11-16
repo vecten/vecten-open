@@ -166,6 +166,14 @@ def inside_actions(root: Path, monkeypatch):
         yield ssm
 
 
+def actions_without_cloud(monkeypatch) -> None:
+    """Inside Actions, where gh and git reach GitHub: both are fakes here, and the checkout is
+    the default branch's head."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
+
+
 @pytest.fixture
 def actions(bootstrapped, monkeypatch):
     with inside_actions(bootstrapped, monkeypatch) as ssm:
@@ -528,7 +536,7 @@ def test_deploy_needs_an_environment(invoke, project):
 
 
 def test_not_bootstrapped_names_bootstrap(invoke, no_cloud, monkeypatch):
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    actions_without_cloud(monkeypatch)
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code == 4
     assert "vecten bootstrap --env prod" in doc(r)["error"]
@@ -547,7 +555,7 @@ def test_laptop_not_bootstrapped_names_bootstrap(invoke, no_cloud, monkeypatch):
 def test_missing_domain_is_named_before_any_terraform(invoke, no_cloud, monkeypatch):
     set_facts(no_cloud, bootstrapped=True, state_bucket=STATE_BUCKET)
     _remove_line(no_cloud, "domain")
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    actions_without_cloud(monkeypatch)
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code == 6
     assert "domain" in doc(r)["error"]
@@ -571,7 +579,7 @@ def test_local_is_not_a_deploy_environment(invoke, no_cloud):
 def test_unsupported_cloud_lists_the_supported_ones(invoke, no_cloud, monkeypatch):
     path = no_cloud / "vecten.toml"
     path.write_text(path.read_text().replace('cloud = "aws"', 'cloud = "gcp"'))
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    actions_without_cloud(monkeypatch)
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code == 6
     error = doc(r)["error"]
@@ -583,11 +591,10 @@ def test_scaleway_without_a_key_refuses_before_terraform(invoke, tmp_path, monke
     root = render_aws(tmp_path / "scw", cloud="scaleway")
     monkeypatch.chdir(root)
     set_facts(root, bootstrapped=True, state_bucket=scw_state_bucket(), cloud_ids=scw_ids())
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    actions_without_cloud(monkeypatch)
     for name in ("SCW_ACCESS_KEY", "SCW_SECRET_KEY", "SCW_DEFAULT_ORGANIZATION_ID"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("SCW_CONFIG_PATH", str(tmp_path / "no-scw-config.yaml"))
-    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code == 3
     assert "SCW_ACCESS_KEY" in doc(r)["error"]
@@ -691,6 +698,18 @@ def test_a_failed_first_run_records_the_layout_it_tried(invoke, laptop, snowflak
     # The run may have created Snowflake objects under these names before it failed.
     assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME"
     assert facts.deployed_commit is None
+
+
+def test_a_dispatch_github_refused_records_no_layout(invoke, laptop, snowflake, monkeypatch):
+    _share_account(snowflake)
+    laptop.failing = ("workflow",)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code != 0, r.stdout
+    assert "workflow run" in doc(r)["error"]
+    # No run exists, so nothing in Snowflake carries these names yet.
+    facts = load_config(snowflake).environments["prod"]
+    assert facts.snowflake_shared_account is None and facts.snowflake_base is None
 
 
 def test_a_shared_deploy_records_the_base_of_its_names(invoke, laptop, snowflake, monkeypatch):

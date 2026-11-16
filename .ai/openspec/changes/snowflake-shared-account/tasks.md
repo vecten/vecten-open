@@ -19,6 +19,7 @@
 
 - [x] 3.1 `[warehouse] shared_account` in `vecten.toml` (default `false`), refused without the `platform` component; `[environments.<env>] snowflake_shared_account` recorded by `deploy`
 - [x] 3.2 `deploy` refuses an environment whose recorded layout differs from the setting, except a fixed environment alone in its account
+- [x] 3.2a The laptop records the layout once GitHub accepted the dispatch, never after a failed `gh workflow run` (part of #99; a layout missed by a run nobody follows to its end stays open there)
 - [x] 3.3 `check_tfvars`: the account comparison applies to `prod` only; fixed environments refuse a shared account; shared environments refuse a hyphen in the environment name, a suffix over 64 characters, and an account a fixed environment names
 - [x] 3.4 `generate_compose` writes the environment's account into every deployed host's Compose environment; the runtime reads it; the laptop is unchanged
 - [x] 3.5 `next` asks `snowflake_shared_account` after the Snowflake account; `answer` accepts it; `init --deploy` writes it
