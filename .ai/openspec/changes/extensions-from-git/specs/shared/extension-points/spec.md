@@ -199,7 +199,7 @@ The source at the recorded commit SHALL declare, in `pyproject.toml`, read witho
 - a static `[project]` name;
 - a static `[project]` version.
 
-`extension add` SHALL resolve `[build-system] requires` to exact versions and record them in `extensions.lock.json`. Every build of that commit SHALL use them as build constraints.
+`extension add` SHALL resolve `[build-system] requires` to exact versions and record them in `extensions.lock.json`. Every build of that commit SHALL use them as build constraints, and no other extension's.
 
 `extension add` and `vecten lock` SHALL record the source's `source_sha256` in `extensions.lock.json`: the sha256 over the sorted list of, for every file in the extension's directory at the commit (the subdirectory when one is given), its path relative to that directory, the sha256 of its bytes and its executable bit, excluding only `.git`. A symbolic link in that directory SHALL be refused. CI, after every fetch, and the image build, before installing, SHALL refuse a source whose `source_sha256` differs from the record.
 

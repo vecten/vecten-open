@@ -27,6 +27,7 @@ that needs a real deploy on a maintainer sandbox; everything else runs in the un
 - [ ] 2.4 Tests, unit tier: byte-identical Compose files, Dockerfiles and bundles for a project without `extensions/`; the generated install step never resolves by name.
 - [ ] 2.5 Tests, `docker` tier: a fixture project with an in-repo extension declaring `vecten.dags`, `vecten.dbt_packages`, `vecten.osi`, `vecten.skills` and `vecten.mcp.tools`; `vecten up` runs the DAG, builds the model, merges the document, links the skill and offers the tool; no layer of either image holds the extension's source tree.
 - [ ] 2.6 **[deploy]** AWS and Scaleway sandboxes: ship the fixture project; both hosts run the extension at the shipped commit; an arm64 VM builds it from an amd64 runner's bundle; a code-only change ships without `vecten lock`.
+- [x] 2.7 Build each source extension (in-repo or git) with its own install and its own `build_requires` file, never one constraints file for all; build from a copy the image user owns, so setuptools or maturin can write into the tree. `docker` tier: two extensions pinning different hatchling versions and a setuptools one build in one image.
 
 ## 3. `vecten extension new`
 

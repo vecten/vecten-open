@@ -76,7 +76,7 @@ For an in-repo extension, `vecten.toml` SHALL list its name and extras, `require
 
 ### Requirement: An in-repo extension is installed from the project everywhere
 
-The CLI's environment SHALL install the CLI lock with `--no-deps` and each in-repo extension editable with `--no-deps`. Each project-layer image SHALL install its lock with `--no-deps` and then build and install each in-repo extension from its source with `--no-deps`, on the architecture of the machine that builds the image, with the build requirements that `vecten lock` pinned. The extension's DAGs, dbt packages, Ossie documents and skills SHALL be found through its entry points in the installed package, as for any extension; skill links SHALL stay machine-local and uncommitted.
+The CLI's environment SHALL install the CLI lock with `--no-deps` and each in-repo extension editable with `--no-deps`. Each project-layer image SHALL install its lock with `--no-deps` and then build and install each in-repo extension from its source with `--no-deps`, on the architecture of the machine that builds the image, with the build requirements that `vecten lock` pinned for that extension and no other's, from a copy of its directory that the image's user owns. The extension's DAGs, dbt packages, Ossie documents and skills SHALL be found through its entry points in the installed package, as for any extension; skill links SHALL stay machine-local and uncommitted.
 
 #### Scenario: Every kind of part from an in-repo extension
 

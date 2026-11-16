@@ -58,11 +58,13 @@ not its content.
 - a static `[project]` `name`, equal to the name a project gives it;
 - a static `[project]` `version`; `dynamic = ["version"]` is refused.
 
-Any build backend works. `vecten extension add` pins the backend and its dependencies to exact
-versions, and every build of that commit uses those pins. The extension's own dependencies come
-from PyPI, or from the project's private index when it has one; the git host is asked for the
-extension's repository and nothing else. Scope dependencies to a component with the `platform`,
-`mcp` and `cli` extras, as for any extension.
+Any build backend works, including one that writes into the tree it builds, such as setuptools:
+the image builds from a copy of the source. `vecten extension add` pins the backend and its
+dependencies to exact versions, and every build of that commit uses those pins and no other
+extension's, so extensions added at different times may pin different versions of one backend.
+The extension's own dependencies come from PyPI, or from the project's private index when it has
+one; the git host is asked for the extension's repository and nothing else. Scope dependencies to
+a component with the `platform`, `mcp` and `cli` extras, as for any extension.
 
 The extension is built on each host that installs it, for that host's architecture. An extension
 with C or Rust code needs a compiler in the image: list it in the project's

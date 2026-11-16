@@ -120,10 +120,14 @@ extras, entry points) makes the locks stale until `vecten lock`; changing code d
 **Where it runs.** Vecten's own environment installs it editable, so the CLI, its skills and
 `vecten connector run` see every edit at once. The images install the lock with `--no-deps`, then
 build the extension from `extensions/` on the machine that builds them, with the pinned build
-requirements; the bundle carries `extensions/` without `dist`, `build` or `*.egg-info`. A
-package that compiles code needs a compiler in the image, from `[dependencies.<component>]
-system`. Because the images install the package rather than run its source, every resource it
-serves must be package data inside `src/<package>/`.
+requirements; the bundle carries `extensions/` without `dist`, `build` or `*.egg-info`. Each
+extension is built on its own, with only the build requirements pinned when it was locked, so two
+extensions may pin different versions of one build backend. The build works on a copy of the
+extension's directory that the image's user owns, so a backend that writes into the tree it
+builds, such as setuptools, works and leaves `extensions/` unchanged. A package that compiles code
+needs a compiler in the image, from `[dependencies.<component>] system`. Because the images
+install the package rather than run its source, every resource it serves must be package data
+inside `src/<package>/`.
 
 **Reviewing a change** to an in-repo extension is reviewing project code: read the diff under
 `extensions/<name>/`, and treat a `pyproject.toml` change like any dependency change, with the

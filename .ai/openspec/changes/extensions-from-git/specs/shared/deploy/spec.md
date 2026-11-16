@@ -6,7 +6,7 @@
 
 The ship SHALL place each git-sourced extension's source in every host bundle at `extensions/<name>/`, beside the in-repo extensions, together with `extensions.lock.json`.
 
-The generated project-layer Dockerfile SHALL verify each git-sourced directory's `source_sha256` against `extensions.lock.json`, then install it exactly as it installs an in-repo extension: from the bundle's `extensions/` context, with `--no-deps` and the pinned build constraints, after the lock is installed with `--no-deps`, followed by `pip check`.
+The generated project-layer Dockerfile SHALL verify each git-sourced directory's `source_sha256` against `extensions.lock.json`, then install it exactly as it installs an in-repo extension: from the bundle's `extensions/` context, with `--no-deps` and the pinned build constraints, after the lock is installed with `--no-deps`, followed by `pip check`. Each source-built extension SHALL be built by its own install, constrained by its own recorded `build_requires` and no other extension's, from a copy of its directory that the image's user owns.
 
 No deployed host SHALL fetch private code, hold a git credential or need git to build the layer. The VM agent, `host.json` and the base images SHALL be unchanged by git sources. `vecten up` SHALL build the local layer through the same Dockerfile path, from a fetched copy kept under `.vecten/` and never written into the project's tracked files.
 
@@ -25,6 +25,16 @@ No deployed host SHALL fetch private code, hold a git credential or need git to 
 
 - **WHEN** a bundled git-sourced directory's files differ from the `source_sha256` in `extensions.lock.json`
 - **THEN** the VM's layer build fails naming the extension, the commit and both hashes, and the host keeps its previous bundle
+
+#### Scenario: Two extensions pin different versions of one build backend
+
+- **WHEN** one source-built extension records `hatchling==1.27.0` and another, locked later, records `hatchling==1.28.0`
+- **THEN** the layer builds each with its own pin, and both are installed
+
+#### Scenario: A backend that writes into its source tree
+
+- **WHEN** a source-built extension uses setuptools, which writes `*.egg-info` and `build/` into the tree it builds
+- **THEN** the layer builds it, and the bundled or project source is unchanged
 
 #### Scenario: Index-only projects unchanged
 
