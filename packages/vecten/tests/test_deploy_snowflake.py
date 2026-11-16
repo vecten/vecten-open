@@ -297,6 +297,24 @@ def test_the_pending_identity_note_names_the_environments_provisioner(tmp_path, 
     assert "as PROVISIONER_ACME_DEV," in note and "VECTEN_PROVISIONER" not in note
 
 
+def test_the_pending_identity_note_names_the_command_that_ships_the_environment(tmp_path):
+    from vecten.deploy.snowflake import identity_pending_note
+
+    from .test_deploy_promotion import ordered
+
+    root = render_snowflake(tmp_path / "snow")
+    assert identity_pending_note(load_config(root), "prod").endswith(
+        "then `vecten github push`, which ships it"
+    )
+    config = load_config(ordered(root))
+    assert identity_pending_note(config, "dev").endswith(
+        "then `vecten github push`, which ships it"
+    )
+    assert identity_pending_note(config, "prod").endswith(
+        "then `vecten github push` and `vecten promote --env prod`, which ships it"
+    )
+
+
 def test_the_destroy_message_names_the_environments_provisioner_role():
     from vecten.cli.commands.deploy import _destroy_message
 

@@ -125,13 +125,32 @@ def identity_pending(config: VectenConfig, env: str) -> bool:
     return has_snowflake_root(config) and config.has("mcp") and not facts.provisioner_script_run
 
 
+def identity_ship_command(config: VectenConfig, env: str) -> str | None:
+    """The command that ships `env` once the push carrying its identity's confirmation is on
+    GitHub; None for the order's first environment, which that push ships."""
+    order = config.promotion_order()
+    if env == order[0]:
+        return None
+    if env in order:
+        return f"vecten promote --env {env}"
+    return f"vecten ship --env {env}"
+
+
+def owed_ship_record(env: str) -> str:
+    """The run record of a later environment of the order whose identity was confirmed after a
+    deploy that shipped no host; a promotion of `env` settles it."""
+    return f"identity-ship-{env}"
+
+
 def identity_pending_note(config: VectenConfig, env: str) -> str:
     user = snowflake_names(config, env).provisioner_user
+    then = identity_ship_command(config, env)
+    ships = f"`vecten github push` and `{then}`" if then else "`vecten github push`"
     return (
         f"the MCP signs in to Snowflake as {user}, which "
         f"`vecten mcp provisioner-script --env {env}` sets up, so no host was shipped: run it, "
-        "have an ACCOUNTADMIN run its SQL, confirm with `--confirm-run`, then "
-        "`vecten github push`, which ships"
+        f"have an ACCOUNTADMIN run its SQL, confirm with `--confirm-run`, then {ships}, "
+        "which ships it"
     )
 
 

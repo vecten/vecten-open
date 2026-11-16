@@ -369,6 +369,10 @@ an ACCOUNTADMIN. The MCP checks its scope as `VECTEN_PROVISIONER` when it starts
    SQL with the public key filled in; it takes no `--public-key`. An ACCOUNTADMIN runs the SQL.
 3. `vecten mcp provisioner-script --env <env> --confirm-run` records the run in `vecten.toml`,
    and `vecten github push` carries it to GitHub, where the ship workflow ships every host.
+   That push ships only the first environment of `[deploy] promotion`. For a later one, run
+   `vecten promote --env <env>` after it: the promotion reads the confirmation from the default
+   branch, and refuses until the push has put it there. Until it succeeds, `vecten next` asks
+   for it before the environment's first user.
 
 Until the run is recorded, `vecten ship` refuses and the ship workflow finishes without shipping.
 `vecten next` reports each step.
