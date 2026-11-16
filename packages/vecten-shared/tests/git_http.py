@@ -7,8 +7,7 @@ without a token. A repository named in `version_0` answers in protocol version 0
 refuses to fetch a commit no ref advertises. A repository named in `errors` answers its
 advertisement with that error message, which git prints as `remote error: <message>`. A
 repository path named in `redirects` answers every request, before asking for credentials, with
-a 301 to the same request on the path it maps to, as GitLab does for a path without `.git` and
-GitHub for a renamed repository.
+a 301 to the same request on the path it maps to, as GitLab does for a path without `.git`.
 """
 
 from __future__ import annotations

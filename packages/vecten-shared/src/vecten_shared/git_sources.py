@@ -200,8 +200,11 @@ class Credential:
         if not self.path:
             return f"{prefix}{self.host}\n"
         bare = repository.removesuffix(".git")
-        other = bare if repository.endswith(".git") else f"{bare}.git"
-        return "".join(f"{prefix}{self.host}/{where}\n" for where in (repository, other))
+        spellings = [repository]
+        # A last segment that is `.git` alone has no spelling without it.
+        if not bare.endswith("/"):
+            spellings.append(bare if repository.endswith(".git") else f"{bare}.git")
+        return "".join(f"{prefix}{self.host}/{where}\n" for where in spellings)
 
 
 def _entry(position: int, raw: str) -> Credential:

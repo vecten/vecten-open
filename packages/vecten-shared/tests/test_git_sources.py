@@ -211,7 +211,7 @@ def test_the_longest_path_on_the_host_wins():
     assert chosen("gitlab.com", "acme/x") is None
 
 
-def test_the_credential_file_is_private_names_one_repository_and_is_deleted():
+def test_the_credential_file_is_private_names_the_repository_in_both_spellings_and_is_deleted():
     token = _token()
     credentials = Credentials.parse(f"https://o:{token}@github.com/acme https://h:t0k@gitlab.com")
     source = parse_source("acme @ git+https://github.com/acme/extensions.git@v1")
@@ -243,6 +243,11 @@ def test_a_path_entry_also_answers_for_the_repository_with_the_git_suffix():
             "https://o:t0k@github.com/acme/extensions\n"
             "https://o:t0k@github.com/acme/extensions.git\n"
         )
+
+
+def test_a_last_segment_of_git_alone_is_written_as_given():
+    entry = Credentials.parse("https://o:t0k@github.com/acme").entries[0]
+    assert entry.store_lines("acme/.git") == "https://o:t0k@github.com/acme/.git\n"
 
 
 def test_a_host_entry_is_written_for_the_host_alone():
