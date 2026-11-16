@@ -4,7 +4,7 @@ admin panel under /admin and for the apps page under /apps."""
 import secrets
 from urllib.parse import urlencode
 
-from vecten_mcp.auth.identity import challenge, digest
+from vecten_mcp.auth.identity import challenge, cookie_name, cookie_value, digest
 from vecten_mcp.auth.service import Resolved
 
 PANEL_CLIENT = "vecten-admin-panel"
@@ -61,16 +61,25 @@ class PanelSessions:
         if uris != client["redirect_uris"]:
             self.state.put("clients", self.client_id, {**client, "redirect_uris": uris})
 
-    def cookie(self, response, name, value, max_age, origin):
-        response.set_cookie(
-            name,
-            value,
-            max_age=max_age,
-            path=self.base,
-            secure=origin.startswith("https:"),
-            httponly=True,
-            samesite="strict",
+    def attributes(self, name, origin):
+        # On HTTPS the __Host- prefix keeps a sibling hostname from planting a login nonce or a
+        # session, and requires Path=/; the cookie names keep the two surfaces apart. A plain
+        # HTTP tunnel cannot hold a Secure cookie, so there the path scopes it instead.
+        secure = origin.startswith("https:")
+        return cookie_name(name, secure), dict(
+            path="/" if secure else self.base, secure=secure, httponly=True, samesite="strict"
         )
+
+    def cookie(self, response, name, value, max_age, origin):
+        key, attributes = self.attributes(name, origin)
+        response.set_cookie(key, value, max_age=max_age, **attributes)
+
+    def clear(self, response, name, origin):
+        key, attributes = self.attributes(name, origin)
+        response.delete_cookie(key, **attributes)
+
+    def read(self, request, name):
+        return cookie_value(request, self.attributes(name, self.origin(request))[0])
 
     def begin(self, request):
         origin = self.origin(request)
@@ -98,7 +107,7 @@ class PanelSessions:
 
     def finish(self, request):
         """Exchange the code and return the caller; raises ValueError on any mismatch."""
-        nonce = request.cookies.get(self.login_cookie, "")
+        nonce = self.read(request, self.login_cookie)
         pending = self.state.take(self.logins, digest(nonce), now=self.oauth.clock())
         supplied = request.query_params.get("state", "")
         if not pending or not secrets.compare_digest(supplied, pending["state"]):
@@ -132,7 +141,7 @@ class PanelSessions:
 
     def current(self, request):
         """The caller and session record, re-read from state on every request."""
-        key = digest(request.cookies.get(self.session_cookie, ""))
+        key = digest(self.read(request, self.session_cookie))
         now = self.oauth.clock()
         record = self.state.get(self.sessions, key, now=now)
         if not record:

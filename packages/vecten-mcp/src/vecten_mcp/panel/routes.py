@@ -98,7 +98,7 @@ def panel_routes(runtime):
         runtime.oauth.event(caller.principal["id"], "panel/login", "", "allowed")
         response = RedirectResponse("/admin", status_code=303)
         sessions.cookie(response, SESSION_COOKIE, token, max_age, origin)
-        response.delete_cookie(LOGIN_COOKIE, path="/admin")
+        sessions.clear(response, LOGIN_COOKIE, origin)
         return response
 
     async def logout(request):
@@ -112,7 +112,7 @@ def panel_routes(runtime):
         sessions.close(record)
         runtime.oauth.event(caller.principal["id"], "panel/logout", "", "allowed")
         response = layout("Signed out", tag("p", link("/admin/login", "Sign in again")), nav=False)
-        response.delete_cookie(SESSION_COOKIE, path="/admin")
+        sessions.clear(response, SESSION_COOKIE, sessions.origin(request))
         return response
 
     routes = [

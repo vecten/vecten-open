@@ -16,7 +16,7 @@ from vecten_mcp.auth.gate import (
     STATE_COOKIE,
     STATE_SECONDS,
 )
-from vecten_mcp.auth.identity import OIDCBackend, digest
+from vecten_mcp.auth.identity import OIDCBackend, cookie_name, cookie_value, digest
 from vecten_mcp.auth.limits import RateLimit
 from vecten_mcp.auth.pages import (
     consent_page,
@@ -65,18 +65,24 @@ def auth_routes(service, gate=None):
         # drop Secure cookies there; every other origin is the HTTPS issuer behind NGINX.
         return service.issuer.startswith("https:") and not loopback_origin(request)
 
+    def cookie(request, name):
+        return cookie_name(name, secure(request))
+
+    def held(request, name):
+        return cookie_value(request, cookie(request, name))
+
     def address(request):
         return request.client.host if request.client else "unknown"
 
     def csrf_check(request, form):
         supplied = str(form.get("csrf", ""))
-        cookie = request.cookies.get("vecten_csrf", "")
+        bound = held(request, "vecten_csrf")
         flow = state.get("browser_flows", digest(str(form.get("flow", ""))), now=service.clock())
         if (
-            not cookie
-            or not secrets.compare_digest(supplied, cookie)
+            not bound
+            or not secrets.compare_digest(supplied, bound)
             or not flow
-            or flow["csrf"] != digest(cookie)
+            or flow["csrf"] != digest(bound)
         ):
             raise ValueError("invalid browser state")
 
@@ -89,7 +95,7 @@ def auth_routes(service, gate=None):
             expires_at=service.clock() + 3600,
         )
         response.set_cookie(
-            "vecten_browser",
+            cookie(request, "vecten_browser"),
             token,
             secure=secure(request),
             httponly=True,
@@ -105,7 +111,7 @@ def auth_routes(service, gate=None):
         )
         response = login_page(flow, csrf, oidc=isinstance(service.backend, OIDCBackend))
         response.set_cookie(
-            "vecten_csrf",
+            cookie(request, "vecten_csrf"),
             csrf,
             secure=secure(request),
             httponly=True,
@@ -248,7 +254,7 @@ def auth_routes(service, gate=None):
         identity, flow = service.backend.callback(
             request.query_params.get("state", ""), request.query_params.get("code", "")
         )
-        csrf = request.cookies.get("vecten_csrf", "")
+        csrf = held(request, "vecten_csrf")
         csrf_check(request, {"flow": flow, "csrf": csrf})
         principal = service.authenticate(flow, identity)
         pending = state.get("flows", digest(flow), now=service.clock())
@@ -325,7 +331,7 @@ def auth_routes(service, gate=None):
     def browser_principal(request):
         row = state.get(
             "browser_sessions",
-            digest(request.cookies.get("vecten_browser", "")),
+            digest(held(request, "vecten_browser")),
             now=service.clock(),
         )
         principal = state.principal(row["principal_id"]) if row else None
@@ -380,7 +386,7 @@ def auth_routes(service, gate=None):
         sid, rd = gate.redeem(
             request.query_params.get("code", ""),
             request.headers.get(HOST_HEADER, ""),
-            request.cookies.get(STATE_COOKIE, ""),
+            cookie_value(request, STATE_COOKIE),
         )
         response = RedirectResponse(rd, status_code=303)
         gate_cookie(response, GATE_COOKIE, sid, max_age=SESSION_SECONDS)
@@ -388,7 +394,7 @@ def auth_routes(service, gate=None):
         return response
 
     async def gate_logout(request):
-        sid = request.cookies.get(GATE_COOKIE, "")
+        sid = cookie_value(request, GATE_COOKIE)
         if request.method == "GET":
             # Signing out changes state, so it takes a POST carrying this page's token.
             return page(
@@ -407,7 +413,7 @@ def auth_routes(service, gate=None):
     async def gate_verify(request):
         try:
             status, headers = gate.verify(
-                request.cookies.get(GATE_COOKIE, ""),
+                cookie_value(request, GATE_COOKIE),
                 request.headers.get(HOST_HEADER, ""),
                 request.headers.get(ROUTE_HEADER, ""),
             )
@@ -434,7 +440,7 @@ def auth_routes(service, gate=None):
         )
         response = page("Connected clients", body or "<p>No connected clients.</p>")
         response.set_cookie(
-            "vecten_clients_csrf",
+            cookie(request, "vecten_clients_csrf"),
             csrf,
             secure=secure(request),
             httponly=True,
@@ -446,8 +452,8 @@ def auth_routes(service, gate=None):
     async def connected_revoke(request):
         principal = current_browser(request)
         form = await request.form()
-        cookie = request.cookies.get("vecten_clients_csrf", "")
-        if not cookie or not secrets.compare_digest(cookie, str(form.get("csrf", ""))):
+        token = held(request, "vecten_clients_csrf")
+        if not token or not secrets.compare_digest(token, str(form.get("csrf", ""))):
             raise ValueError("invalid browser state")
         service.revoke_client(principal["id"], str(form.get("client_id", "")))
         return RedirectResponse("/connected-clients", status_code=303)
@@ -477,7 +483,7 @@ def auth_routes(service, gate=None):
             )
             response = page("Set your password", body)
             response.set_cookie(
-                "vecten_setup_csrf",
+                cookie(request, "vecten_setup_csrf"),
                 csrf,
                 secure=secure(request),
                 httponly=True,
@@ -486,8 +492,8 @@ def auth_routes(service, gate=None):
             )
             return response
         form = await request.form()
-        cookie = request.cookies.get("vecten_setup_csrf", "")
-        if not cookie or not secrets.compare_digest(cookie, str(form.get("csrf", ""))):
+        token = held(request, "vecten_setup_csrf")
+        if not token or not secrets.compare_digest(token, str(form.get("csrf", ""))):
             raise ValueError("invalid browser state")
         principal_id = service.backend.set_password(
             str(form.get("token", "")), str(form.get("password", "")), address(request)

@@ -413,7 +413,7 @@ def _browser_signed_in(service, http, principal):
     service.state.put(
         "browser_sessions", digest(token), {"principal_id": principal["id"]}, expires_at=10**9
     )
-    http.cookies.set("vecten_browser", token, domain="mcp.example")
+    http.cookies.set("__Host-vecten_browser", token, domain="mcp.example")
     assert http.get("/connected-clients").status_code == 200
 
 
