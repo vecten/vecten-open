@@ -97,12 +97,22 @@ On a service's hostname NGINX answers each request this way:
 | Any other path under `/_vecten` | 404. |
 | A path a bound route covers | The route's access mode, below. |
 | A path a declared route that `vecten.toml` does not bind covers | 404, even under a bound route's path. |
+| A path that matches a declared route's prefix only when letter case is ignored, such as `/ADMIN/x` for `/admin` | 404. |
 | Anything else | 404; nothing reaches the service. |
 
 A route the service declares and the project leaves out of `vecten.toml` is closed, not handed
 to whichever bound route covers its path: with `/` bound as `public` and `/admin` declared but
 not bound, `/admin` and everything below it answer 404. A bound route deeper still, such as
 `/admin/api`, is served as its binding says.
+
+Route paths are case-sensitive. NGINX picks a route by the path's exact spelling, but some web
+frameworks route without regard to case, so `/ADMIN/users` could otherwise reach a service's
+`/admin` code through the public `/` route. A request is therefore judged by the longest
+declared prefix it matches when case is ignored, encoded letters such as `%41` included: if
+the path spells that prefix differently, NGINX answers 404 before any route sees it. With
+`/admin` as `login` and `/admin/public` as `public`, `/admin/public/x` is public,
+`/admin/x` needs a sign-in, and `/ADMIN/public/x` or `/admin/PUBLIC/x` answer 404. A route at
+`/` is never the reason for a 404.
 
 A request whose raw path holds an encoded slash or backslash (`%2F`, `%5C`), a backslash, a `;`
 (or `%3B`), `//`, or a `.` or `..` segment, encoded or not, is answered 400 on every path a

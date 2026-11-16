@@ -154,7 +154,9 @@ Consequences:
   that the record declares but `vecten.toml` does not list does not run; `next` reports it as
   unwired. An unlisted route nested under a listed one's path answers 404 rather than fall to
   the listed route's access; a listed route deeper still is served, by NGINX's longest-prefix
-  match. A table in `vecten.toml` naming a service or route the record does not declare is
+  match. NGINX compares prefixes with their case and a service's router may not, so a path
+  whose longest declared prefix, compared ignoring case, is spelled otherwise answers 404 at
+  the server's rewrite phase, through one `map` on `$uri` per hostname. A table in `vecten.toml` naming a service or route the record does not declare is
   refused when the configuration loads.
 - A package upgrade that adds a public route changes nothing until a person adds it to
   `vecten.toml`, and that addition shows in the project's diff.

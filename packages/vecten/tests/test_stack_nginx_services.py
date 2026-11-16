@@ -391,6 +391,83 @@ def test_a_bound_route_under_an_unbound_one_is_still_served():
     assert "proxy_pass $upstream;" in found["= /admin/api"]
 
 
+def case_refused(text: str, host: str, uri: str) -> bool:
+    """Whether the server for `host` answers `uri` (NGINX's decoded, merged $uri) with 404
+    before any location is chosen."""
+    block = tls(text, host)
+    check = r"^    if \((\$vecten_case_\w+)\) {\n        return 404;\n    }$"
+    found = re.search(check, block, re.M)
+    if not found:
+        return False
+    return map_value(text, "$uri", found.group(1), uri) == "1"
+
+
+PORTAL = "portal.data.acme.com"
+
+
+def test_a_case_variant_of_a_declared_prefix_is_refused_before_any_route():
+    site = bound_site(
+        {"home": HOME, "admin": ADMIN, "settings": {**ADMIN, "path": "/settings.v2"}},
+        {"home": {"access": "public"}, "admin": {"access": "login", "groups": ["default"]}},
+    )
+    text = conf(site)
+    for uri in ("/ADMIN", "/Admin/x", "/aDmIn/users", "/SETTINGS.V2/a", "/Settings.v2"):
+        assert case_refused(text, PORTAL, uri), uri
+    for uri in ("/", "/admin", "/admin/x", "/settings.v2/a", "/adminx", "/ADMINX", "/docs/x"):
+        assert not case_refused(text, PORTAL, uri), uri
+    # A regex metacharacter in a prefix matches only itself.
+    assert not case_refused(text, PORTAL, "/settingsXv2/a")
+    # The check runs in the server's rewrite phase, ahead of every location.
+    block = tls(text, PORTAL)
+    assert block.index("if ($vecten_case_") < block.index("location ")
+
+
+def test_a_case_variant_is_judged_by_the_longest_declared_prefix():
+    nested = {"path": "/admin/public", "access": "public"}
+    secret = {"path": "/docs/secret", "access": "login", "groups": ["default"]}
+    docs = {"path": "/docs", "access": "public"}
+    site = bound_site(
+        {"admin": ADMIN, "public": nested, "docs": docs, "secret": secret},
+        {
+            "admin": {"access": "login", "groups": ["default"]},
+            "public": {"access": "public"},
+            "docs": {"access": "public"},
+            "secret": {"access": "login", "groups": ["default"]},
+        },
+    )
+    text = conf(site)
+    for uri in ("/admin/public/x", "/admin/x", "/docs/x", "/docs/secret/x", "/docs/SECRETx"):
+        assert not case_refused(text, PORTAL, uri), uri
+    for uri in ("/ADMIN/public/x", "/admin/PUBLIC/x", "/docs/SECRET/x", "/DOCS/secret"):
+        assert case_refused(text, PORTAL, uri), uri
+
+
+def test_prefixes_differing_only_in_case_each_keep_their_own_path():
+    site = bound_site(
+        {"lower": {"path": "/docs", "access": "public"}, "upper": {**ADMIN, "path": "/Docs"}},
+        {"lower": {"access": "public"}, "upper": {"access": "login", "groups": ["default"]}},
+    )
+    text = conf(site)
+    assert not case_refused(text, PORTAL, "/docs/x")
+    assert not case_refused(text, PORTAL, "/Docs/x")
+    assert case_refused(text, PORTAL, "/DOCS/x")
+
+
+def test_a_site_whose_only_route_is_the_root_needs_no_case_check():
+    text = conf(site(routes=[ServiceRoute("/", "public")]))
+    assert "$vecten_case_" not in text
+
+
+def test_each_site_gets_its_own_case_check():
+    text = conf(
+        site(host="bot.data.acme.com", routes=[ServiceRoute("/a", "public")]),
+        site(host="portal.data.acme.com", routes=[ServiceRoute("/b", "public")]),
+    )
+    assert case_refused(text, "bot.data.acme.com", "/A/x")
+    assert not case_refused(text, "bot.data.acme.com", "/B/x")
+    assert case_refused(text, "portal.data.acme.com", "/B/x")
+
+
 def test_an_unbound_route_at_the_root_leaves_one_fallback():
     site = bound_site(
         {"home": HOME, "hook": {"path": "/hook", "access": "public"}},

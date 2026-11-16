@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -430,12 +431,43 @@ def _service_locations(site: ServiceSite, mode: str, gate: GateUpstream | None) 
     return "".join(out)
 
 
-def _service_servers(site: ServiceSite, mode: str, gate: GateUpstream | None) -> list[str]:
+def _literal_regex(prefix: str) -> str:
+    # PCRE reads a backslash before any character other than a letter or digit as that
+    # character itself.
+    return re.sub(r"[^A-Za-z0-9/]", lambda m: "\\" + m.group(), prefix)
+
+
+def _case_map(site: ServiceSite, variable: str) -> str:
+    """1 for a path whose longest declared prefix, compared ignoring case, is not its own
+    spelling: NGINX's locations compare case, a service's router may not, so such a path could
+    reach that prefix's code through another route's access. The first matching entry wins,
+    so longer prefixes come first, and exact spellings before variants of the same length."""
+    declared = {route_prefix(r.path) for r in site.routes} | set(site.unbound)
+    prefixes = sorted(declared - {"/"})
+    if not prefixes:
+        return ""
+    entries = []
+    for length in sorted({len(p) for p in prefixes}, reverse=True):
+        same = [_literal_regex(p) for p in prefixes if len(p) == length]
+        entries += [f'    "~^{p}(?:/|$)" 0;\n' for p in same]
+        entries += [f'    "~*^{p}(?:/|$)" 1;\n' for p in same]
+    return f"map $uri {variable} {{\n    default 0;\n" + "".join(entries) + "}\n"
+
+
+def _service_servers(
+    site: ServiceSite, mode: str, gate: GateUpstream | None, index: int
+) -> list[str]:
     host = _bare(site.host)
+    variable = f"$vecten_case_{index}"
+    case_map = _case_map(site, variable)
+    # The server's rewrite phase runs before a location is chosen, so no route sees the path.
+    case_check = f"    if ({variable}) {{\n        return 404;\n    }}\n" if case_map else ""
     return [
+        *([case_map] if case_map else []),
         _redirect_server(site.host),
         f"server {{\n    listen 443 ssl;\n    server_name {host};\n"
         + _tls(host, mode)
+        + case_check
         + _service_locations(site, mode, gate)
         + "}\n",
     ]
@@ -499,8 +531,8 @@ def generate_nginx_conf(
             + MCP_PROXY
             + "    }\n}\n"
         )
-    for site in services:
-        out += _service_servers(site, mode, gate)
+    for index, site in enumerate(services):
+        out += _service_servers(site, mode, gate, index)
     return "\n".join(out)
 
 

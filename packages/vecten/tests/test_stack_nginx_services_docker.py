@@ -179,6 +179,18 @@ def test_nginx_serves_a_service_hostname_as_the_routes_and_the_health_path_say(t
         assert status(port, ca, "GET", "/internal/debug") == 404
         assert status(port, ca, "GET", "/api/messages/admin") == 404
         assert status(port, ca, "GET", "/api/messages/admin/users") == 404
+        # A case variant of a declared prefix, written or percent-encoded, never reaches a route
+        # whose access differs from that prefix's own.
+        for variant in (
+            "/SETTINGS",
+            "/Settings/x",
+            "/%53ettings/x",
+            "/OFFICE",
+            "/API/messages",
+            "/api/messages/ADMIN/users",
+            "/%41PI/messages/admin",
+        ):
+            assert status(port, ca, "GET", variant) == 404, variant
         assert status(port, ca, "GET", "/_vecten/anything") == 404
         assert status(port, ca, "HEAD", "/_vecten/health") == 200
         assert status(port, ca, "POST", "/_vecten/health") == 403
