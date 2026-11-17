@@ -321,6 +321,9 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   first deploy of an environment in a shared account completes when the deploy user has no
   default warehouse. It stopped with error 000606 reading back the loader's sign-in policy,
   after setting it on the user.
+- A service's `login` routes and an analytics app on a host without the MCP admit people: NGINX
+  verifies the MCP's certificate through the cross-signed certificates Let's Encrypt's chains
+  reach the bundled roots by. It checked one level, refused the chain and answered 500.
 
 ## [0.1.0] - 2026-11-09
 
