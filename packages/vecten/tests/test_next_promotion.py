@@ -20,6 +20,7 @@ from .fixture_project import render_fixture
 from .test_deploy_promotion import ordered
 from .test_next_assemble import (
     APPLY_DEFAULT,
+    UP,
     clear_local_loop,
     commit_all,
     git,
@@ -449,3 +450,44 @@ def test_no_ship_is_owed_where_the_deploy_has_not_run_or_the_identity_was_confir
     facts(root, "prod", deployed_commit="abc123")
     setup_script(root, "prod", confirm=True)
     assert read_record(root, owed_ship_record("prod")) is None
+
+
+# A deployed environment's items beside an unfinished local loop
+
+
+def _unfinish_local_loop(root):
+    from vecten_shared.records import remove_record
+
+    remove_record(root, "up")
+
+
+def test_a_deployed_environment_reports_its_items_after_the_local_loop(project):
+    facts(project, "prod", bootstrapped=True, deployed_commit="abc123")
+    _unfinish_local_loop(project)
+    items = next_items(project)
+    assert items[0] == UP
+    assert items[1:] == [OIDC, ADMIN, FIRST_USER, APPLY_DEFAULT, CONNECTION, ALERT]
+
+
+def test_an_undeployed_environment_waits_for_the_local_loop(project, tmp_path):
+    ordered(project)
+    clear_after_deploy(project, "dev")
+    in_sync(project, tmp_path)
+    assert next_items(project) == [bootstrap("prod")]
+    _unfinish_local_loop(project)
+    assert next_items(project) == [UP]
+
+
+def test_the_local_loop_and_the_walk_report_a_shared_item_once(tmp_path):
+    from vecten_shared.records import write_record
+
+    from .test_next_deploy import deployed, render_mcp_only_deploy, rerun_item
+    from .test_next_project import SNOWFLAKE_URL
+
+    root = render_mcp_only_deploy(tmp_path, SNOWFLAKE_URL)
+    config = deployed(load_config(root))
+    config.environments["prod"].provisioner_script_run = True
+    save_config(root, config)
+    write_record(root, "provisioner-prod", {"confirmed": True})
+    items = next_items(root)
+    assert items.count(rerun_item()) == 1

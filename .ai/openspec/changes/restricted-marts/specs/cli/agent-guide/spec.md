@@ -18,3 +18,17 @@
 
 - **WHEN** a deployed Postgres environment's script was confirmed by an earlier release
 - **THEN** `next` reports no rerun item
+
+### Requirement: next reports a deployed environment's items beside the local loop
+
+Once an environment of the promotion order has deployed, `next` SHALL report its post-deploy items, walking the order as it does once the local loop is clear, also while local loop items are outstanding. They SHALL follow the local loop items, so local work in progress is finished before the push among them ships it. An environment not yet deployed SHALL get no deploy question, prerequisite or deploy gate while local loop items are outstanding, and the walk SHALL stop at it. An item reported by both the local loop and an environment SHALL be reported once, in the local loop's place.
+
+#### Scenario: Deployed project whose stack never ran on this machine
+
+- **WHEN** `prod` is deployed and the provisioner script is due again, and this clone has never run `vecten up`
+- **THEN** `next` reports `vecten up` and the other local loop items first, then `vecten mcp provisioner-script --env prod` and `prod`'s other post-deploy items
+
+#### Scenario: Later environment not yet deployed
+
+- **WHEN** `[deploy] promotion = ["dev", "prod"]`, `dev` is deployed with its items clear, `prod` is not bootstrapped, and a wanted source is unadded
+- **THEN** `next` reports the local loop items and no `bootstrap --env prod`

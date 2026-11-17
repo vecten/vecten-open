@@ -76,18 +76,21 @@ def _project_items(root: Path, config: VectenConfig) -> list[Item]:
             *existing_warehouse_items(root, config, config.promotion_order()[0]),
             *stack_items(root, config),
         ]
-    # No deploy item is reported before the local loop is clear, and each later stage waits
-    # for the one before it, so the gate is only offered once nothing else is outstanding.
+    # No deploy question, prerequisite or gate is reported before the local loop is clear,
+    # and each later stage waits for the one before it. A deployed environment's items follow
+    # the local loop, so work in progress is finished before the push among them ships it.
     if local_loop:
-        return local_loop
+        deployed = _walk_order(root, config, deployed_only=True) if config.deploy else []
+        return list(dict.fromkeys([*local_loop, *deployed]))
     questions = deploy_question_items(root, config, read_answers(root))
     if questions:
         return questions
     return _walk_order(root, config) if config.deploy is not None else []
 
 
-def _walk_order(root: Path, config: VectenConfig) -> list[Item]:
-    """The first environment of the order whose items are not all clear, with its items.
+def _walk_order(root: Path, config: VectenConfig, deployed_only: bool = False) -> list[Item]:
+    """The first environment of the order whose items are not all clear, with its items;
+    with `deployed_only`, nothing once the walk reaches an environment not yet deployed.
 
     A later environment ships what the one before it shipped, so it waits until the one
     before it is deployed and its first user, access, connection and webhook are settled.
@@ -96,6 +99,8 @@ def _walk_order(root: Path, config: VectenConfig) -> list[Item]:
     for env in config.promotion_order():
         facts = config.environments.get(env)
         if facts is None or not facts.deployed_commit:
+            if deployed_only:
+                return []
             prerequisites = deploy_prerequisite_items(root, config, env, git)
             return prerequisites or deploy_gate_items(config, env)
         items = post_deploy_items(root, config, env, git)

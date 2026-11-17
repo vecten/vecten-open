@@ -26,6 +26,7 @@ ship before areas.
 - [ ] 1.11 live: revoke `marts` from default, `deploy`, rerun the script, rebuild a mart: `ANALYST` cannot read it
 - [ ] 1.12 deploy: upgrade a sandbox deployed with the previous release: the plan revokes nothing; the first reconciliation's access health is as expected
 - [x] 1.13 Changelog: the upgrade steps and the warning about hand-made grants
+- [x] 1.14 `next` reports a deployed environment's post-deploy items after the local loop's items while those are outstanding, so the rerun of 1.8 reaches a clone that never ran the local stack; an environment not yet deployed still waits. Delta: `specs/cli/agent-guide`. Unit: `test_next_promotion`
 
 ## 2. Grants survive rebuilds
 

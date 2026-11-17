@@ -278,6 +278,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Fixed
 
+- `next` reports a deployed environment's items (the MCP's identity, the provisioner-script
+  rerun, users, access grants, the connection) after the local loop's items while those are
+  outstanding, where it reported none of them before the local loop was clear. An environment
+  not yet deployed still waits for the local loop.
+
 - `--env <env>` commands that reach or name the MCP (`vecten login`, `user`, `group`, `grant`,
   `issues`, `mcp admin-link`, `mcp connection`, `mcp provisioner-script` and the sign-in items
   of `next`) use the environment's own domain from `deploy/envs/<env>.tfvars`, not prod's
