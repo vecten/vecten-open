@@ -1304,7 +1304,8 @@ On Snowflake an upgrade runs in this order: install the release, `vecten update`
 `vecten deploy --env <env>`, then the administrator's rerun of
 `vecten mcp provisioner-script --env <env>` as ACCOUNTADMIN, confirmed with `--confirm-run`
 and pushed. The update moves the Terraform module ref, so it comes before the deploy. Until the
-rerun, `vecten issues` reports that the warehouse's access procedures are older than the MCP.
+rerun, `vecten next` asks for it and `vecten issues` reports that the warehouse's access
+procedures are older than the MCP.
 The script's last query lists the users and roles the provisioner owns; on a running
 environment they are the MCP's own users and group roles, so keep them.
 [% endif %]
