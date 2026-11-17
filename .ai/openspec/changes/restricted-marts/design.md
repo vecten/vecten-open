@@ -324,8 +324,10 @@ Decision 5's report procedure, so a missing pairing shows up in access health.
    health reports database-level future grants in the environment's database.
 5. **[Old relations stay after a model moves to an area]** → dbt does not drop the relation
    it no longer builds, and the old copy in `marts` stays readable by the default group. The
-   migration plan drops it before anything else is granted back, and `next` reports relations
-   in convention schemas and areas that no model builds.
+   migration plan drops it before anything else is granted back; the runbook gives the query
+   that lists the relations no model builds and the statements that drop them. An automatic
+   report (task 3.7) needs the warehouse's catalog, which `next` does not read, so it waits
+   on a decision between access health and a check in the dbt build.
 6. **[Rerunning the provisioner script is a human step]** → `READ_GRANT` and `READ_GRANTS`
    change. Until the admin reruns it, the MCP's startup check finds the old procedure (by a
    version string the procedure returns) and refuses area grants and convergence with a
@@ -392,8 +394,8 @@ Stage 2 (areas):
    regenerated `osi/datasets.json` names the new sources.
 3. Ship. The dbt DAG builds the area schemas, and `next` reports the command that grants
    `finance` the area.
-4. Drop the old copies in `MARTS` and `CORE`. `next` lists them, and the runbook gives the
-   statements. This must come before step 5.
+4. Drop the old copies in `MARTS` and `CORE`. The runbook gives the query that lists them and
+   the statements. This must come before step 5.
 5. Grant `marts` back to the default group (`vecten grant --schema marts --group default`) and
    revoke the per-mart dataset grants from stage 1, which the schema grant now covers.
 
