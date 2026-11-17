@@ -21,6 +21,14 @@ VERSION_FILES = (
     ".claude-plugin/marketplace.json",
     "plugins/vecten/.claude-plugin/plugin.json",
     "uv.lock",
+    *(
+        f"packages/vecten/tests/fixtures/release_goldens/{name}"
+        for name in (
+            "local__docker-compose.yml",
+            "mcp__.vecten__stack__docker-compose.yml",
+            "platform__.vecten__stack__docker-compose.yml",
+        )
+    ),
 )
 
 
@@ -47,6 +55,9 @@ def _rewrites(rel: str, old: str, new: str) -> list[tuple[str, str, bool]]:
         ]
     if rel.endswith(".json"):
         return [(rf'"version": "{o}"', f'"version": "{new}"', True)]
+    if rel.endswith("docker-compose.yml"):
+        # The golden stacks tag the project's images with the release they were rendered by.
+        return [(rf"^(\s+image: [\w.-]+):{o}$", rf"\g<1>:{new}", False)]
     return [
         (rf'^(name = "{re.escape(d)}"\nversion = )"{o}"$', rf'\g<1>"{new}"', True)
         for d in DISTRIBUTIONS

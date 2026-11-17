@@ -32,10 +32,33 @@ def bump(invoke, root, version, *extra):
     return invoke("dev", "bump-version", version, "--repo", str(root), *extra, "--json")
 
 
-def test_the_twelve_files_are_the_ones_a_bump_edits():
-    assert len(VERSION_FILES) == 12
+GOLDENS = REPO / "packages/vecten/tests/fixtures/release_goldens"
+
+
+def test_the_fifteen_files_are_the_ones_a_bump_edits():
+    assert len(VERSION_FILES) == 15
     for rel in VERSION_FILES:
         assert VERSIONS.vecten in (REPO / rel).read_text(), rel
+
+
+def test_every_release_golden_naming_the_version_is_bumped():
+    naming = {
+        p.relative_to(REPO).as_posix()
+        for p in GOLDENS.iterdir()
+        if re.search(rf":{re.escape(VERSIONS.vecten)}$", p.read_text(), re.M)
+    }
+    assert naming and naming <= set(VERSION_FILES)
+
+
+def test_bump_retags_the_images_in_the_release_goldens(invoke, repo):
+    r = bump(invoke, repo, NEXT)
+    assert r.exit_code == 0, r.stdout
+    for rel in VERSION_FILES:
+        if "/release_goldens/" not in rel:
+            continue
+        images = re.findall(r"^\s+image: (\S+)$", (repo / rel).read_text(), re.M)
+        assert any(i.endswith(f":{NEXT}") for i in images), (rel, images)
+        assert not any(i.endswith(f":{VERSIONS.vecten}") for i in images), (rel, images)
 
 
 def test_bump_rewrites_every_version_and_pin(invoke, repo):
