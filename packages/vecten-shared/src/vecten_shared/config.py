@@ -181,7 +181,8 @@ def promotion_scaffold_problem(config: VectenConfig) -> str | None:
         return None
     rendered = config.project.scaffold_version
     try:
-        current = Version(rendered) >= Version(PROMOTION_SINCE)
+        # A candidate of `PROMOTION_SINCE` renders that release's workflows.
+        current = Version(rendered).release >= Version(PROMOTION_SINCE).release
     except InvalidVersion:
         current = False
     if current:
