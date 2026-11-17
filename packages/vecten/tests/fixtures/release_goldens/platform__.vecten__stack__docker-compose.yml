@@ -4,7 +4,7 @@ services:
     build:
       context: ./build
       dockerfile: airflow.Dockerfile
-    image: vecten-acme-prod-airflow:0.1.0
+    image: vecten-acme-prod-airflow:0.1.1rc2
     profiles: &id001
     - platform
     environment: &id002
@@ -71,7 +71,7 @@ services:
       retries: 30
       start_period: 60s
   airflow-scheduler:
-    image: vecten-acme-prod-airflow:0.1.0
+    image: vecten-acme-prod-airflow:0.1.1rc2
     profiles: *id001
     environment: *id002
     volumes: *id003
@@ -82,7 +82,7 @@ services:
       airflow-api-server:
         condition: service_healthy
   airflow-dag-processor:
-    image: vecten-acme-prod-airflow:0.1.0
+    image: vecten-acme-prod-airflow:0.1.1rc2
     profiles: *id001
     environment: *id002
     volumes: *id003
@@ -93,7 +93,7 @@ services:
       airflow-api-server:
         condition: service_healthy
   airflow-triggerer:
-    image: vecten-acme-prod-airflow:0.1.0
+    image: vecten-acme-prod-airflow:0.1.1rc2
     profiles: *id001
     environment: *id002
     volumes: *id003
