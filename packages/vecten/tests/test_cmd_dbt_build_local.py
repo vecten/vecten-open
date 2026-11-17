@@ -176,6 +176,52 @@ def test_renaming_a_mart_after_editing_its_metric_builds(invoke, tmp_path, monke
     assert '"company_summary"' in text and "company_overview" not in text
 
 
+# Mart name: its config and its key, which no other dataset may use as an entity.
+_LIVE_MARTS = {
+    "country_live": (
+        "materialized='dynamic_table', target_lag='1 hour', snowflake_warehouse='LIVE_WH'",
+        "live_country",
+    ),
+    # Without a target lag dbt-snowflake disables the scheduler and refreshes the table itself.
+    "country_manual": (
+        "materialized='dynamic_table', snowflake_warehouse='LIVE_WH'",
+        "manual_country",
+    ),
+    "country_heavy": ("materialized='table', snowflake_warehouse='LIVE_WH'", "heavy_country"),
+}
+
+
+def test_marts_on_their_own_warehouse_and_dynamic_tables_build(invoke, tmp_path, monkeypatch):
+    root = render_fixture(tmp_path, "snowflake")
+    monkeypatch.chdir(root)
+    marts = root / "dbt" / "models" / "marts"
+    yml = marts / "schema.yml"
+    for name, (config, key) in _LIVE_MARTS.items():
+        (marts / f"{name}.sql").write_text(
+            f"{{{{ config({config}) }}}}\n"
+            f"select country as {key}, count(*) as company_count\n"
+            "from {{ ref('company') }} group by country\n"
+        )
+        yml.write_text(
+            yml.read_text()
+            + f"  - name: {name}\n"
+            + "    description: Companies per country.\n"
+            + "    columns:\n"
+            + f"      - name: {key}\n"
+            + "        description: ISO 3166-1 alpha-2 country code.\n"
+            + "        data_tests: [unique, not_null]\n"
+            + "      - name: company_count\n"
+            + "        description: Number of companies in the country.\n"
+        )
+    result = invoke("dbt-build-local", "--json")
+    assert result.exit_code == 0, result.output
+    doc = json.loads((root / "osi" / "datasets.json").read_text())
+    sources = {d["name"]: d["source"] for d in doc["semantic_model"][0]["datasets"]}
+    database = sources["company_overview"].split(".")[0]
+    for name in _LIVE_MARTS:
+        assert sources[name] == f"{database}.marts.{name}"
+
+
 def test_the_build_database_is_the_configured_one(invoke, tmp_path, monkeypatch):
     root = render_fixture(tmp_path, "snowflake")
     monkeypatch.chdir(root)

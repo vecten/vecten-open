@@ -125,7 +125,9 @@ from the hosts, so nothing needs configuring. If the hub or GitHub cannot be rea
   `raw_<source>`, runs `dbt build` and then the convention tests, and after a green build
   regenerates `osi/datasets.json`, checks `osi/` with `dbt parse` and records the result in
   `.vecten/records/dbt-build-local.json`. dbt builds against an empty Ossie directory, because
-  `osi/datasets.json` is the build's output, not its input.
+  `osi/datasets.json` is the build's output, not its input. The emulation has one warehouse, so
+  a model's `snowflake_warehouse` is ignored there, and it builds a `dynamic_table` model as a
+  table of the same name; the dbt DAG on Snowflake builds both as configured.
   With `--check` it never touches `osi/datasets.json` and exits 6 when the committed file is
   stale; the rendered CI runs it that way. A dbt failure exits 5, names the failing models and tests, and
   leaves `osi/datasets.json` as it was. A mart without a primary key, or an `osi/` document dbt

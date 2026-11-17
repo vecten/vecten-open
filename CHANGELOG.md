@@ -287,6 +287,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `FUTURE SELECT on views in marts`, where both shared one id before. The id ends in the kind
   (`iss_mcp_drift_analyst_FUTURE-SELECT_marts_table`), and `issues show` lists it as
   `object`. The MCP's log and revoke failures name the kind the same way.
+- `vecten dbt-build-local` builds a Snowflake project whose models set `snowflake_warehouse` or
+  are materialized as `dynamic_table`. The emulation has one warehouse, so no model switches
+  warehouse, and it builds a dynamic table as a table of the same name; `osi/datasets.json`
+  names it as on Snowflake. The build on Snowflake is unchanged.
 
 ## [0.1.0] - 2026-11-09
 
