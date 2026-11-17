@@ -415,19 +415,28 @@ ALTER SECURITY INTEGRATION {integration} SET
   EXTERNAL_OAUTH_AUDIENCE_LIST = ({_literal(names.audience)});
 {_sign_in_policies(names)}"""
     reports = f"""{_leftover_grants(names)}
--- The users and roles {provisioner} owns. On a running environment, or one whose state
--- snapshot was restored, they are the MCP's own: keep them. On a deploy after a destroy
--- without that restore, the new state knows none of them and the MCP refuses to start
--- beside them: run each DROP this prints, as ACCOUNTADMIN.
+-- The users and roles {provisioner} owns, each with the DROP that removes it. On a running
+-- environment, or one whose state snapshot was restored, they are the MCP's own group roles
+-- and users: keep them. Only after a destroy without that restore does the new state know
+-- none of them, and the MCP refuses to start beside them: then run each DROP, as ACCOUNTADMIN.
 SHOW GRANTS TO ROLE {provisioner};
-SELECT 'DROP ' || "granted_on" || ' "' || "name" || '";' AS leftover
+SELECT 'DROP ' || "granted_on" || ' "' || "name" || '";' AS {_DROP_COLUMN}
 FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE "privilege" = 'OWNERSHIP' AND \
 ("granted_on" = 'USER' OR ("granted_on" = 'ROLE' AND "name" <> {_literal(analyst)}));
 """
-    header = "-- Run as ACCOUNTADMIN, or a role holding MANAGE GRANTS: the future grants need it.\n"
+    header = (
+        "-- Run as ACCOUNTADMIN, or a role holding MANAGE GRANTS: the future grants need it.\n"
+        "-- RESULT_SCAN runs on a warehouse, and the session may have no default one.\n"
+        f"USE WAREHOUSE {_ident(names.warehouse.upper())};\n"
+    )
     if not shared:
         return header + changes + reports
     return header + _checked_block(names, changes) + reports
+
+
+# The result's column title, which an administrator skimming the output reads above each
+# DROP; on a running environment the rows are live group roles and users.
+_DROP_COLUMN = '"drop only after a destroy without a state restore"'
 
 
 def _leftover_grants(names):

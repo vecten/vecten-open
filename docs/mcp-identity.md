@@ -404,7 +404,9 @@ public key with `--public-key` instead, and nothing is generated. Postgres SQL r
 provisioner and impersonator passwords from the administrator's environment with psql 15 or
 later, whose `\getenv` older versions lack.
 The Snowflake output expects the CORE and MARTS schemas and the compute warehouse
-`<PROJECT>_<ENV>_WH` to exist, and creates neither schemas nor compute resources. Its
+`<PROJECT>_<ENV>_WH` to exist, and creates neither schemas nor compute resources. It selects
+that warehouse first, because its checks read query results, which need one; the
+administrator's session needs no default warehouse, but their role must be able to use it. Its
 administrator is ACCOUNTADMIN or a role holding MANAGE GRANTS: in a regular schema a future
 grant needs that privilege even from the schema's owner.
 

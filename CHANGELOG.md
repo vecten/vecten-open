@@ -299,6 +299,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   are materialized as `dynamic_table`. The emulation has one warehouse, so no model switches
   warehouse, and it builds a dynamic table as a table of the same name; `osi/datasets.json`
   names it as on Snowflake. The build on Snowflake is unchanged.
+- The Snowflake script of `vecten mcp provisioner-script` selects the environment's warehouse
+  first, so an ACCOUNTADMIN whose session has no default warehouse runs it to the end; its
+  checks stopped with error 000606 before. Its last query prints the `DROP` for each user and
+  role the provisioner owns under the column `drop only after a destroy without a state
+  restore`: on a running environment they are the MCP's group roles and users, to keep.
 
 ## [0.1.0] - 2026-11-09
 

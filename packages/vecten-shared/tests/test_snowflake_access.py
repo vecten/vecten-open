@@ -251,7 +251,10 @@ def _block_and_reports(sql):
 
 def test_every_change_of_the_shared_script_runs_in_one_block_that_stops_at_the_first_error():
     head, block, reports = _block_and_reports(shared_script())
-    assert all(line.startswith("--") for line in head.splitlines())
+    # The block's RESULT_SCAN checks need a warehouse, which the session may lack.
+    assert [line for line in head.splitlines() if not line.startswith("--")] == [
+        'USE WAREHOUSE "ACME_DEV_WH";'
+    ]
     assert "$$" not in block
     assert block.rstrip().endswith("END;")
     # After the block only reports run: SHOW and SELECT print what an administrator drops.
