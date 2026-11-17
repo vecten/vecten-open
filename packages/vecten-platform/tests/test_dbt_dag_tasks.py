@@ -21,6 +21,7 @@ from vecten_platform.dbt.airflow_dag import (
 from vecten_platform.dbt.artifacts import (
     BUILD_FINISHED_KEY,
     BUILT_COMMIT_KEY,
+    BUILT_RELATIONS_KEY,
     DirectorySink,
     run_keys,
 )
@@ -312,6 +313,105 @@ def test_an_unwritable_finish_time_leaves_the_build_result_alone(project, monkey
     with caplog.at_level(logging.WARNING):
         build_step(RUN_ID)
     assert "build finish time not recorded" in caplog.text
+
+
+def node(resource, schema, alias, materialized, **config):
+    return {
+        "resource_type": resource,
+        "database": "warehouse",
+        "schema": schema,
+        "name": alias.removesuffix("_v2"),
+        "alias": alias,
+        "config": {"materialized": materialized, **config},
+    }
+
+
+MANIFEST = {
+    "nodes": {
+        "model.acme.revenue": node("model", "marts_finance", "finance_revenue", "table"),
+        "model.acme.orders": node("model", "marts", "orders_v2", "incremental"),
+        "model.acme.stg": node("model", "staging", "staging_crm_deal", "view"),
+        "model.acme.helper": node("model", "core", "helper", "ephemeral"),
+        "model.acme.live": node("model", "core", "live", "dynamic_table"),
+        "snapshot.acme.deal": node("snapshot", "snapshots", "snapshot_crm_deal", "snapshot"),
+        "seed.acme.codes": node("seed", "core", "codes", "seed"),
+        "test.acme.not_null": node("test", "core", "not_null_orders", "test"),
+    }
+}
+
+
+def build_with_manifest(monkeypatch, code: int, manifest: dict = MANIFEST):
+    """A dbt build leaving its run results and the parsed project's manifest behind."""
+    fake_dbt(monkeypatch, {"build": (code, results())})
+    inner = airflow_dag.run_dbt
+
+    def run(args, *, project_dir, env, capture=True):
+        outcome = inner(args, project_dir=project_dir, env=env, capture=capture)
+        (Path(env["DBT_TARGET_PATH"]) / "manifest.json").write_text(json.dumps(manifest))
+        return outcome
+
+    monkeypatch.setattr(airflow_dag, "run_dbt", run)
+
+
+def test_a_full_green_build_records_its_relations_with_its_finish_time(project, monkeypatch):
+    build_with_manifest(monkeypatch, 0)
+    monkeypatch.setattr(airflow_dag, "_finished_at", lambda: "2026-11-17T09:00:00+00:00")
+    build_step(RUN_ID)
+    record = json.loads(sink(project).get_text(BUILT_RELATIONS_KEY))
+    assert record == {
+        "finished_at": "2026-11-17T09:00:00+00:00",
+        "relations": [
+            {"database": "warehouse", "schema": "core", "name": "codes", "kind": "table"},
+            {"database": "warehouse", "schema": "core", "name": "live", "kind": "dynamic_table"},
+            {"database": "warehouse", "schema": "marts", "name": "orders_v2", "kind": "table"},
+            {
+                "database": "warehouse",
+                "schema": "marts_finance",
+                "name": "finance_revenue",
+                "kind": "table",
+            },
+            {
+                "database": "warehouse",
+                "schema": "snapshots",
+                "name": "snapshot_crm_deal",
+                "kind": "table",
+            },
+            {
+                "database": "warehouse",
+                "schema": "staging",
+                "name": "staging_crm_deal",
+                "kind": "view",
+            },
+        ],
+    }
+    assert sink(project).get_text(BUILD_FINISHED_KEY) == "2026-11-17T09:00:00+00:00\n"
+    assert BUILT_RELATIONS_KEY.rsplit("/", 1)[0] == BUILT_COMMIT_KEY.rsplit("/", 1)[0]
+
+
+@pytest.mark.parametrize(("code", "select"), [(1, ""), (0, "tag:intraday")])
+def test_a_red_or_narrowed_build_leaves_the_relations_record_and_moves_the_finish_time(
+    project, monkeypatch, code, select
+):
+    sink(project).put_text(BUILT_RELATIONS_KEY, '{"finished_at": "earlier", "relations": []}\n')
+    build_with_manifest(monkeypatch, code)
+    monkeypatch.setattr(airflow_dag, "_finished_at", lambda: "2026-11-17T09:00:00+00:00")
+    try:
+        build_step(RUN_ID, select)
+    except RuntimeError:
+        assert code
+    assert json.loads(sink(project).get_text(BUILT_RELATIONS_KEY))["finished_at"] == "earlier"
+    assert sink(project).get_text(BUILD_FINISHED_KEY) == "2026-11-17T09:00:00+00:00\n"
+
+
+def test_an_unreadable_manifest_leaves_the_build_green_and_the_record_as_it_was(
+    project, monkeypatch, caplog
+):
+    fake_dbt(monkeypatch, {"build": (0, results())})
+    with caplog.at_level(logging.WARNING):
+        build_step(RUN_ID)
+    assert "built relations not recorded" in caplog.text
+    assert sink(project).get_text(BUILT_RELATIONS_KEY) is None
+    assert sink(project).get_text(BUILD_FINISHED_KEY) is not None
 
 
 def test_mark_built_writes_the_bundle_commit(project, monkeypatch):

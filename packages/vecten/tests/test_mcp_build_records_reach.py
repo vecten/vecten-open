@@ -18,8 +18,12 @@ SOURCES = [
 ]
 
 
-def test_the_records_are_the_built_commit_and_the_finish_time():
-    assert set(DBT_RECORDS) == {"dbt/built_commit", "dbt/build_finished_at"}
+def test_the_records_are_the_built_commit_the_finish_time_and_the_built_relations():
+    assert set(DBT_RECORDS) == {
+        "dbt/built_commit",
+        "dbt/build_finished_at",
+        "dbt/built_relations.json",
+    }
 
 
 @pytest.mark.parametrize("path", SOURCES)

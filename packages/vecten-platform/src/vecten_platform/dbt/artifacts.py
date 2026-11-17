@@ -1,5 +1,5 @@
-"""Where the dbt DAG keeps what outlives a run: each run's results, the commit last built and
-when the last build finished."""
+"""Where the dbt DAG keeps what outlives a run: each run's results, the commit last built,
+when the last build finished and the relations the last full build made."""
 
 from __future__ import annotations
 
@@ -14,10 +14,14 @@ from vecten_shared.records import write_text_atomic
 
 BUILT_COMMIT_KEY = "dbt/built_commit"
 BUILD_FINISHED_KEY = "dbt/build_finished_at"
+BUILT_RELATIONS_KEY = "dbt/built_relations.json"
 ARTIFACT_DIR_VAR = "VECTEN_ARTIFACT_DIR"
 ARTIFACT_URL_VAR = "VECTEN_ARTIFACT_URL"
 DEFAULT_ARTIFACT_DIR = "/opt/airflow/artifacts"
 _UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
+_BUILT = ("model", "seed", "snapshot")
+# What each materialization leaves in the warehouse; a custom one is named as it is.
+_KINDS = {"incremental": "table", "seed": "table", "snapshot": "table"}
 
 
 class ArtifactSink(Protocol):
@@ -107,3 +111,22 @@ def run_keys(run_id: str) -> dict[str, str]:
         "convention": f"{run}/convention/run_results.json",
         "sources": f"{run}/freshness/sources.json",
     }
+
+
+def built_relations(manifest: dict) -> list[dict[str, str]]:
+    """The relations a build of the manifest's project makes: one per model, seed and
+    snapshot, but none for an ephemeral model, which dbt inlines."""
+    relations = []
+    for node in manifest.get("nodes", {}).values():
+        materialized = node.get("config", {}).get("materialized")
+        if node.get("resource_type") not in _BUILT or materialized == "ephemeral":
+            continue
+        relations.append(
+            {
+                "database": node["database"],
+                "schema": node["schema"],
+                "name": node.get("alias") or node["name"],
+                "kind": _KINDS.get(materialized, materialized),
+            }
+        )
+    return sorted(relations, key=lambda r: (r["database"], r["schema"], r["name"]))
