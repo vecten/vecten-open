@@ -74,4 +74,4 @@ ship before areas.
 ## 6. Release checks
 
 - [ ] 6.1 deploy: full stage-1 and stage-2 migration rehearsal on a sandbox seeded like the client (revoked `marts`, post-hooks, per-mart grants), following design.md's migration plan to the letter
-- [ ] 6.2 Runbook: the migration plan, the old-relation drop statements, the provisioner-script rerun
+- [x] 6.2 Runbook: the migration plan, the old-relation drop statements, the provisioner-script rerun (runbook "Upgrading this project" and "Moving restricted data into an area", following the 0.1.1rc1 rehearsal)

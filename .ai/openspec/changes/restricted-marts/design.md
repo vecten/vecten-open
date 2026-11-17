@@ -344,15 +344,19 @@ Decision 5's report procedure, so a missing pairing shows up in access health.
 
 Snowflake with the MCP:
 
-1. Release the version. `deploy` applies the module with the `removed` blocks, and the plan
-   shows no destroy of an `analyst` grant (`terraform` tier plus a plan on a sandbox).
+1. Release the version. The admin installs it and runs `vecten update`, which moves the
+   Terraform module ref; `deploy` then applies the module with the `removed` blocks, and the
+   plan shows no destroy of an `analyst` grant (`terraform` tier plus a plan on a sandbox).
 2. The admin reruns `vecten mcp provisioner-script --env <env>` as ACCOUNTADMIN and confirms
    with `--confirm-run`. This installs the new `READ_GRANT` and `READ_GRANTS` and no longer
    grants `analyst` data. `next` reports the step until the version check passes.
 3. The MCP's state, created by an earlier release, starts with `reconcile_drift = report`, so
-   the first reconciliation revokes nothing. Where an admin revoked `marts`, the `USAGE` and
-   future `SELECT` that Terraform restored are listed as drift in access health and
-   `vecten issues`, beside any hand-made grants.
+   the first reconciliation revokes nothing. Where an admin revoked `marts` in SQL, the
+   `USAGE` and future `SELECT` that came back are listed as drift in access health and
+   `vecten issues`, beside any hand-made grants. Two things restore such a revoke before the
+   upgrade: the earlier release's MCP reconciles the default group's schema grants seconds
+   after every build, and its deploy reapplies the module's `analyst` grants. A revoke made
+   with `vecten revoke --schema marts --group default` holds, and leaves no drift.
 4. The admin records every listed grant that should stay (a schema grant, or a dataset grant
    for a relation the model has as a dataset), removes dbt `grants:` configs and granting
    post-hooks, which would be revoked on every pass and granted again by every build, then
@@ -372,8 +376,8 @@ report of steps 3 and 4 starts with the first reconciliation; no script rerun is
 
 Stage 1 (Decisions 4 to 6, the first two pull requests, before areas):
 
-1. Upgrade, deploy, rerun the provisioner script, and run `vecten update` so that
-   `dbt_project.yml` carries `+copy_grants: true`.
+1. Install the release and run `vecten update`, which moves the module ref and adds
+   `+copy_grants: true` to `dbt_project.yml`; deploy; then rerun the provisioner script.
 2. Remove the revoke post-hooks from the dbt project in the same commit. From here, the
    default group's lack of `marts` is held by the MCP and no deploy restores it. Per-mart
    grants survive rebuilds.
