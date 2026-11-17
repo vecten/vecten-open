@@ -170,9 +170,16 @@ def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issu
 
 def drift_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
     role, privilege, schema = (str(entry.get(k, "?")) for k in ("role", "privilege", "schema"))
-    relation = entry.get("relation")
-    place = schema + (f".{relation}" if relation else "")
-    parts = [role, privilege, schema, *([str(relation)] if relation else [])]
+    relation, kind = entry.get("relation"), entry.get("object")
+    # A future grant names no relation: the object kind it covers is what tells it from
+    # another in the same schema, in the id as in the title.
+    if relation:
+        place, parts = f"{schema}.{relation}", [role, privilege, schema, str(relation)]
+    elif kind and kind != "schema":
+        kinds = str(kind).replace("_", " ") + "s"
+        place, parts = f"{kinds} in {schema}", [role, privilege, schema, str(kind)]
+    else:
+        place, parts = schema, [role, privilege, schema]
     return Issue(
         id=mcp_issue_id("drift", *parts),
         source="mcp",
@@ -191,7 +198,10 @@ def drift_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Is
         first_seen=None,
         last_seen=iso(checked_at),
         evidence=untrusted(
-            {k: sanitized(ctx, entry.get(k)) for k in ("group", "role", "privilege", "schema")}
+            {
+                k: sanitized(ctx, entry.get(k))
+                for k in ("group", "role", "privilege", "object", "schema")
+            }
             | {"relation": sanitized(ctx, relation)}
         ),
     )

@@ -995,5 +995,13 @@ def _entry(roles, grant, *, place=True):
 
 
 def _named(entry):
-    place = entry["schema"] + ("." + entry["relation"] if entry["relation"] else "")
+    """The grant as a person reads it; a future grant names no relation, so the object kind
+    it covers is what tells it from another in the same schema."""
+    schema, relation, kind = entry["schema"], entry["relation"], entry["object"]
+    if relation:
+        place = f"{schema}.{relation}"
+    elif kind != "schema":
+        place = f"{kind.replace('_', ' ')}s in {schema}"
+    else:
+        place = schema
     return f"{entry['privilege']} on {place}"

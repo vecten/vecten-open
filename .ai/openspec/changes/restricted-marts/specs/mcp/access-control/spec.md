@@ -41,6 +41,12 @@ Dataset, schema and area grants SHALL be stored in `mcp_state` as desired state.
 - **WHEN** `reconcile_drift` is `report` and a group role holds a read grant the state does not hold
 - **THEN** the grant stays, and access health lists it as drift
 
+#### Scenario: Future grants on two relation kinds
+- **WHEN** `reconcile_drift` is `report` and `analyst` holds future `SELECT` on tables and on views in `marts`, which the state does not hold
+- **THEN** access health lists two drift entries, each naming its object kind
+- **AND** `vecten issues` lists two issues with distinct ids, titled with the kind, as in `FUTURE SELECT on views in marts`
+- **AND** once `reconcile_drift` is `revoke`, the next reconciliation revokes both and access health lists each revocation with its kind
+
 ### Requirement: Schema grants beside dataset grants
 An admin SHALL be able to grant a group a whole convention schema, `raw_<source>`, `staging`, `snapshots`, `core` or `marts`, and the server SHALL translate the grant into `USAGE` on the schema, `SELECT` on every relation in it, and a default or future grant so relations created later are covered. Revoking the grant MUST revoke all three. The grant SHALL be available from the admin panel and `vecten grant --schema`, both over the admin API, and never as an MCP tool.
 

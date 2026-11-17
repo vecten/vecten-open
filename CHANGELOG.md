@@ -282,6 +282,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - A sync DAG no longer publishes its asset when an object failed, so `dbt_build` no longer
   builds on a partial sync. The asset now follows the `check` task, and existing DAG files
   pick this up unchanged.
+- Drift on future `SELECT` grants is one `vecten issues` entry per object kind: a role holding
+  future `SELECT` on tables and on views in one schema gets two issues, titled as in
+  `FUTURE SELECT on views in marts`, where both shared one id before. The id ends in the kind
+  (`iss_mcp_drift_analyst_FUTURE-SELECT_marts_table`), and `issues show` lists it as
+  `object`. The MCP's log and revoke failures name the kind the same way.
 
 ## [0.1.0] - 2026-11-09
 

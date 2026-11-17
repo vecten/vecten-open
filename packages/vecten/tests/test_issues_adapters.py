@@ -505,6 +505,7 @@ DRIFT = {
     "group": "default",
     "role": "analyst",
     "privilege": "FUTURE SELECT",
+    "object": "table",
     "schema": "marts",
     "relation": None,
 }
@@ -512,15 +513,32 @@ DRIFT = {
 
 def test_drift_listed_in_report_mode_is_an_issue_per_grant():
     table = {**DRIFT, "privilege": "SELECT", "relation": "payroll"}
-    health = {"checked_at": 1792627200, "failures": [], "drift": [DRIFT, table]}
+    usage = {**DRIFT, "privilege": "USAGE", "object": "schema"}
+    health = {"checked_at": 1792627200, "failures": [], "drift": [DRIFT, table, usage]}
     issues = mcp_issues(context([], admin=admin_with(access_health=health)))
     assert [i.id for i in issues] == [
-        "iss_mcp_drift_analyst_FUTURE-SELECT_marts",
+        "iss_mcp_drift_analyst_FUTURE-SELECT_marts_table",
         "iss_mcp_drift_analyst_SELECT_marts_payroll",
+        "iss_mcp_drift_analyst_USAGE_marts",
     ]
-    assert issues[0].title == "default's role analyst holds FUTURE SELECT on marts"
+    assert issues[0].title == "default's role analyst holds FUTURE SELECT on tables in marts"
     assert "reconcile_drift" in issues[0].resolution and "revoke" in issues[0].resolution
     assert issues[1].evidence["relation"] == "payroll"
+    assert issues[2].title == "default's role analyst holds USAGE on marts"
+
+
+def test_future_drift_on_each_relation_kind_is_its_own_issue():
+    kinds = ["table", "view", "dynamic_table", "external_table", "iceberg_table"]
+    kinds.append("materialized_view")
+    drift = [{**DRIFT, "object": kind} for kind in kinds]
+    health = {"checked_at": 1792627200, "failures": [], "drift": drift}
+    ctx = context([], admin=admin_with(access_health=health))
+    issues = mcp_issues(ctx)
+    assert len({i.id for i in issues}) == len(kinds)
+    view = find(ctx, "iss_mcp_drift_analyst_FUTURE-SELECT_marts_view")
+    assert view.title == "default's role analyst holds FUTURE SELECT on views in marts"
+    assert view.evidence["object"] == "view"
+    assert issues[-1].title.endswith("FUTURE SELECT on materialized views in marts")
 
 
 def test_a_failed_read_of_a_roles_grants_names_the_read():

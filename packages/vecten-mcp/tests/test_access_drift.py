@@ -272,7 +272,45 @@ def test_a_future_grant_the_procedure_cannot_revoke_stays_listed_as_drift():
     ]
     [failure] = result["failures"]
     assert failure["kind"] == "drift" and failure["target"] == "marts"
-    assert "still held" in failure["error"]
+    still = "still held after the revoke: FUTURE SELECT on dynamic tables in marts"
+    assert still in failure["error"]
+
+
+RELATION_KINDS = (
+    "table",
+    "view",
+    "materialized_view",
+    "dynamic_table",
+    "external_table",
+    "iceberg_table",
+)
+
+
+class EveryKind(Adapter):
+    """A schema-level revoke that, like READ_GRANT's, reaches every relation kind."""
+
+    def schema_grant(self, role, schema, grant=True):
+        super().schema_grant(role, schema, grant)
+        if not grant:
+            self.held = {g for g in self.held if not (g[0] == role and g[2] == schema)}
+
+
+def test_future_drift_on_each_relation_kind_is_listed_and_revoked_kind_by_kind(caplog):
+    adapter = EveryKind()
+    access = service(adapter)
+    access.revoke("default", "schema", "marts")
+    adapter.held |= {("analyst", "future", "marts", None, kind) for kind in RELATION_KINDS}
+    access.state.put("settings", "reconcile_drift", {"value": "report"})
+    with caplog.at_level(logging.INFO, logger="vecten_mcp.access"):
+        access.reconcile()
+    drift = access.health()["drift"]
+    assert sorted(d["object"] for d in drift) == sorted(RELATION_KINDS)
+    assert "FUTURE SELECT on views in marts" in caplog.text
+    access.state.put("settings", "reconcile_drift", {"value": "revoke"})
+    result = access.reconcile()
+    health = access.health()
+    assert result["failures"] == [] and health["drift"] == []
+    assert sorted(r["object"] for r in health["revoked"]) == sorted(RELATION_KINDS)
 
 
 def test_a_relation_that_cannot_be_revoked_does_not_stop_the_others():
@@ -707,7 +745,7 @@ def test_a_granted_schema_whose_revoke_fails_keeps_the_retry_record():
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     access.grant("finance", "area", "finance")
-    # The procedure's owner no longer sees core_finance: gone or only invisible, the revoke
+    # The procedure's owner cannot see core_finance: gone or only invisible, the revoke
     # it cannot make stays a failure.
     adapter.absent.add("core_finance")
     result = access.revoke("finance", "area", "finance")
