@@ -835,6 +835,54 @@ def test_a_deployed_platform_snowflake_sets_up_the_mcp_identity_first(snowflake_
     assert items[0] == PUSH and IDENTITY not in items
 
 
+def rerun_item(env="prod"):
+    return Item(
+        "command",
+        f"Rerun the provisioner script for {env}: the access procedures it installed are "
+        "older than this release's",
+        f"vecten mcp provisioner-script --env {env}",
+    )
+
+
+def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version_is_current(
+    snowflake_deploy_layer,
+):
+    from vecten_shared.identity_setup import ACCESS_VERSION
+
+    root, config = snowflake_deploy_layer
+    facts = deployed(config).environments["prod"]
+    # A script confirmed by a release that recorded no version installed an older one.
+    facts.provisioner_script_run = True
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
+    dirty = GitState(has_repo=True, has_origin=True, dirty=True, ahead=False)
+    assert post_deploy_items(root, config, "prod", dirty)[:2] == [PUSH, rerun_item()]
+    facts.access_version = ACCESS_VERSION - 1
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
+    facts.access_version = ACCESS_VERSION
+    assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
+
+
+def test_the_rerun_does_not_hold_back_the_other_post_deploy_items(snowflake_deploy_layer):
+    root, config = snowflake_deploy_layer
+    deployed(config).environments["prod"].provisioner_script_run = True
+    items = post_deploy_items(root, config, "prod", CLEAN)
+    assert items[0] == rerun_item() and items[1:] == [OIDC, ADMIN, FIRST_USER, CONNECTION, ALERT]
+
+
+@pytest.mark.parametrize("url", [POSTGRES_URL, SNOWFLAKE_URL])
+def test_a_deployed_existing_warehouse_asks_for_the_rerun_on_snowflake_only(tmp_path, url):
+    from vecten_shared.identity_setup import ACCESS_VERSION
+
+    root = render_mcp_only_deploy(tmp_path, url)
+    config = deployed(load_config(root))
+    facts = config.environments["prod"]
+    facts.provisioner_script_run = facts.provisioner_secrets_set = True
+    outdated = rerun_item() in post_deploy_items(root, config, "prod", CLEAN)
+    assert outdated == (url == SNOWFLAKE_URL)
+    facts.access_version = ACCESS_VERSION
+    assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
+
+
 def test_a_login_record_that_is_not_an_object_counts_as_no_session(deploy_layer, token_cache):
     root, config = deploy_layer
     config = oidc_ready(config)

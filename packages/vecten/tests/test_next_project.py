@@ -339,6 +339,18 @@ def test_a_prod_run_of_the_script_clears_it(tmp_path):
     assert existing_warehouse_items(root, load_config(root), "prod") == []
 
 
+def test_an_existing_snowflake_script_confirmed_with_an_older_version_is_asked_again(tmp_path):
+    from vecten_shared.identity_setup import ACCESS_VERSION
+
+    from .test_next_deploy import render_mcp_only_deploy, rerun_item
+
+    root = render_mcp_only_deploy(tmp_path, SNOWFLAKE_URL)
+    write_record(root, "provisioner-prod", {"confirmed": True})
+    assert existing_warehouse_items(root, load_config(root), "prod") == [rerun_item()]
+    write_record(root, "provisioner-prod", {"confirmed": True, "access_version": ACCESS_VERSION})
+    assert existing_warehouse_items(root, load_config(root), "prod") == []
+
+
 def test_platform_project_has_no_existing_warehouse_items(tmp_path):
     root = render_fixture(tmp_path, "postgres")
     assert existing_warehouse_items(root, load_config(root), "prod") == []

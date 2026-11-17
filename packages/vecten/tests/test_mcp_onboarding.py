@@ -513,6 +513,35 @@ def test_confirming_the_platform_script_records_it_and_writes_no_key(platform_sn
     assert KeyStore.written == []
 
 
+def test_a_confirmed_snowflake_script_records_the_access_version_it_installed(
+    platform_snowflake,
+):
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.config import load_config
+    from vecten_shared.identity_setup import ACCESS_VERSION
+    from vecten_shared.records import read_record
+
+    setup_script(platform_snowflake, "prod", confirm=True)
+    facts = load_config(platform_snowflake).environments["prod"]
+    assert facts.access_version == ACCESS_VERSION
+    record = read_record(platform_snowflake, "provisioner-prod")
+    assert record["confirmed"] and record["access_version"] == ACCESS_VERSION
+
+
+def test_a_confirmed_postgres_script_records_no_access_version(tmp_path):
+    # The Postgres helpers carry no version; only Snowflake's procedures report one.
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.config import load_config
+
+    from .test_next_deploy import render_mcp_only_deploy
+    from .test_next_project import POSTGRES_URL
+
+    root = render_mcp_only_deploy(tmp_path, POSTGRES_URL)
+    setup_script(root, "prod", confirm=True)
+    facts = load_config(root).environments["prod"]
+    assert facts.provisioner_script_run and facts.access_version is None
+
+
 @pytest.mark.parametrize(("env", "public_key"), [("local", None), ("prod", "AAAA")])
 def test_platform_script_needs_an_env_and_makes_its_own_key(platform_snowflake, env, public_key):
     from vecten.mcp_onboarding import setup_script

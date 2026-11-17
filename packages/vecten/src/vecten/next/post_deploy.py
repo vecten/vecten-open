@@ -11,6 +11,7 @@ from vecten.mcp_url import mcp_url
 from vecten.next.areas import area_access_apply_items
 from vecten.next.declared import declared_secret_items
 from vecten.next.deploy import PUSH
+from vecten.next.existing_warehouse import access_rerun_item
 from vecten.next.gitstate import GitState
 from vecten.next.ingestion import access_apply_items
 from vecten.next.items import Item
@@ -198,6 +199,10 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
             f"Ship {env} now that its MCP has its Snowflake identity; its deploy shipped no host"
         )
         return [*items, Item("command", title, f"vecten promote --env {env}")]
+    # The MCP serves with older procedures and refuses only what needs the newer ones.
+    rerun = access_rerun_item(root, config, env)
+    if rerun is not None:
+        items.append(rerun)
     mcp = config.mcp
     if mcp.auth == "oidc" and not (mcp.oidc_issuer and mcp.oidc_client_id):
         items.append(OIDC)

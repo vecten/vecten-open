@@ -297,7 +297,9 @@ human when the ship is done, or show them the run's URL if it failed.
   warehouse and never ask for it. On a project whose platform builds a Snowflake
   warehouse, `next` reports it with `--env` after the first deploy; the command stores
   the provisioner's key itself, and the `vecten github push` that follows the
-  confirmation ships the MCP.
+  confirmation ships the MCP. On Snowflake, after an upgrade whose MCP needs newer access
+  procedures, `next` reports "Rerun the provisioner script for <env>" with the same
+  command: the same steps apply, and the MCP keeps serving meanwhile.
 
 ### 4. `skill` items: hand over, then come back
 

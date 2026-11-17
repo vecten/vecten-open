@@ -322,10 +322,14 @@ def test_without_an_order_next_reports_what_it_reported_before(
 
 
 def _mcp_only_with_prods_script_run(tmp_path, url):
+    from vecten_shared.identity_setup import ACCESS_VERSION
+
     from .test_next_deploy import render_mcp_only_deploy
 
     root = ordered(render_mcp_only_deploy(tmp_path, url))
-    facts(root, "prod", provisioner_script_run=True)
+    # The current release's confirmation records the Snowflake procedures' version.
+    installed = {"access_version": ACCESS_VERSION} if url.startswith("snowflake") else {}
+    facts(root, "prod", provisioner_script_run=True, **installed)
     return root
 
 

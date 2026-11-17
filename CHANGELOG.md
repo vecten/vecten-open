@@ -227,8 +227,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   nothing); then an ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and the
   run is confirmed with `--confirm-run`, which installs `VECTEN_ACCESS.READ_GRANTS` and the new
   `READ_GRANT`. Until then the MCP keeps applying grants but reads no drift, and
-  `vecten issues` names the step. Postgres deployments need nothing beyond the next ship, and
-  an existing Postgres warehouse needs no rerun; there the drift report starts at once.
+  `vecten issues` and `vecten next` name the step: the confirmation records the procedures'
+  version under `[environments.<env>] access_version`, and a run confirmed by an earlier
+  release, which recorded none, counts as older. Postgres deployments need nothing beyond the
+  next ship, and an existing Postgres warehouse needs no rerun; there the drift report starts
+  at once.
 
   **Before upgrading**, remove every dbt `grants:` config and granting post-hook from the
   dbt project, and override any a dbt package sets with `+grants: {}` under the package's name
