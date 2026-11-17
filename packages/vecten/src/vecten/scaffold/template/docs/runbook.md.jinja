@@ -1300,10 +1300,13 @@ read the drift in `vecten issues`, record the grants to keep with `vecten grant`
 `SELECT` on a relation that is not a dataset cannot be recorded and is revoked from then on.
 [% if warehouse == 'snowflake' %]
 
-On Snowflake an upgrade runs in this order: install the release, `vecten update`, commit,
-`vecten deploy --env <env>`, then the administrator's rerun of
+On Snowflake an upgrade runs in this order: install the release, `vecten update`, commit and
+push with `vecten github push`, `vecten deploy --env <env>`, then the administrator's rerun of
 `vecten mcp provisioner-script --env <env>` as ACCOUNTADMIN, confirmed with `--confirm-run`
-and pushed. The update moves the Terraform module ref, so it comes before the deploy. Until the
+and pushed. The update moves the Terraform module ref, and `vecten deploy` refuses changes to
+`vecten.toml` or `deploy/` that the default branch does not hold, so the push comes before the
+deploy. With a promotion order, upgrade the environments in that order: an environment after
+the first deploys the newest commit the one before it shipped. Until the
 rerun, `vecten next` asks for it and `vecten issues` reports that the warehouse's access
 procedures are older than the MCP.
 The script's last query lists the users and roles the provisioner owns; on a running
@@ -1319,8 +1322,10 @@ plan and approved `vecten deploy --env <env>`.
 ### Moving restricted data into an area
 
 To take data away from the default group, keep `marts` off it through the MCP
-(`vecten revoke --schema marts --group default`), not with SQL, which the MCP's reconciliation
-treats as drift. Data some groups may read and others may not belongs in a restricted area:
+(`vecten revoke --schema marts --group default --env <env>`), not with SQL, which the MCP's
+reconciliation treats as drift. Data some groups may read and others may not belongs in a
+restricted area. Run steps 3 to 5 for each environment, in the promotion order if the project
+has one:
 
 1. Declare the area and who reads it in `vecten.toml`, for example `[areas.finance]` with
    `access.groups = ["finance"]`.
@@ -1343,6 +1348,7 @@ treats as drift. Data some groups may read and others may not belongs in a restr
    `DROP TABLE marts.<name>;` (`DROP VIEW` for a view) for each one no model under
    `dbt/models/core/` or `dbt/models/marts/` builds.
 [% endif %]
-5. Grant `marts` back to the default group (`vecten grant --schema marts --group default`) and
-   revoke any dataset grant on a mart that the schema grant or the area grant now covers.
+5. Grant `marts` back to the default group
+   (`vecten grant --schema marts --group default --env <env>`) and revoke, with `--env <env>`,
+   any dataset grant on a mart that the schema grant or the area grant now covers.
 [% endif %]
