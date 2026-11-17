@@ -8,7 +8,7 @@ import pytest
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.base import Absent
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
 
 
 def full(grant):
@@ -182,14 +182,14 @@ def test_a_grant_missing_from_the_warehouse_is_listed_as_added():
 
 
 def test_an_older_procedure_keeps_grants_reconciling_and_names_the_script():
-    adapter = Adapter(held={("analyst", "usage", "staging", None)}, version=ACCESS_VERSION - 1)
+    adapter = Adapter(held={("analyst", "usage", "staging", None)}, version=GRANTS_VERSION - 1)
     access = service(adapter)
     result = access.reconcile()
     assert adapter.reads == []
     assert ("schema", "analyst", "core", True) in adapter.ops
     assert not [op for op in adapter.ops if not op[3]]
     health = access.health()
-    assert health["outdated"]["installed"] == ACCESS_VERSION - 1
+    assert health["outdated"]["installed"] == GRANTS_VERSION - 1
     assert health["outdated"]["required"] == ACCESS_VERSION
     assert "vecten mcp provisioner-script" in health["outdated"]["fix"]
     assert result["complete"]
@@ -415,7 +415,7 @@ def test_a_grant_of_an_unknown_kind_is_refused():
 
 
 def test_an_older_procedure_refuses_area_grants_and_names_the_script():
-    adapter = Adapter(version=ACCESS_VERSION - 1)
+    adapter = Adapter(version=GRANTS_VERSION - 1)
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     adapter.ops.clear()
@@ -426,7 +426,7 @@ def test_an_older_procedure_refuses_area_grants_and_names_the_script():
 
 
 def test_an_older_procedure_refuses_a_dataset_grant_on_an_area_mart():
-    adapter = Adapter(version=ACCESS_VERSION - 1)
+    adapter = Adapter(version=GRANTS_VERSION - 1)
     access = service(adapter, areas={"finance"})
     access.datasets = {"finance_revenue": "warehouse.marts_finance.finance_revenue"}
     access.create_group("finance")
@@ -441,7 +441,7 @@ def test_an_area_grant_recorded_before_the_script_rerun_waits_and_the_rest_recon
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     access.grant("finance", "area", "finance")
-    adapter.version = ACCESS_VERSION - 1
+    adapter.version = GRANTS_VERSION - 1
     adapter.ops.clear()
     result = access.reconcile()
     assert ("schema", "analyst", "core", True) in adapter.ops

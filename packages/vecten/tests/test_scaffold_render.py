@@ -113,6 +113,17 @@ def test_render_layout(tmp_path, params):
     assert fixed_account is (params.render_deploy and snowflake_root and not shared)
     identity = "`vecten mcp provisioner-script --env <env>`, which stores" in runbook
     assert identity is (params.render_deploy and snowflake_root and "mcp" in params.components)
+    # The dbt DAG records what its build made, against which the MCP lists the old copies.
+    both = {"platform", "mcp"} <= set(params.components)
+    unbuilt = (
+        "`vecten issues --env <env>` lists each relation in `core`, `marts` and the" in runbook
+    )
+    assert unbuilt is both
+    asked = "rerun of `vecten mcp provisioner-script` that this release asks for onwards" in runbook
+    assert asked is (both and params.warehouse == "snowflake")
+    assert ("FROM information_schema.tables WHERE" in runbook) is (
+        "mcp" in params.components and params.warehouse == "postgres"
+    )
     managed_warehouse = params.warehouse == "postgres" and "platform" in params.components
     assert ("restore-db-instance-from-db-snapshot" in runbook) is (aws_deploy and managed_warehouse)
     assert ("scw rdb snapshot restore" in runbook) is (scaleway_deploy and managed_warehouse)

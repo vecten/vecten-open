@@ -15,7 +15,7 @@ from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
 from vecten_mcp.warehouse.base import Absent, RoleExists
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
@@ -29,6 +29,11 @@ OUTDATED_FIX = (
     "--confirm-run: until then area grants wait, and read grants the state does not hold "
     "are neither listed nor revoked."
 )
+LISTING_FIX = (
+    "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
+    "--confirm-run: until then the relations in core, marts and the areas that no model "
+    "builds are not listed."
+)
 
 
 # `p_` is kept for one reader role per person; the others name administrators, services and
@@ -39,11 +44,20 @@ SYSTEM_ROLES = frozenset(
 )
 BOUND_ROLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
 AREA_SCHEMA = re.compile(r"(core|marts)_([a-z][a-z0-9]*)")
+# The modelled schemas, where dbt leaves a relation in place once no model builds it.
+MODELLED_SCHEMAS = frozenset({"core", "marts"})
 KINDS = ("dataset", "schema", "area")
 
 
 def area_schemas(area):
     return [f"core_{area}", f"marts_{area}"]
+
+
+def modelled(schema, areas=()):
+    """Whether a schema, in any case, holds models only: core, marts or a declared area's."""
+    schema = schema.casefold()
+    area = AREA_SCHEMA.fullmatch(schema)
+    return schema in MODELLED_SCHEMAS or bool(area and area.group(2) in areas)
 
 
 def in_scope(schema, areas=()):
@@ -64,11 +78,15 @@ class Undeclared(ValueError):
 
 
 class AccessService:
-    def __init__(self, state, adapter, *, invalidate=None, areas=()):
+    def __init__(self, state, adapter, *, invalidate=None, areas=(), built=None):
         self.state, self.adapter = state, adapter
         self.invalidate = invalidate or (lambda pid: None)
         self.datasets = {}
         self.areas = frozenset(areas)
+        # What the dbt DAG's last full build made, or None without a current record; None
+        # in a project with no dbt DAG.
+        self.built = built
+        self.unread = None
         self.lock = RLock()
         # The bound apps whose admitted groups follow these grants (AppScopes), or None.
         self.apps = None
@@ -512,7 +530,8 @@ class AccessService:
     def _outdated(self):
         installed = self.adapter.access_version()
         if installed < ACCESS_VERSION:
-            return {"installed": installed, "required": ACCESS_VERSION, "fix": OUTDATED_FIX}
+            fix = OUTDATED_FIX if installed < GRANTS_VERSION else LISTING_FIX
+            return {"installed": installed, "required": ACCESS_VERSION, "fix": fix}
         return None
 
     def _apply(self, grant, source, allowed, done=None, missing=None):
@@ -574,7 +593,7 @@ class AccessService:
     def grant(self, group, kind, target):
         self.require_group(group)
         source = self._source(kind, target)
-        if self._current(kind, source) and self._outdated():
+        if self._current(kind, source) and _grants_wait(self._outdated()):
             raise ValueError(f"areas need the current access procedures. {OUTDATED_FIX}")
         row = {"group": group, "kind": kind, "target": target}
         key = self._key(group, kind, target)
@@ -704,7 +723,7 @@ class AccessService:
                 source = self._source_of(row)
                 if key in blocked or source is None:
                     continue
-                if outdated and self._current(row["kind"], source):
+                if _grants_wait(outdated) and self._current(row["kind"], source):
                     failed(key, row, "grant", outdated["fix"])
                     continue
                 done, missing = [], []
@@ -736,7 +755,10 @@ class AccessService:
                             record = dict(row, source=done, granted=done)
                         self.state.put("applied_grants", key, record)
             report["missing_bindings"], report["unbound_roles"] = self._bindings(failures)
+        report["unbuilt"], unlisted = self._unbuilt(outdated)
         health = {"checked_at": time.time(), "failures": failures, **report}
+        if unlisted:
+            health["unbuilt_error"] = unlisted
         if outdated:
             health["outdated"] = outdated
         self.state.put("access_health", "reconciliation", health)
@@ -830,13 +852,14 @@ class AccessService:
             return None, None
         if outdated:
             logger.warning(
-                "Access procedures are version %s; %s", outdated["installed"], OUTDATED_FIX
+                "Access procedures are version %s; %s", outdated["installed"], outdated["fix"]
             )
+        if _grants_wait(outdated):
             return None, outdated
         roles = {row["warehouse_role"]: row["name"] for row in self.list_groups()}
         held, readable = self._read(roles, failures)
         if not readable:
-            return None, None
+            return None, outdated
         whole, datasets = set(), defaultdict(set)
         for row in desired.values():
             group = self.state.group(row["group"])
@@ -870,7 +893,7 @@ class AccessService:
                 for grant in grants:
                     report["drift"].append(_entry(roles, grant))
                     logger.info("Drift: %s holds %s", grant[0], _named(_entry(roles, grant)))
-            return held, None
+            return held, outdated
         failed, touched = set(), set()
 
         def failure(role, target, exc):
@@ -929,7 +952,48 @@ class AccessService:
             if kept and not noted:
                 names = ", ".join(_named(_entry(roles, g)) for g in kept)
                 failure(role, schema, f"still held after the revoke: {names}")
-        return held, None
+        return held, outdated
+
+    def _unbuilt(self, outdated):
+        """The relations in core, marts and the declared areas that the dbt DAG's last full
+        build did not make, each with the statement that drops it, and the listing's error.
+        Without a current record any relation could be one a later build made, so none is
+        listed; the server never drops one."""
+        if self.built is None or outdated:
+            return [], None
+        try:
+            record = self.built()
+        except Exception as exc:
+            error = describe_error(exc)
+            if error != self.unread:
+                logger.warning("The dbt build's relations were not read: %s", error)
+            self.unread = error
+            return [], None
+        self.unread = None
+        if record is None:
+            return [], None
+        made = {(r["schema"].casefold(), r["name"].casefold()) for r in record}
+        try:
+            present = self.adapter.relations()
+            unbuilt = [
+                {
+                    "schema": schema,
+                    "relation": name,
+                    "kind": kind,
+                    "statement": self.adapter.drop_statement(schema, name, kind),
+                }
+                for schema, name, kind in sorted(present)
+                if modelled(schema, self.areas) and (schema.casefold(), name.casefold()) not in made
+            ]
+        except Exception as exc:
+            error = describe_error(exc)
+            logger.warning("Listing the relations no model builds failed: %s", error)
+            return [], error
+        for entry in unbuilt:
+            logger.info(
+                "%s.%s is a %s no model builds", entry["schema"], entry["relation"], entry["kind"]
+            )
+        return unbuilt, None
 
     @staticmethod
     def _read_failure(exc, group):
@@ -956,6 +1020,7 @@ class AccessService:
             "database_future": [],
             "missing_bindings": [],
             "unbound_roles": [],
+            "unbuilt": [],
         }
         if self.apps is not None and self.apps.apps:
             health = {**health, "apps": self.apps.health() + self.app_role_health()}
@@ -980,6 +1045,11 @@ class AccessService:
         for group in self.state.groups_for(principal_id):
             denied.update((self.state.get("denied", group) or {}).get("columns", []))
         return denied
+
+
+def _grants_wait(outdated):
+    """Whether procedures this old refuse area grants and drift, not only the listing."""
+    return bool(outdated) and outdated["installed"] < GRANTS_VERSION
 
 
 def _folded(held):

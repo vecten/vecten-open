@@ -210,4 +210,5 @@ def test_health_before_any_reconciliation_is_empty():
         "database_future": [],
         "missing_bindings": [],
         "unbound_roles": [],
+        "unbuilt": [],
     }

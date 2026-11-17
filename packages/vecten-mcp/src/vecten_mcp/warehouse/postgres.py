@@ -5,7 +5,13 @@ from contextlib import contextmanager
 import psycopg
 from psycopg import sql
 
-from vecten_mcp.warehouse.base import Absent, Account, RoleExists, check_account
+from vecten_mcp.warehouse.base import (
+    Absent,
+    Account,
+    RoleExists,
+    check_account,
+    drop_statement,
+)
 from vecten_shared.identity_setup import ACCESS_VERSION
 
 READ_GRANTS = """
@@ -30,6 +36,16 @@ CROSS JOIN LATERAL aclexplode(d.defaclacl) a JOIN managed m ON m.oid = a.grantee
 WHERE a.privilege_type = 'SELECT' AND d.defaclobjtype = 'r'
 """
 
+# A partition is a table of its partitioned table, which a DROP of that table takes with it.
+RELATIONS = """
+SELECT n.nspname, c.relname,
+       CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
+                      WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END
+FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r','p','v','m','f') AND NOT c.relispartition
+  AND (n.nspname IN ('core','marts') OR n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$')
+"""
+DROP_KINDS = frozenset({"TABLE", "VIEW", "MATERIALIZED VIEW", "FOREIGN TABLE"})
 
 # The role and every role it is a member of, with any options: SET reaches as far as
 # INHERIT does.
@@ -335,6 +351,16 @@ class PostgresAdapter:
         with self.control() as conn:
             rows = conn.execute(READ_GRANTS, (sorted(roles),)).fetchall()
         return {tuple(row) for row in rows}
+
+    def relations(self):
+        """`(schema, name, object type)` for every relation in core, marts and the area
+        schemas, from the catalog every role may read."""
+        with self.control() as conn:
+            rows = conn.execute(RELATIONS).fetchall()
+        return {tuple(row) for row in rows}
+
+    def drop_statement(self, schema, name, kind):
+        return drop_statement(DROP_KINDS, (schema, name), kind)
 
     def check_scope(self, registry, bound=False):
         """Refuse any privilege the provisioner holds outside its stated set; its memberships

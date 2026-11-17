@@ -1336,7 +1336,13 @@ has one:
 3. Push. Once the dbt build has created the area's schemas, grant it:
    `vecten grant --area <area> --group <group> --env <env>`.
 4. Drop the copies the models no longer build, before anyone is granted the schema they sit
-   in. List them by comparing the warehouse with the models:
+   in.[% if 'platform' in components %] Once the dbt build of step 3 has finished green, with no
+   model left out, `vecten issues --env <env>` lists each relation in `core`, `marts` and the
+   areas that no model builds, with the statement that drops it[% if warehouse == 'snowflake' %],
+   from the rerun of `vecten mcp provisioner-script` that this release asks for onwards[% endif %].
+   Run those statements; the MCP drops nothing. Until then, list them by comparing the
+   warehouse with the models:[% else %] List them by comparing the warehouse with the
+   models:[% endif %]
 [% if warehouse == 'snowflake' %]
    `SELECT table_schema, table_name, table_type FROM <DATABASE>.INFORMATION_SCHEMA.TABLES
    WHERE table_schema IN ('CORE', 'MARTS') ORDER BY 1, 2;`, then, as ACCOUNTADMIN,

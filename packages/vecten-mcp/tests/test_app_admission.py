@@ -292,6 +292,7 @@ def test_access_health_without_bound_apps_keeps_its_shape():
         "database_future",
         "missing_bindings",
         "unbound_roles",
+        "unbuilt",
     }
 
 

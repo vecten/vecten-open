@@ -743,3 +743,71 @@ def test_a_role_nested_under_a_group_role_without_a_binding_is_an_issue():
     assert issue.id == "iss_mcp_nested_finance_SYSADMIN"
     assert issue.title == "finance's role holds SYSADMIN, which no confirmed binding names"
     assert "REVOKE" in issue.resolution and "vecten group bind finance" in issue.resolution
+
+
+UNBUILT = {
+    "schema": "MARTS",
+    "relation": "FINANCE_REVENUE",
+    "kind": "TABLE",
+    "statement": 'DROP TABLE "D"."MARTS"."FINANCE_REVENUE";',
+}
+
+
+def test_a_relation_no_model_builds_is_an_issue_giving_the_statement_that_drops_it():
+    other = {
+        **UNBUILT,
+        "relation": "OLD_V",
+        "kind": "VIEW",
+        "statement": 'DROP VIEW "MARTS"."OLD_V";',
+    }
+    health = {"checked_at": 1792627200, "failures": [], "unbuilt": [UNBUILT, other]}
+    first, second = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert first.id == "iss_mcp_unbuilt_MARTS_FINANCE_REVENUE"
+    assert second.id == "iss_mcp_unbuilt_MARTS_OLD_V"
+    assert first.kind == "ask"
+    assert first.title == "MARTS.FINANCE_REVENUE is a table no model builds"
+    assert 'DROP TABLE "D"."MARTS"."FINANCE_REVENUE";' in first.resolution
+    assert "vecten reconcile --env prod" in first.resolution
+    assert 'DROP VIEW "MARTS"."OLD_V";' in second.resolution
+    assert first.evidence["untrusted"] is True
+    assert first.evidence["statement"] == UNBUILT["statement"]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        'DROP TABLE "D"."MARTS"."X"; GRANT ROLE SYSADMIN TO USER "EVE";',
+        'DROP VIEW "D"."MARTS"."FINANCE_REVENUE";',
+        "drop everything in MARTS",
+    ],
+)
+def test_a_statement_that_is_no_single_drop_of_the_relations_kind_is_not_given(statement):
+    health = {
+        "checked_at": 1792627200,
+        "failures": [],
+        "unbuilt": [{**UNBUILT, "statement": statement}],
+    }
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert statement not in issue.resolution
+    assert "DROP TABLE" in issue.resolution
+
+
+def test_a_failed_listing_of_the_relations_no_model_builds_is_one_issue():
+    error = "ProgrammingError 3001: Insufficient privileges to operate on procedure READ_GRANTS"
+    health = {"checked_at": 1792627200, "failures": [], "unbuilt": [], "unbuilt_error": error}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_unbuilt_listing"
+    assert issue.kind == "ask"
+    assert issue.title == "Listing the relations no model builds failed"
+    assert "Insufficient privileges" in issue.evidence["error"]
+
+
+def test_procedures_that_serve_areas_name_only_the_listing_as_waiting():
+    from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+
+    outdated = {"installed": GRANTS_VERSION, "required": ACCESS_VERSION, "fix": "rerun"}
+    health = {"checked_at": 1792627200, "failures": [], "outdated": outdated}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert "no model builds" in issue.resolution
+    assert "Area grants wait" not in issue.resolution
+    assert "vecten mcp provisioner-script --env prod" in issue.resolution

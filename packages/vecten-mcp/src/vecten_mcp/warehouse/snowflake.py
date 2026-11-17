@@ -4,13 +4,23 @@ import json
 import re
 from contextlib import contextmanager
 
-from vecten_mcp.warehouse.base import Absent, Account, RoleExists, check_account
+from vecten_mcp.warehouse.base import (
+    Absent,
+    Account,
+    RoleExists,
+    check_account,
+    drop_statement,
+)
 
 
 def quote(name):
     return '"' + name.upper().replace('"', '""') + '"'
 
 
+# The object types READ_GRANTS names a listed relation by, each the one its DROP takes.
+DROP_KINDS = frozenset(
+    {"TABLE", "VIEW", "MATERIALIZED VIEW", "DYNAMIC TABLE", "EXTERNAL TABLE", "ICEBERG TABLE"}
+)
 # What READ_GRANT answers the version call with when it predates the version, or when no
 # such procedure is installed.
 OLD_INSTALL = re.compile(r"not a bounded reader role|does not exist|unknown user-defined", re.I)
@@ -387,6 +397,17 @@ class SnowflakeAdapter:
                         schema = parts[1] if len(parts) == 3 else None
                         held.add((role, "future", schema, None, kind))
         return held
+
+    def relations(self):
+        """`(schema, name, object type)` for every relation in CORE, MARTS and the area
+        schemas, as READ_GRANTS lists them with no target, named as Snowflake stores them."""
+        with self.control() as cursor:
+            answer = cursor.execute(f"CALL {self._access()}.READ_GRANTS(NULL)").fetchone()[0]
+        answer = answer if isinstance(answer, dict) else json.loads(answer)
+        return {(r["schema"], r["name"], r["kind"]) for r in answer["relations"]}
+
+    def drop_statement(self, schema, name, kind):
+        return drop_statement(DROP_KINDS, (self.database.upper(), schema, name), kind)
 
     def check_scope(self, registry, bound=False):
         """Refuse any grant the provisioner role holds outside its stated set. While a group

@@ -195,4 +195,34 @@ function readGrants() {
     }
     return held;
 }
-return mode === 'report' ? readGrants() : readGrant();
+// Every relation of the modelled schemas, read and never changed, with the object type a DROP
+// of it names: INFORMATION_SCHEMA calls a dynamic or an Iceberg table a base table. The
+// provisioner can list only what it holds a privilege on, which leaves out views and areas.
+function relations() {
+    var dynamic = namedIn('SHOW DYNAMIC TABLES IN DATABASE ' + quoted(database));
+    var iceberg = namedIn('SHOW ICEBERG TABLES IN DATABASE ' + quoted(database));
+    // An area's schemas match a pattern rather than a list, as in readGrant.
+    var rows = execute('SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM ' + quoted(database) +
+        ".INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA IN ('CORE','MARTS')" +
+        " OR TABLE_SCHEMA RLIKE '(CORE|MARTS)_[A-Z][A-Z0-9]*'");
+    var listed = {version: version, relations: []};
+    while (rows.next()) {
+        var schema = rows.getColumnValue(1), name = rows.getColumnValue(2);
+        var type = rows.getColumnValue(3), key = schema + '.' + name;
+        var kind = ['VIEW', 'MATERIALIZED VIEW', 'EXTERNAL TABLE'].indexOf(type) !== -1 ? type
+            : dynamic[key] ? 'DYNAMIC TABLE' : iceberg[key] ? 'ICEBERG TABLE' : 'TABLE';
+        listed.relations.push({schema: schema, name: name, kind: kind});
+    }
+    return listed;
+}
+function namedIn(statement) {
+    var found = Object.create(null);
+    var rows = execute(statement);
+    while (rows.next()) {
+        found[rows.getColumnValue('schema_name') + '.' + rows.getColumnValue('name')] = true;
+    }
+    return found;
+}
+// Snowflake hands SQL NULL to a procedure as undefined: the report with no target lists.
+if (mode === 'report') return TARGET === undefined ? relations() : readGrants();
+return readGrant();
