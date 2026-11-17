@@ -154,3 +154,27 @@ A schema, area or dataset grant SHALL cover every relation kind that can hold a 
 #### Scenario: Dataset grant on a materialized view
 - **WHEN** an admin grants a dataset whose source is a materialized view
 - **THEN** the group's role holds `SELECT` on that materialized view
+
+### Requirement: Relations no model builds are reported
+dbt does not drop a relation it stops building, so a model moved into an area or renamed leaves its old relation readable by whoever reads the schema. Each reconciliation SHALL read the relations in `core`, `marts` and the schemas of every declared area from the warehouse's catalog, on Snowflake through the access procedures and on Postgres from `pg_class`, and SHALL compare them with the relations the dbt DAG recorded for its last green build that left no node out. Access health SHALL list each relation the record does not name, with its kind and the statement that drops it: `DROP TABLE`, `DROP VIEW`, `DROP MATERIALIZED VIEW`, `DROP DYNAMIC TABLE`, `DROP EXTERNAL TABLE` or `DROP ICEBERG TABLE` on Snowflake, and `DROP TABLE`, `DROP VIEW`, `DROP MATERIALIZED VIEW` or `DROP FOREIGN TABLE` on Postgres. `vecten issues` SHALL list each as an `ask` issue whose resolution gives that statement. The server MUST NOT drop a relation. It SHALL list none while no build has recorded its relations, or while a build that finished after the record, narrowed or red, may have made relations the record does not name. `staging`, `snapshots`, `raw_<source>` schemas and schemas named like an undeclared area are not compared. On Snowflake the listing needs the access procedures of version 6; with an older install the server lists none, and access health names `vecten mcp provisioner-script`. A listing the warehouse refuses SHALL be reported in access health with the warehouse's message.
+
+#### Scenario: Old copy after a move into an area
+- **WHEN** the `finance_revenue` mart has moved from `marts` to `marts_finance` and the dbt DAG's next build, green and with no node left out, has finished
+- **THEN** access health lists `marts.finance_revenue` as a table, and `vecten issues` lists one `ask` issue whose resolution gives `DROP TABLE` on it
+- **AND** the server drops nothing, and once an administrator runs the statement the next reconciliation lists it no more
+
+#### Scenario: No build has recorded its relations
+- **WHEN** the deployment was upgraded and the dbt DAG has not yet finished a green build that leaves no node out
+- **THEN** access health lists no relation, whatever `core`, `marts` and the areas hold
+
+#### Scenario: Narrowed build after the record
+- **WHEN** a manual run of the dbt DAG with `select` builds a new mart after the last recorded build
+- **THEN** access health lists no relation until the next green build that leaves no node out
+
+#### Scenario: Schemas outside the comparison
+- **WHEN** `staging` holds a view no model builds
+- **THEN** access health does not list it
+
+#### Scenario: Older access procedures on Snowflake
+- **WHEN** the installed access procedures report version 5
+- **THEN** area grants and drift revocation work, no relation is listed, and access health names `vecten mcp provisioner-script`
