@@ -317,6 +317,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   checks stopped with error 000606 before. Its last query prints the `DROP` for each user and
   role the provisioner owns under the column `drop only after a destroy without a state
   restore`: on a running environment they are the MCP's group roles and users, to keep.
+- `vecten deploy` runs the Snowflake root's Terraform on the environment's warehouse, so the
+  first deploy of an environment in a shared account completes when the deploy user has no
+  default warehouse. It stopped with error 000606 reading back the loader's sign-in policy,
+  after setting it on the user.
 
 ## [0.1.0] - 2026-11-09
 
