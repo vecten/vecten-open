@@ -261,9 +261,20 @@ the owner-rights `VECTEN_ACCESS.READ_GRANTS` procedure, on Postgres from the cat
 revokes those the state does not hold. The `reconcile_drift` setting, `revoke` by default, can
 be set to `report` to list them in access health without revoking; an MCP state created by an
 earlier release starts at `report`. A grant in any other schema, or to a role the MCP does not
-manage, is left alone. While the installed procedures are older than the MCP, this step is
+manage, is left alone. While the installed procedures are older than version 5, this step is
 skipped, grants that reach an area are refused and wait, and access health names
 `vecten mcp provisioner-script`. Memberships combine the permissions of all assigned groups. Removing a grant from one group does not remove access provided by another.
+
+dbt does not drop a relation it stops building, so a model moved into an area or renamed
+leaves its old relation where it was, readable by every group that reads that schema. With
+the `platform` component, the dbt DAG records the relations its last green build that left no
+node out made (`platform/dbt/built_relations.json`), and reconciliation lists in access health
+each relation in `core`, `marts` and the declared areas' schemas that the record does not name,
+with the `DROP` statement for its kind; `vecten issues` shows each one. The MCP drops nothing.
+It lists none until such a build has run, and none after a narrowed or failed build until the
+next full one, because either may have made relations the record lacks. On Snowflake the list
+comes from `READ_GRANTS` called with no target, which needs the procedures of version 6; on
+Postgres from `pg_class`.
 
 A new MCP state starts with `revoke`, and "new" means the MCP's state database, not the
 warehouse. The first reconciliation therefore revokes, with no report first, every read grant

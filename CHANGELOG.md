@@ -156,6 +156,19 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   4: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, grants that reach an area
   are refused and drift is neither listed nor revoked, while every other grant keeps
   reconciling ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- Relations no model builds are reported. dbt does not drop a relation it stops building, so
+  a mart moved into an area leaves its old copy in `marts`, readable by every group that reads
+  `marts`. After a green build that leaves no node out, the dbt DAG writes the relations its
+  models, snapshots and seeds build to `platform/dbt/built_relations.json`, and each
+  reconciliation lists in access health every relation in `core`, `marts` and the declared
+  areas' schemas that the record does not name, with its kind and the `DROP` statement for it;
+  `vecten issues` shows each as an `ask` issue. The MCP drops nothing. It lists none before
+  such a build, or after a narrowed or red build until the next full one. On Snowflake the
+  list comes from `READ_GRANTS` called with no target, and the access procedures are version
+  6: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` the listing waits,
+  while area grants and drift keep working with version 5, and `vecten next` and
+  `vecten issues` name the rerun. `vecten deploy` gives the MCP host read access to the new
+  record on AWS and Scaleway ([#51](https://github.com/vecten/vecten-open/issues/51)).
 - Read grants on Snowflake cover every relation kind a mart can be: a schema or area grant
   grants and revokes `SELECT` on all and future tables, views, materialized views, dynamic
   tables, external tables and Iceberg tables, and a dataset grant names its relation's kind,
