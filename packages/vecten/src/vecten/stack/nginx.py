@@ -178,11 +178,12 @@ SERVICE_MAPS = (
     "    default 0;\n"
     f'    "~*(?:^|;\\s*){GATE_COOKIE_NAMES}=" 1;\n'
     "}\n"
-    # The location is picked by the normalised path, the client's own is forwarded: these
-    # forms would let the service read another route than the one NGINX checked.
+    # NGINX picks the location by the normalised path and forwards the client's: each form,
+    # `/admin%0a` included (Python's `$` matches before a final newline), reads otherwise.
     "map $request_uri $vecten_ambiguous_path {\n"
     "    default 0;\n"
-    r'    "~^[^?]*(?:%2[fF]|%5[cC]|\\\\|;|%3[bB]|//|/(?:\.|%2[eE]){1,2}(?:/|\?|$))" 1;' + "\n"
+    r'    "~^[^?]*(?:%2[fF]|%5[cC]|\\\\|;|%3[bB]|%[01][0-9a-fA-F]|%7[fF]|//|'
+    r'/(?:\.|%2[eE]){1,2}(?:/|\?|$))" 1;' + "\n"
     "}\n"
 )
 

@@ -115,11 +115,12 @@ the path spells that prefix differently, NGINX answers 404 before any route sees
 `/` is never the reason for a 404.
 
 A request whose raw path holds an encoded slash or backslash (`%2F`, `%5C`), a backslash, a `;`
-(or `%3B`), `//`, or a `.` or `..` segment, encoded or not, is answered 400 on every path a
-route covers, before the service sees it; the health path and the 404 answers above are not
-affected. NGINX picks the route from the cleaned-up path but forwards the path as sent, so such a
-path could make the service read a different route than the one NGINX checked. An application
-that needs these forms in its own paths cannot be routed.
+(or `%3B`), an encoded control character (`%00` to `%1F`, `%7F`), `//`, or a `.` or `..`
+segment, encoded or not, is answered 400 on every path a route covers, before the service sees
+it; the health path and the 404 answers above are not affected. NGINX picks the route from the
+cleaned-up path but forwards the path as sent, so such a path could make the service read a
+different route than the one NGINX checked. An application that needs these forms in its own
+paths cannot be routed.
 
 - **`public`**: anyone. The service authenticates callers itself, as a webhook receiver must
   (see [webhooks](#webhooks-and-signature-checks)).

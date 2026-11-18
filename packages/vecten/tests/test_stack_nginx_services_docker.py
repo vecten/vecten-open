@@ -200,6 +200,16 @@ def test_nginx_serves_a_service_hostname_as_the_routes_and_the_health_path_say(t
         assert status(port, ca, "GET", "/api/messages/%2e%2e/%2e%2e/office") == 400
         assert status(port, ca, "GET", "/api/messages/../../office") == 400
         assert status(port, ca, "GET", "/api/messages/..;/office") == 400
+        # Decoded, these miss the unbound route's locations and fall under the public prefix.
+        reached = len(seen(stub))
+        for control in (
+            "/api/messages/admin%0a",
+            "/api/messages/admin%0A/users",
+            "/api/messages/admin%00",
+            "/api/messages/admin%7f",
+        ):
+            assert status(port, ca, "GET", control) == 400, control
+        assert len(seen(stub)) == reached
         assert status(port, ca, "GET", "/office") == 403
         decoy = "Cookie: __HOST-VECTEN-GATE=decoy; __Host-vecten-gate=REAL\r\n"
         assert status(port, ca, "GET", "/api/messages", decoy) == 400

@@ -246,9 +246,28 @@ def test_a_route_refuses_a_path_nginx_would_read_otherwise_than_the_service():
         "/a/%2E%2e;/b",
         "/a%3Bb",
         "/a%3bb",
+        # Python's `$` also matches before a final newline, so `/admin\n` reaches `/admin`.
+        "/admin%0a",
+        "/admin%0A/x",
+        "/a%00b",
+        "/a%09b",
+        "/a%1Fb",
+        "/a%1fb",
+        "/a%7Fb",
+        "/a%7f",
     ):
         assert re.search(regex, uri), uri
-    for uri in ("/api/messages", "/api/file.js", "/api/a..b", "/api?next=/x/../y", "/api?u=a//b"):
+    for uri in (
+        "/api/messages",
+        "/api/file.js",
+        "/api/a..b",
+        "/api?next=/x/../y",
+        "/api?u=a//b",
+        "/api?q=a%0Ab",
+        "/a%20b",
+        "/a%2Ab",
+        "/a%7Eb",
+    ):
         assert not re.search(regex, uri), uri
     found = locations(tls(text, "bot.data.acme.com"))
     for key, body in found.items():
