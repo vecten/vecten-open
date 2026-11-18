@@ -341,7 +341,9 @@ hold:
   empty value drops it, so a client-sent `X-Vecten-User` never reaches a service under any
   spelling. NGINX's default `ignore_invalid_headers` drops underscore variants.
 - A service is reachable only through NGINX: it publishes no port and sits on a network only NGINX
-  joins (Decision 6). No DAG, connector or other service can send it a forged header.
+  joins (Decision 6). No DAG or connector can send it a forged header. Every service on a host
+  shares that network, so another service can, until each gets its own network
+  ([#90](https://github.com/vecten/vecten-open/issues/90)).
 - The gate cookie is removed from the `Cookie` header forwarded to the service, so the service
   never holds a credential it could replay to the gate.
 

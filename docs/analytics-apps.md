@@ -336,7 +336,9 @@ database. A bound group that does not exist admits no one. A declared dataset th
 does not hold admits no group: the app cannot be opened until the model holds it.
 
 The MCP recomputes admission at startup (a ship restarts it with the new bundle), after every
-reconciliation and model swap, and after every grant or group change.
+reconciliation and model swap, and after every grant or group change. The gate checks a
+request when it arrives, so a WebSocket opened before the viewer's group lost admission, such
+as Streamlit's, stays open until it reconnects.
 
 Each bound group that is left out becomes an **access-health** entry, and `vecten issues`
 reports it with a fix. For example: "group `default` may open `acme-sales.overview` but cannot
