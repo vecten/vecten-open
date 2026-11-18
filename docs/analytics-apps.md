@@ -222,9 +222,11 @@ On top of its roles, the MCP holds it to the app's declared datasets:
   same whether or not the metric exists.
 - **`sql-exec`** is checked before the warehouse sees the statement. The statement must be one
   `SELECT` or `WITH` query, with no comments. Every table it reads must be the table of a
-  declared dataset, written with the same parts. An unqualified name counts only as a CTE that
-  a `WITH` makes visible at that point. Subqueries, `VALUES`, `UNNEST` and
-  `LATERAL (subquery)` are allowed. Table functions, stages, `TABLE(...)`, `ROWS FROM`,
+  declared dataset, written with the same parts as the `source` that `describe` returns for it.
+  That source names the environment's own database (`ACME_DEV` in a shared Snowflake account),
+  so an app that runs in more than one environment reads it from `describe` rather than from
+  `osi/datasets.json`. An unqualified name counts only as a CTE that a `WITH` makes visible at
+  that point. Subqueries, `VALUES`, `UNNEST` and `LATERAL (subquery)` are allowed. Table functions, stages, `TABLE(...)`, `ROWS FROM`,
   `OPERATOR(...)`, casts to user-defined or `reg*` types, and any function off the warehouse's
   list are refused.
 - **The function list.** Each warehouse has its own list of reporting built-ins, and anything
@@ -319,10 +321,13 @@ async def revenue_by_region(viewer):
 ## Who may open an app
 
 A bound group **admits** people to an app only if it may read every dataset the app declares.
-A group may read a dataset in one of two ways:
+A group may read a dataset in one of three ways:
 
-- a dataset grant on it, applied to the table the dataset reads now; or
-- a schema grant on the schema of every table its source reads.
+- a dataset grant on it, applied to the table the dataset reads now;
+- a schema grant on the schema of every table its source reads; or
+- a restricted-area grant (`vecten grant --area <area>`) whose `core_<area>` or
+  `marts_<area>` holds every table its source reads. An area schema counts once the warehouse
+  has granted it; dbt creates one when a model first lands in it.
 
 A grant counts once it is both desired and applied. A revoked grant or a grant the warehouse
 refused admits no one. On Snowflake, a three-part source counts only in the project's own
