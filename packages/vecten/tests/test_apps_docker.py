@@ -17,7 +17,14 @@ from vecten.stack.compose import STACK_DIR, compose_project_name
 from vecten_shared.config import load_config
 
 from .docker_util import remove_stack_images
-from .test_up_e2e import REPO, docker_ok, drop_volumes, service_container, vecten
+from .test_up_e2e import (
+    REPO,
+    docker_ok,
+    drop_volumes,
+    service_container,
+    use_checkout_wheels,
+    vecten,
+)
 
 pytestmark = pytest.mark.docker
 
@@ -131,7 +138,8 @@ def _probe(container: str, port: int) -> subprocess.CompletedProcess:
 
 
 @pytest.mark.skipif(not docker_ok(), reason="no docker daemon")
-def test_a_streamlit_app_runs_from_its_package_with_usage_statistics_off(tmp_path):
+def test_a_streamlit_app_runs_from_its_package_with_usage_statistics_off(tmp_path, monkeypatch):
+    use_checkout_wheels(tmp_path, monkeypatch)
     from vecten.stack import up as up_mod
 
     build = subprocess.run(

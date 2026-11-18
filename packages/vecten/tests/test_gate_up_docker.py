@@ -25,7 +25,14 @@ from vecten_shared.provider.local import LocalProvider
 from vecten_shared.versions import VERSIONS
 
 from .docker_util import remove_stack_images
-from .test_up_e2e import REPO, docker_ok, drop_volumes, service_container, vecten
+from .test_up_e2e import (
+    REPO,
+    docker_ok,
+    drop_volumes,
+    service_container,
+    use_checkout_wheels,
+    vecten,
+)
 
 pytestmark = pytest.mark.docker
 
@@ -372,6 +379,7 @@ def _provision(admin):
 
 @pytest.mark.skipif(not docker_ok(), reason="no docker daemon")
 def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monkeypatch):
+    use_checkout_wheels(tmp_path, monkeypatch)
     build = subprocess.run(
         [sys.executable, "-m", "vecten.cli.app", "dev", "build-images", "--repo", REPO, "--json"],
         capture_output=True,

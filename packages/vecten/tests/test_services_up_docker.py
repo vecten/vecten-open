@@ -12,7 +12,15 @@ import pytest
 from vecten.stack.compose import SERVICE_PIDS_LIMIT, STACK_DIR, compose_project_name
 from vecten_shared.config import load_config
 
-from .test_up_e2e import REPO, docker_ok, drop_volumes, front_door, service_container, vecten
+from .test_up_e2e import (
+    REPO,
+    docker_ok,
+    drop_volumes,
+    front_door,
+    service_container,
+    use_checkout_wheels,
+    vecten,
+)
 
 pytestmark = pytest.mark.docker
 
@@ -97,16 +105,7 @@ def _compose(proj, *args):
 
 @pytest.mark.skipif(not docker_ok(), reason="no docker daemon")
 def test_up_runs_services_isolated_and_keeps_their_volume(tmp_path, monkeypatch):
-    # The lock pins the four packages at this checkout's version, which is not on PyPI until
-    # the release is published.
-    wheels = tmp_path / "wheels"
-    subprocess.run(
-        ["uv", "build", "--all-packages", "--wheel", "--out-dir", str(wheels)],
-        cwd=REPO,
-        check=True,
-        capture_output=True,
-    )
-    monkeypatch.setenv("UV_FIND_LINKS", str(wheels))
+    use_checkout_wheels(tmp_path, monkeypatch)
     build = subprocess.run(
         [sys.executable, "-m", "vecten.cli.app", "dev", "build-images", "--repo", REPO, "--json"],
         capture_output=True,
