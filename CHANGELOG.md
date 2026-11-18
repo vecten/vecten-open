@@ -324,6 +324,9 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - A service's `login` routes and an analytics app on a host without the MCP admit people: NGINX
   verifies the MCP's certificate through the cross-signed certificates Let's Encrypt's chains
   reach the bundled roots by. It checked one level, refused the chain and answered 500.
+- An analytics app admits a group through a restricted-area grant (`vecten grant --area`), on
+  the area's schemas the warehouse granted. Only dataset and schema grants counted, so an app
+  over an area admitted none of the area's groups.
 
 ## [0.1.0] - 2026-11-09
 

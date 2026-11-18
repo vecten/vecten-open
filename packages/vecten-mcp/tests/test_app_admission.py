@@ -11,6 +11,7 @@ from vecten_mcp.identity import Identity
 from vecten_mcp.model import ModelService
 from vecten_mcp.runtime import Runtime
 from vecten_mcp.state import StateStore
+from vecten_mcp.warehouse.base import Absent
 from vecten_shared.apps import parse_app
 from vecten_shared.config import VectenConfig
 from vecten_shared.extension_record import RECORD_FILE, Extension, record_text
@@ -80,6 +81,7 @@ def close_stores(stores_closed):
 class Adapter:
     def __init__(self):
         self.fail = False
+        self.absent = set()
 
     def create_group(self, role):
         pass
@@ -92,7 +94,8 @@ class Adapter:
             raise RuntimeError("warehouse refused the grant")
 
     def schema_grant(self, role, schema, grant=True):
-        pass
+        if schema in self.absent:
+            raise Absent(schema)
 
     def access_version(self):
         return ACCESS_VERSION
@@ -151,6 +154,28 @@ def test_a_schema_grant_admits_the_group_for_a_dataset_in_that_schema():
     assert scopes.admitted("overview") == {"default"}
     access.revoke("default", "schema", "marts")
     assert scopes.admitted("overview") == frozenset()
+
+
+def test_an_area_grant_admits_the_group_for_a_dataset_in_the_areas_schemas():
+    _, _, access, scopes = setup(FINANCE)
+    access.model_changed(SOURCES)
+    access.grant("finance", "area", "finance")
+    assert scopes.admitted("finance") == {"finance"}
+    assert [entry["group"] for entry in access.health()["apps"]] == ["default"]
+    access.revoke("finance", "area", "finance")
+    assert scopes.admitted("finance") == frozenset()
+
+
+def test_an_area_admits_through_its_marts_schema_only_once_the_warehouse_granted_it():
+    # dbt creates marts_<area> when a model lands in it; until then the grant waits for it.
+    _, adapter, access, scopes = setup(FINANCE)
+    access.model_changed(SOURCES)
+    adapter.absent = {"marts_finance"}
+    access.grant("finance", "area", "finance")
+    assert scopes.admitted("finance") == frozenset()
+    adapter.absent = set()
+    access.reconcile()
+    assert scopes.admitted("finance") == {"finance"}
 
 
 def test_a_schema_grant_covers_a_three_part_source_only_in_the_projects_database():
