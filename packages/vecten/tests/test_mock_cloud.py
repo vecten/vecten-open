@@ -82,6 +82,7 @@ def test_ship_inside_actions_places_one_release_per_host_without_terraform(
     set_facts(root, bootstrapped=True, state_bucket="mock-state", deployed_commit=COMMIT)
     MockCloud(root, "prod").store_outputs(MockCloud.OUTPUTS)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setenv("VECTEN_TERRAFORM_RUNNER", f"{__name__}:RecordingTerraform")
     RecordingTerraform.created = 0
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())

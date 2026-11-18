@@ -857,14 +857,18 @@ def _expand(text: str, values: dict[str, str]) -> str:
     return _EXPRESSION.sub(value, text)
 
 
-def _ci_environ(store: Store) -> dict[str, str]:
+def _ci_environ(store: Store, checkout: Path) -> dict[str, str]:
     """A job's environment: inside Actions, with this stand-in as its `gh`, since a job sets
-    commit statuses through gh and the real one would write to GitHub."""
+    commit statuses through gh and the real one would write to GitHub, and the repository
+    the checkout was cloned from as Actions names it."""
     environ = _clean_env()
+    origin = Path(_run(["git", "remote", "get-url", "origin"], cwd=checkout).stdout.strip())
+    repository = origin.relative_to(store.root / "repos").as_posix().removesuffix(".git")
     return {
         **environ,
         **install(store.root, python=sys.executable, environ=environ),
         "GITHUB_ACTIONS": "true",
+        "GITHUB_REPOSITORY": repository,
     }
 
 
@@ -880,7 +884,7 @@ def _run_step(store: Store, checkout: Path, step: dict, values: dict[str, str]) 
             cwd=checkout,
             capture_output=True,
             text=True,
-            env={**_ci_environ(store), **env, "GITHUB_OUTPUT": output.name},
+            env={**_ci_environ(store, checkout), **env, "GITHUB_OUTPUT": output.name},
         )
         written = output.read()
     if result.returncode != 0:

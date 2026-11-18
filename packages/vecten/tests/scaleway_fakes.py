@@ -848,6 +848,7 @@ def prepare_environment(
 def actions_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """The deploy key in the job's environment, as CI holds it: no organization."""
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setenv("SCW_ACCESS_KEY", DEPLOY_ACCESS)
     monkeypatch.setenv("SCW_SECRET_KEY", DEPLOY_SECRET)
     monkeypatch.delenv("SCW_DEFAULT_ORGANIZATION_ID", raising=False)

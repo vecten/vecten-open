@@ -148,6 +148,7 @@ def inside_actions(root: Path, monkeypatch):
     """Inside Actions with the CI role: moto for S3, a fake SSM, health polls that pass."""
     aws_credentials(monkeypatch, root)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     # The gh a ship inside Actions sets its commit status through.
     monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
@@ -170,6 +171,7 @@ def actions_without_cloud(monkeypatch) -> None:
     """Inside Actions, where gh and git reach GitHub: both are fakes here, and the checkout is
     the default branch's head."""
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
 
@@ -622,7 +624,7 @@ def test_laptop_deploy_dispatches_follows_and_records_the_run_commit(
     monkeypatch.setattr(gh_mod, "get_git", lambda: git)
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code == 0, r.stdout
-    assert git.named("fetch") == [["fetch", "origin", "main"]]
+    assert git.named("fetch") == [["fetch", "origin", "refs/heads/main"]]
     assert git.named("merge-base") == [["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"]]
     assert git.named("status") == [["status", "--porcelain", "--", "vecten.toml", "deploy"]]
     assert git.named("rev-list") == [
@@ -919,7 +921,7 @@ def test_a_failed_fetch_is_a_tool_failure(invoke, laptop, project, monkeypatch):
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit(answers={("fetch",): (128, "")}))
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code == 5
-    assert "git fetch origin main" in doc(r)["error"]
+    assert "git fetch origin refs/heads/main" in doc(r)["error"]
     assert laptop.named("workflow", "run") == []
 
 
@@ -996,6 +998,7 @@ def test_check_reports_facts_without_credentials(invoke, no_cloud, tmp_path, mon
     out.write_text("earlier=1\n")
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     r = invoke("deploy", "--env", "prod", "--check", "--json")
     assert r.exit_code == 0, r.stdout
     assert doc(r) == {"bootstrapped": False, "deployed": False, "ok": True}

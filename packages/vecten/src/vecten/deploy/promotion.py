@@ -25,7 +25,7 @@ from vecten.deploy.github_env import (
     ship_context,
     ship_status,
 )
-from vecten.deploy.guards import _git
+from vecten.deploy.guards import _git, branch_ref
 from vecten.deploy.tfvars import env_tfvars_path
 from vecten.github.gh import ToolRunner
 from vecten_shared.config import (
@@ -51,7 +51,6 @@ __all__ = [
     "COMMIT_KEYS",
     "CommitFiles",
     "HeadFacts",
-    "checkout_repository",
     "fetched_commit",
     "previous_in",
     "fetch_default_branch",
@@ -66,7 +65,7 @@ __all__ = [
     "ship_context",
 ]
 
-# The default branch's head as `git fetch origin <branch>` left it.
+# The default branch's head as `fetch_default_branch` left it.
 FETCHED = "FETCH_HEAD"
 # A commit id a person types, abbreviated or full; nothing git would read as an option.
 _COMMIT_REF = re.compile(r"[0-9a-f]{7,40}")
@@ -109,7 +108,7 @@ def newest_shipped(
 
 def fetch_default_branch(git: ToolRunner, project_root: Path, branch: str) -> None:
     """Fetch the remote default branch, so a commit named on it is in this checkout."""
-    _git(git, project_root, "fetch", "origin", branch)
+    _git(git, project_root, "fetch", "origin", branch_ref(branch))
 
 
 def given_commit(git: ToolRunner, project_root: Path, ref: str) -> str:
@@ -163,23 +162,6 @@ class HeadFacts:
     order: tuple[str, ...]
     environments: dict[str, EnvironmentFacts]
     warnings: list[str] = field(default_factory=list)
-
-
-def checkout_repository(project_root: Path) -> str:
-    """`[deploy] github_repository` of the checkout's `vecten.toml`, the only key read: the
-    CLI that runs may be older than the one that wrote the file."""
-    path = project_root / CONFIG_FILE
-    try:
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
-        raise Failure(ExitCode.CONFIG, f"{path}: {exc}") from None
-    deploy = raw.get("deploy")
-    repository = deploy.get("github_repository") if isinstance(deploy, dict) else None
-    if not isinstance(repository, str) or not repository:
-        raise Failure(
-            ExitCode.REFUSED, "this project has no deploy layer; run `vecten init --deploy` first"
-        )
-    return repository
 
 
 def fetched_commit(git: ToolRunner, project_root: Path) -> str:

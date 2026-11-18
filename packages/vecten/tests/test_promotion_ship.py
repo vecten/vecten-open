@@ -85,6 +85,7 @@ def repo(tmp_path, monkeypatch) -> Repo:
         MockCloud(root, env).store_outputs(MockCloud.OUTPUTS)
     monkeypatch.chdir(root)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("VECTEN_GIT_RUNNER", raising=False)
     found = Repo()
@@ -162,6 +163,48 @@ def test_a_commit_off_the_default_branch_is_refused_before_any_host(invoke, repo
     assert repo.feature[:8] in error and "main" in error
     assert released(repo.cloud, "mcp") is None
     assert gh.posted_statuses() == []
+
+
+def push_tag_named_main_at(repo: Repo, commit: str) -> None:
+    # `git fetch origin main` takes `refs/tags/main` before `refs/heads/main`.
+    git(repo.root, "tag", "main", commit)
+    git(repo.root, "push", "-q", "origin", "refs/tags/main")
+    git(repo.root, "tag", "-d", "main")
+
+
+def test_a_tag_named_like_the_default_branch_does_not_stand_in_for_it(invoke, repo, monkeypatch):
+    push_tag_named_main_at(repo, repo.feature)
+    gh = use_gh(monkeypatch, FakeGh(statuses={repo.feature: [DEV_OK]}))
+    r = invoke("ship", "--env", "prod", "--commit", repo.feature, "--json")
+    assert r.exit_code == 4, r.stdout
+    assert repo.feature[:8] in doc(r)["error"]
+    assert released(repo.cloud, "mcp") is None
+    assert gh.posted_statuses() == []
+
+
+def test_the_laptop_checks_fetch_the_default_branch_not_a_tag_of_its_name(repo):
+    from vecten.deploy.guards import require_commit_on_default_branch, require_on_default_branch
+
+    push_tag_named_main_at(repo, repo.feature)
+    runner = gh_mod.get_git()
+    with pytest.raises(Failure) as refused:
+        require_commit_on_default_branch(repo.root, runner, "main", repo.feature)
+    assert refused.value.code == ExitCode.REFUSED
+    git(repo.root, "checkout", "-q", "feature")
+    with pytest.raises(Failure) as refused:
+        require_on_default_branch(repo.root, "acme/data", FakeGh(), runner)
+    assert refused.value.code == ExitCode.REFUSED
+
+
+def test_the_default_branch_is_read_for_the_repository_the_workflow_runs_in(
+    invoke, repo, monkeypatch
+):
+    # The shipped commit's own `vecten.toml` names a repository its author chose.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/upstream")
+    gh = use_gh(monkeypatch, FakeGh(statuses={repo.b: [DEV_OK]}))
+    invoke("ship", "--env", "prod", "--commit", repo.b, "--json")
+    viewed = [call[2] for call in gh.calls if call[:2] == ["repo", "view"]]
+    assert viewed[:1] == ["acme/upstream"]
 
 
 def test_the_first_environment_ships_a_given_commit_without_a_status_check(
@@ -253,6 +296,7 @@ def adopted(tmp_path, monkeypatch) -> Adopted:
         MockCloud(root, env).store_outputs(MockCloud.OUTPUTS)
     monkeypatch.chdir(root)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("VECTEN_GIT_RUNNER", raising=False)
     found = Adopted()
@@ -493,6 +537,7 @@ def test_ship_with_commit_from_the_laptop_is_usage(invoke, laptop, monkeypatch):
 def test_the_gate_without_env_reports_the_first_environment(invoke, laptop, tmp_path, monkeypatch):
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     r = invoke("ship", "--check", "--json")
     assert r.exit_code == 0, r.stdout
