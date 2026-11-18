@@ -52,8 +52,13 @@ Note: snowflake-shared-account tasks 3.3 and 3.4 give each environment its own S
 
 ## 8. Proven only on a real repository and two deployed environments
 
-- [ ] 8.1 A merge ships `dev` only and sets `vecten/ship/dev`
-- [ ] 8.2 `vecten promote --env prod` ships the same commit to `prod`, with the CLI version that commit pins, while `main` has moved on
-- [ ] 8.3 A dispatch naming a feature-branch commit, and one naming a commit `dev` never shipped, both fail before any host changes
+- [x] 8.1 A merge ships `dev` only and sets `vecten/ship/dev`
+  - Live, 0.1.1rc2 on AWS: a push shipped `dev` only and set `vecten/ship/dev`.
+- [x] 8.2 `vecten promote --env prod` ships the same commit to `prod`, with the CLI version that commit pins, while `main` has moved on
+  - Live, 0.1.1rc2 on AWS: with `main` a commit ahead, `promote` shipped the commit `dev` shipped, installing the CLI that commit pins.
+- [x] 8.3 A dispatch naming a feature-branch commit, and one naming a commit `dev` never shipped, both fail before any host changes
+  - Live, 0.1.1rc2 on AWS: a feature-branch commit (for `dev` and `prod`) and a `main` commit `dev` never shipped were each refused before any host changed.
 - [ ] 8.4 With required reviewers on `prod` (a public repository or GitHub Enterprise), the dispatched promotion waits for approval and then ships
-- [ ] 8.5 On a private repository without branch policies, the promotion still runs and its checks still refuse
+  - Not run live for 0.1.1: required reviewers on a private repository need GitHub Enterprise.
+- [x] 8.5 On a private repository without branch policies, the promotion still runs and its checks still refuse
+  - Live, 0.1.1rc2 on AWS: with `prod`'s branch policy lifted, a promotion ran, and a ref without the order, a feature commit and an unshipped commit were each refused.

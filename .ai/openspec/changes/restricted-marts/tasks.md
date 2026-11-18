@@ -7,9 +7,12 @@ ship before areas.
 
 - [x] 0.1 terraform: whether a `removed` block with `destroy = false` works in the fetched child module, or must sit in the thin root with a `module.` address; otherwise use the `terraform state rm` fallback of Decision 4
 - [ ] 0.2 live: which `SHOW TERSE OBJECTS` or `INFORMATION_SCHEMA.TABLES` value names a materialized view, a dynamic table, an external table and an Iceberg table
-- [ ] 0.3 live: `CREATE OR REPLACE … COPY GRANTS` keeps a per-object grant and skips the schema's future grants for a table, a view and a dynamic table; and whether dbt-snowflake 1.12 adds `COPY GRANTS` on `--full-refresh` of an incremental model
+  - Partly run live for 0.1.1 (rc2, AWS): table, view, dynamic table and Iceberg table named. A materialized view not run: the sandbox account is Standard edition, and materialized views need Enterprise. An external table needs a stage and was not tried.
+- [x] 0.3 live: `CREATE OR REPLACE … COPY GRANTS` keeps a per-object grant and skips the schema's future grants for a table, a view and a dynamic table; and whether dbt-snowflake 1.12 adds `COPY GRANTS` on `--full-refresh` of an incremental model
+  - Live: `COPY GRANTS` kept the per-object grant and skipped the future grants for a table, a view and a dynamic table. dbt-snowflake 1.12 emits `copy grants` when `copy_grants` is set, read from its macros.
 - [x] 0.4 unit: whether fakesnow 0.11 accepts `COPY GRANTS`
-- [ ] 0.5 live: an owner's-rights JavaScript procedure can run `SHOW GRANTS TO ROLE` and `SHOW FUTURE GRANTS IN SCHEMA` for a role it does not own
+- [x] 0.5 live: an owner's-rights JavaScript procedure can run `SHOW GRANTS TO ROLE` and `SHOW FUTURE GRANTS IN SCHEMA` for a role it does not own
+  - Live, 0.1.1rc2 on AWS: the owner's-rights procedure read both listings for a role it does not own.
 
 ## 1. One owner for the default grants; reconciliation converges
 
@@ -23,8 +26,10 @@ ship before areas.
 - [x] 1.8 `next` reports the provisioner-script rerun while the installed version is older. `--confirm-run` on Snowflake records `access_version` in the environment's facts and the run record; `next` reports `vecten mcp provisioner-script --env <env>` after deploy (platform and MCP-only) and in the MCP-only local loop while the recorded version is missing or below `ACCESS_VERSION`; `vecten update` needs no change, the comparison is against the installed CLI. Delta: `specs/cli/agent-guide`. Unit: `test_next_deploy`, `test_next_project`, `test_mcp_onboarding`
 - [x] 1.9 unit: setup SQL and script text for both warehouses with and without the MCP; reconciliation against a fake adapter (revoke of an undesired schema grant, untouched grant outside scope, report mode, revokes before grants); `READ_GRANTS` bounds
 - [x] 1.10 docker: Postgres stack: revoke `marts` from default, ship again, `analyst` holds nothing on `marts`; a hand grant in `marts` is revoked; a grant in another schema stays
-- [ ] 1.11 live: revoke `marts` from default, `deploy`, rerun the script, rebuild a mart: `ANALYST` cannot read it
-- [ ] 1.12 deploy: upgrade a sandbox deployed with the previous release: the plan revokes nothing; the first reconciliation's access health is as expected
+- [x] 1.11 live: revoke `marts` from default, `deploy`, rerun the script, rebuild a mart: `ANALYST` cannot read it
+  - Live, 0.1.1rc1: after the rerun and a rebuild, `ANALYST` could not read the mart.
+- [x] 1.12 deploy: upgrade a sandbox deployed with the previous release: the plan revokes nothing; the first reconciliation's access health is as expected
+  - Live, 0.1.1rc1: the plan revoked nothing; the first reconciliation listed the expected drift and revoked nothing.
 - [x] 1.13 Changelog: the upgrade steps and the warning about hand-made grants
 - [x] 1.14 `next` reports a deployed environment's post-deploy items after the local loop's items while those are outstanding, so the rerun of 1.8 reaches a clone that never ran the local stack; an environment not yet deployed still waits. Delta: `specs/cli/agent-guide`. Unit: `test_next_promotion`
 
@@ -35,7 +40,8 @@ ship before areas.
 - [x] 2.3 dbt DAG: write a finish time beside the built commit; the MCP reconciles when it changes (Postgres; harmless on Snowflake)
 - [x] 2.4 unit: scaffold render and update merge; the convention test's failures and names; the reconcile trigger
 - [x] 2.5 docker: Postgres dataset grant restored after a dbt rebuild, by the triggered reconciliation
-- [ ] 2.6 live: dataset grant on a mart survives `dbt build` on Snowflake with no reconciliation running
+- [x] 2.6 live: dataset grant on a mart survives `dbt build` on Snowflake with no reconciliation running
+  - Live, 0.1.1rc2 on AWS: the dataset grant survived `dbt build` with no reconciliation running.
 
 ## 3. Restricted areas
 
@@ -48,11 +54,15 @@ ship before areas.
 - [x] 3.7 `next`: `ask` for missing `access.groups`; post-deploy `command` item seeding the grant; report relations in convention schemas and areas that no model builds. The report is access health's, not `next`'s (Decision 12): the dbt DAG writes `platform/dbt/built_relations.json` after a full green build, the MCP host's bucket policy reads it, and reconciliation lists each relation in `core`, `marts` and declared areas the record lacks, with its `DROP`; `vecten issues` shows them. Snowflake lists through `READ_GRANTS` with no target, procedures version 6 (`GRANTS_VERSION` 5 keeps areas and drift). Unit: `test_dbt_dag_tasks`, `test_osi_revision`, `test_snowflake_access`, `test_warehouse_read_grants`, `test_access_unbuilt`, `test_issues_adapters`, `test_scaffold_render`; terraform: `scope.tftest.hcl` on both clouds
 - [x] 3.8 unit: config validation; convention tests on fixture projects (version-1 project passes, undeclared area fails, area mart becomes a dataset); MCP area grant translation; `next` items
 - [x] 3.9 docker: Postgres: area granted to `finance`, rebuilt mart readable by `finance` and refused for default, with no reconciliation in between
-- [ ] 3.10 live: the same on Snowflake, plus an area built before any grant is unreadable by every group role
+- [x] 3.10 live: the same on Snowflake, plus an area built before any grant is unreadable by every group role
+  - Live, 0.1.1rc2 on AWS: an area built before any grant was unreadable by every group role.
 - [ ] 3.11 deploy: declare an area, ship, grant, rebuild on a sandbox of each cloud
+  - Partly run live for 0.1.1 (rc2, AWS): declare, ship, grant and rebuild on AWS with Snowflake. Scaleway not run.
 - [x] 3.13 A marts-only area ([#94](https://github.com/vecten/vecten-open/issues/94)): an area grant covers the area schemas the warehouse finds and names the others, which reconciliation grants once found; the applied record keeps the granted schemas, and a revoke or rollback revokes only those. On a grant `READ_GRANT` answers `absent` when `INFORMATION_SCHEMA` does not list the schema to its owner; a revoke never does, so the access procedures are version 5. The Postgres adapter reads `pg_namespace` and `pg_class`, so a revoke on an object that is gone there is done. Unit: fake adapters, the adapters over recorded answers, the procedure under Node
-- [ ] 3.14 live: `vecten grant --area` on a Snowflake area with `MARTS_<AREA>` only; then dbt creates `CORE_<AREA>` and the next reconciliation grants it
+- [x] 3.14 live: `vecten grant --area` on a Snowflake area with `MARTS_<AREA>` only; then dbt creates `CORE_<AREA>` and the next reconciliation grants it
+  - Live, 0.1.1rc2 on AWS: `grant --area` waited for `core_<area>`, which the next reconciliation granted once dbt created it.
 - [ ] 3.15 live: `READ_GRANTS` with no target names a view, a materialized view, a dynamic table and an Iceberg table with the type its `DROP` takes, and lists the relations `LOADER` owns in `MARTS` and an area
+  - Partly run live for 0.1.1 (rc2, AWS): a view, a dynamic table, an Iceberg table and a table listed with the type their `DROP` takes, among the relations `LOADER` owns. A materialized view not run: the sandbox account is Standard edition, and materialized views need Enterprise.
 - [x] 3.16 docker: Postgres: a relation no model builds is listed once a full build is recorded, not after the admin drops it, and not after a later narrowed build (`test_postgres_default_grants_docker`)
 - [x] 3.12 Glossary: "Restricted area"; "Mart" covers `marts_<area>`
 
@@ -62,6 +72,7 @@ ship before areas.
 - [x] 4.2 `check_scope` and the Postgres adapter's relation lookup unchanged except where 4.1 needs
 - [x] 4.3 unit: generated statements per kind; refusal surfaced in access health
 - [ ] 4.4 live: a dynamic table and a materialized view in a granted schema are readable; a dataset grant on each works, and its revoke removes it (read back with `SHOW GRANTS TO ROLE`)
+  - Partly run live for 0.1.1 (rc2, AWS): a dynamic table. A materialized view not run: the sandbox account is Standard edition, and materialized views need Enterprise.
 
 ## 5. Group roles: chosen names and bound roles
 
@@ -73,8 +84,10 @@ ship before areas.
 - [x] 5.6 unit: name override and refusals; bind, confirm and unbind flows against fake adapters
 - [x] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it
 - [ ] 5.8 live: Snowflake bound role: a member reads through it; `SHOW GRANTS TO ROLE PROVISIONER` unchanged; the startup check passes
+  - Partly run live for 0.1.1 (rc2, AWS): binding, review query, no new provisioner grant, reconciliation leaves the role alone, the startup check passes. A member reading through the role not run.
 
 ## 6. Release checks
 
-- [ ] 6.1 deploy: full stage-1 and stage-2 migration rehearsal on a sandbox seeded like the client (revoked `marts`, post-hooks, per-mart grants), following design.md's migration plan to the letter
+- [x] 6.1 deploy: full stage-1 and stage-2 migration rehearsal on a sandbox seeded like the client (revoked `marts`, post-hooks, per-mart grants), following design.md's migration plan to the letter
+  - Live, 0.1.1rc1: both stages followed design.md's plan on a sandbox seeded like the client; findings are in the live-check results.
 - [x] 6.2 Runbook: the migration plan, the old-relation drop statements, the provisioner-script rerun (runbook "Upgrading this project" and "Moving restricted data into an area", following the 0.1.1rc1 rehearsal)

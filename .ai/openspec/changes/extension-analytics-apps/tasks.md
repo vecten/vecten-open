@@ -38,7 +38,9 @@ publishing is a later change with #40 (section 5).
 - [x] 4.1 New `docs/analytics-apps.md`: the group, the kinds, the binding, the data model (one view shared by every admitted viewer: the union of the admitted groups' roles; the row cap; the consistency check), the Streamlit recipe and an MCP client sketch, `app connect`
 - [x] 4.2 `docs/extensions.md` table row; `docs/admin-panel.md` Analytics screen; `docs/GLOSSARY.md` ("Analytics app", "App principal"); `CHANGELOG.md`
 - [ ] 4.3 **[deploy]** On AWS with a Snowflake warehouse and on Scaleway with Postgres: a Streamlit template app is shipped, `vecten deploy` creates its hostname, a member of its group opens it through the gate and sees data read as `svc_app_<app>`, a person outside it is refused, and the audit names the viewer
-- [ ] 4.4 **[deploy]** With #51's restricted area: a finance dashboard bound to `["finance", "default"]` admits finance members only and access health names `default`
+  - Partly run live for 0.1.1 (rc2, AWS): a container Streamlit app with Snowflake: hostname created, a member read through the gate as `svc_app_<app>` with only the admitted group's role, an outsider was refused, the audit names the viewer. Scaleway with Postgres not run.
+- [x] 4.4 **[deploy]** With #51's restricted area: a finance dashboard bound to `["finance", "default"]` admits finance members only and access health names `default`
+  - Live, 0.1.1rc2 on AWS: bound to `["finance", "default"]`, the app admitted `finance` only, access health named `default`; the area-grant path after the fix in #120.
 
 ## 5. Streamlit in Snowflake (later change, with #40)
 
@@ -49,5 +51,8 @@ publishing is a later change with #40 (section 5).
 ## 6. Proven only by a real deploy
 
 - [ ] 6.1 Task 4.3: end-to-end Streamlit template on both clouds
-- [ ] 6.2 Task 4.4: restricted area and admission
-- [ ] 6.3 The `snowflake_live` run of `packages/vecten-mcp/tests/test_app_sql_snowflake_live.py`: whether Snowflake's grammar itself refuses `LATERAL TABLE('<relation>')`, which the app SQL check refuses (written, not run: it needs the snowflake-live workflow's account)
+  - See 4.3: the AWS half ran, the Scaleway half did not.
+- [x] 6.2 Task 4.4: restricted area and admission
+  - See 4.4.
+- [x] 6.3 The `snowflake_live` run of `packages/vecten-mcp/tests/test_app_sql_snowflake_live.py`: whether Snowflake's grammar itself refuses `LATERAL TABLE('<relation>')`, which the app SQL check refuses (written, not run: it needs the snowflake-live workflow's account)
+  - `snowflake_live` run on `release/0.1.1`: Snowflake itself refuses `LATERAL TABLE('<relation>')`.

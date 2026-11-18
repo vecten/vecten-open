@@ -11,6 +11,7 @@ template can run on; B must land in the same release, before any public route re
 - [x] 1.1 Resolve a Streamlit app's dependencies (`streamlit`, `tornado`, `pyarrow`, `protobuf`) as the `platform` extra against the Airflow base image's installed set with #50's `vecten lock`; record the result in design.md (Decision 5 fallback if it conflicts)
 - [x] 1.2 Confirm the pinned Compose plugin honours `mem_limit`, `cpus` and a network's `com.docker.network.bridge.name` outside swarm
 - [ ] 1.3 Confirm `iptables -I DOCKER-USER -i <bridge> -d 169.254.169.254 -j DROP` blocks a container on that bridge and only it, on Amazon Linux 2023 and on the Scaleway Ubuntu image, and survives a Docker restart
+  - Partly run live for 0.1.1 (rc2, AWS): on Amazon Linux 2023 the rule blocks only the services bridge and survives a Docker restart. Scaleway Ubuntu not run.
 
 ## 2. Services core (PR A)
 
@@ -30,6 +31,7 @@ template can run on; B must land in the same release, before any public route re
 - [x] 3.3 Compose: no cloud key, `AIRFLOW_CONN_*` or published port on any service
 - [x] 3.4 Tests: agent unit tests with a fake runner (rule order before `compose up`, failure fails the step and recovers, legacy release starts without the step, masking); the existing byte-identity and Python 3.9 syntax checks; a Docker-tier test that a container on the services bridge cannot reach a fake metadata listener bound to the link-local address while a default-network container can
 - [ ] 3.5 **[deploy]** On AWS and on Scaleway, a service cannot obtain the instance role or the VM key, also while the VM reboots, and Airflow and the MCP server still read their secrets
+  - Partly run live for 0.1.1 (rc2, AWS): services cannot reach the instance metadata, also across a reboot (the guard unit runs before Docker), and mount no host key; Airflow and the MCP read their secrets. Scaleway not run.
 
 ## 4. Hostnames and public routes (PR C)
 
@@ -41,8 +43,11 @@ template can run on; B must land in the same release, before any public route re
 - [x] 4.6 `ship`: poll each service health URL after the component polls, report states (`--json` too), never roll back for a service; report waiting routes and orphaned volumes; `next` offers `vecten deploy --env <env>` for waiting hostnames
 - [x] 4.7 Tests: NGINX rendering (public, allow, websocket, body size, header clearing, health location, fallback); a Docker-tier test with a stub upstream that logs requests: forged `X-Vecten-*` headers never arrive, `POST` and an encoded path on the health location behave as specified, an unbound path is 404, a WebSocket upgrade passes; bundle tests for `host.json` hostnames with and without outputs
 - [ ] 4.8 **[deploy]** On AWS (standard) and on Scaleway (minimal): `vecten deploy` creates `portal.<domain>`, the next ship issues its certificate, the renewal timer's dry run (`certbot renew --dry-run`) covers it, and a public route answers over HTTPS
-- [ ] 4.9 **[deploy]** A ship from a GitHub-hosted runner reports a routed service's health while its route's `allow` excludes the runner
+  - Partly run live for 0.1.1 (rc2, AWS): record, certificate, renewal dry run and a public route over HTTPS on AWS. Scaleway not run.
+- [x] 4.9 **[deploy]** A ship from a GitHub-hosted runner reports a routed service's health while its route's `allow` excludes the runner
+  - Live, 0.1.1rc2 on AWS: the runner's ship reported the service healthy while a route's `allow` refused the runner's addresses.
 - [ ] 4.10 **[deploy]** Apex binding (`@`) on a domain below its zone, on both clouds
+  - Partly run live for 0.1.1 (rc2, AWS): an apex binding on a domain below its zone got its record, certificate and gate on AWS. Scaleway not run.
 - [x] 4.11 Review of #89, items 2 and 3: forward `Upgrade` only for `websocket` (services and Airflow); a declared route left unbound answers 404 under a bound route's path; unit and Docker-tier tests
 - [x] 4.12 Issue #91: service containers run with `cap_drop: [ALL]`, `no-new-privileges` and `pids_limit: 512`; a Docker-tier test reads them from the running service
 - [x] 4.13 A case variant of a declared route prefix (judged by the longest prefix matching without regard to case) answers 404 at the server's rewrite phase, through a per-hostname `map` on `$uri`; unit tests for nesting and case-only-different prefixes, Docker-tier test with written and percent-encoded variants
@@ -55,8 +60,10 @@ template can run on; B must land in the same release, before any public route re
 - [x] 5.4 NGINX: `auth_request` on `login` routes, `auth_request_set` into the five headers, 401 to `start`, 403 page; the verify upstream on the Compose network on the MCP's host and over verified HTTPS at `mcp.<domain>` elsewhere; gate paths proxied to the MCP
 - [x] 5.5 Tests: MCP unit tests for each refusal (unknown hostname, absolute return path, replayed code, code on another host, service principal, disabled person), live group change, password reset ending gate sessions; NGINX rendering of `login` routes; a Docker-tier end-to-end test on the laptop stack: sign in with the password backend, reach a stub service with correct headers, 403 outside groups, forged headers ignored, logout
 - [x] 5.5a Host-only browser cookies on `mcp.<domain>`: service hostnames sit beside it and can set domain-wide cookies, so the sign-in's, the browser session's, the form tokens' and the panel's and `/apps` page's cookies take `__Host-` names on HTTPS (`mcp/mcp-auth`, "Browser cookies on the MCP hostname are host-only"); a planted bare-named cookie binds nothing
-- [ ] 5.6 **[deploy]** Under `standard` on AWS, the platform VM's NGINX verifies against `https://mcp.<domain>` with the certificate checked; measure the added latency per request and record it in design.md
-- [ ] 5.7 **[deploy]** With the `oidc` backend against a real provider, one sign-in covers two service hostnames, and the provider needs no new redirect URI
+- [x] 5.6 **[deploy]** Under `standard` on AWS, the platform VM's NGINX verifies against `https://mcp.<domain>` with the certificate checked; measure the added latency per request and record it in design.md
+  - Live, 0.1.1rc2 on AWS: with the certificate checked to depth 5 (the fix in #120); about +5 ms per request, recorded in design.md.
+- [x] 5.7 **[deploy]** With the `oidc` backend against a real provider, one sign-in covers two service hostnames, and the provider needs no new redirect URI
+  - Live, 0.1.1rc2 on AWS: one Google sign-in covered three service hostnames; only the MCP's callbacks are registered.
 
 ## 6. Docs
 
@@ -74,9 +81,16 @@ template can run on; B must land in the same release, before any public route re
 ## 8. Proven only by a real deploy
 
 - [ ] 8.1 Task 3.5: no cloud identity in services, on both clouds
+  - See 3.5.
 - [ ] 8.2 Task 4.8: DNS record, certificate issue and renewal for a service hostname, on both clouds
-- [ ] 8.3 Task 4.9: service health polled from a runner outside the allow-list
+  - See 4.8.
+- [x] 8.3 Task 4.9: service health polled from a runner outside the allow-list
+  - See 4.9.
 - [ ] 8.4 Task 4.10: apex hostname
-- [ ] 8.5 Task 5.6: cross-VM verification and its latency
-- [ ] 8.6 Task 5.7: single sign-on across service hostnames with a real OIDC provider
+  - See 4.10.
+- [x] 8.5 Task 5.6: cross-VM verification and its latency
+  - See 5.6.
+- [x] 8.6 Task 5.7: single sign-on across service hostnames with a real OIDC provider
+  - See 5.7.
 - [ ] 8.7 A Teams bot template receives a Bot Framework message on its public route and posts a proactive message; a Slack bot verifies a signed Events API request
+  - Not run live for 0.1.1: optional, no bot app was available.

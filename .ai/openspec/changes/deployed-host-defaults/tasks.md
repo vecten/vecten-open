@@ -31,6 +31,9 @@
 
 ## 5. Proven only by a real deploy
 
-- [ ] 5.1 On AWS, a changed `root_volume_size_gb` grows the running VM's volume in place, and the guest file system takes the space after a reboot
+- [x] 5.1 On AWS, a changed `root_volume_size_gb` grows the running VM's volume in place, and the guest file system takes the space after a reboot
+  - Live, 0.1.1rc2 on AWS: 30 → 32 GiB grew both VMs' EBS volumes with the same instances; `/` took the space after a reboot.
 - [ ] 5.2 On Scaleway, a changed `root_volume_size_gb` on a DEV1 server and on a POP2 server: applied in place or by replacing the server
-- [ ] 5.3 A ship from a GitHub-hosted runner passes its health poll while `[airflow] allow` excludes the runner
+  - Not run live for 0.1.1: Scaleway was not part of the 0.1.1 checks.
+- [x] 5.3 A ship from a GitHub-hosted runner passes its health poll while `[airflow] allow` excludes the runner
+  - Live, 0.1.1rc2 on AWS: with `allow` set to a range no runner is in, the runner's ship passed; from outside, `/` → 403 and the health path → 200.
