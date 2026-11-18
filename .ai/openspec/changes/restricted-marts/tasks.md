@@ -7,7 +7,7 @@ ship before areas.
 
 - [x] 0.1 terraform: whether a `removed` block with `destroy = false` works in the fetched child module, or must sit in the thin root with a `module.` address; otherwise use the `terraform state rm` fallback of Decision 4
 - [ ] 0.2 live: which `SHOW TERSE OBJECTS` or `INFORMATION_SCHEMA.TABLES` value names a materialized view, a dynamic table, an external table and an Iceberg table
-  - Partly run live for 0.1.1 (rc2, AWS): table, view, dynamic table and Iceberg table named. Materialized views need Enterprise edition (Open supports Standard); an external table needs a stage and was not tried.
+  - Partly run live for 0.1.1 (rc2, AWS): table, view, dynamic table and Iceberg table named. A materialized view not run: the sandbox account is Standard edition, and materialized views need Enterprise. An external table needs a stage and was not tried.
 - [x] 0.3 live: `CREATE OR REPLACE … COPY GRANTS` keeps a per-object grant and skips the schema's future grants for a table, a view and a dynamic table; and whether dbt-snowflake 1.12 adds `COPY GRANTS` on `--full-refresh` of an incremental model
   - Live: `COPY GRANTS` kept the per-object grant and skipped the future grants for a table, a view and a dynamic table. dbt-snowflake 1.12 emits `copy grants` when `copy_grants` is set, read from its macros.
 - [x] 0.4 unit: whether fakesnow 0.11 accepts `COPY GRANTS`
@@ -61,8 +61,8 @@ ship before areas.
 - [x] 3.13 A marts-only area ([#94](https://github.com/vecten/vecten-open/issues/94)): an area grant covers the area schemas the warehouse finds and names the others, which reconciliation grants once found; the applied record keeps the granted schemas, and a revoke or rollback revokes only those. On a grant `READ_GRANT` answers `absent` when `INFORMATION_SCHEMA` does not list the schema to its owner; a revoke never does, so the access procedures are version 5. The Postgres adapter reads `pg_namespace` and `pg_class`, so a revoke on an object that is gone there is done. Unit: fake adapters, the adapters over recorded answers, the procedure under Node
 - [x] 3.14 live: `vecten grant --area` on a Snowflake area with `MARTS_<AREA>` only; then dbt creates `CORE_<AREA>` and the next reconciliation grants it
   - Live, 0.1.1rc2 on AWS: `grant --area` waited for `core_<area>`, which the next reconciliation granted once dbt created it.
-- [x] 3.15 live: `READ_GRANTS` with no target names a view, a materialized view, a dynamic table and an Iceberg table with the type its `DROP` takes, and lists the relations `LOADER` owns in `MARTS` and an area
-  - Live, 0.1.1rc2 on AWS: a view, a dynamic table, an Iceberg table and a table listed with the type their `DROP` takes, among the relations `LOADER` owns. Materialized views need Enterprise edition, which Open does not support.
+- [ ] 3.15 live: `READ_GRANTS` with no target names a view, a materialized view, a dynamic table and an Iceberg table with the type its `DROP` takes, and lists the relations `LOADER` owns in `MARTS` and an area
+  - Partly run live for 0.1.1 (rc2, AWS): a view, a dynamic table, an Iceberg table and a table listed with the type their `DROP` takes, among the relations `LOADER` owns. A materialized view not run: the sandbox account is Standard edition, and materialized views need Enterprise.
 - [x] 3.16 docker: Postgres: a relation no model builds is listed once a full build is recorded, not after the admin drops it, and not after a later narrowed build (`test_postgres_default_grants_docker`)
 - [x] 3.12 Glossary: "Restricted area"; "Mart" covers `marts_<area>`
 
@@ -71,8 +71,8 @@ ship before areas.
 - [x] 4.1 `snowflake_access.js`: per-kind `ALL`/`FUTURE` grants and revokes; single-relation kind from 0.2; `READ_GRANTS` covers the same kinds
 - [x] 4.2 `check_scope` and the Postgres adapter's relation lookup unchanged except where 4.1 needs
 - [x] 4.3 unit: generated statements per kind; refusal surfaced in access health
-- [x] 4.4 live: a dynamic table and a materialized view in a granted schema are readable; a dataset grant on each works, and its revoke removes it (read back with `SHOW GRANTS TO ROLE`)
-  - Live, 0.1.1rc2 on AWS: for a dynamic table. Materialized views need Enterprise edition, which Open does not support.
+- [ ] 4.4 live: a dynamic table and a materialized view in a granted schema are readable; a dataset grant on each works, and its revoke removes it (read back with `SHOW GRANTS TO ROLE`)
+  - Partly run live for 0.1.1 (rc2, AWS): a dynamic table. A materialized view not run: the sandbox account is Standard edition, and materialized views need Enterprise.
 
 ## 5. Group roles: chosen names and bound roles
 
