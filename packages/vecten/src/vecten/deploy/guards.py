@@ -52,6 +52,11 @@ def _git_failure(args: list[str], result: subprocess.CompletedProcess) -> Failur
     return Failure(ExitCode.TOOL_FAILED, message + (f": {tail}" if tail else ""))
 
 
+def branch_ref(branch: str) -> str:
+    """The full ref of `branch`: a bare name fetches a tag of that name first."""
+    return f"refs/heads/{branch}"
+
+
 def _git(git: ToolRunner, project_root: Path, *args: str) -> str:
     result = git.run(list(args), project_root)
     if result.returncode != 0:
@@ -71,7 +76,7 @@ def require_on_default_branch(
     """
     require_gh(gh, project_root)
     branch = default_branch(gh, project_root, repository)
-    _git(git, project_root, "fetch", "origin", branch)
+    _git(git, project_root, "fetch", "origin", branch_ref(branch))
     if _git(git, project_root, "status", "--porcelain", "--", *DEPLOY_FILES).strip():
         raise Failure(
             ExitCode.REFUSED,
@@ -107,7 +112,7 @@ def require_commit_on_default_branch(
     Every environment deploys from the default branch only, so a commit only a feature
     branch holds has not passed review.
     """
-    _git(git, project_root, "fetch", "origin", branch)
+    _git(git, project_root, "fetch", "origin", branch_ref(branch))
     require_commit_on_fetched_branch(project_root, git, branch, commit, "FETCH_HEAD")
 
 

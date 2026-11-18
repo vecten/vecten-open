@@ -371,6 +371,7 @@ def test_delete_data_naming_another_environment_is_usage(invoke, project, monkey
 
 def test_inside_actions_without_confirm_is_refused(invoke, project, monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(deploy_cmd, "_stdin_is_tty", lambda: True)
     r = invoke("destroy", "--env", "prod", "--json", input="prod\n")
     assert r.exit_code == 4
@@ -382,6 +383,7 @@ def test_inside_actions_with_confirm_destroys(invoke, project, monkeypatch):
     set_facts(project, **STATE_FACTS)
     with cloud(project, monkeypatch):
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
         r = invoke("destroy", "--env", "prod", "--confirm", "prod", "--json")
     assert r.exit_code == 0, r.stdout
     # CI never writes vecten.toml.

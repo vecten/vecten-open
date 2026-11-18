@@ -101,6 +101,7 @@ def test_check_reports_facts_without_credentials(invoke, no_cloud, tmp_path, mon
     out.write_text("earlier=1\n")
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     r = invoke("ship", "--env", "prod", "--check", "--json")
     assert r.exit_code == 0, r.stdout
     assert doc(r) == {"bootstrapped": False, "deployed": False, "ok": True}
@@ -345,6 +346,7 @@ def test_inside_actions_ships_without_terraform(invoke, project, monkeypatch):
     aws_credentials(monkeypatch, project)
     set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ssm = FakeSsm()
     with mock_aws():
@@ -448,6 +450,7 @@ def test_a_pending_snowflake_identity_ships_nothing_in_actions(
 ):
     aws_credentials(monkeypatch, snowflake_deployed)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ssm = FakeSsm()
     monkeypatch.setattr(clients, "client", lambda svc, region: ssm)
@@ -501,6 +504,7 @@ def test_a_shared_environment_whose_base_changed_ships_no_host_in_actions(
 ):
     aws_credentials(monkeypatch, snowflake_deployed)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ssm = FakeSsm()
     monkeypatch.setattr(clients, "client", lambda svc, region: ssm)
@@ -566,6 +570,7 @@ def test_check_names_what_services_reserve_on_each_host(invoke, no_cloud, tmp_pa
     out = tmp_path / "github_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     tool = {**BOT, "routes": {}, "components": ["mcp"], "memory_mb": 128, "cpus": 0.25}
     with_services(
         no_cloud,
@@ -622,6 +627,7 @@ def _ship_with_services(invoke, project, monkeypatch, answers, outputs=None):
     aws_credentials(monkeypatch, project)
     set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ssm = FakeSsm()
     with mock_aws():
@@ -679,6 +685,7 @@ def test_a_ship_without_services_reports_none(invoke, project, monkeypatch):
     aws_credentials(monkeypatch, project)
     set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     ssm = FakeSsm()
     with mock_aws():
@@ -709,6 +716,7 @@ def _ship_in_actions(invoke, project, monkeypatch, ssm, *extra):
     aws_credentials(monkeypatch, project)
     set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
     monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setenv("GITHUB_RUN_ID", "77")
@@ -832,6 +840,7 @@ def test_a_ship_skipped_for_a_pending_identity_sets_no_status(
 ):
     aws_credentials(monkeypatch, snowflake_deployed)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     monkeypatch.setattr(clients, "client", lambda svc, region: FakeSsm())
     r = invoke("ship", "--env", "prod", "--json")
@@ -846,6 +855,7 @@ def test_an_aws_ship_reports_the_volumes_each_agent_named(invoke, project, monke
     aws_credentials(monkeypatch, project)
     set_facts(project, bootstrapped=True, state_bucket=STATE_BUCKET, deployed_commit=COMMIT)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     stderr = (
         "vecten agent volume: acme-prod_svc-acme-old-data\n"

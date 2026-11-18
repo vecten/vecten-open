@@ -58,7 +58,6 @@ from vecten.deploy.guards import (
 from vecten.deploy.promotion import (
     FETCHED,
     CommitFiles,
-    checkout_repository,
     fetch_default_branch,
     fetched_commit,
     given_commit,
@@ -689,6 +688,15 @@ class ActionsView:
     warnings: list[str] = field(default_factory=list)
 
 
+def workflow_repository() -> str:
+    """The repository the workflow runs in. The checkout's `vecten.toml` is the shipped ref's,
+    which anyone who can push a branch or tag writes."""
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if not repository:
+        raise Failure(ExitCode.PREREQUISITE, "GITHUB_REPOSITORY is not set; run this in Actions")
+    return repository
+
+
 @contextmanager
 def actions_view(
     gh: ToolRunner | None, git: ToolRunner, project_root: Path, ref: str | None
@@ -708,7 +716,7 @@ def actions_view(
     checked_out = head_commit(git, project_root)
     commit = checked_out if ref is None else given_commit(git, project_root, ref)
     # Inside Actions GH_TOKEN authenticates gh; there is no login to check.
-    branch = default_branch(gh, project_root, checkout_repository(project_root))
+    branch = default_branch(gh, project_root, workflow_repository())
     fetch_default_branch(git, project_root, branch)
     head = fetched_commit(git, project_root)
     if commit == checked_out == head:

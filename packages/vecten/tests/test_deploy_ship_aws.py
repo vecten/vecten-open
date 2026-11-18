@@ -77,6 +77,7 @@ def env(tmp_path, monkeypatch):
         monkeypatch.setattr(ship_mod, "poll", polls)
         monkeypatch.setattr(ship_mod, "sleep", lambda seconds: None)
         monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
         yield type("Env", (), {"root": root, "ssm": ssm, "polls": polls})
 
 

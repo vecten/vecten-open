@@ -705,6 +705,7 @@ def test_inside_actions_missing_keys_name_the_workflow_secrets(monkeypatch):
     for name in ("SCW_ACCESS_KEY", "SCW_SECRET_KEY", "SCW_DEFAULT_ORGANIZATION_ID"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setattr(clients, "_from_config", lambda: {})
     with pytest.raises(Failure) as caught:
         clients.credentials(organization=False)

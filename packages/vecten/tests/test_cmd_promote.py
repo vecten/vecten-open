@@ -379,7 +379,7 @@ def test_promote_goes_on_from_this_checkout_when_the_fetch_fails(invoke, project
     [dispatch] = gh.named("workflow", "run")
     assert f"commit={SHIPPED}" in dispatch
     [warning] = doc(r)["warnings"]
-    assert "git fetch origin main" in warning and "this checkout" in warning
+    assert "git fetch origin refs/heads/main" in warning and "this checkout" in warning
 
 
 @pytest.mark.parametrize("command", ["promote", "deploy"])
