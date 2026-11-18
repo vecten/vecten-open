@@ -1,6 +1,7 @@
 import json
 import logging
 import subprocess
+from unittest import mock
 
 import pytest
 
@@ -76,6 +77,27 @@ def test_snowflake_emulation_accepts_copy_grants(tmp_path):
             "(select id from WAREHOUSE.MARTS.T)"
         )
         assert cur.execute("select id from WAREHOUSE.MARTS.V").fetchall() == [(2,)]
+
+
+def test_dbt_snowflake_is_fitted_to_the_emulation_only_inside_it(tmp_path):
+    from dbt.adapters.snowflake import SnowflakeAdapter
+    from dbt.contracts.graph.manifest import Manifest
+
+    hook = SnowflakeAdapter.pre_model_hook
+    find = Manifest.find_materialization_macro_by_name
+    asked = []
+
+    def record(manifest, project_name, materialization_name, adapter_type):
+        asked.append(materialization_name)
+
+    with mock.patch.object(Manifest, "find_materialization_macro_by_name", record):
+        with snowflake_emulation(tmp_path):
+            assert SnowflakeAdapter.pre_model_hook(None, {"snowflake_warehouse": "BIG_WH"}) is None
+            for name in ("dynamic_table", "table", "view"):
+                Manifest.find_materialization_macro_by_name(None, "acme", name, "snowflake")
+        assert asked == ["table", "table", "view"]
+    assert SnowflakeAdapter.pre_model_hook is hook
+    assert Manifest.find_materialization_macro_by_name is find
 
 
 def test_postgres_target_needs_docker(monkeypatch):

@@ -8,7 +8,7 @@ import pytest
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.base import Absent
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
 
 
 def full(grant):
@@ -182,14 +182,14 @@ def test_a_grant_missing_from_the_warehouse_is_listed_as_added():
 
 
 def test_an_older_procedure_keeps_grants_reconciling_and_names_the_script():
-    adapter = Adapter(held={("analyst", "usage", "staging", None)}, version=ACCESS_VERSION - 1)
+    adapter = Adapter(held={("analyst", "usage", "staging", None)}, version=GRANTS_VERSION - 1)
     access = service(adapter)
     result = access.reconcile()
     assert adapter.reads == []
     assert ("schema", "analyst", "core", True) in adapter.ops
     assert not [op for op in adapter.ops if not op[3]]
     health = access.health()
-    assert health["outdated"]["installed"] == ACCESS_VERSION - 1
+    assert health["outdated"]["installed"] == GRANTS_VERSION - 1
     assert health["outdated"]["required"] == ACCESS_VERSION
     assert "vecten mcp provisioner-script" in health["outdated"]["fix"]
     assert result["complete"]
@@ -272,7 +272,45 @@ def test_a_future_grant_the_procedure_cannot_revoke_stays_listed_as_drift():
     ]
     [failure] = result["failures"]
     assert failure["kind"] == "drift" and failure["target"] == "marts"
-    assert "still held" in failure["error"]
+    still = "still held after the revoke: FUTURE SELECT on dynamic tables in marts"
+    assert still in failure["error"]
+
+
+RELATION_KINDS = (
+    "table",
+    "view",
+    "materialized_view",
+    "dynamic_table",
+    "external_table",
+    "iceberg_table",
+)
+
+
+class EveryKind(Adapter):
+    """A schema-level revoke that, like READ_GRANT's, reaches every relation kind."""
+
+    def schema_grant(self, role, schema, grant=True):
+        super().schema_grant(role, schema, grant)
+        if not grant:
+            self.held = {g for g in self.held if not (g[0] == role and g[2] == schema)}
+
+
+def test_future_drift_on_each_relation_kind_is_listed_and_revoked_kind_by_kind(caplog):
+    adapter = EveryKind()
+    access = service(adapter)
+    access.revoke("default", "schema", "marts")
+    adapter.held |= {("analyst", "future", "marts", None, kind) for kind in RELATION_KINDS}
+    access.state.put("settings", "reconcile_drift", {"value": "report"})
+    with caplog.at_level(logging.INFO, logger="vecten_mcp.access"):
+        access.reconcile()
+    drift = access.health()["drift"]
+    assert sorted(d["object"] for d in drift) == sorted(RELATION_KINDS)
+    assert "FUTURE SELECT on views in marts" in caplog.text
+    access.state.put("settings", "reconcile_drift", {"value": "revoke"})
+    result = access.reconcile()
+    health = access.health()
+    assert result["failures"] == [] and health["drift"] == []
+    assert sorted(r["object"] for r in health["revoked"]) == sorted(RELATION_KINDS)
 
 
 def test_a_relation_that_cannot_be_revoked_does_not_stop_the_others():
@@ -377,7 +415,7 @@ def test_a_grant_of_an_unknown_kind_is_refused():
 
 
 def test_an_older_procedure_refuses_area_grants_and_names_the_script():
-    adapter = Adapter(version=ACCESS_VERSION - 1)
+    adapter = Adapter(version=GRANTS_VERSION - 1)
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     adapter.ops.clear()
@@ -388,7 +426,7 @@ def test_an_older_procedure_refuses_area_grants_and_names_the_script():
 
 
 def test_an_older_procedure_refuses_a_dataset_grant_on_an_area_mart():
-    adapter = Adapter(version=ACCESS_VERSION - 1)
+    adapter = Adapter(version=GRANTS_VERSION - 1)
     access = service(adapter, areas={"finance"})
     access.datasets = {"finance_revenue": "warehouse.marts_finance.finance_revenue"}
     access.create_group("finance")
@@ -403,7 +441,7 @@ def test_an_area_grant_recorded_before_the_script_rerun_waits_and_the_rest_recon
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     access.grant("finance", "area", "finance")
-    adapter.version = ACCESS_VERSION - 1
+    adapter.version = GRANTS_VERSION - 1
     adapter.ops.clear()
     result = access.reconcile()
     assert ("schema", "analyst", "core", True) in adapter.ops
@@ -707,7 +745,7 @@ def test_a_granted_schema_whose_revoke_fails_keeps_the_retry_record():
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     access.grant("finance", "area", "finance")
-    # The procedure's owner no longer sees core_finance: gone or only invisible, the revoke
+    # The procedure's owner cannot see core_finance: gone or only invisible, the revoke
     # it cannot make stays a failure.
     adapter.absent.add("core_finance")
     result = access.revoke("finance", "area", "finance")

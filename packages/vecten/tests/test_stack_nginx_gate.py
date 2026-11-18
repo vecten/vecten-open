@@ -106,6 +106,10 @@ def test_on_another_host_the_gate_is_reached_over_https_with_the_certificate_che
         assert "proxy_ssl_name mcp.data.acme.com;" in body
         assert "proxy_ssl_verify on;" in body
         assert "proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;" in body
+        # Let's Encrypt's chains reach a root in the image's bundle only through cross-signed
+        # intermediates (YE1, Root YE, ISRG Root X2), and NGINX checks one level by default.
+        depth = re.search(r"proxy_ssl_verify_depth (\d+);", body)
+        assert depth is not None and int(depth.group(1)) >= 4, key
 
 
 def test_on_the_laptop_the_gate_keeps_the_published_port_out_of_its_upstream():

@@ -64,7 +64,7 @@ The rendered dbt project SHALL build on both Postgres and Snowflake from the sam
 
 ### Requirement: Credential-free local build
 
-`vecten dbt-build-local` SHALL build and test the whole project with no warehouse credentials: against a disposable Postgres container for Postgres projects, and against a Snowflake emulation on DuckDB for Snowflake projects. dbt SHALL build against an empty Ossie directory, because `osi/datasets.json` is the build's output and not its input, in a database named after `[warehouse] database` (`warehouse` when unset) so the generated sources match the build. After a green build it SHALL run the shared generator, rewrite `osi/datasets.json` from the manifest and catalog, and check the root `osi/` with `dbt parse`, failing and naming the document dbt cannot parse. The disposable environment SHALL be removed afterwards, and the result SHALL be written as a record under `.vecten/` for `next` to read.
+`vecten dbt-build-local` SHALL build and test the whole project with no warehouse credentials: against a disposable Postgres container for Postgres projects, and against a Snowflake emulation on DuckDB for Snowflake projects. dbt SHALL build against an empty Ossie directory, because `osi/datasets.json` is the build's output and not its input, in a database named after `[warehouse] database` (`warehouse` when unset) so the generated sources match the build. After a green build it SHALL run the shared generator, rewrite `osi/datasets.json` from the manifest and catalog, and check the root `osi/` with `dbt parse`, failing and naming the document dbt cannot parse. The disposable environment SHALL be removed afterwards, and the result SHALL be written as a record under `.vecten/` for `next` to read. The emulation has one warehouse and no dynamic tables, so it SHALL build a `dynamic_table` model as a table of the same name and ignore a model's `snowflake_warehouse`; the build Airflow runs on Snowflake is unaffected.
 
 #### Scenario: Postgres project on a laptop
 
@@ -75,6 +75,12 @@ The rendered dbt project SHALL build on both Postgres and Snowflake from the sam
 
 - **WHEN** `dbt-build-local` is run in a Snowflake project with no Snowflake credentials
 - **THEN** the project builds and tests against the DuckDB-backed emulation
+
+#### Scenario: Dynamic table on its own warehouse
+
+- **WHEN** a Snowflake mart is materialized as `dynamic_table` with `target_lag` and `snowflake_warehouse` set, and `dbt-build-local` is run
+- **THEN** the emulation builds and tests the mart as a table and the build passes
+- **AND** `osi/datasets.json` names the mart as it is named on Snowflake
 
 #### Scenario: Convention test failure
 

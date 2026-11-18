@@ -296,6 +296,19 @@ def test_snowflake_script_opens_with_the_privilege_its_future_grants_need():
     assert "ACCOUNTADMIN" in first and "MANAGE GRANTS" in first
 
 
+def test_snowflake_script_selects_its_warehouse_before_any_statement():
+    # SHOW ... RESULT_SCAN needs a warehouse, which an administrator's session may lack.
+    sql = provisioner_script(
+        "snowflake", issuer="https://mcp.example", names=names("ANALYTICS", "ANALYTICS_WH")
+    )
+    statements = [line for line in sql.splitlines() if line and not line.startswith("--")]
+    assert statements[0] == 'USE WAREHOUSE "ANALYTICS_WH";'
+    assert sql.index("USE WAREHOUSE") < sql.index("RESULT_SCAN(")
+
+
+DROP_COLUMN = '"drop only after a destroy without a state restore"'
+
+
 def test_snowflake_script_ends_with_the_leftover_drops():
     sql = provisioner_script(
         "snowflake", issuer="https://mcp.example", names=names("ANALYTICS", "ANALYTICS_WH")
@@ -303,12 +316,14 @@ def test_snowflake_script_ends_with_the_leftover_drops():
     statements = [line for line in sql.strip().splitlines() if not line.startswith("--")]
     assert statements[-3:] == [
         "SHOW GRANTS TO ROLE PROVISIONER;",
-        "SELECT 'DROP ' || \"granted_on\" || ' \"' || \"name\" || '\";' AS leftover",
+        f"SELECT 'DROP ' || \"granted_on\" || ' \"' || \"name\" || '\";' AS {DROP_COLUMN}",
         "FROM TABLE(RESULT_SCAN(LAST_QUERY_ID())) WHERE \"privilege\" = 'OWNERSHIP' AND "
         "(\"granted_on\" = 'USER' OR (\"granted_on\" = 'ROLE' AND \"name\" <> 'ANALYST'));",
     ]
     comment = sql[sql.index("SHOW GRANTS TO ROLE PROVISIONER") - 400 :]
     assert "state" in comment and "snapshot" in comment
+    # A group role of a running environment is the MCP's own: the result names when to drop.
+    assert "keep them" in comment
 
 
 def test_snowflake_script_prints_revokes_for_grants_outside_its_database():
@@ -323,7 +338,7 @@ def test_snowflake_script_prints_revokes_for_grants_outside_its_database():
     assert "NOT STARTSWITH(\"name\", 'ANALYTICS.')" in block
     assert "\"name\" <> 'ANALYTICS'" in block and "\"name\" <> 'ANALYTICS_WH'" in block
     assert "GRANT OWNERSHIP" in block and "REVOKE CURRENT GRANTS" in block
-    assert sql.index("AS leftover_grant") < sql.index("AS leftover\n")
+    assert sql.index("AS leftover_grant") < sql.index(f"AS {DROP_COLUMN}")
 
 
 def test_snowflake_script_rerun_points_the_integration_at_this_deployment():
@@ -513,6 +528,35 @@ def test_confirming_the_platform_script_records_it_and_writes_no_key(platform_sn
     assert KeyStore.written == []
 
 
+def test_a_confirmed_snowflake_script_records_the_access_version_it_installed(
+    platform_snowflake,
+):
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.config import load_config
+    from vecten_shared.identity_setup import ACCESS_VERSION
+    from vecten_shared.records import read_record
+
+    setup_script(platform_snowflake, "prod", confirm=True)
+    facts = load_config(platform_snowflake).environments["prod"]
+    assert facts.access_version == ACCESS_VERSION
+    record = read_record(platform_snowflake, "provisioner-prod")
+    assert record["confirmed"] and record["access_version"] == ACCESS_VERSION
+
+
+def test_a_confirmed_postgres_script_records_no_access_version(tmp_path):
+    # The Postgres helpers carry no version; only Snowflake's procedures report one.
+    from vecten.mcp_onboarding import setup_script
+    from vecten_shared.config import load_config
+
+    from .test_next_deploy import render_mcp_only_deploy
+    from .test_next_project import POSTGRES_URL
+
+    root = render_mcp_only_deploy(tmp_path, POSTGRES_URL)
+    setup_script(root, "prod", confirm=True)
+    facts = load_config(root).environments["prod"]
+    assert facts.provisioner_script_run and facts.access_version is None
+
+
 @pytest.mark.parametrize(("env", "public_key"), [("local", None), ("prod", "AAAA")])
 def test_platform_script_needs_an_env_and_makes_its_own_key(platform_snowflake, env, public_key):
     from vecten.mcp_onboarding import setup_script
@@ -621,6 +665,29 @@ def test_a_given_public_key_wins_and_nothing_is_generated(existing_snowflake):
     with pytest.raises(Failure):
         _local(existing_snowflake, "MCP_PROVISIONER_PRIVATE_KEY")
     assert result["commands"][1] == "vecten secret set MCP_PROVISIONER_PRIVATE_KEY --env prod"
+
+
+def _first_statement(sql):
+    return next(line for line in sql.splitlines() if line and not line.startswith("--"))
+
+
+def test_existing_snowflake_script_selects_the_environments_warehouse(existing_snowflake):
+    from vecten.mcp_onboarding import setup_script
+
+    sql = setup_script(existing_snowflake, "prod")["sql"]
+    assert _first_statement(sql) == 'USE WAREHOUSE "ACME_PROD_WH";'
+
+
+def test_platform_scripts_select_the_environments_warehouse(platform_snowflake):
+    from vecten.mcp_onboarding import setup_script
+
+    assert _first_statement(setup_script(platform_snowflake, "prod")["sql"]) == (
+        'USE WAREHOUSE "ACME_PROD_WH";'
+    )
+    _shared_dev(platform_snowflake)
+    shared = setup_script(platform_snowflake, "dev")["sql"]
+    assert _first_statement(shared) == 'USE WAREHOUSE "ACME_DEV_WH";'
+    assert shared.index("USE WAREHOUSE") < shared.index("RESULT_SCAN(")
 
 
 def test_confirming_the_existing_snowflake_script_generates_nothing(existing_snowflake):

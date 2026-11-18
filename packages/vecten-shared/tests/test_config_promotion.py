@@ -122,6 +122,11 @@ def test_the_scaffold_problem_names_vecten_update_for_an_older_scaffold():
     assert problem is not None and "vecten update" in problem and "0.1.0" in problem
 
 
+def test_a_candidate_of_the_first_release_with_promotion_carries_an_order():
+    assert promotion_scaffold_problem(_config(["dev", "prod"], version="0.1.1rc1")) is None
+    assert promotion_scaffold_problem(_config(["dev", "prod"], version="0.1.0rc21")) is not None
+
+
 def test_save_refuses_to_write_an_order_under_an_older_scaffold(tmp_path):
     _write(tmp_path, version="0.1.0")
     before = (tmp_path / "vecten.toml").read_text()

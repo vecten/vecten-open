@@ -505,6 +505,7 @@ DRIFT = {
     "group": "default",
     "role": "analyst",
     "privilege": "FUTURE SELECT",
+    "object": "table",
     "schema": "marts",
     "relation": None,
 }
@@ -512,15 +513,32 @@ DRIFT = {
 
 def test_drift_listed_in_report_mode_is_an_issue_per_grant():
     table = {**DRIFT, "privilege": "SELECT", "relation": "payroll"}
-    health = {"checked_at": 1792627200, "failures": [], "drift": [DRIFT, table]}
+    usage = {**DRIFT, "privilege": "USAGE", "object": "schema"}
+    health = {"checked_at": 1792627200, "failures": [], "drift": [DRIFT, table, usage]}
     issues = mcp_issues(context([], admin=admin_with(access_health=health)))
     assert [i.id for i in issues] == [
-        "iss_mcp_drift_analyst_FUTURE-SELECT_marts",
+        "iss_mcp_drift_analyst_FUTURE-SELECT_marts_table",
         "iss_mcp_drift_analyst_SELECT_marts_payroll",
+        "iss_mcp_drift_analyst_USAGE_marts",
     ]
-    assert issues[0].title == "default's role analyst holds FUTURE SELECT on marts"
+    assert issues[0].title == "default's role analyst holds FUTURE SELECT on tables in marts"
     assert "reconcile_drift" in issues[0].resolution and "revoke" in issues[0].resolution
     assert issues[1].evidence["relation"] == "payroll"
+    assert issues[2].title == "default's role analyst holds USAGE on marts"
+
+
+def test_future_drift_on_each_relation_kind_is_its_own_issue():
+    kinds = ["table", "view", "dynamic_table", "external_table", "iceberg_table"]
+    kinds.append("materialized_view")
+    drift = [{**DRIFT, "object": kind} for kind in kinds]
+    health = {"checked_at": 1792627200, "failures": [], "drift": drift}
+    ctx = context([], admin=admin_with(access_health=health))
+    issues = mcp_issues(ctx)
+    assert len({i.id for i in issues}) == len(kinds)
+    view = find(ctx, "iss_mcp_drift_analyst_FUTURE-SELECT_marts_view")
+    assert view.title == "default's role analyst holds FUTURE SELECT on views in marts"
+    assert view.evidence["object"] == "view"
+    assert issues[-1].title.endswith("FUTURE SELECT on materialized views in marts")
 
 
 def test_a_failed_read_of_a_roles_grants_names_the_read():
@@ -725,3 +743,71 @@ def test_a_role_nested_under_a_group_role_without_a_binding_is_an_issue():
     assert issue.id == "iss_mcp_nested_finance_SYSADMIN"
     assert issue.title == "finance's role holds SYSADMIN, which no confirmed binding names"
     assert "REVOKE" in issue.resolution and "vecten group bind finance" in issue.resolution
+
+
+UNBUILT = {
+    "schema": "MARTS",
+    "relation": "FINANCE_REVENUE",
+    "kind": "TABLE",
+    "statement": 'DROP TABLE "D"."MARTS"."FINANCE_REVENUE";',
+}
+
+
+def test_a_relation_no_model_builds_is_an_issue_giving_the_statement_that_drops_it():
+    other = {
+        **UNBUILT,
+        "relation": "OLD_V",
+        "kind": "VIEW",
+        "statement": 'DROP VIEW "MARTS"."OLD_V";',
+    }
+    health = {"checked_at": 1792627200, "failures": [], "unbuilt": [UNBUILT, other]}
+    first, second = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert first.id == "iss_mcp_unbuilt_MARTS_FINANCE_REVENUE"
+    assert second.id == "iss_mcp_unbuilt_MARTS_OLD_V"
+    assert first.kind == "ask"
+    assert first.title == "MARTS.FINANCE_REVENUE is a table no model builds"
+    assert 'DROP TABLE "D"."MARTS"."FINANCE_REVENUE";' in first.resolution
+    assert "vecten reconcile --env prod" in first.resolution
+    assert 'DROP VIEW "MARTS"."OLD_V";' in second.resolution
+    assert first.evidence["untrusted"] is True
+    assert first.evidence["statement"] == UNBUILT["statement"]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        'DROP TABLE "D"."MARTS"."X"; GRANT ROLE SYSADMIN TO USER "EVE";',
+        'DROP VIEW "D"."MARTS"."FINANCE_REVENUE";',
+        "drop everything in MARTS",
+    ],
+)
+def test_a_statement_that_is_no_single_drop_of_the_relations_kind_is_not_given(statement):
+    health = {
+        "checked_at": 1792627200,
+        "failures": [],
+        "unbuilt": [{**UNBUILT, "statement": statement}],
+    }
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert statement not in issue.resolution
+    assert "DROP TABLE" in issue.resolution
+
+
+def test_a_failed_listing_of_the_relations_no_model_builds_is_one_issue():
+    error = "ProgrammingError 3001: Insufficient privileges to operate on procedure READ_GRANTS"
+    health = {"checked_at": 1792627200, "failures": [], "unbuilt": [], "unbuilt_error": error}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert issue.id == "iss_mcp_unbuilt_listing"
+    assert issue.kind == "ask"
+    assert issue.title == "Listing the relations no model builds failed"
+    assert "Insufficient privileges" in issue.evidence["error"]
+
+
+def test_procedures_that_serve_areas_name_only_the_listing_as_waiting():
+    from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+
+    outdated = {"installed": GRANTS_VERSION, "required": ACCESS_VERSION, "fix": "rerun"}
+    health = {"checked_at": 1792627200, "failures": [], "outdated": outdated}
+    [issue] = mcp_issues(context([], admin=admin_with(access_health=health)))
+    assert "no model builds" in issue.resolution
+    assert "Area grants wait" not in issue.resolution
+    assert "vecten mcp provisioner-script --env prod" in issue.resolution

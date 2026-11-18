@@ -68,10 +68,10 @@ def test_snowflake_version_is_what_read_grant_reports_with_every_argument_null()
 
 
 def test_a_snowflake_install_of_the_previous_release_is_older_than_this_server():
-    # Versions 2 to 4 were installed by builds before this procedure text: version 2
-    # refuses area schemas, version 3 counts a refused revoke as done, and version 4 fails on
-    # a schema that does not exist.
-    for installed in (2, 3, 4):
+    # Versions 2 to 5 were installed by builds before this procedure text: version 2
+    # refuses area schemas, version 3 counts a refused revoke as done, version 4 fails on a
+    # schema that does not exist, and version 5 cannot list the modelled relations.
+    for installed in (2, 3, 4, 5):
         adapter, _ = snowflake(lambda sql, params, v=installed: f"vecten-access {v}")
         assert adapter.access_version() == installed < ACCESS_VERSION
 
@@ -286,3 +286,60 @@ def test_snowflake_schema_grant_returns_the_kinds_read_grant_reports_refused():
     adapter, _ = snowflake(lambda sql, params: "ok")
     assert adapter.schema_grant("finance", "marts") == []
     assert adapter.dataset_grant("finance", "D.MARTS.ORDERS") == []
+
+
+def test_snowflake_relations_are_what_read_grants_lists_with_no_target():
+    listing = {
+        "version": ACCESS_VERSION,
+        "relations": [
+            {"schema": "MARTS", "name": "ORDERS", "kind": "TABLE"},
+            {"schema": "MARTS_FINANCE", "name": "Live", "kind": "DYNAMIC TABLE"},
+        ],
+    }
+    adapter, connection = snowflake(lambda sql, params: json.dumps(listing))
+    assert adapter.relations() == {
+        ("MARTS", "ORDERS", "TABLE"),
+        ("MARTS_FINANCE", "Live", "DYNAMIC TABLE"),
+    }
+    assert connection.calls == [('CALL "D"."VECTEN_ACCESS".READ_GRANTS(NULL)', None)]
+
+
+def test_snowflake_drop_statement_names_the_object_type_and_the_names_as_stored():
+    adapter, _ = snowflake(lambda sql, params: None)
+    assert (
+        adapter.drop_statement("MARTS", "FINANCE_REVENUE", "TABLE")
+        == 'DROP TABLE "D"."MARTS"."FINANCE_REVENUE";'
+    )
+    assert (
+        adapter.drop_statement("MARTS_FINANCE", 'Mixed"Case', "DYNAMIC TABLE")
+        == 'DROP DYNAMIC TABLE "D"."MARTS_FINANCE"."Mixed""Case";'
+    )
+    with pytest.raises(ValueError, match="FOREIGN TABLE"):
+        adapter.drop_statement("MARTS", "X", "FOREIGN TABLE")
+
+
+def test_postgres_relations_are_the_modelled_schemas_relations_in_pg_class():
+    rows = [("marts", "orders", "TABLE"), ("core_finance", "invoice", "VIEW")]
+    connection = PostgresConnection(rows)
+    adapter = PostgresAdapter(lambda: connection, None)
+    assert adapter.relations() == set(rows)
+    [(statement, params)] = connection.statements
+    assert params is None
+    assert "pg_catalog.pg_class" in statement and "NOT c.relispartition" in statement
+    assert "relkind IN ('r','p','v','m','f')" in statement
+    assert "n.nspname IN ('core','marts')" in statement
+    assert "n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$'" in statement
+
+
+def test_postgres_drop_statement_names_the_object_type_and_the_names_as_stored():
+    adapter = PostgresAdapter(None, None)
+    assert (
+        adapter.drop_statement("marts", "orders", "MATERIALIZED VIEW")
+        == 'DROP MATERIALIZED VIEW "marts"."orders";'
+    )
+    assert (
+        adapter.drop_statement("core", 'odd"name', "FOREIGN TABLE")
+        == 'DROP FOREIGN TABLE "core"."odd""name";'
+    )
+    with pytest.raises(ValueError, match="DYNAMIC TABLE"):
+        adapter.drop_statement("marts", "x", "DYNAMIC TABLE")

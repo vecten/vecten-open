@@ -156,6 +156,19 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   4: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, grants that reach an area
   are refused and drift is neither listed nor revoked, while every other grant keeps
   reconciling ([#51](https://github.com/vecten/vecten-open/issues/51)).
+- Relations no model builds are reported. dbt does not drop a relation it stops building, so
+  a mart moved into an area leaves its old copy in `marts`, readable by every group that reads
+  `marts`. After a green build that leaves no node out, the dbt DAG writes the relations its
+  models, snapshots and seeds build to `platform/dbt/built_relations.json`, and each
+  reconciliation lists in access health every relation in `core`, `marts` and the declared
+  areas' schemas that the record does not name, with its kind and the `DROP` statement for it;
+  `vecten issues` shows each as an `ask` issue. The MCP drops nothing. It lists none before
+  such a build, or after a narrowed or red build until the next full one. On Snowflake the
+  list comes from `READ_GRANTS` called with no target, and the access procedures are version
+  6: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` the listing waits,
+  while area grants and drift keep working with version 5, and `vecten next` and
+  `vecten issues` name the rerun. `vecten deploy` gives the MCP host read access to the new
+  record on AWS and Scaleway ([#51](https://github.com/vecten/vecten-open/issues/51)).
 - Read grants on Snowflake cover every relation kind a mart can be: a schema or area grant
   grants and revokes `SELECT` on all and future tables, views, materialized views, dynamic
   tables, external tables and Iceberg tables, and a dataset grant names its relation's kind,
@@ -227,8 +240,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   nothing); then an ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and the
   run is confirmed with `--confirm-run`, which installs `VECTEN_ACCESS.READ_GRANTS` and the new
   `READ_GRANT`. Until then the MCP keeps applying grants but reads no drift, and
-  `vecten issues` names the step. Postgres deployments need nothing beyond the next ship, and
-  an existing Postgres warehouse needs no rerun; there the drift report starts at once.
+  `vecten issues` and `vecten next` name the step: the confirmation records the procedures'
+  version under `[environments.<env>] access_version`, and a run confirmed by an earlier
+  release, which recorded none, counts as older. Postgres deployments need nothing beyond the
+  next ship, and an existing Postgres warehouse needs no rerun; there the drift report starts
+  at once.
 
   **Before upgrading**, remove every dbt `grants:` config and granting post-hook from the
   dbt project, and override any a dbt package sets with `+grants: {}` under the package's name
@@ -275,6 +291,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Fixed
 
+- `next` reports a deployed environment's items (the MCP's identity, the provisioner-script
+  rerun, users, access grants, the connection) after the local loop's items while those are
+  outstanding, where it reported none of them before the local loop was clear. An environment
+  not yet deployed still waits for the local loop.
+
 - `--env <env>` commands that reach or name the MCP (`vecten login`, `user`, `group`, `grant`,
   `issues`, `mcp admin-link`, `mcp connection`, `mcp provisioner-script` and the sign-in items
   of `next`) use the environment's own domain from `deploy/envs/<env>.tfvars`, not prod's
@@ -282,6 +303,30 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - A sync DAG no longer publishes its asset when an object failed, so `dbt_build` no longer
   builds on a partial sync. The asset now follows the `check` task, and existing DAG files
   pick this up unchanged.
+- Drift on future `SELECT` grants is one `vecten issues` entry per object kind: a role holding
+  future `SELECT` on tables and on views in one schema gets two issues, titled as in
+  `FUTURE SELECT on views in marts`, where both shared one id before. The id ends in the kind
+  (`iss_mcp_drift_analyst_FUTURE-SELECT_marts_table`), and `issues show` lists it as
+  `object`. The MCP's log and revoke failures name the kind the same way.
+- `vecten dbt-build-local` builds a Snowflake project whose models set `snowflake_warehouse` or
+  are materialized as `dynamic_table`. The emulation has one warehouse, so no model switches
+  warehouse, and it builds a dynamic table as a table of the same name; `osi/datasets.json`
+  names it as on Snowflake. The build on Snowflake is unchanged.
+- The Snowflake script of `vecten mcp provisioner-script` selects the environment's warehouse
+  first, so an ACCOUNTADMIN whose session has no default warehouse runs it to the end; its
+  checks stopped with error 000606 before. Its last query prints the `DROP` for each user and
+  role the provisioner owns under the column `drop only after a destroy without a state
+  restore`: on a running environment they are the MCP's group roles and users, to keep.
+- `vecten deploy` runs the Snowflake root's Terraform on the environment's warehouse, so the
+  first deploy of an environment in a shared account completes when the deploy user has no
+  default warehouse. It stopped with error 000606 reading back the loader's sign-in policy,
+  after setting it on the user.
+- A service's `login` routes and an analytics app on a host without the MCP admit people: NGINX
+  verifies the MCP's certificate through the cross-signed certificates Let's Encrypt's chains
+  reach the bundled roots by. It checked one level, refused the chain and answered 500.
+- An analytics app admits a group through a restricted-area grant (`vecten grant --area`), on
+  the area's schemas the warehouse granted in full. Only dataset and schema grants counted, so
+  an app over an area admitted none of the area's groups.
 
 ## [0.1.0] - 2026-11-09
 

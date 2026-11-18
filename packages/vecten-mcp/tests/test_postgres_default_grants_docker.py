@@ -202,3 +202,37 @@ def test_a_dataset_grant_dropped_by_a_rebuild_returns_once_the_build_is_recorded
     runtime.tick()
     assert sales_reads_orders(stack)
     assert analyst_reads(stack, "marts")["tables"] == []
+
+
+def test_a_relation_no_model_builds_is_listed_until_dropped_once_a_full_build_is_recorded(stack):
+    from vecten_platform.dbt.artifacts import BUILD_FINISHED_KEY, BUILT_RELATIONS_KEY, DirectorySink
+
+    sink = DirectorySink(Path(stack.root) / "artifacts")
+    stack.pg.sql(
+        "CREATE VIEW marts.old_orders AS SELECT * FROM marts.orders; "
+        "CREATE VIEW staging.staging_old AS SELECT 1 AS one",
+        user="loader",
+    )
+    assert reconcile(stack)["unbuilt"] == []
+    made = [("core", "customers"), ("marts", "orders"), ("marts", "rebuilt")]
+    relations = [
+        {"database": "warehouse", "schema": s, "name": n, "kind": "table"} for s, n in made
+    ]
+    record = {"finished_at": "2026-11-17T09:00:00+00:00", "relations": relations}
+    sink.put_text(BUILT_RELATIONS_KEY, json.dumps(record) + "\n")
+    sink.put_text(BUILD_FINISHED_KEY, "2026-11-17T09:00:00+00:00\n")
+    health = reconcile(stack)
+    assert health["unbuilt"] == [
+        {
+            "schema": "marts",
+            "relation": "old_orders",
+            "kind": "VIEW",
+            "statement": 'DROP VIEW "marts"."old_orders";',
+        }
+    ]
+    stack.pg.sql(health["unbuilt"][0]["statement"], user="loader")
+    assert reconcile(stack)["unbuilt"] == []
+    # A narrowed build after the record may have made relations it lacks.
+    stack.pg.sql("CREATE TABLE marts.new_mart (id int)", user="loader")
+    sink.put_text(BUILD_FINISHED_KEY, "2026-11-17T10:00:00+00:00\n")
+    assert reconcile(stack)["unbuilt"] == []

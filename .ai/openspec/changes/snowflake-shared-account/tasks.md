@@ -32,6 +32,7 @@
 - [x] 4.3 `SnowflakeAdapter` appends the suffix when it names users and roles, strips it from `SHOW GRANTS` before registry lookups, sets the authentication policy on every user it creates, and refuses adoption in a shared account
 - [x] 4.4 `check_scope` accepts `APPLY` on the environment's policy and nothing of another environment
 - [x] 4.5 Tests: the script's statements for fixed and shared layouts (no fixed name in the shared script); `READ_GRANT` refusals; adapter names, adoption refusal and scope check against a mocked connector
+- [x] 4.6 The script, in both layouts and on every path, selects the environment's warehouse before its first statement, since its `RESULT_SCAN` checks need one and an ACCOUNTADMIN session may have none (0.1.1rc1 live check: error 000606); the owned users and roles print under a column that names when to drop them, since on a running environment they are the MCP's group roles
 
 ## 5. The semantic model's database
 
@@ -67,3 +68,4 @@
 - [ ] 9.8 `SHOW GRANTS TO ROLE` names the provisioner's grant on the sign-in policy with `granted_on = AUTHENTICATION_POLICY` and the name `<DB>.VECTEN_ACCESS.MCP_SIGN_IN`, as `SnowflakeAdapter.check_scope` expects
 - [ ] 9.9 The shared provisioner script runs as one `EXECUTE IMMEDIATE` block: `SHOW` with `RESULT_SCAN`, `CREATE SECURITY INTEGRATION`, single-quoted procedure bodies, `UNSET RSA_PUBLIC_KEY_2` and `UNSET PASSWORD` on a service user, and the `UNSET`/`SET AUTHENTICATION POLICY` pair on a rerun; a squatted role, user or integration (another owner or comment) stops it before any change; so do a stranger holding the provisioner or analyst role (`SHOW GRANTS OF ROLE`, the correlated `RESULT_SCAN` over the provisioner's ownerships) and an access schema or sign-in policy another role owns; `EXECUTE IMMEDIATE :blocked` sets `EXTERNAL_OAUTH_BLOCKED_ROLES_LIST` to SYSADMIN and the deploy role while the privileged roles stay blocked
 - [ ] 9.10 The deploy role can create the loader's authentication policy and set it on the loader user it owns (the Snowflake root's `snowflake_user_authentication_policy_attachment`)
+- [ ] 9.11 The fixed and the shared script each run with `snow sql -f` as an ACCOUNTADMIN with no default warehouse, to the end

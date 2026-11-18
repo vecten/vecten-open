@@ -397,6 +397,7 @@ def test_snowflake_terraform_authenticates_from_the_deploy_secrets(
             "SNOWFLAKE_AUTHENTICATOR": "SNOWFLAKE_JWT",
             "SNOWFLAKE_PRIVATE_KEY": DEPLOY_KEY_VALUE,
             "SNOWFLAKE_CONFIG_PATH": NO_CONFIG_FILE,
+            "SNOWFLAKE_WAREHOUSE": "ACME_PROD_WH",
         }, args[0]
     for _, env in _calls_in("aws"):
         assert env is None

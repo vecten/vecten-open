@@ -161,6 +161,33 @@ def test_only_a_postgres_platform_watches_the_build_record():
     assert build_watch(config("postgres", ["mcp"])) is None
 
 
+def test_only_a_project_with_the_dbt_dag_reads_the_built_relations(tmp_path):
+    import json
+
+    from vecten_mcp.runtime_setup import built_reader
+    from vecten_shared.config import VectenConfig
+
+    def config(kind, components):
+        return VectenConfig.model_validate(
+            {
+                "project": {"name": "acme", "scaffold_version": "0.1.0"},
+                "users": 3,
+                "components": components,
+                "warehouse": {"kind": kind},
+            }
+        )
+
+    assert built_reader(config("postgres", ["mcp"]), {}) is None
+    (tmp_path / "dbt").mkdir()
+    record = {"finished_at": "t1", "relations": [{"schema": "marts", "name": "orders"}]}
+    (tmp_path / "dbt/built_relations.json").write_text(json.dumps(record))
+    (tmp_path / "dbt/build_finished_at").write_text("t1\n")
+    environ = {"VECTEN_ARTIFACT_DIR": str(tmp_path)}
+    for kind in ("postgres", "snowflake"):
+        read = built_reader(config(kind, ["platform", "mcp"]), environ)
+        assert read() == record["relations"]
+
+
 def test_local_backend_default_survives_config_serialization():
     from vecten_mcp.runtime_setup import backend_name
     from vecten_shared.config import McpSection

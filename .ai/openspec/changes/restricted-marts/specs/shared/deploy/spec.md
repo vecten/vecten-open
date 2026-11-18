@@ -27,3 +27,17 @@ When `mcp` is not a component, the Snowflake module and the Postgres setup SQL S
 
 - **WHEN** `deploy` runs for a Snowflake project without the `mcp` component
 - **THEN** `ANALYST` holds `USAGE` and future `SELECT` on tables and views in `CORE` and `MARTS`
+
+### Requirement: The dbt DAG records the relations it built
+
+After a green build that leaves no node out, the rendered dbt DAG SHALL write the relations the dbt project's models, snapshots and seeds build, each with its database, schema, name and kind, together with the build's finish time, to `platform/dbt/built_relations.json` in the environment's bucket. The finish time SHALL be the one the DAG records as the time the build finished, so a later build, narrowed or red, that records another is seen to postdate it. A red or narrowed build SHALL leave the record as it was. The MCP host SHALL be allowed to read the record, as it reads the built commit.
+
+#### Scenario: Green build
+
+- **WHEN** the dbt DAG finishes a green build that leaves no node out
+- **THEN** `platform/dbt/built_relations.json` lists every table, view and snapshot the build made, and its finish time equals `platform/dbt/build_finished_at`
+
+#### Scenario: Narrowed build
+
+- **WHEN** a manual run of the dbt DAG with `select` finishes
+- **THEN** the record is unchanged, and `platform/dbt/build_finished_at` holds a later time than it

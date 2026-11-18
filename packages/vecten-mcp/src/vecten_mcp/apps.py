@@ -281,9 +281,12 @@ class AppScopes:
             if model is None or dataset not in model.datasets
         ]
 
-    # Grant kinds and the schemas each covers. A restricted-area grant (#51) adds
-    # "area": lambda target: {f"core_{target}", f"marts_{target}"} here.
-    SCHEMAS = {"schema": lambda target: {target}}
+    # Grant kinds and the schemas each covers. An area covers only the schemas the warehouse
+    # granted in full: dbt creates one when a model first lands in it, and a grant can fail.
+    SCHEMAS = {
+        "schema": lambda grant: {grant["target"]},
+        "area": lambda grant: set(grant.get("confirmed", ())),
+    }
 
     def _folded(self, name):
         """A grant's schema name as the warehouse resolves it unquoted."""
@@ -301,7 +304,7 @@ class AppScopes:
         for grant in grants:
             covered = self.SCHEMAS.get(grant["kind"])
             if covered:
-                schemas |= {self._folded(name) for name in covered(grant["target"])}
+                schemas |= {self._folded(name) for name in covered(grant)}
         try:
             tables = [
                 normalize_identifiers(table, dialect=self.kind)

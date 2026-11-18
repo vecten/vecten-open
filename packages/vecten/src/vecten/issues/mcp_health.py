@@ -1,14 +1,16 @@
 """The MCP's own health from the admin API: a semantic model that never became ready, grants
-the last reconciliation could not apply or only listed as drift, access procedures older than
-the MCP, and bound groups an analytics app does not admit. Each clears once the MCP reports it
-fixed."""
+the last reconciliation could not apply or only listed as drift, relations no model builds,
+access procedures older than the MCP, and bound groups an analytics app does not admit. Each
+clears once the MCP reports it fixed."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from vecten.issues.context import IssueContext, SourceUnavailable, iso
 from vecten.issues.gaps import FIELD_LIMIT, TITLE_LIMIT, sanitized
+from vecten_shared.identity_setup import GRANTS_VERSION
 from vecten_shared.issues import Issue, cap, mcp_issue_id, redact, untrusted
 
 MODEL_RESOLUTION = (
@@ -170,9 +172,16 @@ def app_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issu
 
 def drift_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
     role, privilege, schema = (str(entry.get(k, "?")) for k in ("role", "privilege", "schema"))
-    relation = entry.get("relation")
-    place = schema + (f".{relation}" if relation else "")
-    parts = [role, privilege, schema, *([str(relation)] if relation else [])]
+    relation, kind = entry.get("relation"), entry.get("object")
+    # A future grant names no relation: the object kind it covers is what tells it from
+    # another in the same schema, in the id as in the title.
+    if relation:
+        place, parts = f"{schema}.{relation}", [role, privilege, schema, str(relation)]
+    elif kind and kind != "schema":
+        kinds = str(kind).replace("_", " ") + "s"
+        place, parts = f"{kinds} in {schema}", [role, privilege, schema, str(kind)]
+    else:
+        place, parts = schema, [role, privilege, schema]
     return Issue(
         id=mcp_issue_id("drift", *parts),
         source="mcp",
@@ -191,28 +200,112 @@ def drift_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Is
         first_seen=None,
         last_seen=iso(checked_at),
         evidence=untrusted(
-            {k: sanitized(ctx, entry.get(k)) for k in ("group", "role", "privilege", "schema")}
+            {
+                k: sanitized(ctx, entry.get(k))
+                for k in ("group", "role", "privilege", "object", "schema")
+            }
             | {"relation": sanitized(ctx, relation)}
         ),
     )
 
 
 def outdated_issue(ctx: IssueContext, outdated: dict[str, Any], checked_at: Any) -> Issue:
+    installed = outdated.get("installed")
+    if isinstance(installed, int) and installed >= GRANTS_VERSION:
+        waiting = "The relations in core, marts and the areas that no model builds are not listed"
+    else:
+        waiting = (
+            "Area grants wait, and read grants the MCP's state does not hold are neither "
+            "listed nor revoked"
+        )
     return Issue(
         id=mcp_issue_id("access", "procedures"),
         source="mcp",
         kind="command",
         title="The warehouse's access procedures are older than the MCP",
         resolution=(
-            "Area grants wait, and read grants the MCP's state does not hold are neither "
-            "listed nor revoked, until a "
-            f"warehouse administrator runs the SQL `vecten mcp provisioner-script --env {ctx.env}` "
-            "prints, as ACCOUNTADMIN, and the run is confirmed with --confirm-run."
+            f"{waiting}, until a warehouse administrator runs the SQL "
+            f"`vecten mcp provisioner-script --env {ctx.env}` prints, as ACCOUNTADMIN, and the "
+            "run is confirmed with --confirm-run."
         ),
         occurrences=1,
         first_seen=None,
         last_seen=iso(checked_at),
         evidence=untrusted({k: sanitized(ctx, outdated.get(k)) for k in ("installed", "required")}),
+    )
+
+
+# The object types a DROP of a listed relation names on either warehouse.
+DROP_KINDS = (
+    "TABLE",
+    "VIEW",
+    "MATERIALIZED VIEW",
+    "DYNAMIC TABLE",
+    "EXTERNAL TABLE",
+    "ICEBERG TABLE",
+    "FOREIGN TABLE",
+)
+
+
+def _quoted(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _drop(kind: str, schema: str, relation: str, statement: Any) -> str | None:
+    """The MCP's statement when it is one DROP of this relation's kind naming this relation;
+    a resolution is followed as written, so any other text is left out."""
+    if kind not in DROP_KINDS or not isinstance(statement, str):
+        return None
+    tail = re.escape(f"{_quoted(schema)}.{_quoted(relation)};")
+    shape = rf'DROP {re.escape(kind)} (?:"(?:[^"]|"")+"\.)?{tail}'
+    return statement if re.fullmatch(shape, statement) else None
+
+
+def unbuilt_issue(ctx: IssueContext, entry: dict[str, Any], checked_at: Any) -> Issue:
+    schema, relation, kind = (str(entry.get(k, "?")) for k in ("schema", "relation", "kind"))
+    statement = _drop(kind, schema, relation, entry.get("statement"))
+    if statement:
+        drop = f"a warehouse administrator runs `{statement}`"
+    else:
+        verb = f"DROP {kind}" if kind in DROP_KINDS else "DROP"
+        drop = f"a warehouse administrator drops it with {verb}"
+    return Issue(
+        id=mcp_issue_id("unbuilt", schema, relation),
+        source="mcp",
+        kind="ask",
+        title=cap(f"{schema}.{relation} is a {kind.lower()} no model builds", TITLE_LIMIT),
+        resolution=(
+            "The last full dbt build made no such relation, yet it is in the warehouse: dbt "
+            "does not drop a relation it stops building, such as a model's old copy after the "
+            f"model moved into an area or was renamed. Every group that reads {schema} reads "
+            f"it, and granting {schema} to another group exposes it. Unless something other "
+            f"than dbt keeps it there, {drop}; the MCP never drops it. The issue clears at the "
+            f"next reconciliation (`vecten reconcile --env {ctx.env}`)."
+        ),
+        occurrences=1,
+        first_seen=None,
+        last_seen=iso(checked_at),
+        evidence=untrusted(
+            {k: sanitized(ctx, entry.get(k)) for k in ("schema", "relation", "kind", "statement")}
+        ),
+    )
+
+
+def unlisted_issue(ctx: IssueContext, error: Any, checked_at: Any) -> Issue:
+    return Issue(
+        id=mcp_issue_id("unbuilt", "listing"),
+        source="mcp",
+        kind="ask",
+        title="Listing the relations no model builds failed",
+        resolution=(
+            "The MCP could not read the relations in core, marts and the areas, so it cannot "
+            "say which ones no model builds. A warehouse administrator fixes the cause in the "
+            f"evidence; then run `vecten reconcile --env {ctx.env}`."
+        ),
+        occurrences=1,
+        first_seen=None,
+        last_seen=iso(checked_at),
+        evidence=untrusted({"error": cap(redact(str(error), ctx.secrets), FIELD_LIMIT)}),
     )
 
 
@@ -281,6 +374,11 @@ def collect_mcp_health(ctx: IssueContext) -> list[Issue]:
     for entry in access.get("unbound_roles") or []:
         if isinstance(entry, dict):
             issues.append(nested_role_issue(ctx, entry, checked_at))
+    for entry in access.get("unbuilt") or []:
+        if isinstance(entry, dict):
+            issues.append(unbuilt_issue(ctx, entry, checked_at))
+    if access.get("unbuilt_error"):
+        issues.append(unlisted_issue(ctx, access["unbuilt_error"], checked_at))
     if isinstance(access.get("outdated"), dict):
         issues.append(outdated_issue(ctx, access["outdated"], checked_at))
     for entry in access.get("apps") or []:

@@ -215,6 +215,16 @@ def build_watch(config):
     return lambda: read_build_finished(os.environ)
 
 
+def built_reader(config, environ):
+    """What the dbt DAG's last full build made, which reconciliation compares the modelled
+    schemas with, or None in a project with no dbt DAG."""
+    if not config.has("platform"):
+        return None
+    from vecten_shared.osi.revision import read_built_relations
+
+    return lambda: read_built_relations(environ)
+
+
 def configured_runtime(root, config, extensions):
     import psycopg
 
@@ -290,7 +300,13 @@ def configured_runtime(root, config, extensions):
     )
 
     pools.validate = session_validator(state, oauth.clock)
-    access = AccessService(state, adapter, invalidate=pools.disable_principal, areas=config.areas)
+    access = AccessService(
+        state,
+        adapter,
+        invalidate=pools.disable_principal,
+        areas=config.areas,
+        built=built_reader(config, os.environ),
+    )
     access.seed_defaults()
     idle_setting = state.get("settings", "session_idle_seconds")
     if idle_setting:

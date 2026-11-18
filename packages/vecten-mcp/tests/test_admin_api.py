@@ -278,6 +278,7 @@ def test_access_health_reads_the_last_reconciliation(admin):
             "database_future": [],
             "missing_bindings": [],
             "unbound_roles": [],
+            "unbuilt": [],
         }
         service.access.reconcile()
         data = client.get("/api/admin/access-health", headers=headers).json()["data"]

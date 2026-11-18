@@ -181,7 +181,8 @@ def promotion_scaffold_problem(config: VectenConfig) -> str | None:
         return None
     rendered = config.project.scaffold_version
     try:
-        current = Version(rendered) >= Version(PROMOTION_SINCE)
+        # A candidate of `PROMOTION_SINCE` renders that release's workflows.
+        current = Version(rendered).release >= Version(PROMOTION_SINCE).release
     except InvalidVersion:
         current = False
     if current:
@@ -423,6 +424,9 @@ class EnvironmentFacts(Strict):
     connector_access_applied: list[str] = Field(default_factory=list)
     area_access_applied: list[str] = Field(default_factory=list)
     provisioner_script_run: bool = False
+    # The Snowflake access procedures' version the confirmed provisioner script installed; a
+    # run confirmed without one installed an older version.
+    access_version: int | None = Field(default=None, ge=1)
     provisioner_secrets_set: bool = False
     connection_shown: bool = False
     alert_webhook_asked: bool = False

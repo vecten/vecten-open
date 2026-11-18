@@ -251,7 +251,10 @@ def _block_and_reports(sql):
 
 def test_every_change_of_the_shared_script_runs_in_one_block_that_stops_at_the_first_error():
     head, block, reports = _block_and_reports(shared_script())
-    assert all(line.startswith("--") for line in head.splitlines())
+    # The block's RESULT_SCAN checks need a warehouse, which the session may lack.
+    assert [line for line in head.splitlines() if not line.startswith("--")] == [
+        'USE WAREHOUSE "ACME_DEV_WH";'
+    ]
     assert "$$" not in block
     assert block.rstrip().endswith("END;")
     # After the block only reports run: SHOW and SELECT print what an administrator drops.
@@ -541,7 +544,7 @@ def test_read_grants_returns_the_targets_read_grants_in_the_database_only():
         ("SECURITYADMIN", True, "not a bounded reader role"),
         ("SVC_ETL", True, "not a bounded reader role"),
         ('x";SHOW USERS;--', True, "not a bounded reader role"),
-        (None, True, "not a bounded reader role"),
+        ("", True, "not a bounded reader role"),
     ],
 )
 def test_read_grants_keeps_read_grants_target_bounds(target, owned, error):
@@ -575,6 +578,105 @@ def test_read_grants_in_a_shared_account_bounds_targets_by_the_environments_name
     else:
         assert error in output["error"], output
         assert not any(s.startswith("SHOW GRANTS TO") for s in output["statements"])
+
+
+LIST_RUN = r"""
+const fs = require('fs');
+const p = JSON.parse(fs.readFileSync(0, 'utf8'));
+const statements = [];
+const rows = (list) => {
+    let i = -1;
+    return {next: () => ++i < list.length, getColumnValue: (key) => list[i][key]};
+};
+const snowflake = {execute: ({sqlText, binds}) => {
+    statements.push(sqlText);
+    if (sqlText.startsWith('SHOW DYNAMIC TABLES')) return rows(p.dynamic);
+    if (sqlText.startsWith('SHOW ICEBERG TABLES')) return rows(p.iceberg);
+    if (sqlText.indexOf('INFORMATION_SCHEMA.TABLES') !== -1) {
+        return rows(p.tables.map(([schema, name, type]) => ({1: schema, 2: name, 3: type})));
+    }
+    return rows([]);
+}};
+let value = null, error = null;
+try { value = new Function('snowflake', 'TARGET', p.handler)(snowflake, undefined); }
+catch (e) { error = String(e); }
+process.stdout.write(JSON.stringify({value, error, statements}));
+"""
+
+
+def _listing(handler, *, tables, dynamic=(), iceberg=()):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
+    fixture = dict(
+        handler=handler, tables=list(tables), dynamic=list(dynamic), iceberg=list(iceberg)
+    )
+    result = subprocess.run(
+        [node, "-e", LIST_RUN],
+        input=json.dumps(fixture),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+TABLES = [
+    ("MARTS", "ORDERS", "BASE TABLE"),
+    ("MARTS", "ORDERS_V", "VIEW"),
+    ("CORE", "LEDGER", "MATERIALIZED VIEW"),
+    ("CORE", "FEED", "EXTERNAL TABLE"),
+    ("MARTS_FINANCE", "LIVE_REVENUE", "BASE TABLE"),
+    ("CORE_FINANCE", "LAKE_INVOICE", "BASE TABLE"),
+]
+
+
+def test_read_grants_with_no_target_lists_the_modelled_relations_with_their_drop_types():
+    from vecten_shared.identity_setup import ACCESS_VERSION
+
+    output = _listing(
+        _script().split("$$")[5],
+        tables=TABLES,
+        dynamic=[
+            {"schema_name": "MARTS_FINANCE", "name": "LIVE_REVENUE"},
+            {"schema_name": "STAGING", "name": "ORDERS"},
+        ],
+        iceberg=[{"schema_name": "CORE_FINANCE", "name": "LAKE_INVOICE"}],
+    )
+    assert output["error"] is None, output
+    assert output["value"] == {
+        "version": ACCESS_VERSION,
+        "relations": [
+            {"schema": "MARTS", "name": "ORDERS", "kind": "TABLE"},
+            {"schema": "MARTS", "name": "ORDERS_V", "kind": "VIEW"},
+            {"schema": "CORE", "name": "LEDGER", "kind": "MATERIALIZED VIEW"},
+            {"schema": "CORE", "name": "FEED", "kind": "EXTERNAL TABLE"},
+            {"schema": "MARTS_FINANCE", "name": "LIVE_REVENUE", "kind": "DYNAMIC TABLE"},
+            {"schema": "CORE_FINANCE", "name": "LAKE_INVOICE", "kind": "ICEBERG TABLE"},
+        ],
+    }
+    assert all(s.startswith(("SHOW ", "SELECT ")) for s in output["statements"])
+
+
+def test_read_grants_lists_only_the_modelled_schemas_of_the_database():
+    output = _listing(_script().split("$$")[5], tables=[])
+    [select] = [s for s in output["statements"] if s.startswith("SELECT ")]
+    assert 'FROM "D".INFORMATION_SCHEMA.TABLES' in select
+    assert "TABLE_SCHEMA IN ('CORE','MARTS')" in select
+    assert "TABLE_SCHEMA RLIKE '(CORE|MARTS)_[A-Z][A-Z0-9]*'" in select
+    assert [s for s in output["statements"] if s.startswith("SHOW ")] == [
+        'SHOW DYNAMIC TABLES IN DATABASE "D"',
+        'SHOW ICEBERG TABLES IN DATABASE "D"',
+    ]
+
+
+def test_the_shared_script_lists_the_environments_relations():
+    sql = shared_script()
+    handler = read_grant_body(sql[sql.index("READ_GRANTS(TARGET VARCHAR)") :])
+    output = _listing(handler, tables=[("MARTS", "ORDERS", "BASE TABLE")])
+    assert output["error"] is None, output
+    assert output["value"]["relations"] == [{"schema": "MARTS", "name": "ORDERS", "kind": "TABLE"}]
+    assert any("TABLE_SCHEMA RLIKE '(CORE|MARTS)_" in s for s in output["statements"])
 
 
 KIND_RUN = r"""

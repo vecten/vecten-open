@@ -8,8 +8,9 @@ from vecten_shared.osi.documents import document_sources
 
 BUILT_COMMIT = "dbt/built_commit"
 BUILD_FINISHED = "dbt/build_finished_at"
+BUILT_RELATIONS = "dbt/built_relations.json"
 # Every record read here; each cloud's MCP host policy grants exactly these keys.
-DBT_RECORDS = (BUILT_COMMIT, BUILD_FINISHED)
+DBT_RECORDS = (BUILT_COMMIT, BUILD_FINISHED, BUILT_RELATIONS)
 
 
 def content_revision(directory):
@@ -43,6 +44,20 @@ def read_built_commit(environ):
 def read_build_finished(environ):
     """When the dbt DAG's last build finished, or None before the first."""
     return _read_dbt_record(environ, BUILD_FINISHED)
+
+
+def read_built_relations(environ):
+    """The relations the last full green build made, or None before the first, or once a
+    later build finished: that build, narrowed or red, may have made relations the record
+    lacks. The DAG writes the record before the finish time they share."""
+    text = _read_dbt_record(environ, BUILT_RELATIONS)
+    if text is None:
+        return None
+    record = json.loads(text)
+    finished = read_build_finished(environ)
+    if finished is None or finished.strip() != record.get("finished_at"):
+        return None
+    return record["relations"]
 
 
 def _read_dbt_record(environ, name):

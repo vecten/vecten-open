@@ -287,6 +287,7 @@ class AdminService:
                     "database_future": [],
                     "missing_bindings": [],
                     "unbound_roles": [],
+                    "unbuilt": [],
                 }
             return access.health()
         if operation == "settings":

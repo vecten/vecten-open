@@ -287,6 +287,39 @@ care as `LOADER`'s.
 target, and the identity contract lists it. Open a follow-up for #60 that builds on
 Decision 5's report procedure, so a missing pairing shows up in access health.
 
+### Decision 12: Finding the relations no model builds (direction accepted 2026-11-17)
+
+dbt does not drop a relation it stops building. After a model moves into an area, its old
+relation stays in `marts` or `core`, readable by every group that reads the schema (risk 5).
+`next` cannot report it, because it does not read the warehouse.
+
+| Option | Consequences |
+|---|---|
+| **A. Access health compares the warehouse's catalog with what the last build made** | The dbt DAG writes `platform/dbt/built_relations.json` after a green build that leaves no node out: the relations its models, snapshots and seeds build, from the manifest, and the build's finish time. Each reconciliation reads the relations of `core`, `marts` and the declared areas and lists, with its `DROP` statement, each one the record does not name. `vecten issues` shows them. The MCP host's bucket policy gains the one key. |
+| B. A check in the dbt build | The build already holds the loader, which sees every relation dbt made. But the result lives in Airflow, not with the access state, and the admin who drops a relation sees it listed until the next build. |
+
+**Accepted: A.** The comparison holds only while the record is the newest build: the DAG
+writes the record, then the same finish time to `build_finished_at`. A narrowed or red build
+writes only a later finish time, and may have made relations the record lacks, so the MCP
+lists nothing until the next full green build. With no record, after an upgrade, it lists
+nothing either. The MCP never drops a relation. `staging`, `snapshots` and `raw_` are left
+out: dbt rebuilds the first two in place, and the connectors own `raw_`.
+
+On Postgres the provisioner reads `pg_class`, which every role may. On Snowflake the
+provisioner cannot list the relations: `INFORMATION_SCHEMA` and `SHOW OBJECTS` show only what
+a role holds a privilege on, and it holds `SELECT` on tables in `CORE` and `MARTS` only, nothing
+on views there and nothing in an area. `SOURCE_EXISTS` answers for one name at a time, and
+`READ_GRANTS` names only what a managed role reads. Three ways were weighed:
+
+| Option | Consequences |
+|---|---|
+| **S1. `READ_GRANTS` with no target lists the relations, as its owner** | Every relation in `CORE`, `MARTS` and the area pattern, with the object type its `DROP` names: `TABLE_TYPE` from `INFORMATION_SCHEMA.TABLES`, and `SHOW DYNAMIC TABLES` and `SHOW ICEBERG TABLES` to tell those base tables apart. No new procedure or grant, so `check_scope` and the rollback are unchanged. The procedures move to version 6, so every Snowflake deployment that ran the 0.1.1rc1 script reruns it; one upgrading from 0.1.0 reruns once anyway. The MCP keeps area grants and drift at version 5 and waits only with the listing. |
+| S2. Probe with `SOURCE_EXISTS` each name the build made in an area, in its layer's schema | No rerun. Covers the move into an area, nothing else: a renamed or deleted model's relation stays unseen, and `SOURCE_EXISTS` gives no kind for the `DROP`. |
+| S3. The DAG lists the schemas as the loader and publishes them beside the record | No rerun, and the loader sees what dbt made. The catalog read moves out of the MCP, a relation another role made stays unseen, and a dropped one stays listed until the next build unless the MCP confirms each through `SOURCE_EXISTS`. |
+
+**S1 is implemented; whether the rerun it costs is acceptable is for the maintainer.** S2 and
+S3 are the ways without one.
+
 ## Interactions
 
 - **#34, several environments in one account** (draft on `spec/multi-environment`). Areas
@@ -324,12 +357,16 @@ Decision 5's report procedure, so a missing pairing shows up in access health.
    health reports database-level future grants in the environment's database.
 5. **[Old relations stay after a model moves to an area]** → dbt does not drop the relation
    it no longer builds, and the old copy in `marts` stays readable by the default group. The
-   migration plan drops it before anything else is granted back, and `next` reports relations
-   in convention schemas and areas that no model builds.
+   migration plan drops it before anything else is granted back. Access health and
+   `vecten issues` list each relation in `core`, `marts` and the areas that the last full
+   green build did not make, with the statement that drops it (Decision 12). Until that build
+   has run after the upgrade, and on Snowflake until the provisioner script of version 6 has
+   run, the runbook's query stands in.
 6. **[Rerunning the provisioner script is a human step]** → `READ_GRANT` and `READ_GRANTS`
    change. Until the admin reruns it, the MCP's startup check finds the old procedure (by a
-   version string the procedure returns) and refuses area grants and convergence with a
-   message naming `vecten mcp provisioner-script`, while every other grant keeps working.
+   version string the procedure returns). Below version 5 it refuses area grants and
+   convergence; below version 6 it lists no relation that no model builds. Each names
+   `vecten mcp provisioner-script`, while every other grant keeps working.
 7. **[Postgres helpers lag a new area]** → Ship's setup creates declared areas' schemas, so
    the helpers exist from the first ship after the declaration. On an existing Postgres
    warehouse the admin reruns the script, as for any new schema today.
@@ -344,15 +381,19 @@ Decision 5's report procedure, so a missing pairing shows up in access health.
 
 Snowflake with the MCP:
 
-1. Release the version. `deploy` applies the module with the `removed` blocks, and the plan
-   shows no destroy of an `analyst` grant (`terraform` tier plus a plan on a sandbox).
+1. Release the version. The admin installs it and runs `vecten update`, which moves the
+   Terraform module ref; `deploy` then applies the module with the `removed` blocks, and the
+   plan shows no destroy of an `analyst` grant (`terraform` tier plus a plan on a sandbox).
 2. The admin reruns `vecten mcp provisioner-script --env <env>` as ACCOUNTADMIN and confirms
    with `--confirm-run`. This installs the new `READ_GRANT` and `READ_GRANTS` and no longer
    grants `analyst` data. `next` reports the step until the version check passes.
 3. The MCP's state, created by an earlier release, starts with `reconcile_drift = report`, so
-   the first reconciliation revokes nothing. Where an admin revoked `marts`, the `USAGE` and
-   future `SELECT` that Terraform restored are listed as drift in access health and
-   `vecten issues`, beside any hand-made grants.
+   the first reconciliation revokes nothing. Where an admin revoked `marts` in SQL, the
+   `USAGE` and future `SELECT` that came back are listed as drift in access health and
+   `vecten issues`, beside any hand-made grants. Two things restore such a revoke before the
+   upgrade: the earlier release's MCP reconciles the default group's schema grants seconds
+   after every build, and its deploy reapplies the module's `analyst` grants. A revoke made
+   with `vecten revoke --schema marts --group default` holds, and leaves no drift.
 4. The admin records every listed grant that should stay (a schema grant, or a dataset grant
    for a relation the model has as a dataset), removes dbt `grants:` configs and granting
    post-hooks, which would be revoked on every pass and granted again by every build, then
@@ -372,8 +413,8 @@ report of steps 3 and 4 starts with the first reconciliation; no script rerun is
 
 Stage 1 (Decisions 4 to 6, the first two pull requests, before areas):
 
-1. Upgrade, deploy, rerun the provisioner script, and run `vecten update` so that
-   `dbt_project.yml` carries `+copy_grants: true`.
+1. Install the release and run `vecten update`, which moves the module ref and adds
+   `+copy_grants: true` to `dbt_project.yml`; deploy; then rerun the provisioner script.
 2. Remove the revoke post-hooks from the dbt project in the same commit. From here, the
    default group's lack of `marts` is held by the MCP and no deploy restores it. Per-mart
    grants survive rebuilds.
@@ -388,8 +429,11 @@ Stage 2 (areas):
    regenerated `osi/datasets.json` names the new sources.
 3. Ship. The dbt DAG builds the area schemas, and `next` reports the command that grants
    `finance` the area.
-4. Drop the old copies in `MARTS` and `CORE`. `next` lists them, and the runbook gives the
-   statements. This must come before step 5.
+4. Drop the old copies in `MARTS` and `CORE`. Once the dbt DAG has finished a green build
+   that leaves no node out, `vecten issues` lists each with the statement that drops it; the
+   admin runs those statements, and nothing drops them automatically. Before that build, and
+   on Snowflake before the provisioner script of this release has run, the runbook's query
+   lists them. This must come before step 5.
 5. Grant `marts` back to the default group (`vecten grant --schema marts --group default`) and
    revoke the per-mart dataset grants from stage 1, which the schema grant now covers.
 
@@ -428,3 +472,8 @@ grants for the restriction, no post-deploy check.
 - The current state of Snowflake BCR-2433.
 - `GRANT USAGE ON FUTURE SCHEMAS IN DATABASE`, which only Decision 11 needs.
 - Semantic view privileges (Decision 9, B).
+- Which `INFORMATION_SCHEMA.TABLES.TABLE_TYPE` each relation kind reports, and that
+  `SHOW DYNAMIC TABLES IN DATABASE` and `SHOW ICEBERG TABLES IN DATABASE` run in an owner's
+  rights procedure on an account without either kind (Decision 12, S1).
+- That the procedures' owner sees, in `INFORMATION_SCHEMA`, the relations `LOADER` owns,
+  through the role hierarchy (Decision 12).

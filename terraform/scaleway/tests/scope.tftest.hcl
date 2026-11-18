@@ -129,8 +129,9 @@ run "mcp_host_reaches_its_own_prefixes_and_the_built_commit" {
       "s3:GetObject,s3:PutObject vecten-acme-prod-artifacts-1a2b3c4d/mcp/*",
       "s3:GetObject vecten-acme-prod-artifacts-1a2b3c4d/platform/dbt/built_commit",
       "s3:GetObject vecten-acme-prod-artifacts-1a2b3c4d/platform/dbt/build_finished_at",
+      "s3:GetObject vecten-acme-prod-artifacts-1a2b3c4d/platform/dbt/built_relations.json",
     ])
-    error_message = "the MCP host reads its bundles, reads and writes mcp/, and reads the built commit and the build finish time"
+    error_message = "the MCP host reads its bundles, reads and writes mcp/, and reads the built commit, the build finish time and the built relations"
   }
   assert {
     condition = [
@@ -192,6 +193,7 @@ run "minimal_host_reaches_both_component_prefixes" {
       "s3:GetObject,s3:PutObject vecten-acme-prod-artifacts-1a2b3c4d/mcp/*",
       "s3:GetObject vecten-acme-prod-artifacts-1a2b3c4d/platform/dbt/built_commit",
       "s3:GetObject vecten-acme-prod-artifacts-1a2b3c4d/platform/dbt/build_finished_at",
+      "s3:GetObject vecten-acme-prod-artifacts-1a2b3c4d/platform/dbt/built_relations.json",
     ])
     error_message = "the minimal host carries both components' prefixes"
   }

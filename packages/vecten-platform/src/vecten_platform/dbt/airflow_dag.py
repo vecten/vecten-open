@@ -24,7 +24,9 @@ from typing import Literal
 from vecten_platform.dbt.artifacts import (
     BUILD_FINISHED_KEY,
     BUILT_COMMIT_KEY,
+    BUILT_RELATIONS_KEY,
     artifact_root,
+    built_relations,
     run_keys,
     sink_from_environ,
 )
@@ -185,22 +187,38 @@ def build_step(
     full_refresh: bool = False,
 ) -> None:
     args = (*build_args(select, exclude, full_refresh=full_refresh), *_area_vars())
+    finished = None
     try:
         _raise_for_nodes("build", args, run_id)
+        finished = _finished_at()
+        if not narrowed(select, exclude):
+            _record_relations(finished)
     finally:
-        _record_finished()
+        _record_finished(finished or _finished_at())
 
 
 def _finished_at() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _record_finished() -> None:
+def _record_relations(finished: str) -> None:
+    # The MCP lists a relation no model builds only while this record carries the finish time
+    # recorded last, so it is written first, and a later narrowed or red build, which may have
+    # made relations it lacks, silences the list. An unwritten record silences it too.
+    try:
+        manifest = json.loads((target_dir() / "manifest.json").read_text(encoding="utf-8"))
+        record = {"finished_at": finished, "relations": built_relations(manifest)}
+        sink_from_environ(os.environ).put_text(BUILT_RELATIONS_KEY, json.dumps(record) + "\n")
+    except Exception as exc:
+        log.warning("built relations not recorded in %s: %s", artifact_root(os.environ), exc)
+
+
+def _record_finished(finished: str) -> None:
     # On Postgres a replaced relation loses its per-relation grants, whether the build that
     # replaced it was narrowed or failed later; the MCP reconciles when this time changes.
     # Without it the MCP's schedule still restores them, so a failed write fails no build.
     try:
-        sink_from_environ(os.environ).put_text(BUILD_FINISHED_KEY, f"{_finished_at()}\n")
+        sink_from_environ(os.environ).put_text(BUILD_FINISHED_KEY, f"{finished}\n")
     except Exception as exc:
         log.warning("build finish time not recorded in %s: %s", artifact_root(os.environ), exc)
 

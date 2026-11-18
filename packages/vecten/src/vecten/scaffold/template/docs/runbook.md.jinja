@@ -1298,8 +1298,63 @@ MCP state an earlier release created starts with the setting `reconcile_drift` a
 read the drift in `vecten issues`, record the grants to keep with `vecten grant`, remove dbt
 `grants:` configs and granting post-hooks, then set it to `revoke` in the admin panel. A
 `SELECT` on a relation that is not a dataset cannot be recorded and is revoked from then on.
+[% if warehouse == 'snowflake' %]
+
+On Snowflake an upgrade runs in this order: install the release, `vecten update`, commit and
+push with `vecten github push`, `vecten deploy --env <env>`, then the administrator's rerun of
+`vecten mcp provisioner-script --env <env>` as ACCOUNTADMIN, confirmed with `--confirm-run`
+and pushed. The update moves the Terraform module ref, and `vecten deploy` refuses changes to
+`vecten.toml` or `deploy/` that the default branch does not hold, so the push comes before the
+deploy. With a promotion order, upgrade the environments in that order: an environment after
+the first deploys the newest commit the one before it shipped. Until the
+rerun, `vecten next` asks for it and `vecten issues` reports that the warehouse's access
+procedures are older than the MCP.
+The script's last query lists the users and roles the provisioner owns; on a running
+environment they are the MCP's own users and group roles, so keep them.
+[% endif %]
 [% endif %]
 Run `vecten mcp validate`, review and commit the changed files. The next local `vecten up`
 uses the installed release's images. A deployed project ships content when changes reach its
 default branch after the first deployment; infrastructure changes require a separate reviewed
 plan and approved `vecten deploy --env <env>`.
+[% if 'mcp' in components %]
+
+### Moving restricted data into an area
+
+To take data away from the default group, keep `marts` off it through the MCP
+(`vecten revoke --schema marts --group default --env <env>`), not with SQL, which the MCP's
+reconciliation treats as drift. Data some groups may read and others may not belongs in a
+restricted area. Run steps 3 to 5 for each environment, in the promotion order if the project
+has one:
+
+1. Declare the area and who reads it in `vecten.toml`, for example `[areas.finance]` with
+   `access.groups = ["finance"]`.
+2. Move its marts to `dbt/models/marts_<area>/` and the core models only it reads to
+   `dbt/models/core_<area>/`, each folder configured with `+schema` set to its schema in
+   `dbt/dbt_project.yml`, then run `vecten dbt-build-local` and commit the regenerated
+   `osi/datasets.json`.
+3. Push. Once the dbt build has created the area's schemas, grant it:
+   `vecten grant --area <area> --group <group> --env <env>`.
+4. Drop the copies the models no longer build, before anyone is granted the schema they sit
+   in.[% if 'platform' in components %] Once the dbt build of step 3 has finished green, with no
+   model left out, `vecten issues --env <env>` lists each relation in `core`, `marts` and the
+   areas that no model builds, with the statement that drops it[% if warehouse == 'snowflake' %],
+   from the rerun of `vecten mcp provisioner-script` that this release asks for onwards[% endif %].
+   Run those statements; the MCP drops nothing. Until then, list them by comparing the
+   warehouse with the models:[% else %] List them by comparing the warehouse with the
+   models:[% endif %]
+[% if warehouse == 'snowflake' %]
+   `SELECT table_schema, table_name, table_type FROM <DATABASE>.INFORMATION_SCHEMA.TABLES
+   WHERE table_schema IN ('CORE', 'MARTS') ORDER BY 1, 2;`, then, as ACCOUNTADMIN,
+   `DROP TABLE <DATABASE>.MARTS.<NAME>;` (`DROP VIEW` or `DROP DYNAMIC TABLE` for those
+   kinds) for each one no model under `dbt/models/core/` or `dbt/models/marts/` builds.
+[% else %]
+   `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE
+   table_schema IN ('core', 'marts') ORDER BY 1, 2;`, then, as the database owner,
+   `DROP TABLE marts.<name>;` (`DROP VIEW` for a view) for each one no model under
+   `dbt/models/core/` or `dbt/models/marts/` builds.
+[% endif %]
+5. Grant `marts` back to the default group
+   (`vecten grant --schema marts --group default --env <env>`) and revoke, with `--env <env>`,
+   any dataset grant on a mart that the schema grant or the area grant now covers.
+[% endif %]

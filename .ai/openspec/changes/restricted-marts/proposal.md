@@ -59,6 +59,10 @@ fails silently when it fails.
 - **A group can bind an existing role.** The group keeps its provisioner-owned role. An
   administrator grants the existing role to it with a statement the MCP prints, and the MCP
   records and checks the binding. The provisioner never owns or grants the existing role.
+- **Relations no model builds are reported.** The dbt DAG records the relations its last
+  full green build made, and access health and `vecten issues` list each relation in `core`,
+  `marts` and the areas that it did not, with the statement that drops it, such as a mart's
+  old copy after a move into an area. The MCP never drops one.
 - **A group's role name can be chosen at creation**, so a group whose name matches an existing
   role can still be created.
 

@@ -330,6 +330,7 @@ def snowflake_root(
             ("warehouse_size", snowflake_warehouse_size(str(values["size"]))),
             ("loader_public_key", public_key),
         ),
-        env=credentials,
+        # Policy read-backs need a warehouse; Snowflake resolves this name per query.
+        env={**credentials, "SNOWFLAKE_WAREHOUSE": names.warehouse},
         secrets=(credentials["SNOWFLAKE_USER"], credentials["SNOWFLAKE_PRIVATE_KEY"]),
     )

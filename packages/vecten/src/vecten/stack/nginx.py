@@ -214,6 +214,7 @@ GATE_DENIED_PAGE = (
     f'<a href="{GATE_PATH}/logout">Sign out</a> to use another account.</p></body></html>'
 )
 CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+GATE_VERIFY_DEPTH = 5
 GATE_UPSTREAM = "$vecten_gate_upstream"
 
 
@@ -345,6 +346,8 @@ def _gate_proxy(gate: GateUpstream, site: ServiceSite, uri: str, cookie: str) ->
             "        proxy_ssl_server_name on;\n"
             f"        proxy_ssl_name {gate.host};\n"
             "        proxy_ssl_verify on;\n"
+            # Let's Encrypt chains reach a bundled root only through cross-signed certificates.
+            f"        proxy_ssl_verify_depth {GATE_VERIFY_DEPTH};\n"
             f"        proxy_ssl_trusted_certificate {CA_BUNDLE};\n"
         )
     return body

@@ -4,8 +4,9 @@ locals {
 
   principal = { for k, id in var.application_ids : k => { SCW = "application_id:${id}" } }
 
-  # The prefixes each host may reach. The MCP host also reads the commit dbt last built and when
-  # its last build finished, which the platform host writes.
+  # The prefixes each host may reach. The MCP host also reads the commit dbt last built, when
+  # its last build finished and the relations the last full build made, which the platform
+  # host writes.
   host_object_grants = {
     for h, cs in local.host_components : h => concat(
       [{ actions = ["s3:GetObject"], prefix = "bundles/${h}/*" }],
@@ -13,6 +14,7 @@ locals {
       contains(cs, "mcp") ? [
         { actions = ["s3:GetObject"], prefix = "platform/dbt/built_commit" },
         { actions = ["s3:GetObject"], prefix = "platform/dbt/build_finished_at" },
+        { actions = ["s3:GetObject"], prefix = "platform/dbt/built_relations.json" },
       ] : [],
     )
   }
