@@ -292,8 +292,9 @@ The first reconciliation runs as the MCP starts, before anyone can sign in to ch
 setting, so list the role's grants before the MCP's first start: on Snowflake
 `SHOW GRANTS TO ROLE ANALYST;` and `SHOW FUTURE GRANTS TO ROLE ANALYST;`, on Postgres psql's
 `\dn+` for schema `USAGE`, and `\dp <schema>.*` and `\ddp` for table and default privileges.
-Access health and `vecten issues` list every grant the reconciliation revoked. Record each one
-to keep as an MCP grant, such as `vecten grant --schema staging --group default`, and the next
+Access health lists the grants a reconciliation revoked, for its last pass only, and
+`vecten issues` does not list them, so the listing taken before the first start is the full
+record. Record each grant to keep as an MCP grant, such as `vecten grant --schema staging --group default`, and the next
 reconciliation applies it again. A grant outside the convention schemas, `raw_` schemas and
 declared areas is never touched.
 

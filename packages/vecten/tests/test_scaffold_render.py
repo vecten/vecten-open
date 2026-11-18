@@ -408,7 +408,8 @@ def test_thin_root_module_references_published_module_by_ref(tmp_path, params):
     target = tmp_path / "proj"
     render_project(target, params)
     main = (target / "deploy" / "terraform" / params.cloud / "main.tf").read_text()
-    assert f"vecten-open.git//terraform/{params.cloud}?ref=v0.1.0" in main
+    ref = VERSIONS.terraform_module_ref
+    assert f"vecten-open.git//terraform/{params.cloud}?ref={ref}" in main
 
 
 @pytest.mark.parametrize("params", DEPLOY_SAMPLE, ids=label)

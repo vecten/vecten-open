@@ -5,6 +5,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
 ### Added
 
 - Analytics apps ([#39](https://github.com/vecten/vecten-open/issues/39)): an extension declares
@@ -20,8 +22,9 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   its credentials where the app's host reads them; `--groups-only` follows a binding change
   without rotating. The admin panel's Analytics screen, `GET /api/admin/apps`, the `list_apps`
   tool and the `/apps` page list the apps. Every viewer of one app sees the same data. The gate
-  in front of an app's hostname and publishing a `snowflake` app come later; a laptop app reads
-  no data. See [analytics apps](docs/analytics-apps.md).
+  in front of an app's hostname lets in only people in a group the app admits. Publishing a
+  `snowflake` app comes later; a laptop app reads no data. See
+  [analytics apps](docs/analytics-apps.md).
 - Extensions from a git repository: `vecten extension add '<name> @ git+https://<host>/<repo>@<tag
   or commit>[#subdirectory=<dir>]'` records the extension at a full commit, with prefixed tags
   such as `acme-resolution/v1.2.0` for a repository holding several, and a `source_sha256` of its
@@ -153,7 +156,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   schemas matching `(core|marts)_<area>` by pattern; on Postgres the setup `ship` runs creates
   every declared area's schemas as `loader` before it installs the helpers. An area removed
   from `vecten.toml` has its grants revoked and forgotten. The access procedures are version
-  4: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, grants that reach an area
+  5: until an ACCOUNTADMIN reruns `vecten mcp provisioner-script`, grants that reach an area
   are refused and drift is neither listed nor revoked, while every other grant keeps
   reconciling ([#51](https://github.com/vecten/vecten-open/issues/51)).
 - Relations no model builds are reported. dbt does not drop a relation it stops building, so
@@ -226,6 +229,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   `deploy`, `ship` and a rerun of the provisioner script
   ([#51](https://github.com/vecten/vecten-open/issues/51)). Without the `mcp` component the
   deploy grants them as before.
+- On HTTPS every browser cookie the MCP sets on `mcp.<domain>` (the sign-in, the browser
+  session, the connected-clients and set-password forms, and the admin panel's and `/apps`
+  page's sessions) carries the `__Host-` prefix, so no other hostname under the domain, such as
+  an extension service's, can set one. The MCP no longer reads the cookies an earlier release
+  set: everyone signs in again once after the upgrade, in the browser. MCP clients keep their
+  tokens. See [browser cookies](docs/mcp-identity.md#browser-cookies).
 - Reconciliation converges in both directions: it reads the read grants (`USAGE` on a schema,
   current and future `SELECT`) that `analyst` and every group role hold in the convention and
   `raw_` schemas, and revokes those the state does not hold. Access health lists every grant
@@ -251,7 +260,17 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   in `dbt/dbt_project.yml`: from this release every dbt run, local or on a host, stops before
   it builds anything while one remains.
 
-  After the upgrade nothing is revoked: the deployment is in `report` mode. Read the drift in
+  **Adding the MCP.** A deployment that ran without the `mcp` component and adds it, and an
+  MCP-only project over a warehouse that already has an `ANALYST` role (`analyst` on Postgres),
+  get a new MCP state, which starts in `revoke` mode. Its first reconciliation runs as the MCP
+  starts and revokes, with no report first, every read grant in scope that a managed role holds
+  and the state does not, such as grants made by hand on `staging`, `snapshots` or a `raw_`
+  schema. List the role's grants before the MCP's first start; the
+  [MCP identity guide](docs/mcp-identity.md) gives the statements
+  ([#95](https://github.com/vecten/vecten-open/issues/95)).
+
+  After the upgrade of a deployment that already ran the MCP nothing is revoked: the
+  deployment is in `report` mode. Read the drift in
   access health or `vecten issues`, record every grant you want to keep with `vecten grant`
   (a schema grant, or a dataset grant for a relation the semantic model has as a dataset),
   then set `reconcile_drift` to `revoke`. A grant that cannot be recorded is revoked from then
@@ -344,5 +363,6 @@ The first public release.
 - Published as `vecten`, `vecten-platform`, `vecten-mcp` and `vecten-shared` on PyPI and as
   `ghcr.io/vecten/vecten-airflow` and `ghcr.io/vecten/vecten-mcp`.
 
-[Unreleased]: https://github.com/vecten/vecten-open/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/vecten/vecten-open/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/vecten/vecten-open/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vecten/vecten-open/releases/tag/v0.1.0
