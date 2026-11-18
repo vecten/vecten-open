@@ -283,6 +283,15 @@ source has `auth_request` but no JWT validation. #5 wants Airflow behind the sam
    service that forgets is open, and the MCP must become a full OpenID provider with ID tokens
    and a groups claim.
 
+**Measured cost of option 1** (0.1.1 live checks, `standard` on AWS): a request on a `login`
+route took about 5 ms longer to its first byte than a public route on the same host. Over 2×25
+requests from a laptop in Europe to `eu-central-1`, the gated route had medians of 119 and
+121 ms against 113 and 116 ms, and both kinds had a p90 near 200 ms, so the difference is
+within the path's noise. The gated requests were unauthenticated ones, which the gate
+answered with a redirect after the subrequest; a signed-in request was not measured
+separately. NGINX checks the MCP's certificate chain to depth 5, because Let's Encrypt's
+chains reach a root in the image's bundle only through cross-signed certificates.
+
 **Accepted: option 1.** The flow:
 
 1. A request without a valid gate cookie gets 401 from the subrequest; NGINX answers with a

@@ -22,6 +22,7 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 - [x] 1.7 Tests, unit tier, against a local `git http-backend` with basic authentication: tag, commit, prefixed tag, branch, ambiguous ref, wrong token (no substring of length ≥ 4 in output), missing commit, public repository, a user helper in a fake global config left unused, `GIT_TRACE_CURL` in the parent environment leaking nothing.
 - [x] 1.8 Test, `network` tier: a public GitHub repository by tag, by commit and with a subdirectory.
 - [ ] 1.9 Test, **[private repo]**: fine-grained token; revoked token; GitHub App installation token.
+  - Partly run live for 0.1.1 (rc2, AWS): an App installation token works and an invalid token fails, in CI. A revoked fine-grained token on a laptop not run.
 
 ## 2. Source identity
 
@@ -49,7 +50,9 @@ token (a new maintainers-only marker, like `snowflake_live`); **[deploy]** needs
 - [x] 4.5 Tests: rendered workflows (only the `vecten` step gets the credential); byte-identical bundles for projects without git sources; `docker` tier: both images from a bundled git source, no layer holds the token or the fetched source tree, a tampered source fails the build naming both hashes.
 - [x] 4.5a `vecten deploy` in CI fetches and checks every git source before its first Terraform call and ships those same sources (#98)
 - [ ] 4.6 **[private repo]** `extension add` from a private monorepo with two extensions under subdirectories and prefixed tags, then `vecten up`.
+  - Partly run live for 0.1.1 (rc2, AWS): `extension add` of two extensions from a private monorepo's subdirectories with prefixed tags. `vecten up` with them not run.
 - [ ] 4.7 **[deploy]** AWS and Scaleway sandboxes: ship with an App token and with `VECTEN_GIT_CREDENTIALS`; no VM secret store, host file or container holds a git credential; an arm64 VM builds the source an amd64 runner bundled; a promotion of the same commit fetches again with the CI credential; a revoked token fails the ship in CI before any host changes.
+  - Partly run live for 0.1.1 (rc2, AWS): ship with an App token; no git credential in any VM secret store, host file or container; a promotion of a shipped commit fetches again with the CI credential; an invalid `VECTEN_GIT_CREDENTIALS` entry fails the ship before any host changes. Not run: a ship with a valid `VECTEN_GIT_CREDENTIALS`, arm64 (every VM was x86_64), Scaleway.
 - [x] 4.8 Each source extension builds with its own `build_requires` and from a copy the image user owns (`project-extensions` task 2.7), so pins taken at different times never conflict and any backend can write into its tree.
 
 ## 5. `vecten extension sync`
