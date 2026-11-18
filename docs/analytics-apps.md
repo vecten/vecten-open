@@ -327,7 +327,8 @@ A group may read a dataset in one of three ways:
 - a schema grant on the schema of every table its source reads; or
 - a restricted-area grant (`vecten grant --area <area>`) whose `core_<area>` or
   `marts_<area>` holds every table its source reads. An area schema counts once the warehouse
-  has granted it; dbt creates one when a model first lands in it.
+  has granted it in full: dbt creates one when a model first lands in it, and a schema whose
+  grant failed or was partly refused admits no one until a reconciliation applies it.
 
 A grant counts once it is both desired and applied. A revoked grant or a grant the warehouse
 refused admits no one. On Snowflake, a three-part source counts only in the project's own

@@ -534,12 +534,12 @@ class AccessService:
             return {"installed": installed, "required": ACCESS_VERSION, "fix": fix}
         return None
 
-    def _apply(self, grant, source, allowed, done=None, missing=None):
+    def _apply(self, grant, source, allowed, done=None, missing=None, confirmed=None):
         """The relation kinds the warehouse refused a grant, each with its message; the grant
         holds for every other kind. A revoke that leaves anything refused raises, so its
         applied record stays for the next pass. `done` collects the schemas that may hold a
-        grant, the failing one included, and `missing` the area schemas the warehouse could
-        not find.
+        grant, the failing one included, `confirmed` those the warehouse granted with nothing
+        refused, and `missing` the area schemas the warehouse could not find.
 
         An area grant skips such a schema, since dbt creates one only when a model lands in
         it, and every reconciliation tries it again; a schema or dataset grant on one fails,
@@ -547,6 +547,7 @@ class AccessService:
         every object, so that revoke is done: dropping an object drops its grants."""
         done = [] if done is None else done
         missing = [] if missing is None else missing
+        confirmed = [] if confirmed is None else confirmed
         role = self.require_group(grant["group"])["warehouse_role"]
         if grant["kind"] == "dataset":
             try:
@@ -570,6 +571,8 @@ class AccessService:
                         missing.append(schema)
                     continue
                 refused += [f"{schema}: {kind}" for kind in kinds]
+                if allowed and not kinds:
+                    confirmed.append(schema)
             if allowed and missing:
                 logger.info(
                     "Area %s for %s waits for %s, missing or not visible to the warehouse",
@@ -598,20 +601,22 @@ class AccessService:
         row = {"group": group, "kind": kind, "target": target}
         key = self._key(group, kind, target)
         with self.lock:
-            done, missing = [], []
+            done, missing, confirmed = [], [], []
             previous = self.state.get("applied_grants", key)
             try:
-                refused = self._apply(row, source, True, done, missing)
+                refused = self._apply(row, source, True, done, missing, confirmed)
             except Exception:
                 # A grant held before this call stays; reconciliation retries it.
                 if kind == "area" and done and not previous:
                     self._roll_back(row, done)
                 elif kind == "area" and done:
-                    record = self._record(row, previous["source"], done, previous)
+                    kept = _still_confirmed(previous, confirmed)
+                    record = self._record(row, previous["source"], done, previous, kept)
                     self.state.put("applied_grants", key, record)
                 raise
             self.state.put("grants", key, row)
-            self.state.put("applied_grants", key, self._record(row, source, done, previous))
+            record = self._record(row, source, done, previous, confirmed)
+            self.state.put("applied_grants", key, record)
             self.admit()
         result = dict(row, refused=refused) if refused else dict(row)
         return dict(result, waiting=missing) if missing else result
@@ -642,14 +647,16 @@ class AccessService:
             return applied.get("granted", applied["source"])
         return applied["source"]
 
-    def _record(self, row, source, done=(), previous=None):
+    def _record(self, row, source, done=(), previous=None, confirmed=()):
         """The applied record of a grant. An area's names the schemas granted now or held
         before: one that never existed is left out, so its revoke issues none, while one the
-        warehouse stopped showing stays until a revoke on it succeeds."""
+        warehouse stopped showing stays until a revoke on it succeeds. Its `confirmed` names
+        the schemas the warehouse granted in full, through which an app admits the group."""
         record = dict(row, source=source)
         if row["kind"] == "area":
             held = set(done) | set(self._held(previous) if previous else ())
             record["granted"] = sorted(held)
+            record["confirmed"] = sorted(confirmed)
         return record
 
     def revoke(self, group, kind, target):
@@ -726,17 +733,17 @@ class AccessService:
                 if _grants_wait(outdated) and self._current(row["kind"], source):
                     failed(key, row, "grant", outdated["fix"])
                     continue
-                done, missing = [], []
+                done, missing, confirmed = [], [], []
                 try:
                     role = self.require_group(row["group"])["warehouse_role"]
-                    refused = self._apply(row, source, True, done, missing)
+                    refused = self._apply(row, source, True, done, missing, confirmed)
                     # Compared with what the roles held before this grant: an area schema
                     # that does not exist yet is no part of it.
                     reached = [s for s in source if s not in missing] if missing else source
                     pieces = self._pieces(role, row["kind"], reached)
                     new = key not in applied if held is None else not pieces <= _folded(held)
                     previous = self.state.get("applied_grants", key)
-                    record = self._record(row, source, done, previous)
+                    record = self._record(row, source, done, previous, confirmed)
                     self.state.put("applied_grants", key, record)
                     reconciled += 1
                     if refused:
@@ -749,10 +756,11 @@ class AccessService:
                     if row["kind"] == "area" and done:
                         # The schemas attempted before the failure stay revocable.
                         previous = self.state.get("applied_grants", key)
+                        kept = _still_confirmed(previous, confirmed)
                         if previous:
-                            record = self._record(row, previous["source"], done, previous)
+                            record = self._record(row, previous["source"], done, previous, kept)
                         else:
-                            record = dict(row, source=done, granted=done)
+                            record = dict(row, source=done, granted=done, confirmed=kept)
                         self.state.put("applied_grants", key, record)
             report["missing_bindings"], report["unbound_roles"] = self._bindings(failures)
         report["unbuilt"], unlisted = self._unbuilt(outdated)
@@ -1050,6 +1058,13 @@ class AccessService:
 def _grants_wait(outdated):
     """Whether procedures this old refuse area grants and drift, not only the listing."""
     return bool(outdated) and outdated["installed"] < GRANTS_VERSION
+
+
+def _still_confirmed(previous, confirmed):
+    """An area's fully granted schemas after a failed attempt, which revokes nothing: those
+    granted before it, with those it granted."""
+    before = previous.get("confirmed", ()) if previous else ()
+    return sorted({*before, *confirmed})
 
 
 def _folded(held):

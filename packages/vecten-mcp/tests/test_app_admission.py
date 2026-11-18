@@ -82,6 +82,8 @@ class Adapter:
     def __init__(self):
         self.fail = False
         self.absent = set()
+        self.broken = set()
+        self.refused = {}
 
     def create_group(self, role):
         pass
@@ -96,6 +98,9 @@ class Adapter:
     def schema_grant(self, role, schema, grant=True):
         if schema in self.absent:
             raise Absent(schema)
+        if schema in self.broken:
+            raise RuntimeError(f"warehouse refused the grant on {schema}")
+        return self.refused.get(schema, [])
 
     def access_version(self):
         return ACCESS_VERSION
@@ -174,6 +179,38 @@ def test_an_area_admits_through_its_marts_schema_only_once_the_warehouse_granted
     access.grant("finance", "area", "finance")
     assert scopes.admitted("finance") == frozenset()
     adapter.absent = set()
+    access.reconcile()
+    assert scopes.admitted("finance") == {"finance"}
+
+
+def test_an_area_schema_whose_grant_failed_admits_no_one():
+    # The failed schema stays in the record for a revoke to clean up, never for admission.
+    _, adapter, access, scopes = setup(FINANCE)
+    access.model_changed(SOURCES)
+    adapter.absent = {"marts_finance"}
+    access.grant("finance", "area", "finance")
+    adapter.absent, adapter.broken = set(), {"marts_finance"}
+    access.reconcile()
+    assert scopes.admitted("finance") == frozenset()
+    adapter.broken = set()
+    access.reconcile()
+    assert scopes.admitted("finance") == {"finance"}
+
+
+def test_an_area_schema_the_warehouse_partly_refused_admits_no_one():
+    _, adapter, access, scopes = setup(FINANCE)
+    access.model_changed(SOURCES)
+    adapter.refused = {"marts_finance": ["TABLE"]}
+    access.grant("finance", "area", "finance")
+    assert scopes.admitted("finance") == frozenset()
+
+
+def test_a_failed_regrant_keeps_admitting_through_the_schemas_already_granted():
+    # A failed attempt revokes nothing, so what the warehouse granted before still holds.
+    _, adapter, access, scopes = setup(FINANCE)
+    access.model_changed(SOURCES)
+    access.grant("finance", "area", "finance")
+    adapter.broken = {"core_finance"}
     access.reconcile()
     assert scopes.admitted("finance") == {"finance"}
 

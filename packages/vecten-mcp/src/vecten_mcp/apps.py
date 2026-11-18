@@ -282,10 +282,10 @@ class AppScopes:
         ]
 
     # Grant kinds and the schemas each covers. An area covers only the schemas the warehouse
-    # granted, since dbt creates one when a model first lands in it.
+    # granted in full: dbt creates one when a model first lands in it, and a grant can fail.
     SCHEMAS = {
         "schema": lambda grant: {grant["target"]},
-        "area": lambda grant: set(grant.get("granted", ())),
+        "area": lambda grant: set(grant.get("confirmed", ())),
     }
 
     def _folded(self, name):
