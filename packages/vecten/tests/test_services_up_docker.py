@@ -96,7 +96,17 @@ def _compose(proj, *args):
 
 
 @pytest.mark.skipif(not docker_ok(), reason="no docker daemon")
-def test_up_runs_services_isolated_and_keeps_their_volume(tmp_path):
+def test_up_runs_services_isolated_and_keeps_their_volume(tmp_path, monkeypatch):
+    # The lock pins the four packages at this checkout's version, which is not on PyPI until
+    # the release is published.
+    wheels = tmp_path / "wheels"
+    subprocess.run(
+        ["uv", "build", "--all-packages", "--wheel", "--out-dir", str(wheels)],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setenv("UV_FIND_LINKS", str(wheels))
     build = subprocess.run(
         [sys.executable, "-m", "vecten.cli.app", "dev", "build-images", "--repo", REPO, "--json"],
         capture_output=True,
