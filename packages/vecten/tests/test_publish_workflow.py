@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -87,7 +88,10 @@ def checkout(tmp_path, version, on_main):
     shutil.copy(SCRIPT, root / "scripts/publish_target.py")
     versions = root / "packages/vecten-shared/src/vecten_shared/versions.toml"
     versions.parent.mkdir(parents=True)
-    versions.write_text(f'vecten = "{version}"\npython = "3.14"\n')
+    versions.write_text(
+        f'vecten = "{version}"\npython = "3.14"\n\n[images]\n'
+        'airflow = "apache/airflow:9.8.7-python3.14"\nmcp_base = "python:3.14-slim"\n'
+    )
     git(root, "init")
     git(root, "add", "--all")
     git(root, "commit", "-m", "tree")
@@ -121,6 +125,9 @@ def test_the_cli_writes_a_release_target_for_a_release_tag_on_main(tmp_path):
         "index_url=https://upload.pypi.org/legacy/",
         "check_url=https://pypi.org/simple/",
         "version=0.1.2",
+        "airflow_image=apache/airflow:9.8.7-python3.14",
+        "airflow_version=9.8.7",
+        "mcp_base_image=python:3.14-slim",
     ]
 
 
@@ -205,8 +212,8 @@ def test_every_job_after_target_waits_for_it():
     for name, job in JOBS.items():
         if name != "target":
             assert "target" in job["needs"], name
-    assert {"packages", "images"} <= set(JOBS["verify"]["needs"])
-    assert "packages" in JOBS["images"]["needs"]
+    assert {"packages", "published", "images"} <= set(JOBS["verify"]["needs"])
+    assert {"packages", "published"} <= set(JOBS["images"]["needs"])
 
 
 def test_the_target_job_refuses_through_the_script():
@@ -215,12 +222,39 @@ def test_the_target_job_refuses_through_the_script():
     (step,) = [s for s in steps if "publish_target.py" in s.get("run", "")]
     assert step["env"]["TAG"] == "${{ github.ref_name }}"
     assert 'publish_target.py "$TAG"' in step["run"]
-    assert set(JOBS["target"]["outputs"]) == {"target", "index_url", "check_url", "version"}
+    assert set(JOBS["target"]["outputs"]) == {
+        "target",
+        "index_url",
+        "check_url",
+        "version",
+        *IMAGE_ARGS,
+    }
+    for name, value in JOBS["target"]["outputs"].items():
+        assert value == f"${{{{ steps.target.outputs.{name} }}}}"
+
+
+# Each image build argument the target job computes: its output name, and the argument's.
+IMAGE_ARGS = {
+    "airflow_image": "AIRFLOW_IMAGE",
+    "airflow_version": "AIRFLOW_VERSION",
+    "mcp_base_image": "BASE_IMAGE",
+}
+VERSIONS_TABLE = REPO / "packages/vecten-shared/src/vecten_shared/versions.toml"
+
+
+def test_the_target_scripts_image_arguments_are_the_versions_tables():
+    from vecten_shared.versions import VERSIONS
+
+    assert publish_target().image_args(tomllib.loads(VERSIONS_TABLE.read_text())) == {
+        "airflow_image": VERSIONS.airflow_image,
+        "airflow_version": VERSIONS.airflow_version,
+        "mcp_base_image": VERSIONS.mcp_base_image,
+    }
 
 
 def test_only_the_packages_run_in_the_target_environment():
     assert JOBS["packages"]["environment"] == "${{ needs.target.outputs.target }}"
-    for name in PUBLISHING:
+    for name in PUBLISHING | {"published"}:
         job = JOBS[name]
         assert "candidate" in job["if"] and "release" in job["if"], name
     # One approval of a release: the images run once the approved packages job has succeeded.
@@ -261,16 +295,204 @@ def test_only_the_publishing_jobs_hold_write_permissions():
     assert WORKFLOW["permissions"] == {"contents": "read"}
     assert JOBS["packages"]["permissions"] == {"contents": "read", "id-token": "write"}
     assert JOBS["images"]["permissions"] == {"contents": "read", "packages": "write"}
+    assert JOBS["published"]["permissions"] == {"contents": "read"}
     for name in JOBS.keys() - PUBLISHING:
         assert "write" not in str(JOBS[name].get("permissions", {})), name
+    writers = [n for n, j in JOBS.items() if j.get("permissions", {}).get("packages") == "write"]
+    assert writers == ["images"]
 
 
-def test_images_are_pushed_to_the_published_registry_and_checked():
+def build_pushes():
+    steps = JOBS["images"]["steps"]
+    return [s for s in steps if s.get("uses", "").startswith("docker/build-push-action@")]
+
+
+def build_args(step):
+    return dict(line.split("=", 1) for line in step["with"]["build-args"].splitlines())
+
+
+REF_VERSION = "${{ steps.version.outputs.version }}"
+
+
+def test_images_are_pushed_to_the_published_registry_under_the_refs_version():
+    from vecten.stack.images import REQUIRED_PLATFORMS
     from vecten.stack.up import PUBLISHED_REGISTRY
 
-    images = "\n".join(s.get("run", "") for s in JOBS["images"]["steps"])
-    assert f"uv run vecten dev build-images --push {PUBLISHED_REGISTRY} --json" in images
-    assert "uv run vecten dev check-images" in images
+    airflow, mcp = build_pushes()
+    for step, name in ((airflow, "vecten-airflow"), (mcp, "vecten-mcp")):
+        assert step["with"]["tags"] == f"{PUBLISHED_REGISTRY}/{name}:{REF_VERSION}"
+        assert step["with"]["push"] is True
+        assert step["with"]["context"] == "."
+        assert step["with"]["platforms"] == ",".join(REQUIRED_PLATFORMS)
+        assert build_args(step)["VECTEN_VERSION"] == REF_VERSION
+    assert airflow["with"]["file"] == "images/airflow/Dockerfile"
+    assert mcp["with"]["file"] == "images/mcp/Dockerfile"
+
+
+def test_a_build_push_takes_no_input_beyond_the_image_it_builds():
+    for step in build_pushes():
+        assert set(step["with"]) == {"context", "file", "platforms", "push", "tags", "build-args"}
+
+
+def test_the_build_arguments_are_those_build_images_passes(invoke):
+    result = invoke("dev", "build-images", "--print", "--json", "--repo", str(REPO))
+    assert result.exit_code == 0, result.stdout
+    _, *commands = json.loads(result.stdout)["commands"]
+    computed = publish_target().image_args(tomllib.loads(VERSIONS_TABLE.read_text()))
+    for command, step in zip(commands, build_pushes(), strict=True):
+        assert command[command.index("-f") + 1] == str(REPO / step["with"]["file"])
+        passed = dict(
+            command[i + 1].split("=", 1) for i, arg in enumerate(command) if arg == "--build-arg"
+        )
+        args = build_args(step)
+        assert args.keys() == passed.keys()
+        for name, value in args.items():
+            if name == "VECTEN_VERSION":
+                continue
+            (output,) = [o for o, arg in IMAGE_ARGS.items() if arg == name]
+            assert value == f"${{{{ needs.target.outputs.{output} }}}}"
+            assert computed[output] == passed[name]
+
+
+EXPECTED_ACTIONS = [
+    "actions/checkout",
+    "actions/download-artifact",
+    None,  # the ref-to-version step, the job's only shell
+    "docker/setup-qemu-action",
+    "docker/setup-buildx-action",
+    "docker/login-action",
+    "docker/build-push-action",
+    "docker/build-push-action",
+]
+# Tree code: an interpreter, a package tool, the CLI, or a file of the checkout.
+TREE_CODE = re.compile(
+    r"\b(uv|uvx|python3?|pip3?|vecten|make|source)\b|scripts/|\./|(^|\s)\.\s|\b(ba)?sh\s+\S*/",
+    re.M,
+)
+
+
+def test_the_image_job_runs_only_pinned_actions_and_its_own_shell():
+    steps = JOBS["images"]["steps"]
+    actions = [s["uses"].split("@")[0] if "uses" in s else None for s in steps]
+    assert actions == EXPECTED_ACTIONS
+    for step in steps:
+        if "uses" in step:
+            assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", step["uses"]), step
+            assert "run" not in step
+    (shell,) = [s for s in steps if "run" in s]
+    assert shell["id"] == "version"
+    assert shell["shell"] == "bash"
+    assert not TREE_CODE.search(shell["run"]), shell["run"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "uv run vecten dev build-images",
+        "python3 scripts/published_images.py",
+        "pip install .",
+        "make images",
+        "./build.sh",
+        "bash images/build.sh",
+        "sh -c x; sh images/x",
+        ". images/env",
+    ],
+)
+def test_the_tree_code_pattern_catches_what_it_names(line):
+    assert TREE_CODE.search(line)
+
+
+def test_no_step_of_the_image_job_runs_after_a_failure():
+    airflow, mcp = build_pushes()
+    steps = JOBS["images"]["steps"]
+    assert steps.index(airflow) < steps.index(mcp)
+    assert airflow["with"]["file"] == "images/airflow/Dockerfile"
+    for step in steps:
+        assert "if" not in step and "continue-on-error" not in step, step
+
+
+def test_the_image_job_leaves_no_token_in_the_build_context():
+    (checkout,) = [s for s in JOBS["images"]["steps"] if "actions/checkout@" in s.get("uses", "")]
+    assert checkout["with"] == {"persist-credentials": False}
+
+
+def test_the_images_are_built_from_the_wheels_the_packages_job_published():
+    (build,) = [s["run"] for s in JOBS["packages"]["steps"] if "uv build" in s.get("run", "")]
+    assert "--sdist" not in build and "--out-dir dist" in build
+    (upload,) = [s for s in JOBS["packages"]["steps"] if "upload-artifact@" in s.get("uses", "")]
+    (download,) = [s for s in JOBS["images"]["steps"] if "download-artifact@" in s.get("uses", "")]
+    assert upload["with"]["path"] == "dist/"
+    assert download["with"] == {"name": upload["with"]["name"], "path": "dist"}
+    for image in ("airflow", "mcp"):
+        dockerfile = (REPO / f"images/{image}/Dockerfile").read_text()
+        assert "source=dist,target=/mnt/wheels" in dockerfile
+
+
+def version_step():
+    (step,) = [s for s in JOBS["images"]["steps"] if s.get("id") == "version"]
+    return step
+
+
+def run_version_step(tmp_path, ref_name):
+    script = tmp_path / "version.sh"
+    script.write_text(version_step()["run"])
+    output = tmp_path / "github_output"
+    output.write_text("")
+    env = {"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output), "REF_NAME": ref_name}
+    # The runner's command line for `shell: bash`.
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return result, output.read_text()
+
+
+def test_the_image_version_comes_from_the_pushed_ref_through_env():
+    step = version_step()
+    assert step["env"] == {"REF_NAME": "${{ github.ref_name }}"}
+    assert "$GITHUB_OUTPUT" in step["run"]
+
+
+@pytest.mark.parametrize("ref_name, version", [("v0.1.2rc1", "0.1.2rc1"), ("v0.1.2", "0.1.2")])
+def test_the_version_step_drops_the_v(tmp_path, ref_name, version):
+    result, output = run_version_step(tmp_path, ref_name)
+    assert result.returncode == 0, result.stderr
+    assert output == f"version={version}\n"
+
+
+@pytest.mark.parametrize(
+    "ref_name",
+    ["0.1.2", "vfoo", "", "v", "v0.1.2.dev1", "v0.1.2\nversion=0.1.1", "v0.1.2rc1-x"],
+)
+def test_the_version_step_refuses_any_other_ref(tmp_path, ref_name):
+    result, output = run_version_step(tmp_path, ref_name)
+    assert result.returncode != 0
+    assert output == ""
+    assert "refused" in result.stderr
+
+
+def test_verify_checks_both_images_with_the_published_cli():
+    steps = JOBS["verify"]["steps"]
+    (check,) = [s for s in steps if "check-images" in s.get("run", "")]
+    assert check["env"] == {"VERSION": "${{ needs.target.outputs.version }}"}
+    assert check["run"].strip() == (
+        '"$RUNNER_TEMP/published/bin/vecten" dev check-images --version "$VERSION"'
+    )
+    (install,) = [s for s in steps if "uv pip install" in s.get("run", "")]
+    assert steps.index(install) < steps.index(check)
+
+
+def test_verify_runs_after_a_skipped_image_build_and_never_after_a_failed_one():
+    verify = JOBS["verify"]
+    assert set(verify["needs"]) == {"target", "packages", "published", "images"}
+    assert " ".join(verify["if"].split()) == (
+        "!cancelled() && needs.packages.result == 'success'"
+        " && needs.published.result == 'success'"
+        " && (needs.images.result == 'success'"
+        " || (needs.images.result == 'skipped' && needs.published.outputs.build == 'false'))"
+    )
 
 
 def test_verify_installs_every_package_at_the_version():
@@ -359,16 +581,17 @@ def test_the_registry_error_code_for_a_missing_tag_reads_as_missing():
 
 
 def test_the_build_runs_only_when_the_guard_says_so():
-    steps = JOBS["images"]["steps"]
-    (guard,) = [s for s in steps if "published_images.py" in s.get("run", "")]
+    published = JOBS["published"]
+    assert published["needs"] == "target"
+    assert published["if"] == JOBS["packages"]["if"]
+    (guard,) = [s for s in published["steps"] if "published_images.py" in s.get("run", "")]
     assert guard["id"] == "published"
     assert guard["env"]["VERSION"] == "${{ needs.target.outputs.version }}"
     assert guard["run"] == 'python3 scripts/published_images.py ghcr.io/vecten "$VERSION"'
-    (build,) = [s for s in steps if "build-images" in s.get("run", "")]
-    assert build["if"] == "steps.published.outputs.build == 'true'"
-    assert steps.index(guard) < steps.index(build)
-    (check,) = [s for s in steps if "check-images" in s.get("run", "")]
-    assert "if" not in check
+    assert published["outputs"] == {"build": "${{ steps.published.outputs.build }}"}
+    assert JOBS["images"]["if"] == (
+        f"{JOBS['packages']['if']} && needs.published.outputs.build == 'true'"
+    )
 
 
 def test_verify_waits_for_each_published_hash():

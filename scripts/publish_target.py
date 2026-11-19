@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Name what a pushed version tag publishes, or refuse a tag the tree or `main` does not back.
 
-Usage: publish_target.py <tag>. Writes target, index_url, check_url and version to
-$GITHUB_OUTPUT; on a refusal it writes nothing and exits non-zero.
+Usage: publish_target.py <tag>. Writes target, index_url, check_url, version and the images'
+build arguments (airflow_image, airflow_version, mcp_base_image) to $GITHUB_OUTPUT; on a refusal
+it writes nothing and exits non-zero.
 """
 
 from __future__ import annotations
@@ -35,6 +36,16 @@ def target(tag: str, version: str, on_main: bool) -> str:
     return "release"
 
 
+def image_args(table: dict) -> dict[str, str]:
+    """The versions table's image values, derived as `vecten_shared.versions` derives them."""
+    airflow_image = table["images"]["airflow"]
+    return {
+        "airflow_image": airflow_image,
+        "airflow_version": airflow_image.rsplit(":", 1)[1].split("-")[0],
+        "mcp_base_image": table["images"]["mcp_base"],
+    }
+
+
 def on_main() -> bool:
     result = subprocess.run(
         ["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"],
@@ -52,7 +63,9 @@ def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print("usage: publish_target.py <tag>", file=sys.stderr)
         return 2
-    version = tomllib.loads(VERSIONS.read_text())["vecten"]
+    table = tomllib.loads(VERSIONS.read_text())
+    version = table["vecten"]
+    images = image_args(table)
     try:
         name = target(argv[0], version, on_main())
     except ValueError as error:
@@ -64,6 +77,7 @@ def main(argv: list[str]) -> int:
         f"index_url={index_url}",
         f"check_url={check_url}",
         f"version={version}",
+        *(f"{name}={value}" for name, value in images.items()),
     ]
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         output.write("".join(f"{line}\n" for line in lines))

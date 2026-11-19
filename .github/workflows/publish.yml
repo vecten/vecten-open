@@ -20,6 +20,9 @@ jobs:
       index_url: ${{ steps.target.outputs.index_url }}
       check_url: ${{ steps.target.outputs.check_url }}
       version: ${{ steps.target.outputs.version }}
+      airflow_image: ${{ steps.target.outputs.airflow_image }}
+      airflow_version: ${{ steps.target.outputs.airflow_version }}
+      mcp_base_image: ${{ steps.target.outputs.mcp_base_image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,13 +65,35 @@ jobs:
           uv publish --trusted-publishing always --publish-url "$INDEX_URL"
           --check-url "$CHECK_URL" dist/*
 
-  # The images take their tag from the tree's version, which the target job held equal to the tag.
   # A tag already pushed is never pushed over: buildx output is not byte-reproducible, so a
-  # rebuild would change a published digest. The job names no environment, so a release takes
-  # one approval: it starts only once the approved packages job has succeeded.
-  images:
-    needs: [target, packages]
+  # rebuild would change a published digest. This job holds no write permission, so the tree's
+  # script may run here; the images are public, so inspecting them needs no login.
+  published:
+    needs: target
     if: contains(fromJSON('["candidate", "release"]'), needs.target.outputs.target)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.published.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: published
+        env:
+          VERSION: ${{ needs.target.outputs.version }}
+        run: python3 scripts/published_images.py ghcr.io/vecten "$VERSION"
+
+  # This job can write to the registry, so it executes nothing from the tagged tree: only pinned
+  # actions and its own shell. The image tag comes from the pushed ref, which the App can name
+  # only as a candidate. The tree's Dockerfiles run inside BuildKit, with no token in the build
+  # context. The job names no environment, so a release takes one approval: it starts only once
+  # the approved packages job has succeeded.
+  images:
+    needs: [target, packages, published]
+    if: >-
+      contains(fromJSON('["candidate", "release"]'), needs.target.outputs.target)
+      && needs.published.outputs.build == 'true'
     runs-on: ubuntu-24.04
     # The linux/arm64 builds run under QEMU emulation.
     timeout-minutes: 180
@@ -77,6 +102,23 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - id: version
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          pattern='^v[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+)?$'
+          if ! [[ $REF_NAME =~ $pattern ]]; then
+            echo "refused: the ref $REF_NAME is not vX.Y.Z or vX.Y.ZrcN" >&2
+            exit 1
+          fi
+          echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
@@ -84,21 +126,39 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: published
-        env:
-          VERSION: ${{ needs.target.outputs.version }}
-        run: python3 scripts/published_images.py ghcr.io/vecten "$VERSION"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      # One build per image puts both platforms in one index, so a tag never exists with one
+      # platform only; the mcp image is built only once the airflow image is pushed.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          enable-cache: false
-      - run: uv python install 3.14
-      - run: uv sync --locked --all-packages
-      - if: steps.published.outputs.build == 'true'
-        run: uv run vecten dev build-images --push ghcr.io/vecten --json
-      - run: uv run vecten dev check-images
+          context: .
+          file: images/airflow/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/vecten/vecten-airflow:${{ steps.version.outputs.version }}
+          build-args: |
+            AIRFLOW_IMAGE=${{ needs.target.outputs.airflow_image }}
+            AIRFLOW_VERSION=${{ needs.target.outputs.airflow_version }}
+            VECTEN_VERSION=${{ steps.version.outputs.version }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: images/mcp/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/vecten/vecten-mcp:${{ steps.version.outputs.version }}
+          build-args: |
+            BASE_IMAGE=${{ needs.target.outputs.mcp_base_image }}
+            VECTEN_VERSION=${{ steps.version.outputs.version }}
 
+  # Runs when the images were built, or skipped because both already existed; a job that needs a
+  # skipped job is skipped too unless its condition names the results it accepts.
   verify:
-    needs: [target, packages, images]
+    needs: [target, packages, published, images]
+    if: >-
+      !cancelled() && needs.packages.result == 'success'
+      && needs.published.result == 'success'
+      && (needs.images.result == 'success'
+      || (needs.images.result == 'skipped' && needs.published.outputs.build == 'false'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -133,6 +193,10 @@ jobs:
             sleep 20
           done
           [ "$("$venv/bin/vecten" version)" = "vecten $VERSION" ]
+      - name: Check that both images hold both platforms
+        env:
+          VERSION: ${{ needs.target.outputs.version }}
+        run: '"$RUNNER_TEMP/published/bin/vecten" dev check-images --version "$VERSION"'
       # The index serves its JSON pages from a cache of their own, so a file the install found can
       # still be missing there for a while; a hash that is present and differs fails at once.
       - name: Compare each built file's sha256 with the published one
