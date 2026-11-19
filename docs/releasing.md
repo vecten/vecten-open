@@ -3,11 +3,11 @@
 A release's live checks deploy real environments to AWS and Scaleway, on Postgres and on
 Snowflake, and an agent on your laptop runs them with access of its own to dedicated test
 accounts. This page holds all of it. [One-time setup](#one-time-setup) is the maintainer's:
-the accounts and identities, the credential home that holds them, and the GitHub rules around
-them. [Settings](#settings) gives the Claude Code settings that let the agent use them without
-asking, what bounds the commands it runs and where those bounds stop. [Running the live
-checks](#running-the-live-checks) is the agent's runbook for a release, and [The results
-file](#the-results-file) the record it keeps.
+the copy of the tools the agent runs, the accounts and identities, the credential home that
+holds them, and the GitHub rules around them. [Settings](#settings) gives the Claude Code
+settings that let the agent use them without asking, what bounds the commands it runs and
+where those bounds stop. [Running the live checks](#running-the-live-checks) is the agent's
+runbook for a release, and [The results file](#the-results-file) the record it keeps.
 
 ## One-time setup
 
@@ -41,7 +41,29 @@ and the other files of the credential home, which live only on your laptop:
 | `<sandbox-org>` | The new GitHub organisation for sandbox repositories |
 | `<upstream-app>` | The slug of the GitHub App installed on `vecten/vecten-open` |
 
-1. **The credential home.** In the terminal you use for this whole list, make every new file
+1. **The tools copy.** The agent runs every live-check command from a second clone of this
+   repository that only you update, so that it cannot change the code the
+   [Settings](#settings) let it run without asking. Clone it to `~/vecten-live-tools`, on the
+   branch that carries `scripts/live/`: the open release branch, until the tooling is on
+   `main`. Then give it its own environment:
+
+   ```sh
+   git clone https://github.com/vecten/vecten-open.git ~/vecten-live-tools
+   git -C ~/vecten-live-tools switch release/<X.Y.Z>   # skip once the tooling is on main
+   (cd ~/vecten-live-tools && uv sync --locked --all-packages)
+   ```
+
+   Update it yourself, after a change to `scripts/live/` merges into its branch: `git pull`,
+   then `uv sync --locked --all-packages`, both in `~/vecten-live-tools`. Never work in it: it
+   is not a checkout to edit, build in or switch, the settings deny the agent's file-editing
+   tools there, and the wrapper refuses to run a credentialed command from inside it. Every
+   other step on this page runs in the checkout you work in.
+
+   Confirm: from the checkout, `~/vecten-live-tools/scripts/live/live doctor` prints
+   `tools ok: <the copy's path> at <its commit>` as its first line. Until the next item makes
+   the credential home, it then stops with `access: no credential home at …` (exit 3).
+
+2. **The credential home.** In the terminal you use for this whole list, make every new file
    owner-only and create the directory layout:
 
    ```sh
@@ -53,17 +75,19 @@ and the other files of the credential home, which live only on your laptop:
    ```
 
    `LIVE` is shorthand for the commands on this page only; in a new terminal, run the first
-   two lines again. `allow.toml` lists the identities the wrapper (`scripts/live/access.py`)
-   accepts; you add one table to it at each of the next steps. The wrapper creates `cache/`
-   (minted GitHub tokens) and `home/` (the home directory of every command it runs) itself.
-   `VECTEN_LIVE_HOME` names another directory instead, but every path on this page, and the
-   `denyRead` and `Read` deny entries under [Settings](#settings), assume the default.
+   two lines again. `allow.toml` lists the identities the wrapper (`scripts/live/access.py` of
+   the tools copy, which its launcher `scripts/live/live` starts) accepts; you add one table to
+   it at each of the next steps. The wrapper creates `cache/` (minted GitHub tokens) and
+   `home/` (the home directory of every command it runs) itself. `VECTEN_LIVE_HOME` names
+   another directory instead, but every path on this page, and the `denyRead` and `Read` deny
+   entries under [Settings](#settings), assume the default.
 
-   Confirm: `uv run python scripts/live/access.py doctor` prints six lines. The five identity
-   lines say `FAIL: not configured in allow.toml` for now; the last says `os-sandbox ok`,
-   which proves this Mac can start the sandbox the wrapper runs commands in.
+   Confirm: `~/vecten-live-tools/scripts/live/live doctor` prints seven lines. The first is
+   the `tools ok` line of item 1; the five identity lines say
+   `FAIL: not configured in allow.toml` for now; the last says `os-sandbox ok`, which proves
+   this Mac can start the sandbox the wrapper runs commands in.
 
-2. **AWS.**
+3. **AWS.**
    - In the management account, AWS Organizations, add a new member account used for nothing
      but live checks. Note its account ID, `<livecheck-account-id>`.
    - Switch role into it (`OrganizationAccountAccessRole`). In IAM, create the user
@@ -94,7 +118,7 @@ and the other files of the credential home, which live only on your laptop:
    Confirm: `doctor` prints `aws ok`; `dig +short NS <aws-zone>` prints the four name servers
    of the new zone; the Budgets page lists the budget with your email on its alert.
 
-3. **Scaleway.**
+4. **Scaleway.**
    - Confirm that the existing sandbox API key belongs to an organisation that holds only test
      resources: in the console, look through every project of that organisation, and check
      under IAM that the key's bearer belongs to it. Note the organisation's ID,
@@ -130,7 +154,7 @@ and the other files of the credential home, which live only on your laptop:
    `<scaleway-org-id>`); `dig +short NS <scaleway-zone>` prints Scaleway's name servers and the
    console shows the zone as active; the billing alert is listed.
 
-4. **Snowflake.**
+5. **Snowflake.**
    - Move your connection to the sandbox account out of your own Snowflake configuration
      (`~/.snowflake/`, `~/.config/snowflake/` or `~/Library/Application Support/snowflake/`)
      into `$LIVE/snowflake/connections.toml`, as the table `[livecheck]` (the connection the
@@ -172,7 +196,7 @@ and the other files of the credential home, which live only on your laptop:
    Confirm: `doctor` prints `snowflake ok`; `SHOW RESOURCE MONITORS;` lists
    `livecheck_monthly` at level `ACCOUNT`.
 
-5. **The GitHub sandbox organisation.**
+6. **The GitHub sandbox organisation.**
    - Create a new free organisation, `<sandbox-org>`. It holds only sandbox repositories,
      which are public, because a free organisation gives environments to public repositories
      only and `vecten bootstrap` creates one.
@@ -212,7 +236,7 @@ and the other files of the credential home, which live only on your laptop:
    reaches is in `<sandbox-org>` (none yet is fine). `github-upstream` still fails until the
    next item.
 
-6. **GitHub, `vecten/vecten-open`.**
+7. **GitHub, `vecten/vecten-open`.**
    - Create a second App, owned by the `vecten` organisation, with its webhook turned off and
      these repository permissions: Contents, Pull requests, Actions and Workflows read and
      write; Metadata read. Install it on `vecten/vecten-open` only. Its slug is
@@ -282,7 +306,7 @@ and the other files of the credential home, which live only on your laptop:
    credentials of the test accounts only. Do not test a ruleset by pushing a tag: a tag that
    gets through starts a publish.
 
-7. **The git identity of the agent's commits.** The wrapper gives git
+8. **The git identity of the agent's commits.** The wrapper gives git
    `$LIVE/git/config` as its global configuration when that file exists, and none otherwise.
    Give it the bot identity of `<upstream-app>`, so the agent's commits are attributed to the
    App:
@@ -297,7 +321,7 @@ and the other files of the credential home, which live only on your laptop:
 
    Confirm: `git config --file $LIVE/git/config --list` prints both lines.
 
-8. **Package indexes.** On TestPyPI, add a trusted publisher to each of the four projects
+9. **Package indexes.** On TestPyPI, add a trusted publisher to each of the four projects
    (`vecten`, `vecten-shared`, `vecten-platform`, `vecten-mcp`): GitHub, owner `vecten`,
    repository `vecten-open`, workflow `publish.yml`, environment `candidate`. On PyPI, the
    same for each of the four with environment `release`. No index token is stored anywhere:
@@ -306,48 +330,48 @@ and the other files of the credential home, which live only on your laptop:
    Confirm: each project's Publishing page on both indexes lists exactly that publisher. The
    first candidate the agent cuts is the first real test.
 
-9. **Google sign-in.** Each combination deploys under a fixed domain, so its callback address
-   is registered once, not per run.
-   - Write `$LIVE/google/hostnames.txt`, one line per combination, the combination name and
-     its domain:
+10. **Google sign-in.** Each combination deploys under a fixed domain, so its callback address
+    is registered once, not per run.
+    - Write `$LIVE/google/hostnames.txt`, one line per combination, the combination name and
+      its domain:
 
-     ```text
-     aws-postgres aws-postgres.<aws-zone>
-     aws-snowflake aws-snowflake.<aws-zone>
-     scaleway-postgres scaleway-postgres.<scaleway-zone>
-     scaleway-snowflake scaleway-snowflake.<scaleway-zone>
-     ```
+      ```text
+      aws-postgres aws-postgres.<aws-zone>
+      aws-snowflake aws-snowflake.<aws-zone>
+      scaleway-postgres scaleway-postgres.<scaleway-zone>
+      scaleway-snowflake scaleway-snowflake.<scaleway-zone>
+      ```
 
-   - In the Google Cloud console, APIs and services, Credentials, open the OAuth client the
-     deployed environments sign in with and add `https://mcp.<domain>/oidc/callback` for each
-     of the four domains to its authorised redirect URIs.
-   - Copy the client's ID and its secret from the same page into the credential home, one at a
-     time, so the secret never passes through your shell history. The ID is not a secret; the
-     agent configures the deployed environments with it:
+    - In the Google Cloud console, APIs and services, Credentials, open the OAuth client the
+      deployed environments sign in with and add `https://mcp.<domain>/oidc/callback` for each
+      of the four domains to its authorised redirect URIs.
+    - Copy the client's ID and its secret from the same page into the credential home, one at a
+      time, so the secret never passes through your shell history. The ID is not a secret; the
+      agent configures the deployed environments with it:
 
-     ```sh
-     pbpaste > $LIVE/google/oidc-client-id       # after copying the client ID
-     pbpaste > $LIVE/google/oidc-client-secret   # after copying the client secret
-     ```
+      ```sh
+      pbpaste > $LIVE/google/oidc-client-id       # after copying the client ID
+      pbpaste > $LIVE/google/oidc-client-secret   # after copying the client secret
+      ```
 
-   - Name the Google account that signs in during the checks, in `$LIVE/google/admin.toml`. The
-     agent makes it the first admin and the first user of every sandbox MCP:
+    - Name the Google account that signs in during the checks, in `$LIVE/google/admin.toml`. The
+      agent makes it the first admin and the first user of every sandbox MCP:
 
-     ```toml
-     email = "<the Google account's address>"
-     firstname = "<its first name>"
-     ```
+      ```toml
+      email = "<the Google account's address>"
+      firstname = "<its first name>"
+      ```
 
-     This address is written into each sandbox project's `vecten.toml` (`[mcp] admins`), so it
-     is public in that project's repository for as long as the repository exists. Use a Google
-     account made for these checks, not a personal or work address.
+      This address is written into each sandbox project's `vecten.toml` (`[mcp] admins`), so it
+      is public in that project's repository for as long as the repository exists. Use a Google
+      account made for these checks, not a personal or work address.
 
-   Confirm: the client lists the four redirect URIs; `cat $LIVE/google/oidc-client-id` prints
-   the client ID, and `oidc-client-secret` holds the secret and nothing else (check it in an
-   editor rather than printing it). `uv run python scripts/live/access.py show admin-email`
-   prints the address, and `show hostname aws-postgres` the first domain.
+    Confirm: the client lists the four redirect URIs; `cat $LIVE/google/oidc-client-id` prints
+    the client ID, and `oidc-client-secret` holds the secret and nothing else (check it in an
+    editor rather than printing it). `~/vecten-live-tools/scripts/live/live show admin-email`
+    prints the address, and `show hostname aws-postgres` the first domain.
 
-10. **`allow.toml`, complete.** It now holds the five IDs, and nothing else:
+11. **`allow.toml`, complete.** It now holds the five IDs, and nothing else:
 
     ```toml
     [aws]
@@ -367,19 +391,20 @@ and the other files of the credential home, which live only on your laptop:
     Confirm: `stat -f %Sp $LIVE` prints `drwx------`, so only you can read the credential
     home.
 
-11. **Settings.** Paste the two blocks under [Settings](#settings).
+12. **Settings.** Paste the two blocks under [Settings](#settings).
 
     Confirm: `claude auto-mode config` shows the environment and allow entries.
 
-12. **The whole check.** From the root of the checkout:
+13. **The whole check.** From the root of the checkout:
 
     ```sh
-    uv run python scripts/live/access.py doctor
+    ~/vecten-live-tools/scripts/live/live doctor
     ```
 
     Confirm: it exits 0 and every line says `ok`:
 
     ```text
+    tools ok: <your home>/vecten-live-tools at <its commit>
     aws ok
     scaleway ok
     snowflake ok
@@ -388,44 +413,51 @@ and the other files of the credential home, which live only on your laptop:
     os-sandbox ok
     ```
 
-    A `FAIL` line names the reason; go back to that identity's item. Then
-    `uv run python scripts/live/access.py run -- git config --global --list` prints the
-    identity of item 7, which shows the guard passes and a command runs. Last, start a new
+    A `FAIL` line names the reason; go back to that item. Then
+    `~/vecten-live-tools/scripts/live/live run -- git config --global --list` prints the
+    identity of item 8, which shows the guard passes and a command runs. Last, start a new
     Claude Code session in the checkout and ask it to run the same `doctor` command: it runs
-    without a permission prompt and prints the same six lines.
+    without a permission prompt and prints the same seven lines. Ask it too to change a line
+    of `~/vecten-live-tools/scripts/live/access.py`: its edit tools are denied, and a shell
+    command that writes there fails in the command sandbox.
 
 ## Settings
 
 The agent cannot write either settings file, so you paste these two blocks yourself, merging
 them into whatever the files already hold, and check the result with `claude auto-mode config`.
 
-In `.claude/settings.local.json` of the checkout, which git ignores. It lets the agent run four
-live-check scripts, the wrapper (`access.py`), `combos.py`, `cost.py` and `sandbox_project.py`,
-without a prompt and outside the command sandbox; makes `~/vecten-sandbox` (the throwaway
-sandbox projects) a directory it can work in; keeps every other command, and the agent's own
-file-reading tools, out of the credential home; and lets commands in the command sandbox reach
-the image registry and the address checker of the runbook:
+In `.claude/settings.local.json` of the checkout, which git ignores. It lets the agent run one
+command, the launcher of the tools copy (`~/vecten-live-tools/scripts/live/live`, setup item
+1), without a prompt and outside the command sandbox; keeps the agent's own file-editing tools
+out of the tools copy; makes `~/vecten-sandbox` (the throwaway sandbox projects) a directory it
+can work in; keeps every other command, and the agent's own file-reading tools, out of the
+credential home; and lets commands in the command sandbox reach the image registry and the
+address checker of the runbook:
 
 ```json
 {
   "permissions": {
-    "allow": ["Bash(uv run python scripts/live/access.py *)", "Bash(uv run python scripts/live/combos.py *)",
-              "Bash(uv run python scripts/live/cost.py *)", "Bash(uv run python scripts/live/sandbox_project.py *)"],
-    "deny": ["Read(~/.config/vecten-livecheck/**)"],
+    "allow": ["Bash(~/vecten-live-tools/scripts/live/live *)"],
+    "deny": ["Read(~/.config/vecten-livecheck/**)", "Edit(~/vecten-live-tools/**)",
+             "Write(~/vecten-live-tools/**)"],
     "additionalDirectories": ["~/vecten-sandbox"]
   },
   "sandbox": {
-    "excludedCommands": ["uv run python scripts/live/access.py *", "uv run python scripts/live/combos.py *",
-                         "uv run python scripts/live/cost.py *", "uv run python scripts/live/sandbox_project.py *"],
+    "excludedCommands": ["~/vecten-live-tools/scripts/live/live *"],
     "filesystem": {"allowWrite": ["~/vecten-sandbox"], "denyRead": ["~/.config/vecten-livecheck"]},
     "network": {"allowedDomains": ["ghcr.io", "checkip.amazonaws.com"]}
   }
 }
 ```
 
-`candidate.py` is not among the four: it runs only through the wrapper. Nor is
-`github_app.py`: its `token` command prints a live token, so it stays inside the command
-sandbox, which keeps it out of the credential home.
+The launcher starts the wrapper (`access.py`) of the tools copy with the copy's own Python, and
+the wrapper runs the other live-check scripts beside it by name: `live combos` runs
+`combos.py`, `live cost` `cost.py`, `live candidate` `candidate.py` and `live project`
+`sandbox_project.py`. So this one rule covers every live-check command, and each runs the code
+of the tools copy, not of the checkout the agent edits. Any other form, such as running a
+script of the checkout itself, falls outside the rule and gets the permission prompt.
+`github_app.py`, whose `token` command prints a live token, is not run by itself at all: the
+wrapper runs it to mint the token a command gets.
 
 In `~/.claude/settings.json`, the only file the auto-mode classifier reads this key from. It
 tells the classifier that the test accounts, the sandbox organisation and `~/vecten-sandbox`
@@ -438,32 +470,46 @@ are the agent's to change, and that the wrapper and candidate pushes are the age
       "The live-check test accounts (one AWS account, one Scaleway organisation, one Snowflake account) and every repository of the sandbox GitHub organisation exist only for release testing and are this agent's to create, change and destroy.",
       "~/vecten-sandbox holds throwaway sandbox projects owned by this agent."],
     "allow": ["$defaults",
-      "Commands run through `uv run python scripts/live/access.py run`, with no environment assignment in front, which refuses any identity outside the test accounts.",
-      "Pushing branches and tags matching v*rc* to vecten/vecten-open when done through `uv run python scripts/live/access.py run --github upstream`, with no environment assignment in front."]
+      "Commands run through `~/vecten-live-tools/scripts/live/live run`, typed in exactly that form with nothing in front, which refuses any identity outside the test accounts.",
+      "Pushing branches and tags matching v*rc* to vecten/vecten-open when done through `~/vecten-live-tools/scripts/live/live run --github upstream` or `~/vecten-live-tools/scripts/live/live candidate cut`, typed in exactly that form with nothing in front."]
   }
 }
 ```
 
 ### Why the wrapper runs outside the command sandbox
 
-Claude Code's command sandbox cannot hold the wrapper, for two reasons: `uv` cannot reach the
-network inside it (it panics; reproduced on 2026-11-19), and macOS cannot start one sandbox
-inside another, so the wrapper's own `sandbox-exec` exits 71 and the command never starts.
-`doctor` runs under the same sandbox as the commands, so from inside Claude Code it too must be
-run as `uv run python scripts/live/access.py doctor`, the excluded form.
+Claude Code's command sandbox cannot hold the wrapper, for two reasons: the commands it runs
+include `uv`, which cannot reach the network inside it (it panics; reproduced on 2026-11-19),
+and macOS cannot start one sandbox inside another, so the wrapper's own `sandbox-exec` exits 71
+and the command never starts. `doctor` runs under the same sandbox as the commands, so from
+inside Claude Code it too must be run as `~/vecten-live-tools/scripts/live/live doctor`, the
+excluded form.
 
 Two entries keep the agent out of the credential home. `sandbox.filesystem.denyRead` binds
 its shell commands only; its own file-reading tools follow `permissions.deny`, hence the
-`Read` entry there. Only the four excluded scripts can read the home.
+`Read` entry there. Only the excluded launcher can read the home.
+
+Three things keep the agent from changing the tools copy, and so the code the rule lets it run
+unasked: the `Edit` and `Write` deny entries bind its own file-editing tools; its shell
+commands run in the command sandbox, which lets them write the checkout and `~/vecten-sandbox`
+but not the copy; and a wrapped command is denied the copy by the OS profile below.
 
 ### What bounds a wrapped command
+
+A wrapped command is one that runs with the test credentials: `live run -- <command>`,
+`live cost sweep` and every `live candidate` call. The other subcommands (`doctor`, `show`,
+`live combos`, `live cost estimate`, `live cost spent` and `live project`) need no credential
+and run directly, outside the guard and the OS sandbox; `live combos` and `live project` read
+and write only the checkout or project they run in or are given, and `live cost` prices with
+the `vecten` of the tools copy. A wrapped command refuses (exit 3) to run inside the tools
+copy, as the current directory or as its `--cwd`: the copy is not a place to work in.
 
 What bounds a wrapped command is the identity guard, the command's own home and environment,
 and the OS sandbox, all below. Together they keep tools, and slips, away from your own
 credentials and accounts; they do not contain an agent that sets out to work around them
 ([Limits](#limits) says why). The executable list is no bound: `uv` is on it, and `uv run`
 starts any program, which the runbook itself relies on. The list only keeps the common case
-tidy. `access.py run -- <command>` refuses a first word outside `vecten`, `aws`, `scw`, `snow`,
+tidy. `live run -- <command>` refuses a first word outside `vecten`, `aws`, `scw`, `snow`,
 `gh`, `git`, `terraform` and `uv`, and a first word that is a path (`./vecten`,
 `/opt/bin/aws`): only bare names, found on `PATH`, run. `docker` is not among them: local
 Docker work needs no cloud credential, so it runs outside the wrapper.
@@ -482,7 +528,7 @@ outside the home, through `..` or a symlink, or names no file is refused, and th
 prints the file. That is how a secret such as the Google client secret reaches a command without
 passing through the agent.
 
-`access.py show <name>` prints one setting that is not a secret, and nothing else:
+`live show <name>` prints one setting that is not a secret, and nothing else:
 `sandbox-org` and `upstream-repo` from `allow.toml`, `hostname <combination>` from
 `google/hostnames.txt`, `oidc-client-id`, and `admin-email` and `admin-firstname` from
 `google/admin.toml`. Any other name, or a missing file, key or line, is a one-line refusal
@@ -512,6 +558,8 @@ The command then runs with:
     `~/.claude/settings.local.json`, `~/.zshrc`, `~/.zprofile`, `~/.zshenv`, `~/.bashrc`,
     `~/.bash_profile` and `~/.profile`, and `.claude/settings.json` and
     `.claude/settings.local.json` of the directory the wrapper started in, the checkout;
+  - writing the tools copy the wrapper runs from, `~/vecten-live-tools`, so no wrapped command
+    can change the code the settings let the agent run unasked;
   - every unix-socket connection but the name resolver's (`/private/var/run/mDNSResponder`),
     so no Docker daemon, ssh-agent or gpg-agent is reachable.
 - **Its own home.** `HOME` is `<credential home>/home`, so a tool's default lookups miss your
@@ -525,44 +573,50 @@ The command then runs with:
   git's credential helper for github.com, GitHub SSH remotes rewritten to HTTPS, and git over
   SSH refused.
 
-The permission rule matches only the bare command. `VECTEN_LIVE_HOME` (and `HOME`) choose the
-credential home the wrapper reads, so a command with an environment assignment in front of the
-wrapper falls outside the rule and goes to the permission prompt or the auto-mode classifier.
-That is intended.
+The permission rule matches the command's text, so it matches only the launcher typed in full
+with nothing in front. `VECTEN_LIVE_HOME` (and `HOME`) choose the credential home the wrapper
+reads, so a command with an environment assignment in front of the launcher falls outside the
+rule and goes to the permission prompt or the auto-mode classifier. That is intended.
 
 ### Limits
 
 - **The wrapper is not a containment.** It keeps tools, and slips, away from your own
-  credentials and accounts. It does not contain an agent that deliberately works around it,
-  for three reasons:
-  - The allowed commands run outside the command sandbox, from the working checkout, which the
-    agent edits and whose branches the runbook switches. Editing a script under
-    `scripts/live/` and then running the allowed command runs any code the agent wrote, as
-    you.
+  credentials and accounts. The tools copy closes the easy way around it: the code the
+  settings let the agent run unasked, outside the command sandbox, is the copy's, and the agent
+  cannot change it, since its file-editing tools are denied the copy, its sandboxed shell
+  commands cannot write there, and a wrapped command is denied it by the OS profile. It still
+  does not contain an agent that deliberately works around it, for three reasons:
   - The OS sandbox profile is a deny-list: a wrapped command can write most of your home
     directory and read any credential file the profile does not name.
   - A wrapped process can have another started outside the profile, through LaunchServices,
     Apple Events or launchd.
+  - A wrapped `uv run …`, such as the release commit's `uv run vecten dev bump-version` or the
+    `uv run --no-project` form of a sandbox project's `vecten`, still runs code from the
+    working checkout or the run's own environments, which the agent can change; it runs inside
+    the profile, with the test credentials.
 
-  Either of two things would make it a real boundary, and neither is built: a copy of
-  `scripts/live/` outside the working checkout, updated only by you and named by absolute
-  path in the permission rules; or a separate macOS user for the agent. Text written by a
-  stranger can reach the agent: the runbook has it read pull request bodies and work in public
-  repositories.
-- **Images can be pushed without an approval.** Setup item 6 gives this repository's Actions
+  A separate macOS user for the agent would make it a real boundary; that is not built. Text
+  written by a stranger can reach the agent: the runbook has it read pull request bodies and
+  work in public repositories.
+- **Images can be pushed without an approval.** Setup item 7 gives this repository's Actions
   the Write role on the two images, and the App can push workflows; the item says what that
   grants and what would close it.
 - A symlink inside a denied directory that points outside it stays readable.
 - Whether the deny on `~/Library/Keychains` stops a keychain read through `/usr/bin/security`
   has not been verified.
 - The executable list bounds nothing while `uv` is on it, since `uv run` starts any program.
+- The subcommands that need no credential (`live combos`, `live cost estimate`,
+  `live cost spent` and `live project`) run outside the profile, as you. They run only the
+  tools copy's code and `git`, with fsmonitor off where git reads an index, and write only what
+  they are given: `combos record` the ledger of the checkout it runs in, or the one `--ledger`
+  names, and `project candidate` and `project release` the workflows of the project named.
 - On Linux there is no OS sandbox: `doctor` prints `os-sandbox absent (not macOS)`, and a
   wrapped command is bounded by its home, its environment and the guard only.
 - **Sandbox repositories are public.** While one exists, it publishes the project's domain
   (in `vecten.toml` and `deploy/envs/prod.tfvars`), on a Snowflake combination the Snowflake
   account identifier (in the tfvars), the sign-in address of `google/admin.toml` (in
   `vecten.toml`'s `[mcp] admins`), the Google OAuth client ID (in `vecten.toml`; its numeric
-  prefix is the Google Cloud project number), and the bot's git identity of setup item 7 (in
+  prefix is the Google Cloud project number), and the bot's git identity of setup item 8 (in
   every commit), besides the workflow logs. That is accepted for those repositories only; the
   run deletes each one when its environment is destroyed.
 
@@ -605,20 +659,31 @@ these, which need the maintainer:
 - decisions: a `FAIL` from `doctor`, a run over the $60 ceiling, a finding to block on or
   follow up, and every other step that says to tell the maintainer and stop or wait.
 
-Any other prompt is a gap in this page: record it in Hand-offs with its cause.
+Any other prompt is a gap in this page: record it in Hand-offs with its cause. A live-check
+command that prompts because it was not typed in the launcher form of
+[How commands run](#how-commands-run), item 1, is not such a gap: it is a mistake in the
+command; type it again in that form.
 
 ### How commands run
 
-1. Run every command from the root of the checkout. Four live-check scripts run as
-   `uv run python scripts/live/<script>.py …`: `access.py` (the wrapper), `combos.py`,
-   `cost.py` and `sandbox_project.py`, which the settings run outside the command sandbox.
-   Any other command of the checkout runs from its virtual environment, as
-   `.venv/bin/<tool> …`, since `uv` cannot work inside the command sandbox.
+1. Run every command from the root of the checkout, never from the tools copy. Every
+   live-check command runs through the launcher of the tools copy, typed in exactly this form:
+   `~/vecten-live-tools/scripts/live/live <subcommand> …`. Use no variable, alias or other path
+   for it, and put nothing in front of it, no environment assignment and no `cd`: the
+   permission rule matches the command's text, and any other form raises a prompt. Running
+   text on this page names such a command `live <subcommand>`; every command block writes it
+   in full, and so do you. The subcommands are `run` (item 2), `doctor`, `show` (item 6), and
+   `combos`, `cost`, `candidate` and `project`, which run `combos.py`, `cost.py`,
+   `candidate.py` and `sandbox_project.py` of the tools copy with the arguments that follow.
+   They run the copy's code, so a change to `scripts/live/` in the checkout takes effect only
+   once the maintainer has merged it and updated the copy (setup item 1). Any other command of
+   the checkout runs from its virtual environment, as `.venv/bin/<tool> …`, since `uv` cannot
+   work inside the command sandbox.
 2. A command that needs a test credential (every cloud, GitHub and git command, including local
    git) runs through the wrapper:
 
    ```sh
-   uv run python scripts/live/access.py run [--github upstream] [--cwd <directory>] \
+   ~/vecten-live-tools/scripts/live/live run [--github upstream] [--cwd <directory>] \
      [--stdin-file <path in the credential home>] -- <command> …
    ```
 
@@ -626,22 +691,22 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
    `git`, `terraform` or `uv`; a path is refused (exit 2). `--github upstream` gives GitHub and
    git the `vecten/vecten-open` App; without it they get the sandbox organisation's App.
    `--cwd` runs the command in that directory. `--stdin-file` feeds it a file of the credential
-   home as standard input. Exit 3 means the wrapper refused: its message names the identity or
-   the option at fault; tell the maintainer and do not reach the account another way. Never put
-   an environment assignment or a `cd` in front of the wrapper: the permission rule matches the
-   bare command only. Every script under `scripts/live/` exits the same way: 2 is a usage
-   error or a refusal before anything ran, 3 a refusal by the tool its message names, and a
-   traceback is exit 1 and always a finding about the tooling. A step names any other exit it
-   relies on, such as the sweep's 1 and 4.
-3. A helper script that calls a cloud CLI itself runs inside the wrapper, as in
-   `uv run python scripts/live/access.py run -- uv run python scripts/live/cost.py sweep …`.
-   `candidate.py cut` and `cost.py sweep` refuse (exit 3) anywhere else, since there git and
-   the cloud CLIs would use your own credentials; the message gives the wrapped form.
+   home as standard input. Exit 3 means the wrapper refused: its message names the identity, the
+   option or the directory at fault; tell the maintainer and do not reach the account another
+   way. Every live-check command exits the same way: 2 is a usage error or a refusal before
+   anything ran, 3 a refusal by the tool its message names, and a traceback is exit 1 and
+   always a finding about the tooling. A step names any other exit it relies on, such as the
+   sweep's 1 and 4.
+3. `live cost sweep` and every `live candidate` call run with the test credentials as
+   `live run` does, the identity check first: `candidate` with the `vecten/vecten-open` App,
+   `cost sweep` with the sandbox organisation's. Never put them inside `live run`. The other
+   subcommands of `live combos`, `live cost` and `live project` need no credential and run
+   directly.
 4. A `vecten` command in a sandbox project is written below as `vecten <arguments>`, short for
    this full form, which runs the CLI in `<cli>` with `<project>` as its working directory:
 
    ```sh
-   uv run python scripts/live/access.py run --cwd <project> -- \
+   ~/vecten-live-tools/scripts/live/live run --cwd <project> -- \
      uv run --no-project --python <cli>/bin/python vecten <arguments>
    ```
 
@@ -659,14 +724,14 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
    come from `show`, which prints one value and nothing else:
 
    ```sh
-   uv run python scripts/live/access.py show sandbox-org            # <sandbox-org>
-   uv run python scripts/live/access.py show hostname <combination> # its domain
-   uv run python scripts/live/access.py show oidc-client-id
-   uv run python scripts/live/access.py show admin-email            # the Google account
-   uv run python scripts/live/access.py show admin-firstname        # that signs in
+   ~/vecten-live-tools/scripts/live/live show sandbox-org            # <sandbox-org>
+   ~/vecten-live-tools/scripts/live/live show hostname <combination> # its domain
+   ~/vecten-live-tools/scripts/live/live show oidc-client-id
+   ~/vecten-live-tools/scripts/live/live show admin-email            # the Google account
+   ~/vecten-live-tools/scripts/live/live show admin-firstname        # that signs in
    ```
 
-   Exit 3 names what is missing; that is the maintainer's to add (setup items 5 and 9). None
+   Exit 3 names what is missing; that is the maintainer's to add (setup items 6 and 10). None
    of these values goes into anything checked in.
 7. `vecten deploy`, `vecten destroy`, `vecten github push` on a deployed project and
    `gh run watch` follow a workflow for many minutes, the publish run for up to three hours.
@@ -684,7 +749,8 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
    the run stops to wait for the maintainer:
 
    ```sh
-   uv run python scripts/live/cost.py spent --created .claude/live-checks-<version>.created.json
+   ~/vecten-live-tools/scripts/live/live cost spent \
+     --created .claude/live-checks-<version>.created.json
    ```
 
    Exit 3 (over the $60 ceiling) means ask the maintainer, with the figures, before
@@ -692,9 +758,10 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
 4. Never read or print a credential. A secret of the credential home reaches a command through
    the wrapper's `--stdin-file`; a key the run generates itself reaches it through a redirect;
    neither passes through your output.
-5. Every cloud, GitHub and git command goes through `access.py run`.
+5. Every cloud, GitHub and git command goes through the wrapper: `live run`, or
+   `live candidate` and `live cost sweep`, which pass through it themselves.
 6. Never push to `main` or to `release/*`, and never merge. Pushes to `vecten/vecten-open` are
-   candidate branches and tags (`candidate.py` makes them), branches of your own pull
+   candidate branches and tags (`live candidate cut` makes them), branches of your own pull
    requests, and, once the release is published, the deletion of the run's candidate branches
    ([The release commit](#the-release-commit), step 7).
 7. A candidate number is used once. A tag is never moved, deleted or pushed again.
@@ -714,29 +781,30 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
 2. Check every identity:
 
    ```sh
-   uv run python scripts/live/access.py doctor
+   ~/vecten-live-tools/scripts/live/live doctor
    ```
 
-   It must exit 0 with six `ok` lines. A `FAIL` line is the maintainer's to fix: send it to
-   them and stop.
+   It must exit 0, its first line `tools ok: …` and the six after it `ok`. A `FAIL` line is
+   the maintainer's to fix: send it to them and stop. `tools FAIL` means the command ran inside
+   the tools copy: run it again from the checkout.
 3. Fetch and stand on the release branch:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- git fetch origin --tags
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- git fetch origin --tags
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git switch --detach origin/release/<version>
    ```
 
 4. Confirm CI is green on the release head:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      gh run list --repo vecten/vecten-open --branch release/<version> --limit 10 \
      --json workflowName,headSha,conclusion,url
    ```
 
    The newest run of each workflow on the head commit (what
-   `uv run python scripts/live/access.py run --github upstream -- git rev-parse HEAD` prints)
+   `~/vecten-live-tools/scripts/live/live run --github upstream -- git rev-parse HEAD` prints)
    has conclusion `success`. Otherwise tell the maintainer and stop: live checks run on a green
    head.
 5. Create the run's files. `mkdir -p <run>/cli`, write `<created>` as
@@ -745,8 +813,8 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
 6. Sweep for leftovers before creating anything:
 
    ```sh
-   uv run python scripts/live/access.py run -- \
-     uv run python scripts/live/cost.py sweep --created .claude/live-checks-<version>.created.json
+   ~/vecten-live-tools/scripts/live/live cost sweep \
+     --created .claude/live-checks-<version>.created.json
    ```
 
    Exit 0 (`nothing left`): carry on. Exit 1: each `leftover:` line is something no
@@ -758,17 +826,20 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
 7. Name the owed combinations:
 
    ```sh
-   uv run python scripts/live/combos.py plan
+   ~/vecten-live-tools/scripts/live/live combos plan
    ```
 
-   Each line is an owed combination, the ledger tag it last ran at and the files changed since.
+   The first line names the ledger and file map it read, the checkout's own under
+   `scripts/live/`. Each line after it is an owed combination, the ledger tag it last ran at
+   and the files changed since.
    You may add a combination and say why in the results file; dropping an owed one is the
    maintainer's decision. When `not owed` lists all four, the run has only the release's own
    list.
 8. Price the run, 24 hours per owed combination:
 
    ```sh
-   uv run python scripts/live/cost.py estimate --combinations <owed,comma,separated> --hours 24
+   ~/vecten-live-tools/scripts/live/live cost estimate \
+     --combinations <owed,comma,separated> --hours 24
    ```
 
    Exit 0: carry on. Exit 3 (over the $60 ceiling): ask the maintainer, with the figures, and
@@ -793,17 +864,17 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
    branch, so list its commits by first parent; each subject ends in its pull request number:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git log --first-parent --oneline v<previous>..origin/release/<version>
    ```
 
    For each pull request, read it
-   (`… run --github upstream -- gh pr view <number> --repo vecten/vecten-open`) and keep the
+   (`live run --github upstream -- gh pr view <number> --repo vecten/vecten-open`) and keep the
    ones whose proof needs a real system: a unit test cannot show it.
 3. Write one results row per check, with no result yet, grouped by the combination it runs
    on. A check that needs something the test accounts do not have (a private extensions
    repository, a chat app) gets BLOCKED with that reason at once.
-4. A check owed on a combination `combos.py` did not name adds that combination: estimate
+4. A check owed on a combination `live combos plan` did not name adds that combination: estimate
    again (Start, step 8) with it.
 
 ### Candidate
@@ -812,7 +883,7 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
    merged yet. List them:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      gh pr list --repo vecten/vecten-open --base release/<version> --state open \
      --json number,headRefName,title
    ```
@@ -821,34 +892,36 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
    the candidate needs (none on a first candidate):
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
-     uv run python scripts/live/candidate.py cut --version <version> [--with origin/<branch> …]
+   ~/vecten-live-tools/scripts/live/live candidate cut --version <version> \
+     [--with origin/<branch> …]
    ```
 
-   It prints one JSON line with `candidate`, `branch`, `tag`, `commit` and `pushed: true`, and
-   leaves the checkout on `rc/<candidate>`; switch back with
-   `… run --github upstream -- git switch --detach origin/release/<version>`. Exit 3 names
+   It cuts the candidate in the checkout it runs in and prints one JSON line with
+   `candidate`, `branch`, `tag`, `commit` and `pushed: true`, and leaves the checkout on
+   `rc/<candidate>`; switch back with
+   `live run --github upstream -- git switch --detach origin/release/<version>`. Exit 3 names
    the step that failed and has undone the local branch and tag. If the message ends in
    "branch rc/<candidate> is already on origin", the tag was not pushed: tell the maintainer
    and stop. That number is spent, and a later cut takes the one after it.
 3. Pushing the tag starts the `publish` workflow. Find its run and follow it:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      gh run list --repo vecten/vecten-open --workflow publish.yml --branch v<candidate> \
      --json databaseId,status,conclusion,url --limit 1
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      gh run watch <databaseId> --repo vecten/vecten-open --exit-status
    ```
 
    The run registers a few seconds after the push: until `gh run list` prints a run for
    `v<candidate>`, wait and list again. `gh run watch` exit 0: published. Otherwise read the
-   failed step (`… gh run view <databaseId> --repo vecten/vecten-open --log-failed`). A
-   failure that needs no change to the tree (the index or the registry was unreachable, a
+   failed step, with
+   `live run --github upstream -- gh run view <databaseId> --repo vecten/vecten-open --log-failed`.
+   A failure that needs no change to the tree (the index or the registry was unreachable, a
    runner died) is rerun with
-   `… gh run rerun <databaseId> --repo vecten/vecten-open --failed`: the workflow is built for
-   that, skipping packages the index already holds and
-   never pushing over a published image tag. A failure that needs any change is a
+   `live run --github upstream -- gh run rerun <databaseId> --repo vecten/vecten-open --failed`:
+   the workflow is built for that, skipping packages the index already holds and never pushing
+   over a published image tag. A failure that needs any change is a
    [finding](#findings), and its fix is cut as the next candidate number. A tag is never moved,
    deleted or pushed again (not yet tried against a live account).
 
@@ -871,9 +944,9 @@ Any other prompt is a gap in this page: record it in Hand-offs with its cause.
    verification does:
 
    ```sh
-   uv run python scripts/live/access.py run -- \
+   ~/vecten-live-tools/scripts/live/live run -- \
      uv venv --no-config --python 3.14 <run>/cli/<candidate>
-   uv run python scripts/live/access.py run -- uv pip install --no-config \
+   ~/vecten-live-tools/scripts/live/live run -- uv pip install --no-config \
      --python <run>/cli/<candidate> \
      --find-links https://test.pypi.org/simple/vecten/ \
      --find-links https://test.pypi.org/simple/vecten-shared/ \
@@ -897,13 +970,13 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    `show sandbox-org` prints. Then the values of the cloud:
 
    - region: on AWS,
-     `uv run python scripts/live/access.py run -- aws configure get region`; on Scaleway,
+     `~/vecten-live-tools/scripts/live/live run -- aws configure get region`; on Scaleway,
      `fr-par`;
-   - profile: `standard` on AWS, `minimal` on Scaleway (the profiles `cost.py` priced);
+   - profile: `standard` on AWS, `minimal` on Scaleway (the profiles `live cost` priced);
    - on Snowflake, the account's `<ORG-ACCOUNT>` identifier:
 
      ```sh
-     uv run python scripts/live/access.py run -- snow sql -c livecheck --format json \
+     ~/vecten-live-tools/scripts/live/live run -- snow sql -c livecheck --format json \
        -q "select current_organization_name() || '-' || current_account_name()"
      ```
 
@@ -913,7 +986,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    `<project>`:
 
    ```sh
-   uv run python scripts/live/access.py run --cwd <run> -- \
+   ~/vecten-live-tools/scripts/live/live run --cwd <run> -- \
      uv run --no-project --python <cli>/bin/python \
      vecten init <combination> --name <name> --users 5 --source placeholder \
      --components platform,mcp --size small --profile <profile> --cloud <cloud> \
@@ -929,7 +1002,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 3. **Candidate workflows.** On the candidate path:
 
    ```sh
-   uv run python scripts/live/sandbox_project.py candidate <project> <candidate>
+   ~/vecten-live-tools/scripts/live/live project candidate <project> <candidate>
    ```
 
    It exits 0 and the workflows install `vecten==<candidate>` with the TestPyPI
@@ -937,9 +1010,9 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 4. **Check before it goes public.** Stage the project and check it:
 
    ```sh
-   uv run python scripts/live/access.py run -- git -C <project> init -b main
-   uv run python scripts/live/access.py run -- git -C <project> add --all
-   uv run python scripts/live/sandbox_project.py check-public <project>
+   ~/vecten-live-tools/scripts/live/live run -- git -C <project> init -b main
+   ~/vecten-live-tools/scripts/live/live run -- git -C <project> add --all
+   ~/vecten-live-tools/scripts/live/live project check-public <project>
    ```
 
    Exit 0, printing nothing, is a pass. Exit 1 lists each file that holds a secret, by name or
@@ -955,22 +1028,23 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
     "repository": "<sandbox-org>/<name>", "created_at": "<now>", "destroyed_at": null}
    ```
 
-   where `<now>` is `date -u +%Y-%m-%dT%H:%M:%S+00:00`. `cost.py` reads `combination`,
+   where `<now>` is `date -u +%Y-%m-%dT%H:%M:%S+00:00`. `live cost` reads `combination`,
    `project`, `env`, `created_at` and `destroyed_at`; `repository` is for you.
 6. **Repository.** Create it, then make it public, since a free organisation gives environments
    to public repositories only:
 
    ```sh
    vecten github init
-   uv run python scripts/live/access.py run -- \
+   ~/vecten-live-tools/scripts/live/live run -- \
      gh repo edit <sandbox-org>/<name> --visibility public --accept-visibility-change-consequences
    ```
 
-   `github init` prints that it pushed; `gh repo view <sandbox-org>/<name> --json visibility`
-   (wrapped) says `PUBLIC` (not yet tried against a live account).
+   `github init` prints that it pushed, and
+   `live run -- gh repo view <sandbox-org>/<name> --json visibility` says `PUBLIC` (not yet
+   tried against a live account).
 7. **Bootstrap.** `vecten bootstrap --env prod`. It prints the state bucket, the identities and
    the GitHub environment it prepared. On Scaleway it finds the project holding the zone
-   itself, which rests on the zone setup of setup item 3 (not yet tried against a live
+   itself, which rests on the zone setup of setup item 4 (not yet tried against a live
    account).
 8. **Snowflake deploy user.** On Snowflake only. The environment gets a deploy user of its own,
    as `docs/deploy-aws.md` (step 4) and the Snowflake section of the project's
@@ -1010,7 +1084,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
       ```
 
       ```sh
-      uv run python scripts/live/access.py run -- \
+      ~/vecten-live-tools/scripts/live/live run -- \
         snow sql -c livecheck -f <run>/<combination>-deploy-user.sql
       ```
 
@@ -1039,7 +1113,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 
    ```sh
    vecten mcp provisioner-script --env prod > <project>/.vecten/provisioner.sql
-   uv run python scripts/live/access.py run -- \
+   ~/vecten-live-tools/scripts/live/live run -- \
      snow sql -c livecheck -f <project>/.vecten/provisioner.sql
    vecten mcp provisioner-script --env prod --confirm-run
    vecten github push
@@ -1060,11 +1134,11 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 
     - "Who is the first admin": `vecten answer mcp.admins <address>`, where `<address>` is what
       `show admin-email` prints.
-    - "Register … /oidc/callback": the address is registered already (setup item 9). Store the
+    - "Register … /oidc/callback": the address is registered already (setup item 10). Store the
       client secret from the credential home through the wrapper, then confirm:
 
       ```sh
-      uv run python scripts/live/access.py run --cwd <project> \
+      ~/vecten-live-tools/scripts/live/live run --cwd <project> \
         --stdin-file google/oidc-client-secret -- \
         uv run --no-project --python <cli>/bin/python \
         vecten secret set MCP_OIDC_CLIENT_SECRET --env prod
@@ -1097,15 +1171,15 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 
     ```sh
     vecten update
-    uv run python scripts/live/sandbox_project.py candidate <project> <candidate>
+    ~/vecten-live-tools/scripts/live/live project candidate <project> <candidate>
     # the check of step 4, then:
     vecten github push
     vecten deploy --env prod
     ```
 
     `update` prints `updated <previous> → <candidate>` and the files it changed. If a later
-    candidate replaces this one, run `uv run python scripts/live/sandbox_project.py release
-    <project>` before the next `vecten update`: update refuses workflows carrying the TestPyPI
+    candidate replaces this one, run `live project release <project>` before the next
+    `vecten update`: update refuses workflows carrying the TestPyPI
     patch. If `update` or the ship reports a lock pinning the old version, run `vecten lock` in
     the project form with `--env-file <run>/testpypi.env` after `--no-project`, where that
     file holds one line, `UV_FIND_LINKS=` followed by the four TestPyPI addresses of Candidate
@@ -1157,13 +1231,13 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 1. **AWS, through SSM.** Find the instances and run a command on one:
 
    ```sh
-   uv run python scripts/live/access.py run -- aws ec2 describe-instances --region <region> \
+   ~/vecten-live-tools/scripts/live/live run -- aws ec2 describe-instances --region <region> \
      --filters Name=tag:vecten:project,Values=<name> Name=instance-state-name,Values=running \
      --query "Reservations[].Instances[].[InstanceId, Tags[?Key=='Name'] | [0].Value]" --output text
-   uv run python scripts/live/access.py run -- aws ssm send-command --region <region> \
+   ~/vecten-live-tools/scripts/live/live run -- aws ssm send-command --region <region> \
      --instance-ids <instance id> --document-name AWS-RunShellScript \
      --parameters 'commands=["<command>"]' --query Command.CommandId --output text
-   uv run python scripts/live/access.py run -- aws ssm get-command-invocation --region <region> \
+   ~/vecten-live-tools/scripts/live/live run -- aws ssm get-command-invocation --region <region> \
      --command-id <command id> --instance-id <instance id> \
      --query "[Status, StandardOutputContent, StandardErrorContent]" --output text
    ```
@@ -1178,8 +1252,8 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    2. The resources project, its server, zone, public address and security group:
 
       ```sh
-      uv run python scripts/live/access.py run -- scw account project list -o json
-      uv run python scripts/live/access.py run -- \
+      ~/vecten-live-tools/scripts/live/live run -- scw account project list -o json
+      ~/vecten-live-tools/scripts/live/live run -- \
         scw instance server list project-id=<resources project id> zone=all -o json
       ```
 
@@ -1189,13 +1263,14 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
       keys:
 
       ```sh
-      uv run python scripts/live/access.py run -- scw iam ssh-key create name=<name> \
+      ~/vecten-live-tools/scripts/live/live run -- scw iam ssh-key create name=<name> \
         public-key=@<run>/ssh/<combination>.pub project-id=<resources project id> -o json
-      uv run python scripts/live/access.py run -- scw instance security-group create-rule \
+      ~/vecten-live-tools/scripts/live/live run -- scw instance security-group create-rule \
         security-group-id=<security group id> protocol=TCP direction=inbound action=accept \
         ip-range=<your public address>/32 dest-port-from=22 dest-port-to=22 zone=<zone>
-      uv run python scripts/live/access.py run -- scw instance server reboot <server id> zone=<zone>
-      uv run python scripts/live/access.py run -- scw instance server wait <server id> zone=<zone>
+      ~/vecten-live-tools/scripts/live/live run -- \
+        scw instance server reboot <server id> zone=<zone>
+      ~/vecten-live-tools/scripts/live/live run -- scw instance server wait <server id> zone=<zone>
       ```
 
       Write the key's `id` in the results file: the destroy removes it. Your public address is
@@ -1227,46 +1302,47 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
      as a pull request against `release/<version>`:
 
      ```sh
-     uv run python scripts/live/access.py run --github upstream -- \
+     ~/vecten-live-tools/scripts/live/live run --github upstream -- \
        git switch --create fix/<short-name> origin/release/<version>
      # the failing test, then the fix; the unit tests and ruff of AGENTS.md pass, run as
      # .venv/bin/pytest … and .venv/bin/ruff … in place of uv run pytest and uv run ruff
-     uv run python scripts/live/access.py run --github upstream -- git add <files>
-     uv run python scripts/live/access.py run --github upstream -- \
+     ~/vecten-live-tools/scripts/live/live run --github upstream -- git add <files>
+     ~/vecten-live-tools/scripts/live/live run --github upstream -- \
        git commit -m "fix(<scope>): <what>"
-     uv run python scripts/live/access.py run --github upstream -- git push origin fix/<short-name>
-     uv run python scripts/live/access.py run --github upstream -- \
+     ~/vecten-live-tools/scripts/live/live run --github upstream -- git push origin fix/<short-name>
+     ~/vecten-live-tools/scripts/live/live run --github upstream -- \
        gh pr create --repo vecten/vecten-open --base release/<version> --head fix/<short-name> \
        --title "fix(<scope>): <what>" --body "<the finding, the failing test, the fix>"
      ```
 
 5. Not while it is open: checks downstream of the finding, a new candidate, destroying an
    environment the fix would be retested on, the ticks, the release commit.
-6. When nothing of the first kind is left, run `cost.py spent` (Rules, item 3), then stop and
+6. When nothing of the first kind is left, run `live cost spent` (Rules, item 3), then stop and
    tell the maintainer that the run waits for their decision.
 7. After a blocking fix: cut the next candidate with `--with origin/fix/<short-name>`, and move
    each environment still up to it as One combination step 12 does, with
-   `sandbox_project.py release <project>` before `vecten update`. A result recorded on the
+   `live project release <project>` before `vecten update`. A result recorded on the
    earlier candidate stands unless the fix changed a file its check exercises. To see which:
 
    ```sh
-   uv run python scripts/live/combos.py affected v<earlier candidate> v<candidate>
+   ~/vecten-live-tools/scripts/live/live combos affected v<earlier candidate> v<candidate>
    ```
 
    It compares the trees beneath the two candidates' bump commits, so the version files every
-   bump changes do not count. Each line names a combination and the changed files that touch
-   it; the last, `untouched:`, the combinations nothing touches. Rerun the checks of the
+   bump changes do not count. The first line names the file map it read; each line after it
+   names a combination and the changed files that touch it; the last, `untouched:`, the
+   combinations nothing touches. Rerun the checks of the
    combinations it names, and only those; when it names none (`untouched:` lists all four),
    nothing reruns live.
 8. A follow-up: the maintainer opens the issue, or you open it on their word with
-   `… run --github upstream -- gh issue create --repo vecten/vecten-open`; its link goes in
+   `live run --github upstream -- gh issue create --repo vecten/vecten-open`; its link goes in
    the row's note.
 
 ### Destroy
 
 For each environment of `<created>` whose `destroyed_at` is `null`, once its checks are done.
 `vecten` commands are the project form. Every `aws` and `scw` line in steps 4 and 5 runs
-through the wrapper: put `uv run python scripts/live/access.py run --` in front of it.
+through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front of it.
 
 1. On Snowflake, note `snowflake_base` under `[environments.prod]` in `<project>/vecten.toml`
    first: destroy clears it. Call it `<BASE>`.
@@ -1280,7 +1356,7 @@ through the wrapper: put `uv run python scripts/live/access.py run --` in front 
    destroyed and print the statements an ACCOUNTADMIN runs. Run them, then destroy again:
 
    ```sh
-   uv run python scripts/live/access.py run -- \
+   ~/vecten-live-tools/scripts/live/live run -- \
      snow sql -c livecheck -q "USE ROLE ACCOUNTADMIN; <the statements, in order>"
    ```
 
@@ -1288,7 +1364,7 @@ through the wrapper: put `uv run python scripts/live/access.py run --` in front 
    needs it, then delete its key pair (`rm -r <project>/.vecten/deploy`):
 
    ```sh
-   uv run python scripts/live/access.py run -- snow sql -c livecheck -q \
+   ~/vecten-live-tools/scripts/live/live run -- snow sql -c livecheck -q \
      "USE ROLE ACCOUNTADMIN;
       ALTER USER IF EXISTS DEPLOY_<NAME>_PROD UNSET AUTHENTICATION POLICY;
       DROP USER IF EXISTS DEPLOY_<NAME>_PROD; DROP DATABASE IF EXISTS ADMIN_<NAME>_PROD;
@@ -1298,7 +1374,7 @@ through the wrapper: put `uv run python scripts/live/access.py run --` in front 
    Then confirm nothing of the environment stays outside Terraform:
 
    ```sh
-   uv run python scripts/live/access.py run -- snow sql -c livecheck -q \
+   ~/vecten-live-tools/scripts/live/live run -- snow sql -c livecheck -q \
      "USE ROLE ACCOUNTADMIN; SHOW DATABASES LIKE '%<BASE>%'; SHOW ROLES LIKE '%<BASE>%';
       SHOW USERS LIKE '%<BASE>%'; SHOW WAREHOUSES LIKE '%<BASE>%';
       SHOW SECURITY INTEGRATIONS LIKE '%<BASE>%'; SHOW USERS LIKE '%<NAME>%';
@@ -1373,14 +1449,14 @@ through the wrapper: put `uv run python scripts/live/access.py run --` in front 
    and write the commands into this page in the run's pull request
    (not yet tried against a live account).
 6. Delete the repository:
-   `uv run python scripts/live/access.py run -- gh repo delete <sandbox-org>/<name> --yes`.
+   `~/vecten-live-tools/scripts/live/live run -- gh repo delete <sandbox-org>/<name> --yes`.
 7. Set the entry's `destroyed_at` in `<created>` to `<now>`. Leave `<project>` on the laptop:
    it holds the evidence.
 8. Sweep:
 
    ```sh
-   uv run python scripts/live/access.py run -- \
-     uv run python scripts/live/cost.py sweep --created .claude/live-checks-<version>.created.json
+   ~/vecten-live-tools/scripts/live/live cost sweep \
+     --created .claude/live-checks-<version>.created.json
    ```
 
    Exit 0 proves the removal. Cloud APIs can list a just-destroyed resource for a few minutes,
@@ -1399,13 +1475,15 @@ through the wrapper: put `uv run python scripts/live/access.py run --` in front 
 1. Record the ledger and tick the specs on one branch:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git switch --create docs/live-checks-<version> origin/release/<version>
-   uv run python scripts/live/combos.py record <combination> v<candidate>
+   ~/vecten-live-tools/scripts/live/live combos record <combination> v<candidate>
    ```
 
    `record` runs once for each combination whose standing regression passed in full, with the
-   candidate it last passed on, and prints `<combination> = v<candidate>`.
+   candidate it last passed on. It writes the checkout's own `scripts/live/ledger.toml`, and
+   refuses where there is none; it prints `ledger <that file>`, then
+   `<combination> = v<candidate>`.
 2. For each passed check, tick its task in `.ai/openspec/changes/<change>/tasks.md` and add one
    evidence line under it, in the form the file already uses:
    `  - Live, <candidate> on <cloud>: <what was seen>.` A check that passed on one cloud of two
@@ -1414,13 +1492,13 @@ through the wrapper: put `uv run python scripts/live/access.py run --` in front 
 3. Commit, push and open the pull request:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git add scripts/live/ledger.toml .ai/openspec/changes
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git commit -m "docs(specs): live checks for <version>"
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git push origin docs/live-checks-<version>
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      gh pr create --repo vecten/vecten-open --base release/<version> \
      --head docs/live-checks-<version> --title "docs(specs): live checks for <version>" \
      --body "<one line per check: task, result, candidate>"
@@ -1429,7 +1507,8 @@ through the wrapper: put `uv run python scripts/live/access.py run --` in front 
 4. Price what the run spent:
 
    ```sh
-   uv run python scripts/live/cost.py spent --created .claude/live-checks-<version>.created.json
+   ~/vecten-live-tools/scripts/live/live cost spent \
+     --created .claude/live-checks-<version>.created.json
    ```
 
    Exit 3 means the run went over the $60 ceiling: say so in the report.
@@ -1445,8 +1524,8 @@ Only once no decision is open and the maintainer has merged the fixes and the ti
 1. Branch from the release branch:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- git fetch origin
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- git fetch origin
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git switch --create chore/release-<version> origin/release/<version>
    ```
 
@@ -1457,20 +1536,20 @@ Only once no decision is open and the maintainer has merged the fixes and the ti
 3. Bump the version and confirm the lock:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      uv run vecten dev bump-version <version>
-   uv run python scripts/live/access.py run --github upstream -- uv sync --locked --all-packages
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- uv sync --locked --all-packages
    ```
 
 4. Stage the changed tracked files, commit, push and open the pull request:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- git add --update
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- git add --update
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git commit -m "chore(release): <version>"
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git push origin chore/release-<version>
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      gh pr create --repo vecten/vecten-open --base release/<version> \
      --head chore/release-<version> --title "chore(release): <version>" \
      --body "<the changelog's entries for <version>>"
@@ -1478,7 +1557,7 @@ Only once no decision is open and the maintainer has merged the fixes and the ti
 5. After the maintainer merges it, open the pull request from `release/<version>` to `main`:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      gh pr create --repo vecten/vecten-open --base main --head release/<version> \
      --title "Release <version>" --body "<the changelog's entries for <version>>"
    ```
@@ -1491,7 +1570,7 @@ Only once no decision is open and the maintainer has merged the fixes and the ti
    `vecten/vecten-open`, one for each candidate the Run block lists; the candidate tags stay:
 
    ```sh
-   uv run python scripts/live/access.py run --github upstream -- \
+   ~/vecten-live-tools/scripts/live/live run --github upstream -- \
      git push origin --delete rc/<candidate>
    ```
 
@@ -1533,7 +1612,7 @@ A new session starts here when `<results>` exists:
 1. Read `<results>` and `<created>` in full.
 2. Run Start steps 2 and 3, then the sweep of Start step 6: exit 0 means the created file
    accounts for everything that runs. Then price what the run has spent so far with
-   `cost.py spent` (Rules, item 3): exit 3 means ask the maintainer before continuing.
+   `live cost spent` (Rules, item 3): exit 3 means ask the maintainer before continuing.
 3. The newest candidate in the Run block is the one under test; install it again (Candidate
    step 5) if `<run>/cli/<candidate>` is missing.
 4. For each entry of `<created>` without `destroyed_at`, run `vecten deploy --check --env prod`
