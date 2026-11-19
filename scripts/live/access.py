@@ -44,9 +44,13 @@ SIBLINGS = {
     "candidate": "candidate.py",
     "project": "sandbox_project.py",
 }
-# Reading the index runs any fsmonitor command the checked repository configures, and this runs
-# outside the OS sandbox.
+# Reading the index would run any fsmonitor command the checked repository configures.
 LS_FILES = ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"]
+# The secret check's findings for the public check, which cannot start a sandbox inside its own;
+# a sibling's environment comes from an allowlist, so only the wrapper can set it.
+SECRET_HITS = "VECTEN_LIVE_SECRET_HITS"
+# Code planted in the interpreter would run in the next wrapper before any of its checks.
+INTERPRETER = (sys.base_prefix, sys.prefix)
 OUTSIDE_TOOLS = (
     "is inside the tools copy {root}, which is not a place to work in;"
     " run from the working checkout or a sandbox project"
@@ -84,8 +88,9 @@ LIVE_WRITABLE = ("home", "cache", "snowflake/logs", "github/gh")
 # directory the wrapper started in.
 HOME_UNWRITABLE = (
     ".claude/settings.json", ".claude/settings.local.json", ".zshrc", ".zprofile", ".zshenv",
-    ".bashrc", ".bash_profile", ".profile",
+    ".bashrc", ".bash_profile", ".profile", ".gitconfig",
 )  # fmt: skip
+HOME_UNWRITABLE_TREES = (".config/git",)
 STARTED_IN_UNWRITABLE = (".claude/settings.json", ".claude/settings.local.json")
 # Any unix socket may belong to an agent or daemon that acts with the maintainer's access
 # (Docker, ssh-agent, gpg-agent), so every one is denied and only the resolver's is open.
@@ -134,12 +139,15 @@ def real_home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
-def tool_env(home: Path, base: Mapping[str, str], github_token: str) -> dict[str, str]:
+def tool_env(
+    home: Path, base: Mapping[str, str], github_token: str, credentials: bool = True
+) -> dict[str, str]:
     # Any variable a tool reads that the wrapper did not set is a way around the credential
     # home, so only identity-free variables pass, and HOME moves so default lookups miss.
     env = {key: value for key, value in base.items() if key in PASSED or key.startswith("LC_")}
     own_home = home / "home"
-    own_home.mkdir(mode=0o700, exist_ok=True)
+    if home.is_dir():
+        own_home.mkdir(mode=0o700, exist_ok=True)
     git_global = home / "git/config"
     # Git asks every configured helper in turn and takes the first answer; the empty helper
     # empties the list, so no helper but gh's is asked for github.com.
@@ -152,26 +160,31 @@ def tool_env(home: Path, base: Mapping[str, str], github_token: str) -> dict[str
     ]
     env |= {
         "HOME": str(own_home),
-        "AWS_CONFIG_FILE": str(home / "aws/config"),
-        "AWS_SHARED_CREDENTIALS_FILE": str(home / "aws/credentials"),
-        "AWS_PROFILE": LIVECHECK,
-        "SCW_CONFIG_PATH": str(home / "scw/config.yaml"),
-        "SNOWFLAKE_HOME": str(home / "snowflake"),
-        "SNOWFLAKE_DEFAULT_CONNECTION_NAME": LIVECHECK,
         "GH_CONFIG_DIR": str(home / "github/gh"),
         # Without a token gh answers from the macOS keyring, whatever GH_CONFIG_DIR says.
         "GH_TOKEN": github_token or GH_UNCONFIGURED,
-        "VECTEN_LIVE": "1",
         "DOCKER_CONFIG": str(home / "docker"),
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": str(git_global) if git_global.is_file() else os.devnull,
         "GIT_TERMINAL_PROMPT": "0",
+        # A promisor remote would otherwise be fetched from, by a program it names.
+        "GIT_NO_LAZY_FETCH": "1",
         # A remote left on SSH would authenticate with the maintainer's key.
         "GIT_SSH_COMMAND": SSH_REFUSED,
         "UV_CACHE_DIR": str(real_home() / ".cache/uv"),
         "UV_PYTHON_INSTALL_DIR": str(real_home() / ".local/share/uv/python"),
         "GIT_CONFIG_COUNT": str(len(git)),
     }
+    if credentials:
+        env |= {
+            "AWS_CONFIG_FILE": str(home / "aws/config"),
+            "AWS_SHARED_CREDENTIALS_FILE": str(home / "aws/credentials"),
+            "AWS_PROFILE": LIVECHECK,
+            "SCW_CONFIG_PATH": str(home / "scw/config.yaml"),
+            "SNOWFLAKE_HOME": str(home / "snowflake"),
+            "SNOWFLAKE_DEFAULT_CONNECTION_NAME": LIVECHECK,
+            "VECTEN_LIVE": "1",
+        }
     for index, (key, value) in enumerate(git):
         env[f"GIT_CONFIG_KEY_{index}"] = key
         env[f"GIT_CONFIG_VALUE_{index}"] = value
@@ -195,7 +208,13 @@ def env_files_pattern(home: str) -> str:
     return ENV_FILES.format(home="".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in home))
 
 
-def sandbox_profile(account_home: Path, live_home: Path, started_in: Path, tools: Path) -> str:
+def sandbox_profile(
+    account_home: Path,
+    live_home: Path,
+    started_in: Path,
+    tools: Path,
+    interpreter: Iterable[Path],
+) -> str:
     """A Seatbelt profile that keeps tools, and slips, off the maintainer's credentials.
 
     It allows everything by default and denies what it names, so it does not contain a process
@@ -208,12 +227,14 @@ def sandbox_profile(account_home: Path, live_home: Path, started_in: Path, tools
     unwritable = _filters(
         [
             *(("literal", account_home / relative) for relative in HOME_UNWRITABLE),
+            *(("subpath", account_home / relative) for relative in HOME_UNWRITABLE_TREES),
             *(("literal", started_in / relative) for relative in STARTED_IN_UNWRITABLE),
             ("subpath", tools),
+            *(("subpath", Path(p)) for p in dict.fromkeys(map(str, interpreter))),
         ]
     )
     # The later rule wins, so each allow follows the deny it narrows and no file rule follows the
-    # last file deny: the files that steer the agent and the tools copy stay unwritable.
+    # last file deny: the steering files, the tools copy and its interpreter stay unwritable.
     sockets = "".join(f'(allow network-outbound (literal "{path}"))' for path in ALLOWED_SOCKETS)
     return (
         "(version 1)(allow default)"
@@ -231,8 +252,14 @@ def _os_sandbox() -> list[str]:
     """The argv prefix that runs a command under the deny profile; empty off macOS."""
     if PLATFORM != "darwin":
         return []
-    profile = sandbox_profile(real_home(), credential_home(), Path.cwd(), tools_root())
+    interpreter = [Path(prefix).resolve() for prefix in INTERPRETER]
+    profile = sandbox_profile(real_home(), credential_home(), Path.cwd(), tools_root(), interpreter)
     return [SANDBOX_EXEC, "-p", profile]
+
+
+def plain_env() -> dict[str, str]:
+    """The environment of a tool run on the agent's files with no credential at all."""
+    return tool_env(credential_home(), os.environ, "", credentials=False)
 
 
 def _problem(name: str, allowed: dict, value: str | list[str], github: str) -> str | None:
@@ -486,15 +513,20 @@ def _run(
         raise Refused(f"{command[0]} could not start ({missing.strerror})") from None
 
 
-def _tools_line() -> str:
+def _tools_line(sandbox: list[str]) -> str:
     root = tools_root()
     if _inside_tools(Path.cwd()):
         return "tools FAIL: running from the directory being worked in"
+    base = Path(INTERPRETER[0]).resolve()
+    for place in (Path.cwd(), real_home() / SANDBOX_PROJECTS):
+        if base.is_relative_to(place.resolve()):
+            return f"tools FAIL: its interpreter {base} is inside {place}, which the agent writes"
     commit = "unknown"
     try:
         done = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            [*sandbox, "git", "rev-parse", "--short", "HEAD"],
             cwd=root,
+            env=plain_env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -508,7 +540,7 @@ def _tools_line() -> str:
 
 
 def _doctor() -> int:
-    tools = _tools_line()
+    tools = _tools_line(_os_sandbox())
     print(tools, flush=True)
     home = credential_home()
     allow = _load_allow(home)
@@ -599,20 +631,60 @@ def _show(name: str, combination: str | None) -> int:
     return 0
 
 
-def _secrets_check(directory: Path) -> int:
+class NotListed(Refused):
+    pass
+
+
+def _tracked_text(path: Path, root: Path) -> str | None:
+    """What git would publish for one tracked path: a symlink's target, or a file's content."""
+    if path.is_symlink():
+        return os.readlink(path)
+    # A tracked path reached through a symlinked directory leads outside the work tree.
+    if not path.resolve().is_relative_to(root) or not path.is_file():
+        return None
+    return path.read_bytes().decode(errors="ignore")
+
+
+def secret_hits(directory: Path) -> list[str]:
+    """The tracked files of `directory` that hold a value of the credential home.
+
+    The wrapper reads the secrets and the files itself; git, which obeys the repository's own
+    configuration, lists the files under the OS sandbox and without a credential.
+    """
     home = credential_home()
     if not home.is_dir():
         raise Refused(f"no credential home at {home}")
     secrets = secret_values(home)
-    listed = subprocess.run(LS_FILES, cwd=directory, capture_output=True)
+    try:
+        listed = subprocess.run(
+            [*_os_sandbox(), *LS_FILES],
+            cwd=directory,
+            env=plain_env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+        )
+    except OSError as error:
+        raise NotListed(f"cannot list the tracked files of {directory}: {error}") from None
     if listed.returncode != 0:
-        print(f"access: {directory} is not a git work tree", file=sys.stderr)
-        return 2
+        raise NotListed(f"cannot list the tracked files of {directory}; is it a git work tree?")
+    root = directory.resolve()
     hits = []
-    for name in filter(None, listed.stdout.decode().split("\0")):
-        path = directory / name
-        if path.is_file() and any(s in path.read_bytes().decode(errors="ignore") for s in secrets):
+    for name in filter(None, listed.stdout.decode(errors="surrogateescape").split("\0")):
+        try:
+            text = _tracked_text(directory / name, root)
+        except OSError:
+            continue
+        if text is not None and any(secret in text for secret in secrets):
             hits.append(name)
+    return hits
+
+
+def _secrets_check(directory: Path) -> int:
+    try:
+        hits = secret_hits(directory)
+    except NotListed as refused:
+        print(f"access: {refused}", file=sys.stderr)
+        return 2
     for name in hits:
         print(name)
     return 1 if hits else 0
@@ -621,10 +693,10 @@ def _secrets_check(directory: Path) -> int:
 def _sibling_github(name: str, args: list[str]) -> str | None:
     """The GitHub App of a sibling call that acts in the test accounts; None for the others."""
     # `cut` is candidate's only subcommand, and a dry run outside the guard would run the
-    # checkout's own code unsandboxed, so every candidate call is credentialed.
+    # checkout's own code, so every candidate call is credentialed.
     if name == "candidate":
         return "upstream"
-    if name == "cost" and args[:1] == ["sweep"]:
+    if name == "cost" and args[:1] not in (["estimate"], ["spent"]):
         return "sandbox"
     return None
 
@@ -634,8 +706,10 @@ def _sibling(name: str, args: list[str]) -> NoReturn:
     github = _sibling_github(name, args)
     if github is not None:
         _run(github, command)
-    # A caller's VECTEN_LIVE=1 would tell a sibling it runs with the test credentials.
-    env = {key: value for key, value in os.environ.items() if key != "VECTEN_LIVE"}
+    env = plain_env()
+    if name == "project" and args[:1] == ["check-public"] and len(args) == 2:
+        env[SECRET_HITS] = json.dumps(secret_hits(Path(args[1])))
+    command = [*_os_sandbox(), *command]
     try:
         os.execve(command[0], command, env)
     except OSError as missing:
@@ -653,7 +727,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=f"{', '.join(SIBLINGS)} run the script of that name beside this one with the"
-        " arguments that follow; `cost sweep` and every `candidate` call pass the guard first.",
+        " arguments that follow, under the OS sandbox; `candidate` and every `cost` call but"
+        " `estimate` and `spent` pass the guard first and get the test credentials.",
     )
     actions = parser.add_subparsers(dest="action", required=True)
     run = actions.add_parser("run", help="run one command with the test credentials")

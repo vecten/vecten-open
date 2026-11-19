@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
+import os
 import re
 import subprocess
 import sys
@@ -17,6 +19,8 @@ ACCESS = Path(__file__).resolve().with_name("access.py")
 SECRET_FILE_NAMES = (".env", ".env.*", "*.pem", "*.key")
 REFUSED = 3
 VERSION_VARIABLES = ("$VECTEN_VERSION", "${VECTEN_VERSION}")
+# The wrapper's own secret check, which it runs before this script when it runs `check-public`.
+SECRET_HITS = "VECTEN_LIVE_SECRET_HITS"
 
 PIN = re.compile(r'vecten==([^"\s]+)')
 INSTALL = re.compile(rf'(uv tool install "vecten==[^"\s]+")(?: {re.escape(FIND_LINKS)})?')
@@ -52,7 +56,15 @@ def unpatch(text: str) -> str:
 
 def workflow_files(project: Path) -> list[Path]:
     directory = project / ".github" / "workflows"
-    files = sorted(p for p in directory.glob("*") if p.is_file()) if directory.is_dir() else []
+    root = project.resolve()
+    files = []
+    for path in sorted(directory.glob("*")) if directory.is_dir() else []:
+        # A rewrite follows a link, so a link that leaves the project would change a file
+        # elsewhere; one inside it names a workflow the loop meets on its own.
+        if not path.resolve().is_relative_to(root):
+            raise Refused(f"{path.relative_to(project)} leads outside the project")
+        if path.is_file() and not path.is_symlink():
+            files.append(path)
     if not files:
         raise Refused(f"no workflows under {directory}")
     return files
@@ -71,7 +83,7 @@ def rewrite(project: Path, convert) -> None:
 
 
 def tracked_files(project: Path) -> list[str]:
-    # Reading the index runs any fsmonitor command the project configures, outside the sandbox.
+    # Reading the index would run any fsmonitor command the project configures.
     listed = subprocess.run(
         ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"], cwd=project, capture_output=True
     )
@@ -93,6 +105,17 @@ def secret_names(names: Sequence[str]) -> list[str]:
 
 
 def secret_values(project: Path, tracked: Sequence[str]) -> list[str]:
+    handed = os.environ.get(SECRET_HITS)
+    if handed is not None:
+        try:
+            paths = json.loads(handed)
+        except ValueError:
+            paths = None
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            raise Refused("the secret check handed over something other than a list of paths")
+        if not set(paths) <= set(tracked):
+            raise Refused("the secret check named a path that is not in the git index")
+        return paths
     try:
         checked = subprocess.run(
             [sys.executable, "-I", str(ACCESS), "secrets-check", str(project)],

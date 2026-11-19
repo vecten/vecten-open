@@ -131,3 +131,25 @@ def test_the_cli_prints_only_the_token(tmp_path, monkeypatch, capsys):
     m.main()
     assert capsys.readouterr().out == "ghs_cli\n"
     assert (tmp_path / "home/cache/sandbox.json").exists()
+
+
+def test_the_signer_is_the_systems_own_openssl_where_there_is_one():
+    expected = "/usr/bin/openssl" if Path("/usr/bin/openssl").is_file() else "openssl"
+    assert mod().OPENSSL == expected
+
+
+def test_the_jwt_is_signed_by_the_openssl_the_constant_names(tmp_path, monkeypatch):
+    record = tmp_path / "signer-argv"
+    signer = tmp_path / "openssl"
+    signer.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {record}\nprintf signature\n')
+    signer.chmod(0o755)
+    module = mod()
+    monkeypatch.setattr(module, "OPENSSL", str(signer))
+    token = module.app_jwt("12345", tmp_path / "app.pem", now=1_800_000_000)
+    assert record.read_text().splitlines() == [
+        "dgst",
+        "-sha256",
+        "-sign",
+        str(tmp_path / "app.pem"),
+    ]
+    assert b64d(token.split(".")[2]) == b"signature"

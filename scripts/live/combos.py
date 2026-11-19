@@ -28,6 +28,8 @@ SCOPES = (
 )
 HERE = Path(__file__).resolve().parent
 TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+/-]*")
+# How much of a ledger value that is no tag name a refusal repeats.
+SHOWN_OF_VALUE = 20
 REFUSED = 3
 SHOWN = 5
 
@@ -104,15 +106,23 @@ def git_lines(*args: str) -> list[str]:
 def has_tag(tag: str) -> bool:
     try:
         probe = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"], capture_output=True
+            ["git", "rev-parse", "--verify", "--quiet", "--end-of-options", f"refs/tags/{tag}"],
+            capture_output=True,
         )
     except OSError as error:
         raise Refused(f"git failed: {error}") from None
     return probe.returncode == 0
 
 
+def changed_between(earlier: str, later: str) -> list[str]:
+    # The revisions come from files and arguments the agent writes: none may be read as an option.
+    return git_lines(
+        "diff", "--name-only", "--no-renames", "--end-of-options", earlier, later, "--"
+    )
+
+
 def git_changed(tag: str) -> list[str]:
-    return git_lines("diff", "--name-only", "--no-renames", tag, "HEAD")
+    return changed_between(f"refs/tags/{tag}", "HEAD")
 
 
 def touched(changed: list[str], rules: list[Rule]) -> dict[str, list[str]]:
@@ -134,7 +144,7 @@ def affected(earlier: str, later: str, map_path: Path, as_json: bool) -> None:
             raise Refused(f"tag {tag!r} is not a tag this clone has")
     # Each candidate's own bump commit sits on top of the tree it tests and changes the version
     # files every candidate changes; the trees beneath the bumps differ only by the fixes.
-    changed = git_lines("diff", "--name-only", "--no-renames", f"{earlier}^", f"{later}^")
+    changed = changed_between(f"refs/tags/{earlier}^", f"refs/tags/{later}^")
     result = touched(changed, rules)
     untouched = [combo for combo in COMBOS if combo not in result]
     if as_json:
@@ -157,6 +167,10 @@ def read_ledger(path: Path) -> dict[str, str]:
     missing = [combo for combo in COMBOS if not isinstance(ledger.get(combo), str)]
     if missing:
         raise Refused(f"ledger has no tag for: {', '.join(missing)}")
+    for combo in COMBOS:
+        if not TAG.fullmatch(ledger[combo]):
+            shown = ledger[combo][:SHOWN_OF_VALUE]
+            raise Refused(f"the ledger's {combo} is no tag name: it starts {shown!r}")
     return ledger
 
 

@@ -46,11 +46,43 @@ def rendered(request, tmp_path_factory):
     return {p.name: p.read_bytes().decode() for p in sorted(workflows.iterdir())}
 
 
-def run(*args, home=None):
-    env = {**os.environ, "VECTEN_LIVE_HOME": str(home)} if home else None
-    return subprocess.run(
-        [sys.executable, str(SCRIPT), *map(str, args)], capture_output=True, text=True, env=env
-    )
+# The secret check lists files under the macOS sandbox, which cannot start inside another
+# sandbox; the tests run its off-macOS form, which is otherwise the same.
+ACCESS_OFF_MACOS = f"""
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("access", {str(SCRIPT.with_name("access.py"))!r})
+access = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(access)
+access.PLATFORM = "linux"
+sys.exit(access.main(sys.argv[1:]))
+"""
+RUNNER = f"""
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("sandbox_project", {str(SCRIPT)!r})
+project = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(project)
+project.ACCESS = sys.argv[1]
+sys.exit(project.main(sys.argv[2:]))
+"""
+
+
+@pytest.fixture(scope="module")
+def access_off_macos(tmp_path_factory):
+    path = tmp_path_factory.mktemp("access") / "access_off_macos.py"
+    path.write_text(ACCESS_OFF_MACOS)
+    return path
+
+
+@pytest.fixture
+def run(access_off_macos):
+    def run(*args, home=None):
+        env = {key: value for key, value in os.environ.items() if key != "VECTEN_LIVE_SECRET_HITS"}
+        if home:
+            env["VECTEN_LIVE_HOME"] = str(home)
+        command = [sys.executable, "-c", RUNNER, str(access_off_macos), *map(str, args)]
+        return subprocess.run(command, capture_output=True, text=True, env=env)
+
+    return run
 
 
 def git(root, *args):
@@ -140,7 +172,9 @@ def test_a_pin_for_another_version_is_refused():
         sp.patch('run: uv tool install "vecten==1.2.2"\n', "1.2.3")
 
 
-def test_candidate_command_patches_every_workflow_and_release_restores_them(rendered, tmp_path):
+def test_candidate_command_patches_every_workflow_and_release_restores_them(
+    rendered, tmp_path, run
+):
     workflows = tmp_path / ".github/workflows"
     workflows.mkdir(parents=True)
     for name, text in rendered.items():
@@ -153,7 +187,7 @@ def test_candidate_command_patches_every_workflow_and_release_restores_them(rend
         assert (workflows / name).read_bytes().decode() == text
 
 
-def test_candidate_command_names_file_and_version_and_changes_nothing_on_a_mismatch(tmp_path):
+def test_candidate_command_names_file_and_version_and_changes_nothing_on_a_mismatch(tmp_path, run):
     workflows = tmp_path / ".github/workflows"
     workflows.mkdir(parents=True)
     good = 'run: uv tool install "vecten==1.2.3"\n'
@@ -165,11 +199,11 @@ def test_candidate_command_names_file_and_version_and_changes_nothing_on_a_misma
     assert (workflows / "a.yml").read_text() == good
 
 
-def test_candidate_command_refuses_a_project_with_no_workflows(tmp_path):
+def test_candidate_command_refuses_a_project_with_no_workflows(tmp_path, run):
     assert run("candidate", tmp_path, "1.2.3").returncode == 3
 
 
-def test_check_public_refuses_a_tracked_env_file(tmp_path):
+def test_check_public_refuses_a_tracked_env_file(tmp_path, run):
     root = project(tmp_path, {".env": "A=1\n", "app/.env.local": "B=2\n", "README.md": "x\n"})
     result = run("check-public", root, home=credential_home(tmp_path))
     assert result.returncode == 1
@@ -188,13 +222,13 @@ def test_check_public_refuses_a_tracked_env_file(tmp_path):
         ".ENV",
     ],
 )
-def test_check_public_refuses_key_and_pem_file_names(tmp_path, name):
+def test_check_public_refuses_key_and_pem_file_names(tmp_path, name, run):
     root = project(tmp_path, {name: "x\n"})
     result = run("check-public", root, home=credential_home(tmp_path))
     assert (result.returncode, name in result.stdout) == (1, True)
 
 
-def test_check_public_refuses_a_credential_value_in_a_tracked_file(tmp_path):
+def test_check_public_refuses_a_credential_value_in_a_tracked_file(tmp_path, run):
     root = project(tmp_path, {"infra/main.tf": f'x = "{SECRET}"\n', "README.md": "x\n"})
     result = run("check-public", root, home=credential_home(tmp_path))
     assert result.returncode == 1
@@ -202,7 +236,7 @@ def test_check_public_refuses_a_credential_value_in_a_tracked_file(tmp_path):
     assert SECRET not in result.stdout + result.stderr
 
 
-def test_check_public_lists_every_path_with_the_check_that_caught_it(tmp_path):
+def test_check_public_lists_every_path_with_the_check_that_caught_it(tmp_path, run):
     root = project(tmp_path, {".env": f"K={SECRET}\n", "a.txt": SECRET})
     result = run("check-public", root, home=credential_home(tmp_path))
     lines = result.stdout.splitlines()
@@ -212,13 +246,13 @@ def test_check_public_lists_every_path_with_the_check_that_caught_it(tmp_path):
     assert any(x.startswith("a.txt") and "credential" in x for x in lines)
 
 
-def test_check_public_passes_a_clean_project(tmp_path):
+def test_check_public_passes_a_clean_project(tmp_path, run):
     root = project(tmp_path, {"README.md": "# Sandbox\n", "src/a.py": "x = 1\n"})
     result = run("check-public", root, home=credential_home(tmp_path))
     assert (result.returncode, result.stdout) == (0, "")
 
 
-def test_check_public_is_not_clean_when_the_credential_home_is_missing(tmp_path):
+def test_check_public_is_not_clean_when_the_credential_home_is_missing(tmp_path, run):
     root = project(tmp_path, {"README.md": "# Sandbox\n"})
     result = run("check-public", root, home=tmp_path / "absent")
     assert result.returncode == 3
@@ -246,7 +280,7 @@ def test_check_public_relays_the_secret_check_message(tmp_path, capsys):
     assert "no credential home at X" in capsys.readouterr().err
 
 
-def test_check_public_refuses_a_non_repository_and_an_empty_index(tmp_path):
+def test_check_public_refuses_a_non_repository_and_an_empty_index(tmp_path, run):
     home = credential_home(tmp_path)
     plain = tmp_path / "plain"
     plain.mkdir()
@@ -295,3 +329,61 @@ def test_only_the_version_variable_of_the_rendered_workflows_is_exempt_from_the_
         sp.patch(f'run: uv tool install "vecten=={ok}"\n', "1.2.3")
     with pytest.raises(sp.Refused, match="OTHER"):
         sp.patch('run: uv tool install "vecten==$OTHER"\n', "1.2.3")
+
+
+def test_a_workflow_link_that_leaves_the_project_is_refused_and_its_target_kept(tmp_path, run):
+    workflows = tmp_path / "proj/.github/workflows"
+    workflows.mkdir(parents=True)
+    good = 'run: uv tool install "vecten==1.2.3"\n'
+    (workflows / "a.yml").write_text(good)
+    outside = tmp_path / "outside.yml"
+    outside.write_text(good)
+    (workflows / "b.yml").symlink_to(outside)
+    for command in (["candidate", tmp_path / "proj", "1.2.3"], ["release", tmp_path / "proj"]):
+        result = run(*command)
+        assert result.returncode == 3
+        assert "b.yml" in result.stderr and "outside the project" in result.stderr
+        assert outside.read_text() == good
+        assert (workflows / "a.yml").read_text() == good
+
+
+def test_a_workflow_directory_that_leads_outside_the_project_is_refused(tmp_path, run):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "a.yml").write_text('run: uv tool install "vecten==1.2.3"\n')
+    (tmp_path / "proj/.github").mkdir(parents=True)
+    (tmp_path / "proj/.github/workflows").symlink_to(elsewhere)
+    result = run("candidate", tmp_path / "proj", "1.2.3")
+    assert result.returncode == 3
+    assert "outside the project" in result.stderr
+    assert "find-links" not in (elsewhere / "a.yml").read_text()
+
+
+def test_a_workflow_link_inside_the_project_is_skipped(tmp_path, run):
+    workflows = tmp_path / "proj/.github/workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "a.yml").write_text('run: uv tool install "vecten==1.2.3"\n')
+    (workflows / "b.yml").symlink_to("a.yml")
+    assert run("candidate", tmp_path / "proj", "1.2.3").returncode == 0
+    assert (workflows / "a.yml").read_text().count("--find-links") == len(mod().PACKAGES)
+    assert (workflows / "b.yml").is_symlink()
+
+
+def handed(monkeypatch, value):
+    monkeypatch.setenv("VECTEN_LIVE_SECRET_HITS", value)
+    module = mod()
+    module.ACCESS = Path("/nonexistent/access.py")
+    return module
+
+
+def test_check_public_takes_the_secret_check_the_wrapper_hands_over(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path, {"README.md": "x\n", "infra/main.tf": "y\n"})
+    assert handed(monkeypatch, '["infra/main.tf"]').main(["check-public", str(root)]) == 1
+    assert capsys.readouterr().out == "infra/main.tf  (credential value)\n"
+    assert handed(monkeypatch, "[]").main(["check-public", str(root)]) == 0
+
+
+@pytest.mark.parametrize("value", ['["elsewhere.txt"]', "not json", '{"a": 1}', "[1]"])
+def test_check_public_refuses_a_handed_secret_check_it_cannot_trust(tmp_path, monkeypatch, value):
+    root = project(tmp_path, {"README.md": "x\n"})
+    assert handed(monkeypatch, value).main(["check-public", str(root)]) == 3

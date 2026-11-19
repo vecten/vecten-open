@@ -19,6 +19,9 @@ from pathlib import Path
 API = "https://api.github.com"
 # A token this close to expiry could lapse before the caller's request lands.
 REFRESH_MARGIN = 300
+# The signer sees the App's private key outside any sandbox, so it is the system's own binary,
+# which no command of the user can replace, wherever the system has one.
+OPENSSL = "/usr/bin/openssl" if Path("/usr/bin/openssl").is_file() else "openssl"
 
 
 def _b64(data: bytes) -> str:
@@ -31,7 +34,7 @@ def app_jwt(app_id: str, key_path: Path, now: int) -> str:
     payload = _b64(json.dumps(claims, separators=(",", ":")).encode())
     signing_input = f"{header}.{payload}".encode()
     signed = subprocess.run(
-        ["openssl", "dgst", "-sha256", "-sign", str(key_path)],
+        [OPENSSL, "dgst", "-sha256", "-sign", str(key_path)],
         input=signing_input,
         capture_output=True,
     )

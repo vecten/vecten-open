@@ -443,3 +443,50 @@ def test_json_output_names_no_file(clone, tmp_path):
     planned = from_tools(here, clone, "plan", "--json")
     assert planned.returncode == 0, planned.stderr
     assert set(json.loads(planned.stdout)) == {"owed", "not_owed"}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "--output={written}-and-then-some-more-text",
+        "-pfoo",
+        "v1 HEAD",
+        "",
+    ],
+)
+def test_a_ledger_value_that_is_no_tag_name_is_refused_before_git_reads_it(clone, tmp_path, value):
+    written = tmp_path / "written-by-git"
+    value = value.format(written=written)
+    if value.startswith("-"):
+        # `git tag` refuses such a name, but a ref of that name can still be written directly.
+        git(clone, "update-ref", f"refs/tags/{value}", "HEAD")
+    ledger = ledger_file(tmp_path)
+    ledger.write_text(
+        ledger.read_text().replace('aws-postgres = "v1"', f'aws-postgres = "{value}"')
+    )
+    result = run(clone, ledger, "plan")
+    assert result.returncode == 3
+    assert result.stdout == ""
+    assert "aws-postgres" in result.stderr
+    assert value[20:] == "" or value[20:] not in result.stderr
+    assert not list(tmp_path.glob("written-by-git*"))
+
+
+def test_revisions_reach_git_as_tag_refs_after_the_end_of_options(monkeypatch):
+    m = mod()
+    seen = []
+
+    def run_git(argv, **kwargs):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(m.subprocess, "run", run_git)
+    m.has_tag("v1")
+    m.git_changed("v1")
+    m.changed_between("refs/tags/v1^", "refs/tags/v2^")
+    diff = ["git", "diff", "--name-only", "--no-renames", "--end-of-options"]
+    assert seen == [
+        ["git", "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/tags/v1"],
+        [*diff, "refs/tags/v1", "HEAD", "--"],
+        [*diff, "refs/tags/v1^", "refs/tags/v2^", "--"],
+    ]

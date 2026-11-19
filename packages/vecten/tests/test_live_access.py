@@ -89,6 +89,7 @@ EXAMPLE_HOME = Path("/Users/example")
 EXAMPLE_LIVE = EXAMPLE_HOME / ".config/vecten-livecheck"
 EXAMPLE_CHECKOUT = EXAMPLE_HOME / "src/checkout"
 EXAMPLE_TOOLS = EXAMPLE_HOME / "vecten-live-tools"
+EXAMPLE_PYTHON = [Path("/opt/example-python/3.14"), EXAMPLE_TOOLS / ".venv"]
 DENIED_TEXT = (
     "(version 1)(allow default)"
     '(deny file-read* (regex #"^/Users/example/(.*/)?\\.env(\\.[^/]+)?$"))'
@@ -119,9 +120,12 @@ DENIED_TEXT = (
     ' (literal "/Users/example/.zshrc") (literal "/Users/example/.zprofile")'
     ' (literal "/Users/example/.zshenv") (literal "/Users/example/.bashrc")'
     ' (literal "/Users/example/.bash_profile") (literal "/Users/example/.profile")'
+    ' (literal "/Users/example/.gitconfig") (subpath "/Users/example/.config/git")'
     ' (literal "/Users/example/src/checkout/.claude/settings.json")'
     ' (literal "/Users/example/src/checkout/.claude/settings.local.json")'
-    ' (subpath "/Users/example/vecten-live-tools"))'
+    ' (subpath "/Users/example/vecten-live-tools")'
+    ' (subpath "/opt/example-python/3.14")'
+    ' (subpath "/Users/example/vecten-live-tools/.venv"))'
     "(deny network-outbound (remote unix-socket))"
     '(allow network-outbound (literal "/private/var/run/mDNSResponder"))'
 )
@@ -135,6 +139,15 @@ def short_commit(root):
 
 
 TOOLS_OK = f"tools ok: {REPO} at {short_commit(REPO)}"
+CREDENTIAL_VARIABLES = {
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_PROFILE",
+    "SCW_CONFIG_PATH",
+    "SNOWFLAKE_HOME",
+    "SNOWFLAKE_DEFAULT_CONNECTION_NAME",
+    "VECTEN_LIVE",
+}
 LAUNCHER = REPO / "scripts/live/live"
 IDENTITY = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
 IDENTITY += ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
@@ -807,7 +820,9 @@ def test_doctor_redacts_a_value_it_refuses(tmp_path):
 
 
 def test_the_sandbox_profile_denies_the_maintainers_credentials():
-    profile = mod().sandbox_profile(EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS)
+    profile = mod().sandbox_profile(
+        EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, EXAMPLE_PYTHON
+    )
     assert profile == DENIED_TEXT
 
 
@@ -815,10 +830,11 @@ def test_a_path_the_profile_cannot_quote_is_a_refusal():
     m = mod()
     for odd in ('/Users/ex"ample', "/Users/ex\\ample"):
         for paths in (
-            (Path(odd), EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS),
-            (EXAMPLE_HOME, Path(odd), EXAMPLE_CHECKOUT, EXAMPLE_TOOLS),
-            (EXAMPLE_HOME, EXAMPLE_LIVE, Path(odd), EXAMPLE_TOOLS),
-            (EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, Path(odd)),
+            (Path(odd), EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, EXAMPLE_PYTHON),
+            (EXAMPLE_HOME, Path(odd), EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, EXAMPLE_PYTHON),
+            (EXAMPLE_HOME, EXAMPLE_LIVE, Path(odd), EXAMPLE_TOOLS, EXAMPLE_PYTHON),
+            (EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, [Path(odd)]),
+            (EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, Path(odd), EXAMPLE_PYTHON),
         ):
             with pytest.raises(m.Refused):
                 m.sandbox_profile(*paths)
@@ -836,14 +852,28 @@ def test_the_env_file_pattern_escapes_the_home_and_matches_only_env_files():
 
 
 def recording_sandbox(tmp_path):
-    """A fake sandbox-exec that appends its argv to a record, then runs the command."""
+    """A fake sandbox-exec that appends its argv and environment to records, then runs the
+    command."""
     record = tmp_path / "sandbox-argv"
-    body = f'printf "%s\\n" "$@" --- >> {record}\nshift 2\nexec "$@"'
+    body = (
+        f'printf "%s\\n" "$@" --- >> {record}\n'
+        f"env >> {record}.env; echo --- >> {record}.env\n"
+        'shift 2\nexec "$@"'
+    )
     return script(tmp_path / "sandbox-exec", body), record
 
 
 def invocations(record):
     return [call.splitlines() for call in record.read_text().split("---\n") if call]
+
+
+def environments(record):
+    calls = Path(f"{record}.env").read_text().split("---\n")
+    return [dict(line.split("=", 1) for line in call.splitlines()) for call in calls if call]
+
+
+def interpreter():
+    return [Path(prefix).resolve() for prefix in (sys.base_prefix, sys.prefix)]
 
 
 def test_on_macos_probes_and_command_run_inside_the_os_sandbox(tmp_path):
@@ -854,7 +884,9 @@ def test_on_macos_probes_and_command_run_inside_the_os_sandbox(tmp_path):
         tmp_path, "run", "--", "vecten", "status", PLATFORM="darwin", SANDBOX_EXEC=str(fake)
     )
     assert result.returncode == 7, result.stderr
-    profile = mod().sandbox_profile(tmp_path / "real", tmp_path / "home", tmp_path.resolve(), REPO)
+    profile = mod().sandbox_profile(
+        tmp_path / "real", tmp_path / "home", tmp_path.resolve(), REPO, interpreter()
+    )
     calls = invocations(record)
     assert all(call[:2] == ["-p", profile] for call in calls)
     assert [call[2] for call in calls] == ["aws", "scw", "snow", "gh", "vecten"]
@@ -910,17 +942,21 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
         (real / project / ".env").write_text("A=1\n")
     (real / ".claude").mkdir()
     (real / ".claude/settings.json").write_text("{}\n")
+    (real / ".gitconfig").write_text("")
+    (real / ".config/git").mkdir(parents=True)
     live = tmp_path / "live"
     (live / "cache").mkdir(parents=True)
     (live / "allow.toml").write_text("")
     tools = tmp_path / "tools"
     (tools / "scripts/live").mkdir(parents=True)
     (tools / "scripts/live/access.py").write_text("")
+    python = tmp_path / "python"
+    (python / "lib").mkdir(parents=True)
     # A unix socket path must stay under about 100 bytes, so the sockets live in a short dir.
     sockets = Path(tempfile.mkdtemp(dir="/tmp"))
     server = listening(sockets / "agent.sock")
     try:
-        profile = mod().sandbox_profile(real, live, tmp_path, tools)
+        profile = mod().sandbox_profile(real, live, tmp_path, tools, [python])
 
         def sandboxed(*argv):
             command = ["/usr/bin/sandbox-exec", "-p", profile, *argv]
@@ -943,6 +979,9 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
         assert appended(tools / "new-file") != 0
         assert (tools / "scripts/live/access.py").read_text() == ""
         assert not (tools / "new-file").exists()
+        assert appended(python / "lib/sitecustomize.py") != 0
+        assert appended(real / ".gitconfig") != 0
+        assert appended(real / ".config/git/config") != 0
         connect = [
             sys.executable,
             "-c",
@@ -1251,14 +1290,14 @@ def test_the_launcher_without_an_interpreter_says_how_to_make_one(tmp_path):
     ("args", "script_name"),
     [
         (["combos", "plan", "--json"], "combos.py"),
-        (["project", "check-public", "/elsewhere/proj"], "sandbox_project.py"),
+        (["project", "release", "/elsewhere/proj"], "sandbox_project.py"),
         (["cost", "estimate", "--combinations", "aws-postgres", "--hours", "1"], "cost.py"),
         (["cost", "spent", "--created", "created.json"], "cost.py"),
         (["combos", "--made-up-option"], "combos.py"),
     ],
 )
-def test_a_sibling_without_credentials_runs_directly_with_the_wrappers_interpreter(
-    monkeypatch, args, script_name
+def test_a_sibling_without_credentials_runs_with_the_wrappers_interpreter_and_no_credential(
+    tmp_path, monkeypatch, args, script_name
 ):
     m = mod()
     started = []
@@ -1268,15 +1307,21 @@ def test_a_sibling_without_credentials_runs_directly_with_the_wrappers_interpret
         raise SystemExit(0)
 
     monkeypatch.setattr(m.os, "execve", execve)
+    monkeypatch.setattr(m, "PLATFORM", "linux")
+    monkeypatch.setenv("VECTEN_LIVE_HOME", str(home(tmp_path)))
     monkeypatch.setenv("VECTEN_LIVE", "1")
-    monkeypatch.setenv("SOME_SETTING", "kept")
+    monkeypatch.setenv("AWS_PROFILE", "personal")
+    monkeypatch.setenv("SOME_SETTING", "dropped")
     with pytest.raises(SystemExit):
         m.main(args)
     [(path, argv, env)] = started
     assert path == sys.executable
     assert argv == [sys.executable, "-I", str(SCRIPT.with_name(script_name)), *args[1:]]
-    assert "VECTEN_LIVE" not in env
-    assert env["SOME_SETTING"] == "kept"
+    assert not CREDENTIAL_VARIABLES & env.keys()
+    assert "SOME_SETTING" not in env
+    assert env["GH_TOKEN"] == "livecheck-github-not-configured"
+    assert env["GIT_NO_LAZY_FETCH"] == "1"
+    assert env["HOME"] == str(tmp_path / "home/home")
 
 
 def throwaway_repository(root, ledger_tag="v1"):
@@ -1499,4 +1544,213 @@ def test_the_wrapped_command_cannot_write_the_tools_copy(tmp_path):
     assert result.returncode == 0, result.stderr
     profiles = {call[1] for call in invocations(record)}
     assert len(profiles) == 1
-    assert f'(subpath "{REPO}"))(deny network-outbound' in profiles.pop()
+    last_file_deny = profiles.pop().split("(deny file-write*")[-1]
+    assert f'(subpath "{REPO}")' in last_file_deny
+    for prefix in interpreter():
+        assert f'(subpath "{prefix}")' in last_file_deny
+
+
+def project_with_workflow(tmp_path, files=None):
+    project = tmp_path / "project"
+    (project / ".github/workflows").mkdir(parents=True)
+    workflow = project / ".github/workflows/ship.yml"
+    workflow.write_text('run: uv tool install "vecten==1.2.3"\n')
+    for name, text in (files or {}).items():
+        (project / name).parent.mkdir(parents=True, exist_ok=True)
+        (project / name).write_text(text)
+    git(project, "init", "-q")
+    git(project, "add", ".")
+    return project, workflow
+
+
+def uncredentialed(tmp_path, case):
+    """The arguments, working directory and script of each sibling call needing no credential."""
+    repo = throwaway_repository(tmp_path / "checkout")
+    project, _ = project_with_workflow(tmp_path)
+    (tmp_path / "created.json").write_text('{"environments": []}')
+    estimate = ["cost", "estimate", "--combinations", "aws-postgres", "--hours", "1"]
+    return {
+        "combos plan": (["combos", "plan"], repo, "combos.py"),
+        "combos record": (["combos", "record", "aws-postgres", "v1"], repo, "combos.py"),
+        "cost estimate": (estimate, tmp_path, "cost.py"),
+        "cost spent": (["cost", "spent", "--created", "created.json"], tmp_path, "cost.py"),
+        "project candidate": (
+            ["project", "candidate", str(project), "1.2.3"],
+            tmp_path,
+            "sandbox_project.py",
+        ),
+        "project check-public": (
+            ["project", "check-public", str(project)],
+            tmp_path,
+            "sandbox_project.py",
+        ),
+    }[case]
+
+
+UNCREDENTIALED = (
+    "combos plan",
+    "combos record",
+    "cost estimate",
+    "cost spent",
+    "project candidate",
+    "project check-public",
+)
+
+
+def no_credential_in(env):
+    assert not CREDENTIAL_VARIABLES & env.keys()
+    assert env["GH_TOKEN"] == "livecheck-github-not-configured"
+    assert "!gh auth git-credential" not in env.values()
+    assert env["GIT_NO_LAZY_FETCH"] == "1"
+
+
+@pytest.mark.parametrize("case", UNCREDENTIALED)
+def test_an_uncredentialed_sibling_runs_under_the_os_sandbox_without_credentials(tmp_path, case):
+    home(tmp_path)
+    probed = tmp_path / "probed"
+    fake_clis(tmp_path, aws=f"touch {probed}\n{printing(AWS_OUTPUT)}")
+    fake, record = recording_sandbox(tmp_path)
+    args, cwd, script_name = uncredentialed(tmp_path, case)
+    personal = {"VECTEN_LIVE": "1", "AWS_PROFILE": "personal"}
+    result = access(
+        tmp_path, *args, cwd=cwd, env=personal, PLATFORM="darwin", SANDBOX_EXEC=str(fake)
+    )
+    assert result.returncode == 0, result.stderr
+    assert not probed.exists()
+    calls = invocations(record)
+    profile = mod().sandbox_profile(
+        tmp_path / "real", tmp_path / "home", cwd.resolve(), REPO, interpreter()
+    )
+    assert all(call[:2] == ["-p", profile] for call in calls)
+    sibling = [sys.executable, "-I", str(SCRIPT.with_name(script_name)), *args[1:]]
+    assert calls[-1][2:] == sibling
+    for env in environments(record):
+        no_credential_in(env)
+
+
+@pytest.mark.parametrize("case", UNCREDENTIALED)
+def test_an_uncredentialed_sibling_fails_closed_without_the_os_sandbox(tmp_path, case):
+    home(tmp_path)
+    fake_clis(tmp_path)
+    fake = script(tmp_path / "sandbox-exec", "echo 'sandbox_apply: not permitted' >&2; exit 71")
+    args, cwd, _ = uncredentialed(tmp_path, case)
+    watched = [tmp_path / "checkout/scripts/live/ledger.toml"]
+    watched.append(tmp_path / "project/.github/workflows/ship.yml")
+    before = [path.read_text() for path in watched]
+    result = access(tmp_path, *args, cwd=cwd, PLATFORM="darwin", SANDBOX_EXEC=str(fake))
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert [path.read_text() for path in watched] == before
+
+
+def test_the_secret_check_lists_files_under_the_os_sandbox(tmp_path):
+    home(tmp_path)
+    project, _ = project_with_workflow(tmp_path, {"infra/leak.tf": f'secret = "{AWS_SECRET}"\n'})
+    fake, record = recording_sandbox(tmp_path)
+    result = access(
+        tmp_path, "secrets-check", str(project), PLATFORM="darwin", SANDBOX_EXEC=str(fake)
+    )
+    assert (result.returncode, result.stdout) == (1, "infra/leak.tf\n")
+    [call] = invocations(record)
+    assert call[2:] == ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"]
+    [env] = environments(record)
+    no_credential_in(env)
+    closed = script(tmp_path / "closed-sandbox-exec", "exit 71")
+    failed = access(
+        tmp_path, "secrets-check", str(project), PLATFORM="darwin", SANDBOX_EXEC=str(closed)
+    )
+    assert (failed.returncode, failed.stdout) == (2, "")
+    assert "cannot list the tracked files" in failed.stderr
+
+
+def test_doctor_reads_the_tools_commit_under_the_os_sandbox(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path)
+    fake, record = recording_sandbox(tmp_path)
+    result = access(tmp_path, "doctor", PLATFORM="darwin", SANDBOX_EXEC=str(fake))
+    assert result.stdout.splitlines()[0] == TOOLS_OK
+    calls = invocations(record)
+    [index] = [i for i, call in enumerate(calls) if call[2:3] == ["git"]]
+    assert calls[index][2:] == ["git", "rev-parse", "--short", "HEAD"]
+    no_credential_in(environments(record)[index])
+
+
+def test_check_public_through_the_wrapper_runs_both_checks(tmp_path):
+    home(tmp_path)
+    files = {".env": "A=1\n", "infra/main.tf": f'x = "{AWS_SECRET}"\n'}
+    project, _ = project_with_workflow(tmp_path, files)
+    expected = [".env  (file name)", "infra/main.tf  (credential value)"]
+    forged = {"VECTEN_LIVE_SECRET_HITS": "[]"}
+    fake, _ = recording_sandbox(tmp_path)
+    for platform in ("linux", "darwin"):
+        result = access(
+            tmp_path,
+            "project",
+            "check-public",
+            str(project),
+            env=forged,
+            PLATFORM=platform,
+            SANDBOX_EXEC=str(fake),
+        )
+        assert (result.returncode, result.stdout.splitlines()) == (1, expected), result.stderr
+        assert AWS_SECRET not in result.stdout + result.stderr
+
+
+def test_check_public_through_the_wrapper_is_refused_where_it_cannot_list(tmp_path):
+    home(tmp_path)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    result = access(tmp_path, "project", "check-public", str(plain))
+    assert (result.returncode, result.stdout) == (3, "")
+    assert "cannot list the tracked files" in result.stderr
+
+
+@pytest.mark.parametrize("args", [["--", "sweep"], [], ["made-up"], ["--help"]])
+def test_every_cost_call_but_estimate_and_spent_passes_the_guard(tmp_path, args):
+    home(tmp_path)
+    fake_clis(tmp_path, aws="echo 222222222222")
+    result = access(tmp_path, "cost", *args)
+    assert result.returncode == 3
+    assert "aws: account 222222222222 is not the live-check account" in result.stderr
+    assert result.stdout == ""
+
+
+def test_doctor_fails_an_interpreter_the_agent_can_write(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path)
+    work = tmp_path / "work"
+    work.mkdir()
+    sandbox_python = tmp_path / "real/vecten-sandbox/python"
+    for prefix, cwd in ((work / "python", work), (sandbox_python, work)):
+        prefix.mkdir(parents=True)
+        result = access(tmp_path, "doctor", cwd=cwd, INTERPRETER=[str(prefix), str(prefix)])
+        assert result.returncode == 1
+        first = result.stdout.splitlines()[0]
+        assert first.startswith(f"tools FAIL: its interpreter {prefix.resolve()} is inside")
+
+
+@pytest.mark.skipif(not os_sandbox_works(), reason="needs a usable macOS sandbox-exec")
+def test_a_sibling_run_through_the_wrapper_cannot_write_the_tools_copy(tmp_path):
+    tools = tmp_path / "tools/scripts/live"
+    tools.mkdir(parents=True)
+    for name in ("access.py", "combos.py", "ledger.toml", "filemap.toml"):
+        shutil.copy2(SCRIPT.with_name(name), tools / name)
+    ledger = tools / "ledger.toml"
+    before = ledger.read_text()
+    repo = throwaway_repository(tmp_path / "checkout")
+    settings = {"PLATFORM": "darwin", "real_home": str(tmp_path / "real")}
+    args = ["combos", "record", "--ledger", str(ledger), "aws-postgres", "v1"]
+    result = subprocess.run(
+        [sys.executable, "-c", DRIVER, str(tools / "access.py"), json.dumps(settings), *args],
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "VECTEN_LIVE_HOME": str(home(tmp_path)),
+        },
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode != 0
+    assert ledger.read_text() == before
