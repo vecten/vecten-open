@@ -253,12 +253,14 @@ and the other files of the credential home, which live only on your laptop:
      `<upstream-app>`. Generate its key and describe it as in the previous item, in
      `$LIVE/github/upstream.pem` and `$LIVE/github/upstream.toml`.
 
-     Without the Workflows permission, GitHub refuses any push of the App's that adds or
-     changes a file under `.github/workflows/`, so every workflow that runs on its pushes is
-     one a maintainer wrote. Two things follow. A fix that touches `.github/workflows/` is
-     pushed by you, not the agent ([Findings](#findings) says how the agent hands it over).
-     And the first candidate can only be cut once `publish.yml` is on the release branch,
-     since the App cannot push a candidate branch that adds it.
+     Without the Workflows permission, GitHub refuses a push of the App's whose commits add or
+     change a file under `.github/workflows/`. So a workflow that runs on the App's pushes is
+     some version a maintainer wrote, not necessarily the current one, and only as far as
+     GitHub's check behaves as the test before the packages step shows. Two things follow. A
+     fix that touches `.github/workflows/` is pushed by you, not the agent
+     ([Findings](#findings) says how the agent hands it over). And the first candidate can
+     only be cut once `publish.yml` is on the release branch, since the App cannot push a
+     candidate branch that adds it.
    - Import the two tag rulesets checked in beside the branch rulesets: in the repository's
      settings, Rules, Rulesets, New ruleset, Import a ruleset, once with
      `.github/rulesets/release-tags.json` and once with `.github/rulesets/candidate-tags.json`.
@@ -281,20 +283,72 @@ and the other files of the credential home, which live only on your laptop:
      run on the App's pushes run the code it pushed, and that code can read every
      repository-level secret a workflow hands it, so any that is not a credential of the test
      accounts moves into an environment with required reviewers, such as `release`.
+   - Before the next step, test what GitHub's Workflows check covers. The registry permission
+     of the next step is repository-wide and holds for any version of any workflow, and an
+     earlier version of `publish.yml` whose `images` job runs tree code
+     (`uv run vecten dev build-images --push`) is part of this repository's history: the
+     earlier commits of the pull request that brought in the current one carry it, and they
+     stay reachable through that pull request's ref after a squash merge. On a throwaway
+     repository you own, with a throwaway App that has Contents read and write and no
+     Workflows permission, installed on that repository only (not yet tried against a live
+     account):
+     1. Commit a workflow file `.github/workflows/probe.yml`, then a second commit that changes
+        it, both pushed as yourself to the default branch.
+     2. (a) An older workflow under a new commit: branch `probe-a` from the first commit,
+        change a file outside `.github/`, commit, tag it `v0.0.1rc1`, and push the branch and
+        the tag with the App's installation token:
+
+        ```sh
+        git push https://x-access-token:<token>@github.com/<you>/<throwaway> probe-a v0.0.1rc1
+        ```
+
+     3. (b) A stranger's commit: from another account's fork, open a pull request whose commit
+        changes `.github/workflows/probe.yml`; fetch it with
+        `git fetch origin pull/<number>/head`, tag it with `git tag v0.0.2rc1 FETCH_HEAD`, and
+        push the tag with the App's token as in (a).
+
+     Refused looks like this, for each ref pushed, and no such ref appears on the repository:
+
+     ```text
+     ! [remote rejected] probe-a -> probe-a (refusing to allow a GitHub App to create or
+     update workflow `.github/workflows/probe.yml` without `workflows` permission)
+     ```
+
+     If GitHub refuses both, the arrangement holds as this item describes:
+     continue with the next step. If it accepts either, do not give the repository's Actions
+     the Write role. The alternative, not built, is a registry credential stored in a GitHub
+     environment whose deployments are limited to the default branch, used by a workflow that
+     runs from the default branch after the tag's run has built the images (a `workflow_run`
+     workflow), so that no workflow at a tag ever holds it. It can only work once that
+     workflow is on `main`; until then the maintainer pushes candidate images.
    - In the `vecten` organisation's packages, open `vecten-airflow` and `vecten-mcp`, and in
      each one's package settings give the `vecten-open` repository's Actions the Write role.
      With it, a workflow run in this repository can request `packages: write` on the two
      images, with no approval, and deployed projects pull their images by tag. The App cannot
-     use that to push a released tag: without the Workflows permission its pushes run only
-     workflows you wrote, and the one job that requests `packages: write`, the `publish`
-     workflow's `images`, runs only pinned actions and its own shell, and tags both images with
-     the pushed tag's name, which for the App is always a candidate's (`v*rc*`). What remains:
-     a candidate's image contents are whatever its tree builds, which is the point of a
-     candidate; and the image guard (`scripts/published_images.py`, in the `published` job)
-     skips the build when both of the version's images exist, so a candidate's tags are pushed
-     once and never over. The guard is the candidate tree's own code, so a tree written to
-     defeat it could push its own two tags again on a rerun. PyPI is not exposed the same way,
-     since its trusted publisher is bound to the `release` environment.
+     use that to push a released tag, provided the test above refused both pushes: its pushes
+     then run only workflow versions you wrote, and in the current `publish.yml` the one job
+     that requests `packages: write`, `images`, executes no script, build backend or CLI from
+     the tagged tree (only pinned actions and its own shell), and tags both images with the
+     pushed tag's name, which for the App is always a candidate's (`v*rc*`). What remains:
+     - A candidate's image contents are whatever its tree builds, which is the point of a
+       candidate.
+     - The image guard (`scripts/published_images.py`, in the `published` job) skips the build
+       when both of the version's images exist, so a candidate's tags are pushed once and never
+       over. The guard is the candidate tree's own code, so a tree written to defeat it could
+       push its own two tags again on a rerun.
+     - The tree's Dockerfiles do run in the `images` job: their `RUN` steps, and the frontend a
+       `# syntax=` line or a `BUILDKIT_SYNTAX` build argument names, run inside BuildKit's
+       container after `docker/login-action` has written the token to the runner's Docker
+       configuration. That container is not handed the registry credential, so reaching it
+       from a Dockerfile takes an escape from the container. The stronger arrangement, not
+       built: build the images to an archive in a job with no write permission, and push them
+       from a job that runs no build.
+     - The `published` and `verify` jobs inspect the images anonymously, so both packages must
+       be public. If one is private, the run stops at `published`, which cannot tell whether
+       its image exists and refuses.
+
+     PyPI is not exposed the same way, since its trusted publisher is bound to the `release`
+     environment.
 
    Confirm: `doctor` prints `github-upstream ok` (the App reaches exactly
    `vecten/vecten-open`). With your own `gh` (not yet tried against a live account):
@@ -642,11 +696,20 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   written by a stranger can reach the agent: the runbook has it read pull request bodies and
   work in public repositories.
 - **A candidate's images are pushed without an approval.** Setup item 7 gives this
-  repository's Actions the Write role on the two images. The App cannot push a workflow, and
-  the one job that can push an image runs nothing from the tagged tree and takes the tag from
-  the pushed candidate tag, so the App can cause only candidates' image tags to be pushed. The
-  image guard that keeps a candidate's tags from being pushed twice is the candidate tree's
-  own code; the item says what that leaves.
+  repository's Actions the Write role on the two images, for any version of any workflow, and
+  an earlier version of `publish.yml` whose `images` job runs tree code is part of this
+  repository's history. The App can cause only candidates' image tags to be pushed provided
+  GitHub refuses its pushes that would run another workflow version (the test in item 7, not
+  yet tried against a live account): the current `images` job, the one that can push an
+  image, executes no script, build backend or CLI from the tagged tree and takes the tag from
+  the pushed candidate tag. What remains, as the item says: the tree's Dockerfiles run in that
+  job inside BuildKit's container, which is not handed the registry credential, so reaching it
+  takes an escape from that container (building to an archive without write permission and
+  pushing from a job that runs no build would close it; not built); the image guard that keeps
+  a candidate's tags from being pushed twice is the candidate tree's own code; and
+  `setup-buildx-action` and `setup-qemu-action` pull the BuildKit and binfmt images by moving
+  tags into the job that holds the credential, a supply-chain dependency the tree cannot
+  reach.
 - A symlink inside a denied directory that points outside it stays readable.
 - Whether the deny on `~/Library/Keychains` stops a keychain read through `/usr/bin/security`
   has not been verified.
@@ -961,15 +1024,18 @@ command; type it again in that form.
    Its jobs: `target` checks the tag against the tree, `packages` publishes to TestPyPI,
    `published` decides whether the two images still need building, `images` builds and pushes
    them (skipped when both exist), and `verify` installs the published packages and runs
-   `vecten dev check-images` on the two images. The run registers a few seconds after the
-   push: until `gh run list` prints a run for `v<candidate>`, wait and list again.
+   `vecten dev check-images` on the two images. `published` and `verify` inspect the images
+   anonymously, so a package that is not public stops the run at `published`. The run
+   registers a few seconds after the push: until `gh run list` prints a run for
+   `v<candidate>`, wait and list again.
    `gh run watch` exit 0: published. Otherwise read the failed step, with
    `live run --github upstream -- gh run view <databaseId> --repo vecten/vecten-open --log-failed`.
    A failure that needs no change to the tree (the index or the registry was unreachable, a
    runner died) is rerun with
    `live run --github upstream -- gh run rerun <databaseId> --repo vecten/vecten-open --failed`:
-   the workflow is built for that, skipping packages the index already holds and never pushing
-   over a published image tag. A failure that needs any change is a
+   the workflow is built for that, skipping packages the index already holds and, while the
+   candidate tree's own image guard is unmodified, never pushing over a published image tag
+   (setup item 7). A failure that needs any change is a
    [finding](#findings), and its fix is cut as the next candidate number. A tag is never moved,
    deleted or pushed again (not yet tried against a live account).
 
