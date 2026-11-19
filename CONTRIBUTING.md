@@ -97,6 +97,7 @@ fails a pull request to `main` from any other branch. The maintainers are
 | `release/<version>` | any branch or fork | a maintainer's approval; a maintainer's own pull request needs none | a squash |
 | `main` | `release/<version>` | the other maintainer's approval | a merge commit |
 | `main` | `hotfix/<name>` | the other maintainer's approval | a squash |
+| none | `rc/<version>rcN`, created by the release tooling for a release candidate | nothing | never merged; deleted after the release |
 
 Every merge also needs CI green, and no one bypasses that, the maintainers included. One
 release branch is open at a time. It opens as the next
@@ -128,7 +129,15 @@ distributions share one, and the tag is `v<version>`.
    merges it with a merge commit.
 3. Tag the merge commit `v<version>` with an annotated tag and push the tag. The Terraform
    modules are fetched by this tag, so nothing deploys from the version before it exists.
-4. Publish the packages and the images, then run `uv run vecten dev check-images`.
+   Pushing the tag starts the `publish` workflow, which refuses a tag that does not name the
+   version in the tree or does not sit on `main`.
+4. Approve the `publish` run in the `release` environment. A release takes one approval, for
+   the packages: the run waits for it before anything is published, then publishes the
+   packages to PyPI. The images build after that with no approval of their own and can take
+   long (up to three hours: the arm64 builds run under emulation); they are pushed to
+   `ghcr.io/vecten` and checked to hold both platforms. The `verify` job then installs the
+   published version, and the release is done when `verify` is green. Nothing is published by
+   hand. The one-time setup the workflow relies on is in `docs/releasing.md`.
 5. Rename the merged branch to `release/<next patch>`. Its open pull requests follow the
    rename; deleting the branch would move them onto `main`.
 
