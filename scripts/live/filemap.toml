@@ -1,0 +1,18 @@
+# Rule order is the precedence: the first rule naming a path decides its scope.
+# A path no rule names counts as shared deploy code, which owes a combination per cloud.
+[[rule]]
+scope = "none"
+paths = ["docs/**", "**/tests/**", "**/*.md", ".ai/**", ".github/**", "plugins/**", "scripts/**",
+         "packages/vecten/src/vecten/knowhow/**", ".claude-plugin/**"]
+[[rule]]
+scope = "cloud:aws"
+paths = ["terraform/aws/**", "packages/vecten/src/vecten/deploy/aws/**"]
+[[rule]]
+scope = "cloud:scaleway"
+paths = ["terraform/scaleway/**", "packages/vecten/src/vecten/deploy/scaleway/**"]
+[[rule]]
+scope = "warehouse:snowflake"
+paths = ["terraform/snowflake/**", "**/*snowflake*", "**/*snowflake*/**"]
+[[rule]]
+scope = "warehouse:postgres"
+paths = ["**/*postgres*", "**/*postgres*/**"]
