@@ -238,10 +238,17 @@ and the other files of the credential home, which live only on your laptop:
 
 7. **GitHub, `vecten/vecten-open`.**
    - Create a second App, owned by the `vecten` organisation, with its webhook turned off and
-     these repository permissions: Contents, Pull requests, Actions and Workflows read and
-     write; Metadata read. Install it on `vecten/vecten-open` only. Its slug is
+     these repository permissions: Contents, Pull requests and Actions read and write; Metadata
+     read. Leave Workflows at No access. Install it on `vecten/vecten-open` only. Its slug is
      `<upstream-app>`. Generate its key and describe it as in the previous item, in
      `$LIVE/github/upstream.pem` and `$LIVE/github/upstream.toml`.
+
+     Without the Workflows permission, GitHub refuses any push of the App's that adds or
+     changes a file under `.github/workflows/`, so every workflow that runs on its pushes is
+     one a maintainer wrote. Two things follow. A fix that touches `.github/workflows/` is
+     pushed by you, not the agent ([Findings](#findings) says how the agent hands it over).
+     And the first candidate can only be cut once `publish.yml` is on the release branch,
+     since the App cannot push a candidate branch that adds it.
    - Import the two tag rulesets checked in beside the branch rulesets: in the repository's
      settings, Rules, Rulesets, New ruleset, Import a ruleset, once with
      `.github/rulesets/release-tags.json` and once with `.github/rulesets/candidate-tags.json`.
@@ -251,11 +258,7 @@ and the other files of the credential home, which live only on your laptop:
      match `v*rc*`, and nothing bypasses it: the App can push a candidate tag, but once pushed
      the tag cannot be moved or removed.
    - Open the branch rulesets on `main` and `release/*` and confirm that `<upstream-app>` is
-     not in either bypass list. Your choice, recommended: add the rule Restrict deletions to
-     the `release/**` ruleset (`release branches: review`), since nothing else stops the App
-     deleting the open release branch. Renaming that branch at a release (CONTRIBUTING.md,
-     Releasing, step 5) removes its old name, so keep the Admin role able to bypass the rule
-     (not yet tried against a live account).
+     not in either bypass list.
    - In Environments, create `candidate` with no protection rules, and `release` with the
      maintainers as required reviewers and, under Deployment branches and tags, Selected
      branches and tags with two tag rules, `v*.*.[0-9]` and `v*.*.[0-9][0-9]`. Release tags
@@ -264,23 +267,24 @@ and the other files of the credential home, which live only on your laptop:
      second it publishes a release after one approval, yours, of its packages job, and the
      images follow without another.
    - List the repository's Actions secrets and variables (`gh secret list --repo
-     vecten/vecten-open` and `gh variable list --repo vecten/vecten-open`). The App can push a
-     workflow, and a workflow it pushes can read every repository-level secret, so any that is
-     not a credential of the test accounts moves into an environment with required
-     reviewers, such as `release`.
-   - Before the next step, decide whether to accept what it grants. With the Write role, any
-     workflow run in this repository can request `packages: write` on the two images. The App
-     can push branches and candidate tags whose workflows and code it wrote, so an agent that
-     set out to could push any image tag, a released one included, with no approval, and
-     deployed projects pull their images by tag. The unmodified tooling never does this: it
-     tags the images with the tree's candidate version, and the image guard
-     (`scripts/published_images.py`) refuses to push over a tag that exists. PyPI is not
-     exposed the same way, since its trusted publisher is bound to the `release` environment.
-     The stronger alternative is to create the upstream App without the Workflows permission
-     and rework the `images` job to run only pinned actions, with the tag taken from the
-     pushed ref. Fixes to workflows then go through you; neither change is made here.
+     vecten/vecten-open` and `gh variable list --repo vecten/vecten-open`). The workflows that
+     run on the App's pushes run the code it pushed, and that code can read every
+     repository-level secret a workflow hands it, so any that is not a credential of the test
+     accounts moves into an environment with required reviewers, such as `release`.
    - In the `vecten` organisation's packages, open `vecten-airflow` and `vecten-mcp`, and in
      each one's package settings give the `vecten-open` repository's Actions the Write role.
+     With it, a workflow run in this repository can request `packages: write` on the two
+     images, with no approval, and deployed projects pull their images by tag. The App cannot
+     use that to push a released tag: without the Workflows permission its pushes run only
+     workflows you wrote, and the one job that requests `packages: write`, the `publish`
+     workflow's `images`, runs only pinned actions and its own shell, and tags both images with
+     the pushed tag's name, which for the App is always a candidate's (`v*rc*`). What remains:
+     a candidate's image contents are whatever its tree builds, which is the point of a
+     candidate; and the image guard (`scripts/published_images.py`, in the `published` job)
+     skips the build when both of the version's images exist, so a candidate's tags are pushed
+     once and never over. The guard is the candidate tree's own code, so a tree written to
+     defeat it could push its own two tags again on a rerun. PyPI is not exposed the same way,
+     since its trusted publisher is bound to the `release` environment.
 
    Confirm: `doctor` prints `github-upstream ok` (the App reaches exactly
    `vecten/vecten-open`). With your own `gh` (not yet tried against a live account):
@@ -363,8 +367,9 @@ and the other files of the credential home, which live only on your laptop:
       ```
 
       This address is written into each sandbox project's `vecten.toml` (`[mcp] admins`), so it
-      is public in that project's repository for as long as the repository exists. Use a Google
-      account made for these checks, not a personal or work address.
+      is public in that project's repository for as long as the repository exists. Your
+      ordinary address will do; a Google account made for these checks works the same, if you
+      prefer to keep yours out of them.
 
     Confirm: the client lists the four redirect URIs; `cat $LIVE/google/oidc-client-id` prints
     the client ID, and `oidc-client-secret` holds the secret and nothing else (check it in an
@@ -598,9 +603,12 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   A separate macOS user for the agent would make it a real boundary; that is not built. Text
   written by a stranger can reach the agent: the runbook has it read pull request bodies and
   work in public repositories.
-- **Images can be pushed without an approval.** Setup item 7 gives this repository's Actions
-  the Write role on the two images, and the App can push workflows; the item says what that
-  grants and what would close it.
+- **A candidate's images are pushed without an approval.** Setup item 7 gives this
+  repository's Actions the Write role on the two images. The App cannot push a workflow, and
+  the one job that can push an image runs nothing from the tagged tree and takes the tag from
+  the pushed candidate tag, so the App can cause only candidates' image tags to be pushed. The
+  image guard that keeps a candidate's tags from being pushed twice is the candidate tree's
+  own code; the item says what that leaves.
 - A symlink inside a denied directory that points outside it stays readable.
 - Whether the deny on `~/Library/Keychains` stops a keychain read through `/usr/bin/security`
   has not been verified.
@@ -913,9 +921,12 @@ command; type it again in that form.
      gh run watch <databaseId> --repo vecten/vecten-open --exit-status
    ```
 
-   The run registers a few seconds after the push: until `gh run list` prints a run for
-   `v<candidate>`, wait and list again. `gh run watch` exit 0: published. Otherwise read the
-   failed step, with
+   Its jobs: `target` checks the tag against the tree, `packages` publishes to TestPyPI,
+   `published` decides whether the two images still need building, `images` builds and pushes
+   them (skipped when both exist), and `verify` installs the published packages and runs
+   `vecten dev check-images` on the two images. The run registers a few seconds after the
+   push: until `gh run list` prints a run for `v<candidate>`, wait and list again.
+   `gh run watch` exit 0: published. Otherwise read the failed step, with
    `live run --github upstream -- gh run view <databaseId> --repo vecten/vecten-open --log-failed`.
    A failure that needs no change to the tree (the index or the registry was unreachable, a
    runner died) is rerun with
@@ -925,11 +936,11 @@ command; type it again in that form.
    [finding](#findings), and its fix is cut as the next candidate number. A tag is never moved,
    deleted or pushed again (not yet tried against a live account).
 
-   One failure no rerun mends: the image guard refuses because exactly one of the two images
-   exists (`… exists but … does not`), so the candidate is half published. Cut the next
-   candidate number from the same tree (step 2 again, with the same `--with` branches), and
-   record why in the results file. For a release the same refusal means stop and tell the
-   maintainer, who deletes the lone image tag before a rerun.
+   One failure no rerun mends: the image guard (the `published` job) refuses because exactly
+   one of the two images exists (`… exists but … does not`), so the candidate is half
+   published. Cut the next candidate number from the same tree (step 2 again, with the same
+   `--with` branches), and record why in the results file. For a release the same refusal
+   means stop and tell the maintainer, who deletes the lone image tag before a rerun.
 4. Confirm both images hold both platforms. This needs the Docker daemon running and no
    credential:
 
@@ -1315,14 +1326,29 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
        --title "fix(<scope>): <what>" --body "<the finding, the failing test, the fix>"
      ```
 
+     The exception is a fix that adds or changes a file under `.github/workflows/`: the App
+     holds no Workflows permission, so GitHub refuses its push. Commit it as above, skip the
+     push and the pull request, write the commit to a patch, and send the maintainer its path
+     with the pull request's title and body; they push the branch and open the pull request.
+     Record the hand-off.
+
+     ```sh
+     ~/vecten-live-tools/scripts/live/live run --github upstream -- \
+       git format-patch -1 --stdout > <run>/fix-<short-name>.patch
+     ```
+
 5. Not while it is open: checks downstream of the finding, a new candidate, destroying an
    environment the fix would be retested on, the ticks, the release commit.
 6. When nothing of the first kind is left, run `live cost spent` (Rules, item 3), then stop and
    tell the maintainer that the run waits for their decision.
 7. After a blocking fix: cut the next candidate with `--with origin/fix/<short-name>`, and move
    each environment still up to it as One combination step 12 does, with
-   `live project release <project>` before `vecten update`. A result recorded on the
-   earlier candidate stands unless the fix changed a file its check exercises. To see which:
+   `live project release <project>` before `vecten update`. A fix that touches
+   `.github/workflows/` reaches a candidate only once the maintainer has merged it into
+   `release/<version>`: cut the next candidate without its `--with`, since the App's push of a
+   candidate branch that merges it is refused too (not yet tried against a live account). A
+   result recorded on the earlier candidate stands unless the fix changed a file its check
+   exercises. To see which:
 
    ```sh
    ~/vecten-live-tools/scripts/live/live combos affected v<earlier candidate> v<candidate>
