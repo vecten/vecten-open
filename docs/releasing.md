@@ -53,6 +53,14 @@ and the other files of the credential home, which live only on your laptop:
    (cd ~/vecten-live-tools && uv sync --locked --all-packages)
    ```
 
+   The copy's interpreter, `.venv/bin/python` and the Python installation it points at, must
+   be one the agent cannot write: Python loads code from that installation (a
+   `sitecustomize.py`, say) before the wrapper runs a single check. Give `uv sync` a Python
+   that lives outside every checkout and outside `~/vecten-sandbox`, such as the one
+   `uv python install 3.14` puts under `~/.local/share/uv/python`. Every command the wrapper
+   starts is denied writing it, and `doctor` fails when it lies inside the directory `doctor`
+   runs from or inside `~/vecten-sandbox`.
+
    Update it yourself, after a change to `scripts/live/` merges into its branch: `git pull`,
    then `uv sync --locked --all-packages`, both in `~/vecten-live-tools`. Never work in it: it
    is not a checkout to edit, build in or switch, the settings deny the agent's file-editing
@@ -60,8 +68,10 @@ and the other files of the credential home, which live only on your laptop:
    other step on this page runs in the checkout you work in.
 
    Confirm: from the checkout, `~/vecten-live-tools/scripts/live/live doctor` prints
-   `tools ok: <the copy's path> at <its commit>` as its first line. Until the next item makes
-   the credential home, it then stops with `access: no credential home at …` (exit 3).
+   `tools ok: <the copy's path> at <its commit>` as its first line, and `tools FAIL: …` when
+   the copy is run from inside itself or its interpreter lies where the agent writes. Until the
+   next item makes the credential home, it then stops with `access: no credential home at …`
+   (exit 3).
 
 2. **The credential home.** In the terminal you use for this whole list, make every new file
    owner-only and create the directory layout:
@@ -497,17 +507,30 @@ its shell commands only; its own file-reading tools follow `permissions.deny`, h
 Three things keep the agent from changing the tools copy, and so the code the rule lets it run
 unasked: the `Edit` and `Write` deny entries bind its own file-editing tools; its shell
 commands run in the command sandbox, which lets them write the checkout and `~/vecten-sandbox`
-but not the copy; and a wrapped command is denied the copy by the OS profile below.
+but not the copy; and every command the wrapper starts is denied the copy and its interpreter
+by the OS profile below.
 
 ### What bounds a wrapped command
 
-A wrapped command is one that runs with the test credentials: `live run -- <command>`,
-`live cost sweep` and every `live candidate` call. The other subcommands (`doctor`, `show`,
-`live combos`, `live cost estimate`, `live cost spent` and `live project`) need no credential
-and run directly, outside the guard and the OS sandbox; `live combos` and `live project` read
-and write only the checkout or project they run in or are given, and `live cost` prices with
-the `vecten` of the tools copy. A wrapped command refuses (exit 3) to run inside the tools
-copy, as the current directory or as its `--cwd`: the copy is not a place to work in.
+Outside the OS profile the wrapper does three things only: it parses its arguments, reads the
+credential home (the allow list, the secret values it redacts and looks for, a
+`--stdin-file`), and mints the GitHub token, which `github_app.py` signs with the system's
+`/usr/bin/openssl`. For the secret check it also reads the files it looks into, without
+running anything. Every tool it runs on files the agent can write runs inside the profile:
+every identity probe, every wrapped command, the `git` of the secret check and of `doctor`, and
+the subcommands that need no credential.
+
+A wrapped command is one that runs with the test credentials: `live run -- <command>`, every
+`live candidate` call and every `live cost` call but `estimate` and `spent`. `live combos`,
+`live cost estimate`, `live cost spent` and `live project` run under the same profile, with no
+credential and no identity check: their environment is built from the same allowlist, without
+the tools' configurations, the App token, the git credential helper or `VECTEN_LIVE`. They read
+whatever path they are given (`live combos --ledger` and `--map`, `live cost --created`), and
+`live cost` prices with the `vecten` of the tools copy. `live project check-public` runs both of
+its checks: the wrapper runs the secret check first and hands its findings to the script, which
+cannot start a sandbox inside its own. `doctor` checks every identity as below, and `show` reads
+only the credential home. A wrapped command refuses (exit 3) to run inside the tools copy, as
+the current directory or as its `--cwd`: the copy is not a place to work in.
 
 What bounds a wrapped command is the identity guard, the command's own home and environment,
 and the OS sandbox, all below. Together they keep tools, and slips, away from your own
@@ -559,12 +582,14 @@ The command then runs with:
   - writing the credential home, except its `home/`, `cache/`, `snowflake/logs/` and
     `github/gh/`, which the tools write; so no command can edit `allow.toml`, the guard's own
     list;
-  - writing the files that steer the agent or every later shell: `~/.claude/settings.json`,
-    `~/.claude/settings.local.json`, `~/.zshrc`, `~/.zprofile`, `~/.zshenv`, `~/.bashrc`,
-    `~/.bash_profile` and `~/.profile`, and `.claude/settings.json` and
-    `.claude/settings.local.json` of the directory the wrapper started in, the checkout;
-  - writing the tools copy the wrapper runs from, `~/vecten-live-tools`, so no wrapped command
-    can change the code the settings let the agent run unasked;
+  - writing the files that steer the agent, every later shell or every later `git`:
+    `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.zshrc`, `~/.zprofile`,
+    `~/.zshenv`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.gitconfig` and everything
+    under `~/.config/git/`, and `.claude/settings.json` and `.claude/settings.local.json` of the
+    directory the wrapper started in, the checkout;
+  - writing the tools copy the wrapper runs from, `~/vecten-live-tools`, and the Python
+    installation its interpreter runs from, so no command can change the code the settings let
+    the agent run unasked, or plant code Python loads before the wrapper's first check;
   - every unix-socket connection but the name resolver's (`/private/var/run/mDNSResponder`),
     so no Docker daemon, ssh-agent or gpg-agent is reachable.
 - **Its own home.** `HOME` is `<credential home>/home`, so a tool's default lookups miss your
@@ -575,8 +600,11 @@ The command then runs with:
   credential home (`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE=livecheck`,
   `SCW_CONFIG_PATH`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`), a freshly minted App token in
   `GH_TOKEN`, git's global configuration from `<credential home>/git/config`, only `gh` as
-  git's credential helper for github.com, GitHub SSH remotes rewritten to HTTPS, and git over
-  SSH refused.
+  git's credential helper for github.com, GitHub SSH remotes rewritten to HTTPS, git over
+  SSH refused, and `GIT_NO_LAZY_FETCH=1`, so git fetches nothing from a promisor remote the
+  repository names. A subcommand that needs no credential gets the same environment without
+  the tools' configurations, with the unconfigured placeholder in `GH_TOKEN`, no credential
+  helper and no `VECTEN_LIVE`.
 
 The permission rule matches the command's text, so it matches only the launcher typed in full
 with nothing in front. `VECTEN_LIVE_HOME` (and `HOME`) choose the credential home the wrapper
@@ -586,19 +614,29 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
 ### Limits
 
 - **The wrapper is not a containment.** It keeps tools, and slips, away from your own
-  credentials and accounts. The tools copy closes the easy way around it: the code the
-  settings let the agent run unasked, outside the command sandbox, is the copy's, and the agent
-  cannot change it, since its file-editing tools are denied the copy, its sandboxed shell
-  commands cannot write there, and a wrapped command is denied it by the OS profile. It still
-  does not contain an agent that deliberately works around it, for three reasons:
-  - The OS sandbox profile is a deny-list: a wrapped command can write most of your home
-    directory and read any credential file the profile does not name.
-  - A wrapped process can have another started outside the profile, through LaunchServices,
-    Apple Events or launchd.
+  credentials and accounts. The tools copy and the OS profile close the easy ways around it.
+  The code the settings let the agent run unasked, outside the command sandbox, is the copy's,
+  and the agent cannot change it: its file-editing tools are denied the copy, its sandboxed
+  shell commands cannot write there, and every command the wrapper starts is denied the copy
+  and its interpreter. And everything the wrapper runs on files the agent writes, `git` in the
+  checkout and in the sandbox projects included, runs inside the profile; outside it the
+  wrapper only parses its arguments, reads the credential home and mints the GitHub token
+  ([What bounds a wrapped command](#what-bounds-a-wrapped-command)). It still does not contain
+  an agent that deliberately works around it:
+  - The profile is a list of denied places. Its write denies cover the tools copy and its
+    interpreter, the credential home outside `home/`, `cache/`, `snowflake/logs/` and
+    `github/gh/`, the Claude Code settings, and the shell and git startup files; a command it
+    holds can still write the rest of your home directory, and read any credential file it
+    does not name.
+  - A process inside the profile can have another started outside it, through
+    LaunchServices, Apple Events or launchd.
   - A wrapped `uv run …`, such as the release commit's `uv run vecten dev bump-version` or the
     `uv run --no-project` form of a sandbox project's `vecten`, still runs code from the
     working checkout or the run's own environments, which the agent can change; it runs inside
     the profile, with the test credentials.
+  - On Linux there is no profile: `doctor` prints `os-sandbox absent (not macOS)`, a wrapped
+    command is bounded by its home, its environment and the guard only, and the subcommands
+    that need no credential by their environment only.
 
   A separate macOS user for the agent would make it a real boundary; that is not built. Text
   written by a stranger can reach the agent: the runbook has it read pull request bodies and
@@ -613,13 +651,11 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
 - Whether the deny on `~/Library/Keychains` stops a keychain read through `/usr/bin/security`
   has not been verified.
 - The executable list bounds nothing while `uv` is on it, since `uv run` starts any program.
-- The subcommands that need no credential (`live combos`, `live cost estimate`,
-  `live cost spent` and `live project`) run outside the profile, as you. They run only the
-  tools copy's code and `git`, with fsmonitor off where git reads an index, and write only what
-  they are given: `combos record` the ledger of the checkout it runs in, or the one `--ledger`
-  names, and `project candidate` and `project release` the workflows of the project named.
-- On Linux there is no OS sandbox: `doctor` prints `os-sandbox absent (not macOS)`, and a
-  wrapped command is bounded by its home, its environment and the guard only.
+- The subcommands that need no credential act on what they are given, inside the profile:
+  `live combos --ledger` and `--map` and `live cost --created` read whatever path they name;
+  `live combos record` writes the ledger of the checkout it runs in, or the one `--ledger`
+  names; `live project candidate` and `release` rewrite the workflows of the project named,
+  skip a workflow that is a link within the project, and refuse one that leads outside it.
 - **Sandbox repositories are public.** While one exists, it publishes the project's domain
   (in `vecten.toml` and `deploy/envs/prod.tfvars`), on a Snowflake combination the Snowflake
   account identifier (in the tfvars), the sign-in address of `google/admin.toml` (in
@@ -707,9 +743,9 @@ command; type it again in that form.
    sweep's 1 and 4.
 3. `live cost sweep` and every `live candidate` call run with the test credentials as
    `live run` does, the identity check first: `candidate` with the `vecten/vecten-open` App,
-   `cost sweep` with the sandbox organisation's. Never put them inside `live run`. The other
-   subcommands of `live combos`, `live cost` and `live project` need no credential and run
-   directly.
+   `cost sweep` with the sandbox organisation's. Never put them inside `live run`.
+   `live combos`, `live cost estimate`, `live cost spent` and `live project` need no
+   credential: they run in the same OS sandbox, with none.
 4. A `vecten` command in a sandbox project is written below as `vecten <arguments>`, short for
    this full form, which runs the CLI in `<cli>` with `<project>` as its working directory:
 
@@ -793,8 +829,9 @@ command; type it again in that form.
    ```
 
    It must exit 0, its first line `tools ok: …` and the six after it `ok`. A `FAIL` line is
-   the maintainer's to fix: send it to them and stop. `tools FAIL` means the command ran inside
-   the tools copy: run it again from the checkout.
+   the maintainer's to fix: send it to them and stop, with one exception: a `tools FAIL` line
+   that says the command ran from the directory being worked in means it ran inside the tools
+   copy; run it again from the checkout.
 3. Fetch and stand on the release branch:
 
    ```sh
