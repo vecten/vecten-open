@@ -2,6 +2,7 @@ import base64
 import importlib.util
 import io
 import json
+import os
 import stat
 import subprocess
 import urllib.error
@@ -153,3 +154,41 @@ def test_the_jwt_is_signed_by_the_openssl_the_constant_names(tmp_path, monkeypat
         str(tmp_path / "app.pem"),
     ]
     assert b64d(token.split(".")[2]) == b"signature"
+
+
+def test_a_link_planted_in_the_cache_is_neither_read_nor_written_through(tmp_path):
+    cfg = config(tmp_path)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    target = tmp_path / "script.py"
+    planted = json.dumps({"token": "ghs_planted", "expires_at": EXPIRES_AT})
+    target.write_text(planted)
+    (cache / "sandbox.json").symlink_to(target)
+    fresh = {"token": "ghs_fresh", "expires_at": EXPIRES_AT}
+    token = mod().installation_token(cfg, cache, 1_800_000_000, lambda url, jwt: fresh)
+    assert token == "ghs_fresh"
+    assert target.read_text() == planted
+    entry = cache / "sandbox.json"
+    assert stat.S_ISREG(os.lstat(entry).st_mode)
+    assert stat.S_IMODE(os.lstat(entry).st_mode) == 0o600
+    assert json.loads(entry.read_text()) == fresh
+    assert sorted(path.name for path in cache.iterdir()) == ["sandbox.json"]
+
+
+def test_a_cache_directory_that_is_a_link_is_refused(tmp_path):
+    cfg = config(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / "cache").symlink_to(elsewhere)
+    fetch = {"token": "ghs_fresh", "expires_at": EXPIRES_AT}
+    with pytest.raises(SystemExit, match="not a directory"):
+        mod().installation_token(cfg, tmp_path / "cache", 1_800_000_000, lambda url, jwt: fetch)
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_a_new_cache_directory_is_owner_only(tmp_path):
+    cfg = config(tmp_path)
+    cache = tmp_path / "home/cache"
+    fresh = {"token": "ghs_fresh", "expires_at": EXPIRES_AT}
+    mod().installation_token(cfg, cache, 1_800_000_000, lambda url, jwt: fresh)
+    assert stat.S_IMODE(cache.stat().st_mode) == 0o700

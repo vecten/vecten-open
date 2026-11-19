@@ -8,6 +8,7 @@ import base64
 import calendar
 import json
 import os
+import stat
 import subprocess
 import time
 import tomllib
@@ -60,9 +61,27 @@ def parse_time(stamp: str) -> int:
     return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
 
 
+# This command runs outside the OS sandbox, so it neither reads nor writes through a link: one
+# planted in the cache would point its reads and writes at any file of the user's.
+def _cache_directory(directory: Path) -> None:
+    try:
+        directory.mkdir(mode=0o700, parents=True)
+    except FileExistsError:
+        pass
+    if not stat.S_ISDIR(os.lstat(directory).st_mode):
+        raise SystemExit(f"the token cache {directory} is not a directory")
+
+
 def _cached(path: Path, now: int) -> str | None:
     try:
-        entry = json.loads(path.read_text())
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(descriptor) as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return None
+            entry = json.loads(handle.read())
         if parse_time(entry["expires_at"]) - now > REFRESH_MARGIN:
             return entry["token"]
     except OSError, ValueError, KeyError, TypeError:
@@ -71,11 +90,17 @@ def _cached(path: Path, now: int) -> str | None:
 
 
 def _store(path: Path, entry: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as handle:
-        handle.write(json.dumps(entry))
-    path.chmod(0o600)
+    # A fresh file renamed over the entry replaces a link there instead of writing through it.
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(json.dumps(entry))
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def installation_token(
@@ -84,6 +109,7 @@ def installation_token(
     now: int,
     fetch: Callable[[str, str], dict] = _post,
 ) -> str:
+    _cache_directory(cache_dir)
     cache = cache_dir / f"{config.stem}.json"
     token = _cached(cache, now)
     if token is not None:

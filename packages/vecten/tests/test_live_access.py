@@ -87,7 +87,6 @@ sys.exit(access.main(sys.argv[3:]))
 """
 EXAMPLE_HOME = Path("/Users/example")
 EXAMPLE_LIVE = EXAMPLE_HOME / ".config/vecten-livecheck"
-EXAMPLE_CHECKOUT = EXAMPLE_HOME / "src/checkout"
 EXAMPLE_TOOLS = EXAMPLE_HOME / "vecten-live-tools"
 EXAMPLE_PYTHON = [Path("/opt/example-python/3.14"), EXAMPLE_TOOLS / ".venv"]
 DENIED_TEXT = (
@@ -112,20 +111,25 @@ DENIED_TEXT = (
     ' (literal "/Users/example/.pgpass"))'
     '(deny file-write* (subpath "/Users/example/.config/vecten-livecheck"))'
     '(allow file-write* (subpath "/Users/example/.config/vecten-livecheck/home")'
-    ' (subpath "/Users/example/.config/vecten-livecheck/cache")'
+    ' (subpath "/Users/example/.config/vecten-livecheck/home-plain")'
     ' (subpath "/Users/example/.config/vecten-livecheck/snowflake/logs")'
     ' (subpath "/Users/example/.config/vecten-livecheck/github/gh"))'
-    '(deny file-write* (literal "/Users/example/.claude/settings.json")'
-    ' (literal "/Users/example/.claude/settings.local.json")'
-    ' (literal "/Users/example/.zshrc") (literal "/Users/example/.zprofile")'
+    '(deny file-write* (literal "/Users/example/.zshrc") (literal "/Users/example/.zprofile")'
     ' (literal "/Users/example/.zshenv") (literal "/Users/example/.bashrc")'
     ' (literal "/Users/example/.bash_profile") (literal "/Users/example/.profile")'
     ' (literal "/Users/example/.gitconfig") (subpath "/Users/example/.config/git")'
-    ' (literal "/Users/example/src/checkout/.claude/settings.json")'
-    ' (literal "/Users/example/src/checkout/.claude/settings.local.json")'
+    ' (subpath "/Users/example/.claude")'
     ' (subpath "/Users/example/vecten-live-tools")'
     ' (subpath "/opt/example-python/3.14")'
-    ' (subpath "/Users/example/vecten-live-tools/.venv"))'
+    ' (subpath "/Users/example/vecten-live-tools/.venv")'
+    ' (regex #"^/Users/example/(.*/)?\\.claude'
+    '(/(settings\\.json|settings\\.local\\.json|hooks|skills|commands|agents)(/.*)?)?$"))'
+    '(deny file-write-unlink (literal "/Users/example") (literal "/Users")'
+    ' (literal "/Users/example/.config") (literal "/Users/example/Library")'
+    ' (literal "/Users/example/Library/Application Support")'
+    ' (literal "/Users/example/.docker") (literal "/Users/example/.config/git")'
+    ' (literal "/Users/example/.claude") (literal "/opt/example-python") (literal "/opt")'
+    ' (literal "/Users/example/vecten-live-tools"))'
     "(deny network-outbound (remote unix-socket))"
     '(allow network-outbound (literal "/private/var/run/mDNSResponder"))'
 )
@@ -820,9 +824,7 @@ def test_doctor_redacts_a_value_it_refuses(tmp_path):
 
 
 def test_the_sandbox_profile_denies_the_maintainers_credentials():
-    profile = mod().sandbox_profile(
-        EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, EXAMPLE_PYTHON
-    )
+    profile = mod().sandbox_profile(EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_TOOLS, EXAMPLE_PYTHON)
     assert profile == DENIED_TEXT
 
 
@@ -830,11 +832,10 @@ def test_a_path_the_profile_cannot_quote_is_a_refusal():
     m = mod()
     for odd in ('/Users/ex"ample', "/Users/ex\\ample"):
         for paths in (
-            (Path(odd), EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, EXAMPLE_PYTHON),
-            (EXAMPLE_HOME, Path(odd), EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, EXAMPLE_PYTHON),
-            (EXAMPLE_HOME, EXAMPLE_LIVE, Path(odd), EXAMPLE_TOOLS, EXAMPLE_PYTHON),
-            (EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS, [Path(odd)]),
-            (EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, Path(odd), EXAMPLE_PYTHON),
+            (Path(odd), EXAMPLE_LIVE, EXAMPLE_TOOLS, EXAMPLE_PYTHON),
+            (EXAMPLE_HOME, Path(odd), EXAMPLE_TOOLS, EXAMPLE_PYTHON),
+            (EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_TOOLS, [Path(odd)]),
+            (EXAMPLE_HOME, EXAMPLE_LIVE, Path(odd), EXAMPLE_PYTHON),
         ):
             with pytest.raises(m.Refused):
                 m.sandbox_profile(*paths)
@@ -884,9 +885,7 @@ def test_on_macos_probes_and_command_run_inside_the_os_sandbox(tmp_path):
         tmp_path, "run", "--", "vecten", "status", PLATFORM="darwin", SANDBOX_EXEC=str(fake)
     )
     assert result.returncode == 7, result.stderr
-    profile = mod().sandbox_profile(
-        tmp_path / "real", tmp_path / "home", tmp_path.resolve(), REPO, interpreter()
-    )
+    profile = mod().sandbox_profile(tmp_path / "real", tmp_path / "home", REPO, interpreter())
     calls = invocations(record)
     assert all(call[:2] == ["-p", profile] for call in calls)
     assert [call[2] for call in calls] == ["aws", "scw", "snow", "gh", "vecten"]
@@ -946,6 +945,7 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
     (real / ".config/git").mkdir(parents=True)
     live = tmp_path / "live"
     (live / "cache").mkdir(parents=True)
+    (live / "home").mkdir()
     (live / "allow.toml").write_text("")
     tools = tmp_path / "tools"
     (tools / "scripts/live").mkdir(parents=True)
@@ -956,7 +956,7 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
     sockets = Path(tempfile.mkdtemp(dir="/tmp"))
     server = listening(sockets / "agent.sock")
     try:
-        profile = mod().sandbox_profile(real, live, tmp_path, tools, [python])
+        profile = mod().sandbox_profile(real, live, tools, [python])
 
         def sandboxed(*argv):
             command = ["/usr/bin/sandbox-exec", "-p", profile, *argv]
@@ -973,7 +973,8 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
         assert sandboxed("/bin/cat", str(real / "vecten-sandbox/proj/.env")) == 0
         assert appended(live / "allow.toml") != 0
         assert (live / "allow.toml").read_text() == ""
-        assert appended(live / "cache/token.json") == 0
+        assert appended(live / "home/state") == 0
+        assert appended(live / "cache/token.json") != 0
         assert appended(real / ".claude/settings.json") != 0
         assert appended(tools / "scripts/live/access.py") != 0
         assert appended(tools / "new-file") != 0
@@ -1321,7 +1322,7 @@ def test_a_sibling_without_credentials_runs_with_the_wrappers_interpreter_and_no
     assert "SOME_SETTING" not in env
     assert env["GH_TOKEN"] == "livecheck-github-not-configured"
     assert env["GIT_NO_LAZY_FETCH"] == "1"
-    assert env["HOME"] == str(tmp_path / "home/home")
+    assert env["HOME"] == str(tmp_path / "home/home-plain")
 
 
 def throwaway_repository(root, ledger_tag="v1"):
@@ -1618,9 +1619,7 @@ def test_an_uncredentialed_sibling_runs_under_the_os_sandbox_without_credentials
     assert result.returncode == 0, result.stderr
     assert not probed.exists()
     calls = invocations(record)
-    profile = mod().sandbox_profile(
-        tmp_path / "real", tmp_path / "home", cwd.resolve(), REPO, interpreter()
-    )
+    profile = mod().sandbox_profile(tmp_path / "real", tmp_path / "home", REPO, interpreter())
     assert all(call[:2] == ["-p", profile] for call in calls)
     sibling = [sys.executable, "-I", str(SCRIPT.with_name(script_name)), *args[1:]]
     assert calls[-1][2:] == sibling
@@ -1753,4 +1752,111 @@ def test_a_sibling_run_through_the_wrapper_cannot_write_the_tools_copy(tmp_path)
         timeout=60,
     )
     assert result.returncode != 0
+    assert "Operation not permitted" in result.stderr
     assert ledger.read_text() == before
+
+
+def test_secret_values_follows_no_link(tmp_path):
+    root = home(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "notes.txt").write_text("a-value-outside-the-credential-home\n")
+    (root / "cache").mkdir()
+    (root / "cache/sandbox.json").symlink_to(outside / "notes.txt")
+    (root / "cache/linked-directory").symlink_to(outside, target_is_directory=True)
+    secrets = mod().secret_values(root)
+    assert AWS_SECRET in secrets
+    assert "a-value-outside-the-credential-home" not in secrets
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--", "check-public", "{project}"],
+        ["check-public", "--", "{project}"],
+        ["check-public", "{project}", "--"],
+    ],
+)
+def test_check_public_in_any_other_spelling_is_refused(tmp_path, args):
+    home(tmp_path)
+    project, _ = project_with_workflow(tmp_path, {".env": "A=1\n"})
+    given = [arg.format(project=project) for arg in args]
+    result = access(tmp_path, "project", *given)
+    assert (result.returncode, result.stdout) == (2, "")
+    assert len(result.stderr.strip().splitlines()) == 1
+    assert "check-public <project>" in result.stderr
+
+
+def test_runs_without_credentials_have_a_home_of_their_own(tmp_path):
+    root = home(tmp_path)
+    m = mod()
+    plain = m.tool_env(root, {"PATH": "/bin"}, "", credentials=False)
+    credentialed = m.tool_env(root, {"PATH": "/bin"}, "ghs_minted")
+    assert plain["HOME"] == str(root / "home-plain")
+    assert credentialed["HOME"] == str(root / "home")
+    assert stat.S_IMODE((root / "home-plain").stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize("name", ["home", "home-plain"])
+def test_a_home_that_is_not_a_real_directory_is_refused(tmp_path, name):
+    root = home(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / name).symlink_to(elsewhere, target_is_directory=True)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, vecten=f"touch {marker}")
+    estimate = ["cost", "estimate", "--combinations", "aws-postgres", "--hours", "1"]
+    result = access(tmp_path, *(["run", "--", "vecten"] if name == "home" else estimate))
+    assert result.returncode == 3
+    assert f"{root / name} is not a directory" in result.stderr
+    assert not marker.exists()
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_the_cache_is_not_among_the_places_a_wrapped_command_writes():
+    assert "cache" not in mod().LIVE_WRITABLE
+
+
+@pytest.mark.skipif(not os_sandbox_works(), reason="needs a usable macOS sandbox-exec")
+def test_the_os_sandbox_holds_against_renames_and_any_checkouts_agent_files(tmp_path):
+    real = tmp_path / "real"
+    checkout = real / "elsewhere/checkout"
+    (checkout / ".claude/hooks").mkdir(parents=True)
+    (checkout / ".claude/settings.local.json").write_text("{}\n")
+    (checkout / ".claude/worktrees").mkdir()
+    (real / ".claude/plugins").mkdir(parents=True)
+    live = tmp_path / "live"
+    live.mkdir()
+    tools = tmp_path / "anc/b/tools"
+    tools.mkdir(parents=True)
+    profile = mod().sandbox_profile(real, live, tools, [tmp_path / "python"])
+    work = tmp_path / "work"
+    work.mkdir()
+
+    def sandboxed(script):
+        command = ["/usr/bin/sandbox-exec", "-p", profile, "/bin/sh", "-c", script]
+        return subprocess.run(command, cwd=work, capture_output=True, text=True)
+
+    anc = tmp_path / "anc"
+    renamed = sandboxed(
+        f"mv {anc}/b {anc}/x && mkdir -p {anc}/x/tools && echo planted > {anc}/x/tools/f"
+        f" && mv {anc}/x {anc}/b"
+    )
+    assert renamed.returncode != 0
+    assert "Operation not permitted" in renamed.stderr
+    assert not (tools / "f").exists()
+    assert (anc / "b/tools").is_dir()
+    for target in (
+        checkout / ".claude/settings.local.json",
+        checkout / ".claude/settings.json",
+        checkout / ".claude/hooks/pre.sh",
+        real / ".claude/plugins/hook.sh",
+        real / ".claude/settings.json",
+    ):
+        written = sandboxed(f'printf x >> "{target}"')
+        assert written.returncode != 0, target
+    assert (checkout / ".claude/settings.local.json").read_text() == "{}\n"
+    moved = sandboxed(f'mv "{checkout}/.claude" "{checkout}/claude-moved"')
+    assert moved.returncode != 0
+    assert (checkout / ".claude/settings.local.json").exists()
+    assert sandboxed(f'printf x >> "{checkout}/.claude/worktrees/notes"').returncode == 0

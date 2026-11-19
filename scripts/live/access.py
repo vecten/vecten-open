@@ -9,6 +9,7 @@ import os
 import pwd
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tomllib
@@ -81,24 +82,29 @@ SANDBOX_PROJECTS = "vecten-sandbox"
 # is spliced in as `home` with REGEX_SPECIAL escaped.
 ENV_FILES = r"^{home}/(.*/)?\.env(\.[^/]+)?$"
 REGEX_SPECIAL = frozenset(".^$|?*+()[]{}")
-# What the wrapped tools write in the credential home; the rest of it, `allow.toml` above all,
-# is the guard's own and stays unwritable.
-LIVE_WRITABLE = ("home", "cache", "snowflake/logs", "github/gh")
-# Files that steer the agent or every later shell: under the real home, then under the
-# directory the wrapper started in.
+# What the wrapped tools write in the credential home; the rest of it, `allow.toml` and the
+# token cache above all, is the guard's own and stays unwritable.
+LIVE_WRITABLE = ("home", "home-plain", "snowflake/logs", "github/gh")
+# Files that steer every later shell or git under the real home, and the trees of the agent's
+# own settings, hooks, plugins and memory.
 HOME_UNWRITABLE = (
-    ".claude/settings.json", ".claude/settings.local.json", ".zshrc", ".zprofile", ".zshenv",
-    ".bashrc", ".bash_profile", ".profile", ".gitconfig",
+    ".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".gitconfig",
 )  # fmt: skip
-HOME_UNWRITABLE_TREES = (".config/git",)
-STARTED_IN_UNWRITABLE = (".claude/settings.json", ".claude/settings.local.json")
+HOME_UNWRITABLE_TREES = (".config/git", ".claude")
+# A Seatbelt regex for the `.claude` directory of any checkout under the real home, its settings
+# files and the trees whose scripts and prompts the agent runs: the directory itself and each
+# named entry are matched too, so none can be renamed away and back.
+CLAUDE_CONTROL = (
+    r"^{home}/(.*/)?\.claude"
+    r"(/(settings\.json|settings\.local\.json|hooks|skills|commands|agents)(/.*)?)?$"
+)
 # Any unix socket may belong to an agent or daemon that acts with the maintainer's access
 # (Docker, ssh-agent, gpg-agent), so every one is denied and only the resolver's is open.
 ALLOWED_SOCKETS = ("/private/var/run/mDNSResponder",)
 # The commands' own HOME holds tool caches and binaries, not the credentials the home was given.
 NOT_SECRET = (
     ("allow.toml",), ("google", "hostnames.txt"), ("google", "oidc-client-id"),
-    ("snowflake", "logs"), ("github", "gh"), ("git", "config"), ("home",),
+    ("snowflake", "logs"), ("github", "gh"), ("git", "config"), ("home",), ("home-plain",),
     ("google", "admin.toml"),
 )  # fmt: skip
 SSH_REFUSED = "sh -c 'echo \"access: git over SSH is refused; use https://\" >&2; exit 1'"
@@ -139,15 +145,27 @@ def real_home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
+def _own_directory(path: Path) -> None:
+    """Make `path` a directory only its owner can enter; refuse a link or file planted there."""
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    if not stat.S_ISDIR(os.lstat(path).st_mode):
+        raise Refused(f"{path} is not a directory")
+
+
 def tool_env(
     home: Path, base: Mapping[str, str], github_token: str, credentials: bool = True
 ) -> dict[str, str]:
     # Any variable a tool reads that the wrapper did not set is a way around the credential
     # home, so only identity-free variables pass, and HOME moves so default lookups miss.
     env = {key: value for key, value in base.items() if key in PASSED or key.startswith("LC_")}
-    own_home = home / "home"
+    # Runs with and without a credential keep apart homes, so neither's tools find the other's
+    # state where they look by default.
+    own_home = home / ("home" if credentials else "home-plain")
     if home.is_dir():
-        own_home.mkdir(mode=0o700, exist_ok=True)
+        _own_directory(own_home)
     git_global = home / "git/config"
     # Git asks every configured helper in turn and takes the first answer; the empty helper
     # empties the list, so no helper but gh's is asked for github.com.
@@ -204,14 +222,38 @@ def _filters(rules: Iterable[tuple[str, Path]]) -> str:
     return " ".join(f'({kind} "{v}")' for kind, path in rules for v in _variants(path))
 
 
+def _home_pattern(template: str, home: str) -> str:
+    return template.format(home="".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in home))
+
+
 def env_files_pattern(home: str) -> str:
-    return ENV_FILES.format(home="".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in home))
+    return _home_pattern(ENV_FILES, home)
+
+
+def claude_control_pattern(home: str) -> str:
+    return _home_pattern(CLAUDE_CONTROL, home)
+
+
+def _ancestors(rules: Iterable[tuple[str, Path]]) -> list[str]:
+    """Every directory above a denied path, as written and resolved, short of the root.
+
+    A write deny names a path, so renaming a directory above it, writing beneath the new name
+    and renaming it back would plant a file there; denying the rename of each ancestor stops
+    that.
+    """
+    found = (
+        str(parent)
+        for _, path in rules
+        for variant in _variants(path)
+        for parent in Path(variant).parents
+        if parent.parent != parent
+    )
+    return list(dict.fromkeys(found))
 
 
 def sandbox_profile(
     account_home: Path,
     live_home: Path,
-    started_in: Path,
     tools: Path,
     interpreter: Iterable[Path],
 ) -> str:
@@ -222,28 +264,31 @@ def sandbox_profile(
     any credential file the profile does not name, and start processes outside the profile
     through LaunchServices, Apple Events or launchd.
     """
-    env_files = " ".join(f'(regex #"{env_files_pattern(v)}")' for v in _variants(account_home))
-    credentials = _filters((kind, account_home / relative) for kind, relative in DENIED)
-    unwritable = _filters(
-        [
-            *(("literal", account_home / relative) for relative in HOME_UNWRITABLE),
-            *(("subpath", account_home / relative) for relative in HOME_UNWRITABLE_TREES),
-            *(("literal", started_in / relative) for relative in STARTED_IN_UNWRITABLE),
-            ("subpath", tools),
-            *(("subpath", Path(p)) for p in dict.fromkeys(map(str, interpreter))),
-        ]
-    )
+    homes = _variants(account_home)
+    env_files = " ".join(f'(regex #"{env_files_pattern(v)}")' for v in homes)
+    claude = " ".join(f'(regex #"{claude_control_pattern(v)}")' for v in homes)
+    credentials = [(kind, account_home / relative) for kind, relative in DENIED]
+    guarded = [("subpath", live_home)]
+    unwritable = [
+        *(("literal", account_home / relative) for relative in HOME_UNWRITABLE),
+        *(("subpath", account_home / relative) for relative in HOME_UNWRITABLE_TREES),
+        ("subpath", tools),
+        *(("subpath", Path(p)) for p in dict.fromkeys(map(str, interpreter))),
+    ]
+    ancestors = _ancestors([*credentials, *guarded, *unwritable])
+    unlinks = " ".join(f'(literal "{path}")' for path in ancestors)
     # The later rule wins, so each allow follows the deny it narrows and no file rule follows the
-    # last file deny: the steering files, the tools copy and its interpreter stay unwritable.
+    # last two denies: the steering files, the tools copy and its interpreter stay unwritable.
     sockets = "".join(f'(allow network-outbound (literal "{path}"))' for path in ALLOWED_SOCKETS)
     return (
         "(version 1)(allow default)"
         f"(deny file-read* {env_files})"
         f"(allow file-read* {_filters([('subpath', account_home / SANDBOX_PROJECTS)])})"
-        f"(deny file-read* file-write* {credentials})"
-        f"(deny file-write* {_filters([('subpath', live_home)])})"
+        f"(deny file-read* file-write* {_filters(credentials)})"
+        f"(deny file-write* {_filters(guarded)})"
         f"(allow file-write* {_filters(('subpath', live_home / p) for p in LIVE_WRITABLE)})"
-        f"(deny file-write* {unwritable})"
+        f"(deny file-write* {_filters(unwritable)} {claude})"
+        f"(deny file-write-unlink {unlinks})"
         f"(deny network-outbound (remote unix-socket)){sockets}"
     )
 
@@ -253,7 +298,7 @@ def _os_sandbox() -> list[str]:
     if PLATFORM != "darwin":
         return []
     interpreter = [Path(prefix).resolve() for prefix in INTERPRETER]
-    profile = sandbox_profile(real_home(), credential_home(), Path.cwd(), tools_root(), interpreter)
+    profile = sandbox_profile(real_home(), credential_home(), tools_root(), interpreter)
     return [SANDBOX_EXEC, "-p", profile]
 
 
@@ -312,13 +357,27 @@ def _skipped(home: Path, path: Path) -> bool:
     return any(parts[: len(prefix)] == prefix for prefix in NOT_SECRET)
 
 
+def _read_regular(path: Path) -> str | None:
+    """The text of `path` when it is a regular file itself; wrapped commands can plant links."""
+    try:
+        # Non-blocking, so a planted pipe cannot hold the open.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
+        return handle.read().decode(errors="ignore")
+
+
 def secret_values(home: Path) -> set[str]:
     values = set()
+    # os.walk lists a linked directory without entering it.
     for directory, subdirectories, names in os.walk(home):
         here = Path(directory)
         subdirectories[:] = [name for name in subdirectories if not _skipped(home, here / name)]
         for path in (here / name for name in names):
-            if not _skipped(home, path) and path.is_file():
+            if not _skipped(home, path):
                 values |= _secrets_in(path)
     return values
 
@@ -338,9 +397,8 @@ def _secrets_in_json(data: object) -> set[str]:
 
 def _secrets_in(path: Path) -> set[str]:
     values = set()
-    try:
-        text = path.read_text(errors="ignore")
-    except OSError:
+    text = _read_regular(path)
+    if text is None:
         return values
     try:
         data = json.loads(text)
@@ -701,7 +759,19 @@ def _sibling_github(name: str, args: list[str]) -> str | None:
     return None
 
 
+class Usage(Refused):
+    pass
+
+
 def _sibling(name: str, args: list[str]) -> NoReturn:
+    # Any other spelling would reach the script's own secret check, which reads a credential
+    # home its environment names and wrapped commands can write.
+    if (
+        name == "project"
+        and "check-public" in args
+        and not (len(args) == 2 and args[0] == "check-public")
+    ):
+        raise Usage("give the public check as exactly `project check-public <project>`")
     command = [sys.executable, "-I", str(Path(__file__).with_name(SIBLINGS[name])), *args]
     github = _sibling_github(name, args)
     if github is not None:
@@ -723,7 +793,7 @@ def main(argv: list[str] | None = None) -> int:
             _sibling(argv[0], argv[1:])
         except Refused as refused:
             print(f"access: {refused}", file=sys.stderr)
-            return 3
+            return 2 if isinstance(refused, Usage) else 3
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog=f"{', '.join(SIBLINGS)} run the script of that name beside this one with the"
