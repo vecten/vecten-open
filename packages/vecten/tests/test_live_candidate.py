@@ -132,7 +132,7 @@ def test_cut_refuses_outside_the_wrapper(repo, live):
     assert result.returncode == 3
     assert result.stdout == ""
     assert len(result.stderr.strip().splitlines()) == 1
-    assert "scripts/live/access.py run --github upstream" in result.stderr
+    assert "scripts/live/live candidate cut" in result.stderr
     assert git(repo, "branch", "--list", "rc/*") == ""
     assert remote_refs(repo) == before
 

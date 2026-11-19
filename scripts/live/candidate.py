@@ -15,7 +15,7 @@ BUMP = ["uv", "run", "vecten", "dev", "bump-version"]
 LOCK = ["uv", "sync", "--locked", "--all-packages"]
 VERSION = re.compile(r"\d+\.\d+\.\d+")
 REFUSED = 3
-WRAPPED = "uv run python scripts/live/access.py run --github upstream -- "
+WRAPPED = "<tools copy>/scripts/live/live candidate cut …"
 
 
 class Refused(Exception):
@@ -126,8 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     wrapped = os.environ.get("VECTEN_LIVE") == "1"
     if not wrapped and not args.dry_run:
         print(
-            f"candidate: cut pushes with the test credentials only; run it as `{WRAPPED}"
-            "uv run python scripts/live/candidate.py cut …`",
+            f"candidate: cut pushes with the test credentials only; run it as `{WRAPPED}`",
             file=sys.stderr,
         )
         return REFUSED

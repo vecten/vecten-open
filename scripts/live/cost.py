@@ -27,7 +27,9 @@ UNKNOWN = "unknown"
 TAG = "vecten:project"
 ENV_TAG = "vecten:env"
 TIMEOUT_SECONDS = 120
-ESTIMATE = ["uv", "run", "vecten", "estimate"]
+# The vecten of this interpreter: the settings run this script unsandboxed, so it must not run
+# the code of the directory it is run in, which the agent edits.
+ESTIMATE = [sys.executable, "-I", "-m", "vecten.cli.app", "estimate"]
 
 # The rendered Terraform root sets `vecten:project` and `vecten:env` as the AWS provider's
 # default tags, so every AWS resource Terraform creates carries both. The tagging API answers
@@ -525,8 +527,8 @@ def main(
     # Outside the wrapper the cloud CLIs would list the maintainer's own accounts.
     if args.command == "sweep" and os.environ.get("VECTEN_LIVE") != "1":
         print(
-            "cost: sweep lists the test accounts only; run it as `uv run python"
-            " scripts/live/access.py run -- uv run python scripts/live/cost.py sweep …`",
+            "cost: sweep lists the test accounts only; run it as"
+            " `<tools copy>/scripts/live/live cost sweep …`",
             file=sys.stderr,
         )
         return OUTSIDE_WRAPPER

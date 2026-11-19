@@ -22,7 +22,7 @@ GITHUB_MODES = ("sandbox", "upstream")
 # The AWS profile and the Snowflake connection the credential home defines.
 LIVECHECK = "livecheck"
 PROBE_TIMEOUT = 30.0
-TOKEN_COMMAND = [sys.executable, str(Path(__file__).with_name("github_app.py")), "token"]
+TOKEN_COMMAND = [sys.executable, "-I", str(Path(__file__).with_name("github_app.py")), "token"]
 PROBES = {
     name: shlex.split(command)
     for name, command in {
@@ -37,6 +37,20 @@ PASSED = frozenset(
     " NO_PROXY ALL_PROXY http_proxy https_proxy no_proxy all_proxy".split()
 )
 GH_UNCONFIGURED = "livecheck-github-not-configured"
+# The scripts beside this one that the wrapper runs by name.
+SIBLINGS = {
+    "combos": "combos.py",
+    "cost": "cost.py",
+    "candidate": "candidate.py",
+    "project": "sandbox_project.py",
+}
+# Reading the index runs any fsmonitor command the checked repository configures, and this runs
+# outside the OS sandbox.
+LS_FILES = ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"]
+OUTSIDE_TOOLS = (
+    "is inside the tools copy {root}, which is not a place to work in;"
+    " run from the working checkout or a sandbox project"
+)
 PLATFORM = sys.platform
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 # The maintainer's own credential files under the real home: (Seatbelt filter, path).
@@ -106,6 +120,15 @@ def credential_home() -> Path:
     return Path(override) if override else Path.home() / ".config" / "vecten-livecheck"
 
 
+def tools_root() -> Path:
+    """The repository holding this file: the tools copy, which only the maintainer updates."""
+    return Path(os.path.abspath(__file__)).parents[2]
+
+
+def _inside_tools(directory: Path) -> bool:
+    return directory.resolve().is_relative_to(tools_root().resolve())
+
+
 def real_home() -> Path:
     """The account's own home directory; HOME can name any directory."""
     return Path(pwd.getpwuid(os.getuid()).pw_dir)
@@ -172,7 +195,7 @@ def env_files_pattern(home: str) -> str:
     return ENV_FILES.format(home="".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in home))
 
 
-def sandbox_profile(account_home: Path, live_home: Path, started_in: Path) -> str:
+def sandbox_profile(account_home: Path, live_home: Path, started_in: Path, tools: Path) -> str:
     """A Seatbelt profile that keeps tools, and slips, off the maintainer's credentials.
 
     It allows everything by default and denies what it names, so it does not contain a process
@@ -186,11 +209,11 @@ def sandbox_profile(account_home: Path, live_home: Path, started_in: Path) -> st
         [
             *(("literal", account_home / relative) for relative in HOME_UNWRITABLE),
             *(("literal", started_in / relative) for relative in STARTED_IN_UNWRITABLE),
+            ("subpath", tools),
         ]
     )
-    # The later rule wins: the projects' allow reopens their `.env` files but no credential, the
-    # writable parts of the credential home follow its deny, and no allow follows the deny of
-    # the files that steer the agent. The resolver's socket follows the deny of every socket.
+    # The later rule wins, so each allow follows the deny it narrows and no file rule follows the
+    # last file deny: the files that steer the agent and the tools copy stay unwritable.
     sockets = "".join(f'(allow network-outbound (literal "{path}"))' for path in ALLOWED_SOCKETS)
     return (
         "(version 1)(allow default)"
@@ -208,7 +231,8 @@ def _os_sandbox() -> list[str]:
     """The argv prefix that runs a command under the deny profile; empty off macOS."""
     if PLATFORM != "darwin":
         return []
-    return [SANDBOX_EXEC, "-p", sandbox_profile(real_home(), credential_home(), Path.cwd())]
+    profile = sandbox_profile(real_home(), credential_home(), Path.cwd(), tools_root())
+    return [SANDBOX_EXEC, "-p", profile]
 
 
 def _problem(name: str, allowed: dict, value: str | list[str], github: str) -> str | None:
@@ -428,6 +452,10 @@ def _stdin_file(home: Path, relative: str) -> Path:
 def _run(
     github: str, command: list[str], cwd: Path | None = None, stdin_file: str | None = None
 ) -> NoReturn:
+    if _inside_tools(Path.cwd()):
+        raise Refused("the current directory " + OUTSIDE_TOOLS.format(root=tools_root()))
+    if cwd is not None and _inside_tools(cwd):
+        raise Refused(f"--cwd {cwd} " + OUTSIDE_TOOLS.format(root=tools_root()))
     home = credential_home()
     allow = _load_allow(home)
     if cwd is not None and not cwd.is_dir():
@@ -458,14 +486,37 @@ def _run(
         raise Refused(f"{command[0]} could not start ({missing.strerror})") from None
 
 
+def _tools_line() -> str:
+    root = tools_root()
+    if _inside_tools(Path.cwd()):
+        return "tools FAIL: running from the directory being worked in"
+    commit = "unknown"
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT,
+        )
+        if done.returncode == 0 and done.stdout.strip():
+            commit = done.stdout.strip()
+    except OSError, subprocess.TimeoutExpired:
+        pass
+    return f"tools ok: {root} at {commit}"
+
+
 def _doctor() -> int:
+    tools = _tools_line()
+    print(tools, flush=True)
     home = credential_home()
     allow = _load_allow(home)
     secrets = secret_values(home)
     sandbox = _os_sandbox()
     checks = [(name, "sandbox", name) for name in ("aws", "scaleway", "snowflake")]
     checks += [("github", mode, f"github-{mode}") for mode in GITHUB_MODES]
-    failed = False
+    failed = not tools.startswith("tools ok: ")
     for name, github, title in checks:
         if name not in allow:
             line = "FAIL: not configured in allow.toml"
@@ -553,7 +604,7 @@ def _secrets_check(directory: Path) -> int:
     if not home.is_dir():
         raise Refused(f"no credential home at {home}")
     secrets = secret_values(home)
-    listed = subprocess.run(["git", "ls-files", "-z"], cwd=directory, capture_output=True)
+    listed = subprocess.run(LS_FILES, cwd=directory, capture_output=True)
     if listed.returncode != 0:
         print(f"access: {directory} is not a git work tree", file=sys.stderr)
         return 2
@@ -567,8 +618,43 @@ def _secrets_check(directory: Path) -> int:
     return 1 if hits else 0
 
 
+def _sibling_github(name: str, args: list[str]) -> str | None:
+    """The GitHub App of a sibling call that acts in the test accounts; None for the others."""
+    # `cut` is candidate's only subcommand, and a dry run outside the guard would run the
+    # checkout's own code unsandboxed, so every candidate call is credentialed.
+    if name == "candidate":
+        return "upstream"
+    if name == "cost" and args[:1] == ["sweep"]:
+        return "sandbox"
+    return None
+
+
+def _sibling(name: str, args: list[str]) -> NoReturn:
+    command = [sys.executable, "-I", str(Path(__file__).with_name(SIBLINGS[name])), *args]
+    github = _sibling_github(name, args)
+    if github is not None:
+        _run(github, command)
+    # A caller's VECTEN_LIVE=1 would tell a sibling it runs with the test credentials.
+    env = {key: value for key, value in os.environ.items() if key != "VECTEN_LIVE"}
+    try:
+        os.execve(command[0], command, env)
+    except OSError as missing:
+        raise Refused(f"{command[0]} could not start ({missing.strerror})") from None
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] in SIBLINGS:
+        try:
+            _sibling(argv[0], argv[1:])
+        except Refused as refused:
+            print(f"access: {refused}", file=sys.stderr)
+            return 3
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=f"{', '.join(SIBLINGS)} run the script of that name beside this one with the"
+        " arguments that follow; `cost sweep` and every `candidate` call pass the guard first.",
+    )
     actions = parser.add_subparsers(dest="action", required=True)
     run = actions.add_parser("run", help="run one command with the test credentials")
     run.add_argument("--github", choices=GITHUB_MODES, default="sandbox")

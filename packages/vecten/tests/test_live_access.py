@@ -88,6 +88,7 @@ sys.exit(access.main(sys.argv[3:]))
 EXAMPLE_HOME = Path("/Users/example")
 EXAMPLE_LIVE = EXAMPLE_HOME / ".config/vecten-livecheck"
 EXAMPLE_CHECKOUT = EXAMPLE_HOME / "src/checkout"
+EXAMPLE_TOOLS = EXAMPLE_HOME / "vecten-live-tools"
 DENIED_TEXT = (
     "(version 1)(allow default)"
     '(deny file-read* (regex #"^/Users/example/(.*/)?\\.env(\\.[^/]+)?$"))'
@@ -119,10 +120,24 @@ DENIED_TEXT = (
     ' (literal "/Users/example/.zshenv") (literal "/Users/example/.bashrc")'
     ' (literal "/Users/example/.bash_profile") (literal "/Users/example/.profile")'
     ' (literal "/Users/example/src/checkout/.claude/settings.json")'
-    ' (literal "/Users/example/src/checkout/.claude/settings.local.json"))'
+    ' (literal "/Users/example/src/checkout/.claude/settings.local.json")'
+    ' (subpath "/Users/example/vecten-live-tools"))'
     "(deny network-outbound (remote unix-socket))"
     '(allow network-outbound (literal "/private/var/run/mDNSResponder"))'
 )
+
+
+def short_commit(root):
+    done = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True
+    )
+    return done.stdout.strip() if done.returncode == 0 else "unknown"
+
+
+TOOLS_OK = f"tools ok: {REPO} at {short_commit(REPO)}"
+LAUNCHER = REPO / "scripts/live/live"
+IDENTITY = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
+IDENTITY += ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]
 
 
 def mod():
@@ -186,7 +201,7 @@ def fake_clis(tmp_path, **overrides):
     return bin_dir
 
 
-def access(tmp_path, *args, timeout=30.0, env=None, stdin="", **overrides):
+def access(tmp_path, *args, timeout=30.0, env=None, stdin="", cwd=None, **overrides):
     token = script(tmp_path / "token", 'echo "ghs_fake_$(basename "$1" .toml)_token"')
     base = {
         "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin",
@@ -204,6 +219,7 @@ def access(tmp_path, *args, timeout=30.0, env=None, stdin="", **overrides):
     return subprocess.run(
         [sys.executable, "-c", DRIVER, str(SCRIPT), json.dumps(settings), *args],
         env=base,
+        cwd=cwd or tmp_path,
         input=stdin,
         capture_output=True,
         text=True,
@@ -728,6 +744,7 @@ def test_doctor_reports_every_identity_and_fails_on_one(tmp_path):
     result = access(tmp_path, "doctor")
     assert result.returncode == 1
     assert result.stdout.splitlines() == [
+        TOOLS_OK,
         "aws ok",
         f"scaleway FAIL: organization {other} is not the live-check organization",
         "snowflake ok",
@@ -743,7 +760,8 @@ def test_doctor_passes_when_every_identity_is_allowed(tmp_path):
     result = access(tmp_path, "doctor")
     assert result.returncode == 0, result.stdout + result.stderr
     lines = result.stdout.splitlines()
-    assert all(line.endswith(" ok") for line in lines[:-1])
+    assert lines[0] == TOOLS_OK
+    assert all(line.endswith(" ok") for line in lines[1:-1])
     assert lines[-1] == "os-sandbox absent (not macOS)"
 
 
@@ -755,6 +773,7 @@ def test_doctor_fails_an_identity_missing_from_allow_toml(tmp_path):
     result = access(tmp_path, "doctor", PLATFORM="darwin", SANDBOX_EXEC=str(fake))
     assert result.returncode == 1
     assert result.stdout.splitlines() == [
+        TOOLS_OK,
         "aws ok",
         "scaleway FAIL: not configured in allow.toml",
         "snowflake ok",
@@ -783,12 +802,12 @@ def test_doctor_redacts_a_value_it_refuses(tmp_path):
     home(tmp_path)
     fake_clis(tmp_path, aws=f"echo '{AWS_SECRET}'")
     result = access(tmp_path, "doctor")
-    assert result.stdout.splitlines()[0] == "aws FAIL: account *** is not the live-check account"
+    assert result.stdout.splitlines()[1] == "aws FAIL: account *** is not the live-check account"
     assert AWS_SECRET not in result.stdout
 
 
 def test_the_sandbox_profile_denies_the_maintainers_credentials():
-    profile = mod().sandbox_profile(EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT)
+    profile = mod().sandbox_profile(EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS)
     assert profile == DENIED_TEXT
 
 
@@ -796,9 +815,10 @@ def test_a_path_the_profile_cannot_quote_is_a_refusal():
     m = mod()
     for odd in ('/Users/ex"ample', "/Users/ex\\ample"):
         for paths in (
-            (Path(odd), EXAMPLE_LIVE, EXAMPLE_CHECKOUT),
-            (EXAMPLE_HOME, Path(odd), EXAMPLE_CHECKOUT),
-            (EXAMPLE_HOME, EXAMPLE_LIVE, Path(odd)),
+            (Path(odd), EXAMPLE_LIVE, EXAMPLE_CHECKOUT, EXAMPLE_TOOLS),
+            (EXAMPLE_HOME, Path(odd), EXAMPLE_CHECKOUT, EXAMPLE_TOOLS),
+            (EXAMPLE_HOME, EXAMPLE_LIVE, Path(odd), EXAMPLE_TOOLS),
+            (EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_CHECKOUT, Path(odd)),
         ):
             with pytest.raises(m.Refused):
                 m.sandbox_profile(*paths)
@@ -834,7 +854,7 @@ def test_on_macos_probes_and_command_run_inside_the_os_sandbox(tmp_path):
         tmp_path, "run", "--", "vecten", "status", PLATFORM="darwin", SANDBOX_EXEC=str(fake)
     )
     assert result.returncode == 7, result.stderr
-    profile = mod().sandbox_profile(tmp_path / "real", tmp_path / "home", Path.cwd())
+    profile = mod().sandbox_profile(tmp_path / "real", tmp_path / "home", tmp_path.resolve(), REPO)
     calls = invocations(record)
     assert all(call[:2] == ["-p", profile] for call in calls)
     assert [call[2] for call in calls] == ["aws", "scw", "snow", "gh", "vecten"]
@@ -893,11 +913,14 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
     live = tmp_path / "live"
     (live / "cache").mkdir(parents=True)
     (live / "allow.toml").write_text("")
+    tools = tmp_path / "tools"
+    (tools / "scripts/live").mkdir(parents=True)
+    (tools / "scripts/live/access.py").write_text("")
     # A unix socket path must stay under about 100 bytes, so the sockets live in a short dir.
     sockets = Path(tempfile.mkdtemp(dir="/tmp"))
     server = listening(sockets / "agent.sock")
     try:
-        profile = mod().sandbox_profile(real, live, tmp_path)
+        profile = mod().sandbox_profile(real, live, tmp_path, tools)
 
         def sandboxed(*argv):
             command = ["/usr/bin/sandbox-exec", "-p", profile, *argv]
@@ -916,6 +939,10 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
         assert (live / "allow.toml").read_text() == ""
         assert appended(live / "cache/token.json") == 0
         assert appended(real / ".claude/settings.json") != 0
+        assert appended(tools / "scripts/live/access.py") != 0
+        assert appended(tools / "new-file") != 0
+        assert (tools / "scripts/live/access.py").read_text() == ""
+        assert not (tools / "new-file").exists()
         connect = [
             sys.executable,
             "-c",
@@ -957,8 +984,7 @@ def test_secrets_check_is_silent_on_a_clean_project(tmp_path):
 
 def test_the_default_token_command_runs_github_app_beside_the_wrapper():
     command = mod().TOKEN_COMMAND
-    assert command[-2:] == [str(SCRIPT.with_name("github_app.py")), "token"]
-    assert os.path.isabs(command[0])
+    assert command == [sys.executable, "-I", str(SCRIPT.with_name("github_app.py")), "token"]
 
 
 def test_run_cwd_moves_the_command_but_not_the_probes(tmp_path):
@@ -970,7 +996,7 @@ def test_run_cwd_moves_the_command_but_not_the_probes(tmp_path):
     result = access(tmp_path, "run", "--cwd", str(project), "--", "vecten", "deploy")
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"{project.resolve()}\n"
-    assert log.read_text() == f"{Path.cwd().resolve()}\n"
+    assert log.read_text() == f"{tmp_path.resolve()}\n"
 
 
 def test_run_cwd_must_exist(tmp_path):
@@ -1141,6 +1167,7 @@ def test_stdin_file_reaches_the_command_when_descriptor_0_starts_closed(tmp_path
             "HOME": str(tmp_path),
             "VECTEN_LIVE_HOME": str(root),
         },
+        cwd=tmp_path,
         stdin=subprocess.DEVNULL,
         preexec_fn=lambda: os.close(0),
         capture_output=True,
@@ -1149,3 +1176,327 @@ def test_stdin_file_reaches_the_command_when_descriptor_0_starts_closed(tmp_path
     )
     assert result.returncode == 0, result.stderr
     assert received.read_text() == "GOCSPX-example-client-secret\n"
+
+
+def tools_copy(tmp_path, python=True):
+    """A copy of the launcher in a made-up tools copy whose interpreter prints its arguments."""
+    root = tmp_path / "tools"
+    launcher = root / "scripts/live/live"
+    launcher.parent.mkdir(parents=True)
+    shutil.copy2(LAUNCHER, launcher)
+    if python:
+        script(root / ".venv/bin/python", 'printf "%s\\n" "$@"')
+    return root.resolve(), launcher
+
+
+def launch(path, *args, env=None):
+    return subprocess.run(
+        [str(path), *args],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", **(env or {})},
+        cwd=path.parent.parent,
+        timeout=30,
+    )
+
+
+def test_the_launcher_is_checked_in_executable():
+    assert os.access(LAUNCHER, os.X_OK)
+    assert LAUNCHER.read_text().startswith("#!/bin/sh")
+
+
+def test_the_launcher_runs_the_wrapper_beside_it_with_its_own_interpreter(tmp_path):
+    root, launcher = tools_copy(tmp_path)
+    result = launch(launcher, "doctor")
+    assert (result.returncode, result.stderr) == (0, "")
+    assert result.stdout == f"-I\n{root}/scripts/live/access.py\ndoctor\n"
+    spaced = launch(launcher, "run", "--", "git", "commit", "-m", "a b  c")
+    assert spaced.stdout.splitlines()[2:] == ["run", "--", "git", "commit", "-m", "a b  c"]
+
+
+def test_the_launcher_resolves_a_symlink_to_itself(tmp_path):
+    root, launcher = tools_copy(tmp_path)
+    expected = f"-I\n{root}/scripts/live/access.py\ndoctor\n"
+    (tmp_path / "bin").mkdir()
+    absolute = tmp_path / "bin/live"
+    absolute.symlink_to(launcher)
+    relative = tmp_path / "bin/relative-live"
+    relative.symlink_to(os.path.relpath(launcher, relative.parent))
+    chained = tmp_path / "chained-live"
+    chained.symlink_to(relative)
+    for link in (absolute, relative, chained):
+        result = launch(link, "doctor")
+        assert (result.returncode, result.stdout) == (0, expected), link
+
+
+def test_the_launcher_ignores_shell_functions_from_the_environment(tmp_path):
+    root, launcher = tools_copy(tmp_path)
+    hijack = "() { echo hijacked; }"
+    env = {f"BASH_FUNC_{name}%%": hijack for name in ("cd", "pwd", "dirname", "readlink")}
+    result = launch(launcher, "doctor", env={**env, "CDPATH": str(tmp_path)})
+    assert result.stdout == f"-I\n{root}/scripts/live/access.py\ndoctor\n"
+
+
+def test_the_launcher_without_an_interpreter_says_how_to_make_one(tmp_path):
+    root, launcher = tools_copy(tmp_path, python=False)
+    result = launch(launcher, "doctor")
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert len(result.stderr.strip().splitlines()) == 1
+    assert "uv sync --locked --all-packages" in result.stderr
+    assert str(root) in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("args", "script_name"),
+    [
+        (["combos", "plan", "--json"], "combos.py"),
+        (["project", "check-public", "/elsewhere/proj"], "sandbox_project.py"),
+        (["cost", "estimate", "--combinations", "aws-postgres", "--hours", "1"], "cost.py"),
+        (["cost", "spent", "--created", "created.json"], "cost.py"),
+        (["combos", "--made-up-option"], "combos.py"),
+    ],
+)
+def test_a_sibling_without_credentials_runs_directly_with_the_wrappers_interpreter(
+    monkeypatch, args, script_name
+):
+    m = mod()
+    started = []
+
+    def execve(path, argv, env):
+        started.append((path, argv, env))
+        raise SystemExit(0)
+
+    monkeypatch.setattr(m.os, "execve", execve)
+    monkeypatch.setenv("VECTEN_LIVE", "1")
+    monkeypatch.setenv("SOME_SETTING", "kept")
+    with pytest.raises(SystemExit):
+        m.main(args)
+    [(path, argv, env)] = started
+    assert path == sys.executable
+    assert argv == [sys.executable, "-I", str(SCRIPT.with_name(script_name)), *args[1:]]
+    assert "VECTEN_LIVE" not in env
+    assert env["SOME_SETTING"] == "kept"
+
+
+def throwaway_repository(root, ledger_tag="v1"):
+    root.mkdir(parents=True)
+    git(root, "init", "-q", "--initial-branch=main")
+    (root / "README.md").write_text("x\n")
+    git(root, "add", "README.md")
+    git(root, *IDENTITY, "commit", "-q", "-m", "first")
+    git(root, *IDENTITY, "tag", "v1")
+    (root / "terraform/scaleway").mkdir(parents=True)
+    (root / "terraform/scaleway/main.tf").write_text("x\n")
+    git(root, "add", "terraform")
+    git(root, *IDENTITY, "commit", "-q", "-m", "second")
+    (root / "scripts/live").mkdir(parents=True)
+    combos = ("aws-postgres", "aws-snowflake", "scaleway-postgres", "scaleway-snowflake")
+    ledger = "".join(f'{name} = "{ledger_tag}"\n' for name in combos)
+    (root / "scripts/live/ledger.toml").write_text(ledger)
+    return root
+
+
+def test_combos_runs_from_the_tools_copy_on_the_checkout_it_is_run_in(tmp_path):
+    repo = throwaway_repository(tmp_path / "checkout")
+    result = access(tmp_path, "combos", "plan", cwd=repo)
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0] == (
+        f"ledger {repo.resolve()}/scripts/live/ledger.toml, map {SCRIPT.with_name('filemap.toml')}"
+    )
+    assert lines[1].startswith("scaleway-postgres")
+    stale = throwaway_repository(tmp_path / "stale", ledger_tag="v9")
+    refused = access(tmp_path, "combos", "plan", cwd=stale)
+    assert refused.returncode == 3
+    assert "combos: " in refused.stderr and "v9" in refused.stderr
+
+
+def test_cost_estimate_runs_from_the_tools_copy(tmp_path):
+    estimate = ["cost", "estimate", "--combinations", "aws-postgres", "--json", "--hours"]
+    cheap = access(tmp_path, *estimate, "1")
+    assert cheap.returncode == 0, cheap.stderr
+    assert json.loads(cheap.stdout)["over_ceiling"] is False
+    dear = access(tmp_path, *estimate, "100000")
+    assert dear.returncode == 3, dear.stderr
+    assert json.loads(dear.stdout)["over_ceiling"] is True
+    unknown = access(tmp_path, "cost", "estimate", "--combinations", "gcp-x", "--hours", "1")
+    assert unknown.returncode == 2
+    assert "gcp-x" in unknown.stderr
+
+
+def test_the_estimate_cost_runs_is_the_vecten_of_its_own_interpreter():
+    spec = importlib.util.spec_from_file_location("cost", SCRIPT.with_name("cost.py"))
+    cost = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cost)
+    assert cost.ESTIMATE == [sys.executable, "-I", "-m", "vecten.cli.app", "estimate"]
+
+
+def test_project_check_public_runs_from_the_tools_copy(tmp_path):
+    home(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    git(project, "init", "-q")
+    (project / "README.md").write_text("# Sandbox\n")
+    git(project, "add", "README.md")
+    clean = access(tmp_path, "project", "check-public", str(project))
+    assert (clean.returncode, clean.stdout) == (0, ""), clean.stderr
+    (project / ".env").write_text("A=1\n")
+    git(project, "add", ".env")
+    leaking = access(tmp_path, "project", "check-public", str(project))
+    assert (leaking.returncode, leaking.stdout) == (1, ".env  (file name)\n")
+
+
+def test_check_public_runs_no_command_the_projects_git_configuration_names(tmp_path):
+    home(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    git(project, "init", "-q")
+    (project / "README.md").write_text("# Sandbox\n")
+    git(project, "add", "README.md")
+    marker = tmp_path / "ran"
+    git(project, "config", "core.fsmonitor", f"touch {marker}; true")
+    subprocess.run(["git", "ls-files"], cwd=project, capture_output=True)
+    assert marker.exists()
+    marker.unlink()
+    for args in (["project", "check-public", str(project)], ["secrets-check", str(project)]):
+        result = access(tmp_path, *args)
+        assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+
+
+def recording_cli(record, probe_output):
+    """A fake CLI that answers its identity probe and records what any other call sees."""
+    return (
+        'case "$*" in\n'
+        f"  sts*|account*) {printing(probe_output)}\n;;\n"
+        f'  *) echo "$VECTEN_LIVE $GH_TOKEN $*" >> {record}; echo refused >&2; exit 1\n;;\n'
+        "esac"
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["cost", "sweep", "--created", "created.json"], ["candidate", "cut", "--version", "0.1.2"]],
+)
+def test_credentialed_siblings_start_only_past_the_guard(tmp_path, args):
+    home(tmp_path)
+    record = tmp_path / "record"
+    fake_clis(
+        tmp_path,
+        aws=recording_cli(record, "222222222222\n"),
+        git=f'echo "$*" >> {record}; exit 1',
+    )
+    (tmp_path / "created.json").write_text('{"environments": []}')
+    result = access(tmp_path, *args)
+    assert result.returncode == 3
+    assert "aws: account 222222222222 is not the live-check account" in result.stderr
+    assert result.stdout == ""
+    assert not record.exists()
+
+
+def test_cost_sweep_runs_with_the_test_credentials(tmp_path):
+    home(tmp_path)
+    record = tmp_path / "record"
+    fake_clis(
+        tmp_path,
+        aws=recording_cli(record, AWS_OUTPUT),
+        scw=recording_cli(record, SCW_OUTPUT),
+    )
+    (tmp_path / "created.json").write_text('{"environments": []}')
+    result = access(tmp_path, "cost", "sweep", "--created", "created.json")
+    assert result.returncode == 4, result.stderr
+    calls = record.read_text().splitlines()
+    assert calls
+    assert all(call.startswith("1 ghs_fake_sandbox_token ") for call in calls)
+
+
+def test_candidate_cut_runs_with_the_upstream_token(tmp_path):
+    home(tmp_path)
+    record = tmp_path / "record"
+    fake_clis(tmp_path, git=f'echo "$VECTEN_LIVE $GH_TOKEN $*" >> {record}; exit 1')
+    result = access(tmp_path, "candidate", "cut", "--version", "0.1.2")
+    assert result.returncode == 3
+    assert "candidate: git status failed" in result.stderr
+    assert record.read_text().splitlines() == ["1 ghs_fake_upstream_token status --porcelain"]
+
+
+def test_every_candidate_command_passes_the_guard(tmp_path):
+    home(tmp_path)
+    record = tmp_path / "record"
+    fake_clis(tmp_path, aws="echo 222222222222", git=f'echo "$*" >> {record}; exit 1')
+    for args in (["--help"], ["--", "cut", "--version", "0.1.2", "--dry-run"], ["made-up"]):
+        result = access(tmp_path, "candidate", *args)
+        assert result.returncode == 3, args
+        assert "aws: account 222222222222" in result.stderr
+        assert result.stdout == ""
+    assert not record.exists()
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["run", "--", "vecten", "status"],
+        ["cost", "sweep", "--created", "created.json"],
+        ["candidate", "cut", "--version", "0.1.2"],
+    ],
+)
+def test_nothing_credentialed_runs_inside_the_tools_copy(tmp_path, args):
+    home(tmp_path)
+    probed = tmp_path / "probed"
+    fake_clis(tmp_path, aws=f"touch {probed}\n{printing(AWS_OUTPUT)}")
+    for where in (REPO, REPO / "scripts/live"):
+        result = access(tmp_path, *args, cwd=where)
+        assert result.returncode == 3, where
+        assert len(result.stderr.strip().splitlines()) == 1
+        assert "tools copy" in result.stderr
+        assert "working checkout" in result.stderr
+    assert not probed.exists()
+
+
+def test_run_cwd_inside_the_tools_copy_is_refused(tmp_path):
+    home(tmp_path)
+    probed = tmp_path / "probed"
+    fake_clis(tmp_path, aws=f"touch {probed}\n{printing(AWS_OUTPUT)}")
+    (tmp_path / "into-tools").symlink_to(REPO / "docs")
+    for where in (REPO, REPO / "docs", tmp_path / "into-tools"):
+        result = access(tmp_path, "run", "--cwd", str(where), "--", "vecten", "status")
+        assert result.returncode == 3, where
+        assert len(result.stderr.strip().splitlines()) == 1
+        assert "tools copy" in result.stderr
+    assert not probed.exists()
+    fake_clis(tmp_path, vecten="pwd -P")
+    outside = access(tmp_path, "run", "--cwd", str(tmp_path), "--", "vecten")
+    assert (outside.returncode, outside.stdout) == (0, f"{tmp_path.resolve()}\n")
+
+
+def test_doctor_fails_when_run_from_inside_the_tools_copy(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path)
+    result = access(tmp_path, "doctor", cwd=REPO / "scripts")
+    assert result.returncode == 1
+    lines = result.stdout.splitlines()
+    assert lines[0] == "tools FAIL: running from the directory being worked in"
+    assert all(line.endswith(" ok") for line in lines[1:-1])
+
+
+def test_doctor_prints_the_tools_line_before_it_needs_the_credential_home(tmp_path):
+    result = access(tmp_path, "doctor")
+    assert result.returncode == 3
+    assert result.stdout.splitlines() == [TOOLS_OK]
+    assert str(tmp_path / "home") in result.stderr
+
+
+def test_the_tools_copy_is_the_repository_holding_the_wrapper():
+    assert mod().tools_root() == REPO
+
+
+def test_the_wrapped_command_cannot_write_the_tools_copy(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path, vecten="exit 0")
+    fake, record = recording_sandbox(tmp_path)
+    result = access(tmp_path, "run", "--", "vecten", PLATFORM="darwin", SANDBOX_EXEC=str(fake))
+    assert result.returncode == 0, result.stderr
+    profiles = {call[1] for call in invocations(record)}
+    assert len(profiles) == 1
+    assert f'(subpath "{REPO}"))(deny network-outbound' in profiles.pop()

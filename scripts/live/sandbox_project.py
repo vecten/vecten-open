@@ -71,7 +71,10 @@ def rewrite(project: Path, convert) -> None:
 
 
 def tracked_files(project: Path) -> list[str]:
-    listed = subprocess.run(["git", "ls-files", "-z"], cwd=project, capture_output=True)
+    # Reading the index runs any fsmonitor command the project configures, outside the sandbox.
+    listed = subprocess.run(
+        ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"], cwd=project, capture_output=True
+    )
     if listed.returncode != 0:
         raise Refused(f"{project} is not a git work tree")
     names = [name for name in listed.stdout.decode().split("\0") if name]
@@ -92,7 +95,7 @@ def secret_names(names: Sequence[str]) -> list[str]:
 def secret_values(project: Path, tracked: Sequence[str]) -> list[str]:
     try:
         checked = subprocess.run(
-            [sys.executable, str(ACCESS), "secrets-check", str(project)],
+            [sys.executable, "-I", str(ACCESS), "secrets-check", str(project)],
             capture_output=True,
             text=True,
         )

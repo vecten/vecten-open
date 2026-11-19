@@ -140,6 +140,7 @@ def affected(earlier: str, later: str, map_path: Path, as_json: bool) -> None:
     if as_json:
         print(json.dumps({"touched": result, "untouched": untouched}))
         return
+    print(f"map {map_path.absolute()}")
     for combo, files in result.items():
         print(f"{combo:<20} {len(files)} files: {', '.join(files)}")
     print(f"untouched: {', '.join(untouched) if untouched else 'none'}")
@@ -171,6 +172,7 @@ def plan(ledger_path: Path, map_path: Path, as_json: bool) -> None:
         owed_json = {c: {"since": ledger[c], "files": files} for c, files in result.items()}
         print(json.dumps({"owed": owed_json, "not_owed": not_owed}))
         return
+    print(f"ledger {ledger_path.absolute()}, map {map_path.absolute()}")
     for combo, files in result.items():
         listed = ", ".join(files[:SHOWN]) + (", ..." if len(files) > SHOWN else "")
         print(f"{combo:<20} since {ledger[combo]:<12} {len(files)} files: {listed}")
@@ -190,14 +192,26 @@ def record(ledger_path: Path, combination: str, tag: str) -> None:
     if not line.search(text):
         raise Refused(f"the ledger has no line for {combination}")
     ledger_path.write_text(line.sub(f'{combination} = "{tag}"', text, count=1))
+    print(f"ledger {ledger_path.absolute()}")
     print(f"{combination} = {tag}")
+
+
+def default_file(name: str, written: bool = False) -> Path:
+    """The checkout the command runs in holds the ledger it records, not the clone this script
+    runs from; the files beside the script stand in for reading when the directory has none."""
+    local = Path.cwd() / "scripts" / "live" / name
+    if local.is_file():
+        return local
+    if written:
+        raise Refused(f"no scripts/live/{name} here; run it in the checkout that keeps the ledger")
+    return HERE / name
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     paths = argparse.ArgumentParser(add_help=False)
-    paths.add_argument("--ledger", type=Path, default=HERE / "ledger.toml")
-    paths.add_argument("--map", type=Path, default=HERE / "filemap.toml")
+    paths.add_argument("--ledger", type=Path, help="default: scripts/live/ledger.toml here")
+    paths.add_argument("--map", type=Path, help="default: scripts/live/filemap.toml here")
     commands = parser.add_subparsers(dest="command", required=True)
     plan_parser = commands.add_parser("plan", parents=[paths], help="list the owed combinations")
     plan_parser.add_argument("--json", action="store_true", help="print JSON only")
@@ -212,6 +226,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     affected_parser.add_argument("--json", action="store_true", help="print JSON only")
     args = parser.parse_args(argv)
     try:
+        args.ledger = args.ledger or default_file("ledger.toml", args.command == "record")
+        args.map = args.map or default_file("filemap.toml")
         if args.command == "plan":
             plan(args.ledger, args.map, args.json)
         elif args.command == "affected":

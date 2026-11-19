@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -10,6 +11,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / "scripts/live/combos.py"
+MAP_LINE = f"map {SCRIPT.with_name('filemap.toml')}"
 IDENTITY = {
     "GIT_AUTHOR_NAME": "Test",
     "GIT_AUTHOR_EMAIL": "test@example.invalid",
@@ -199,6 +201,7 @@ def test_plan_prints_reasons_and_what_is_not_owed(clone, tmp_path):
     result = run(clone, ledger_file(tmp_path), "plan")
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
+    assert lines[0] == f"ledger {tmp_path / 'ledger.toml'}, {MAP_LINE}"
     owed = [line for line in lines if line.startswith("scaleway-postgres")]
     assert len(owed) == 1
     assert "v1" in owed[0]
@@ -338,6 +341,7 @@ def test_affected_prints_each_touched_combination_then_the_untouched(candidates)
     assert result.returncode == 0, result.stderr
     lines = result.stdout.splitlines()
     assert lines == [
+        MAP_LINE,
         "aws-postgres         1 files: images/mcp/Dockerfile",
         "aws-snowflake        2 files: images/mcp/Dockerfile, packages/x/snowflake.py",
         "scaleway-postgres    1 files: images/mcp/Dockerfile",
@@ -352,7 +356,8 @@ def test_a_docs_only_fix_touches_nothing(candidates):
     result = affected(repo, "v0.1.2rc1", "v0.1.2rc2")
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
-        "untouched: aws-postgres, aws-snowflake, scaleway-postgres, scaleway-snowflake"
+        MAP_LINE,
+        "untouched: aws-postgres, aws-snowflake, scaleway-postgres, scaleway-snowflake",
     ]
 
 
@@ -362,3 +367,79 @@ def test_affected_refuses_a_tag_the_clone_lacks(candidates):
     assert result.returncode == 3
     assert "v0.1.2rc9" in result.stderr
     assert result.stdout == ""
+
+
+def tools_copy(tmp_path):
+    """combos.py with its own ledger and map, as the tools copy holds them."""
+    here = tmp_path / "tools/scripts/live"
+    here.mkdir(parents=True)
+    for name in ("combos.py", "ledger.toml", "filemap.toml"):
+        shutil.copy2(SCRIPT.with_name(name), here / name)
+    return here.resolve()
+
+
+def from_tools(here, cwd, *args):
+    return subprocess.run(
+        [sys.executable, str(here / "combos.py"), *args], cwd=cwd, capture_output=True, text=True
+    )
+
+
+def every_combination_at(tag):
+    return "".join(f'{name} = "{tag}"\n' for name in mod().COMBOS)
+
+
+def test_a_ledger_in_the_checkout_worked_in_is_the_default(clone, tmp_path):
+    here = tools_copy(tmp_path)
+    beside = (here / "ledger.toml").read_text()
+    local = clone.resolve() / "scripts/live"
+    local.mkdir(parents=True)
+    ledger = local / "ledger.toml"
+    ledger.write_text(every_combination_at("v1"))
+    (local / "filemap.toml").write_text(
+        '[[rule]]\nscope = "none"\npaths = ["terraform/**", "docs/**"]\n'
+    )
+    planned = from_tools(here, clone, "plan")
+    assert planned.returncode == 0, planned.stderr
+    assert planned.stdout.splitlines() == [
+        f"ledger {ledger}, map {local / 'filemap.toml'}",
+        "not owed: aws-postgres, aws-snowflake, scaleway-postgres, scaleway-snowflake",
+    ]
+    git(clone, "tag", "v3")
+    recorded = from_tools(here, clone, "record", "aws-snowflake", "v3")
+    assert recorded.returncode == 0, recorded.stderr
+    assert recorded.stdout.splitlines() == [f"ledger {ledger}", "aws-snowflake = v3"]
+    assert 'aws-snowflake = "v3"' in ledger.read_text()
+    assert (here / "ledger.toml").read_text() == beside
+
+
+def test_without_a_ledger_in_the_checkout_the_one_beside_the_script_is_read(clone, tmp_path):
+    here = tools_copy(tmp_path)
+    ledger = here / "ledger.toml"
+    ledger.write_text(every_combination_at("v1"))
+    planned = from_tools(here, clone, "plan")
+    assert planned.returncode == 0, planned.stderr
+    assert planned.stdout.splitlines()[0] == f"ledger {ledger}, map {here / 'filemap.toml'}"
+
+
+def test_record_writes_no_ledger_but_the_checkouts_unless_named(clone, tmp_path):
+    here = tools_copy(tmp_path)
+    ledger = here / "ledger.toml"
+    before = ledger.read_text()
+    git(clone, "tag", "v3")
+    refused = from_tools(here, clone, "record", "aws-snowflake", "v3")
+    assert refused.returncode == 3
+    assert refused.stdout == ""
+    assert "scripts/live/ledger.toml" in refused.stderr
+    assert ledger.read_text() == before
+    assert not (clone / "scripts").exists()
+    named = from_tools(here, clone, "record", "--ledger", str(ledger), "aws-snowflake", "v3")
+    assert named.returncode == 0, named.stderr
+    assert 'aws-snowflake = "v3"' in ledger.read_text()
+
+
+def test_json_output_names_no_file(clone, tmp_path):
+    here = tools_copy(tmp_path)
+    (here / "ledger.toml").write_text(every_combination_at("v1"))
+    planned = from_tools(here, clone, "plan", "--json")
+    assert planned.returncode == 0, planned.stderr
+    assert set(json.loads(planned.stdout)) == {"owed", "not_owed"}

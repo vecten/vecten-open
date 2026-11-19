@@ -336,7 +336,7 @@ def test_sweep_refuses_outside_the_wrapper(tmp_path, capsys, monkeypatch, marker
     assert listed == []
     assert captured.out == ""
     assert len(captured.err.strip().splitlines()) == 1
-    assert "scripts/live/access.py run --" in captured.err
+    assert "scripts/live/live cost sweep" in captured.err
 
 
 def test_estimate_and_spent_need_no_wrapper(tmp_path, monkeypatch):
