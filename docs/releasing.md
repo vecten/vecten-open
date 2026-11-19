@@ -55,11 +55,12 @@ and the other files of the credential home, which live only on your laptop:
 
    The copy's interpreter, `.venv/bin/python` and the Python installation it points at, must
    be one the agent cannot write: Python loads code from that installation (a
-   `sitecustomize.py`, say) before the wrapper runs a single check. Give `uv sync` a Python
-   that lives outside every checkout and outside `~/vecten-sandbox`, such as the one
-   `uv python install 3.14` puts under `~/.local/share/uv/python`. Every command the wrapper
-   starts is denied writing it, and `doctor` fails when it lies inside the directory `doctor`
-   runs from or inside `~/vecten-sandbox`.
+   `sitecustomize.py`, say) before the wrapper runs a single check. Every command the wrapper
+   starts is denied writing that installation, and denied renaming any directory above it, so
+   it cannot be moved aside, changed and moved back. The agent's own shell commands, in the
+   command sandbox, cannot write it while it lies outside the checkout and `~/vecten-sandbox`.
+   `doctor` fails when it lies inside the directory `doctor` runs from or inside
+   `~/vecten-sandbox`.
 
    Update it yourself, after a change to `scripts/live/` merges into its branch: `git pull`,
    then `uv sync --locked --all-packages`, both in `~/vecten-live-tools`. Never work in it: it
@@ -87,8 +88,9 @@ and the other files of the credential home, which live only on your laptop:
    `LIVE` is shorthand for the commands on this page only; in a new terminal, run the first
    two lines again. `allow.toml` lists the identities the wrapper (`scripts/live/access.py` of
    the tools copy, which its launcher `scripts/live/live` starts) accepts; you add one table to
-   it at each of the next steps. The wrapper creates `cache/` (minted GitHub tokens) and
-   `home/` (the home directory of every command it runs) itself. `VECTEN_LIVE_HOME` names
+   it at each of the next steps. The wrapper creates `cache/` (minted GitHub tokens), `home/`
+   (the home directory of every command it runs with the test credentials) and `home-plain/`
+   (that of every command it runs without them) itself. `VECTEN_LIVE_HOME` names
    another directory instead, but every path on this page, and the `denyRead` and `Read` deny
    entries under [Settings](#settings), assume the default.
 
@@ -569,8 +571,10 @@ by the OS profile below.
 Outside the OS profile the wrapper does three things only: it parses its arguments, reads the
 credential home (the allow list, the secret values it redacts and looks for, a
 `--stdin-file`), and mints the GitHub token, which `github_app.py` signs with the system's
-`/usr/bin/openssl`. For the secret check it also reads the files it looks into, without
-running anything. Every tool it runs on files the agent can write runs inside the profile:
+`/usr/bin/openssl`. The token command reads and writes only the credential home's `cache/`,
+which no command the wrapper starts may write, and neither reads nor writes through a link
+there. For the secret check the wrapper also reads the files it looks into, without running
+anything. Every tool it runs on files the agent can write runs inside the profile:
 every identity probe, every wrapped command, the `git` of the secret check and of `doctor`, and
 the subcommands that need no credential.
 
@@ -623,7 +627,9 @@ The command then runs with:
   (`sandbox-exec`) that allows everything by default and denies only what it names. The
   processes the command starts inherit it, but a process can have another started outside it
   (see [Limits](#limits)). Each path below is denied both as written and where a symlink
-  resolves to. The profile denies:
+  resolves to, and for each path whose writing it denies, renaming any directory above it is
+  denied too, so no directory can be moved aside, written beneath and moved back. The profile
+  denies:
   - reading and writing, under your real home, the directories `~/.aws`, `~/.config/scw`,
     `~/.snowflake`, `~/.config/snowflake`, `~/.ssh`, `~/.config/gh`, `~/.gnupg`, `~/.kube`,
     `~/.config/gcloud`, `~/.terraform.d`, `~/Library/Keychains`,
@@ -633,21 +639,26 @@ The command then runs with:
     `~/.claude/.credentials.json` and `~/.pgpass`;
   - reading any file named `.env` or `.env.<name>` anywhere under your real home, except under
     `~/vecten-sandbox`, whose projects' own `.env` files `vecten` reads;
-  - writing the credential home, except its `home/`, `cache/`, `snowflake/logs/` and
+  - writing the credential home, except its `home/`, `home-plain/`, `snowflake/logs/` and
     `github/gh/`, which the tools write; so no command can edit `allow.toml`, the guard's own
-    list;
-  - writing the files that steer the agent, every later shell or every later `git`:
-    `~/.claude/settings.json`, `~/.claude/settings.local.json`, `~/.zshrc`, `~/.zprofile`,
-    `~/.zshenv`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.gitconfig` and everything
-    under `~/.config/git/`, and `.claude/settings.json` and `.claude/settings.local.json` of the
-    directory the wrapper started in, the checkout;
+    list, or the token cache `cache/`;
+  - writing anything under `~/.claude`, the agent's own settings, hooks, plugins, skills and
+    memory: a wrapped command has its own home and no business there;
+  - writing, in any checkout or directory under your real home, the `.claude` directory itself,
+    its `settings.json` and `settings.local.json`, and its `hooks/`, `skills/`, `commands/` and
+    `agents/` trees, whose scripts and prompts the agent runs, whatever directory the wrapper
+    was started in or given as `--cwd`;
+  - writing the files that steer every later shell or every later `git`: `~/.zshrc`,
+    `~/.zprofile`, `~/.zshenv`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.gitconfig`
+    and everything under `~/.config/git/`;
   - writing the tools copy the wrapper runs from, `~/vecten-live-tools`, and the Python
     installation its interpreter runs from, so no command can change the code the settings let
     the agent run unasked, or plant code Python loads before the wrapper's first check;
   - every unix-socket connection but the name resolver's (`/private/var/run/mDNSResponder`),
     so no Docker daemon, ssh-agent or gpg-agent is reachable.
-- **Its own home.** `HOME` is `<credential home>/home`, so a tool's default lookups miss your
-  own files.
+- **Its own home.** `HOME` is `<credential home>/home`, or `<credential home>/home-plain` for
+  a subcommand that needs no credential, so a tool's default lookups miss your own files. The
+  wrapper refuses (exit 3) a home that is a link or a file rather than a directory.
 - **An environment built from an allowlist.** Only `PATH`, `LANG`, `TERM`, `TMPDIR`, `USER`,
   `LOGNAME`, `SHELL`, `TZ`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, the proxy variables and the
   `LC_*` variables pass through. The wrapper sets the rest: each tool's configuration in the
@@ -678,10 +689,11 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   ([What bounds a wrapped command](#what-bounds-a-wrapped-command)). It still does not contain
   an agent that deliberately works around it:
   - The profile is a list of denied places. Its write denies cover the tools copy and its
-    interpreter, the credential home outside `home/`, `cache/`, `snowflake/logs/` and
-    `github/gh/`, the Claude Code settings, and the shell and git startup files; a command it
-    holds can still write the rest of your home directory, and read any credential file it
-    does not name.
+    interpreter, the credential home outside `home/`, `home-plain/`, `snowflake/logs/` and
+    `github/gh/`, all of `~/.claude`, the `.claude` settings and hook, skill, command and agent
+    trees of any checkout under your home, and the shell and git startup files, with the
+    renaming of every directory above them; a command it holds can still write the rest of
+    your home directory, and read any credential file it does not name.
   - A process inside the profile can have another started outside it, through
     LaunchServices, Apple Events or launchd.
   - A wrapped `uv run …`, such as the release commit's `uv run vecten dev bump-version` or the
@@ -692,9 +704,15 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
     command is bounded by its home, its environment and the guard only, and the subcommands
     that need no credential by their environment only.
 
-  A separate macOS user for the agent would make it a real boundary; that is not built. Text
-  written by a stranger can reach the agent: the runbook has it read pull request bodies and
-  work in public repositories.
+  Text written by a stranger can reach the agent: the runbook has it read pull request bodies
+  and work in public repositories.
+- **A list of denied places cannot be completed.** Each successive review of this wrapper
+  found another way around its list: through the working checkout, git's own configuration,
+  the interpreter, a renamed directory, a link in the token cache, a checkout's agent files.
+  Each was closed by naming one more place. Such a list can be extended but not completed, so
+  expect the next way around rather than rule it out. The dependable forms of containment, a
+  profile that allows writing only to named places, or a separate macOS user for the agent,
+  are not built.
 - **A candidate's images are pushed without an approval.** Setup item 7 gives this
   repository's Actions the Write role on the two images, for any version of any workflow, and
   an earlier version of `publish.yml` whose `images` job runs tree code is part of this
