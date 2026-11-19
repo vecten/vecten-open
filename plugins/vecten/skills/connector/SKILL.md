@@ -46,7 +46,8 @@ this skill explains what to do when one of them fails.
   | 6 | CONFIG | A project file is invalid; the `error` names it. |
 
 - The files that are yours: `connectors/<name>/connector.py` and any helper module you add
-  beside it. The CLI owns `vecten.toml`, `.env`, `dbt/models/staging/sources.yml`, `.vecten/`
+  beside it, and, when the human asks to change how the source is scheduled, its DAG files
+  `orchestration/dags/sync_<name>_<group>.py` (step 8). The CLI owns `vecten.toml`, `.env`, `dbt/models/staging/sources.yml`, `.vecten/`
   and `osi/datasets.json`; never edit them, because the CLI writes them and reads them back as
   its own record of the project.
 - A credential reaches the project one way only: the human types it at the hidden prompt of
@@ -101,9 +102,12 @@ Read the JSON the command prints:
   change that breaks a live sync: `vecten connector run <name> --json` is the live proof;
 - `dags`: the sync DAG, `orchestration/dags/sync_<name>_default.py`;
 - `secrets`: the secret names the code reads, used in step 3;
-- `dependencies`: Python packages a verified source needs. The Airflow image installs them; for
+- `dependencies`: Python packages a verified source needs; `locked` says whether the command
+  pinned them. With `locked: true`, every lock holds them and vecten's own environment has them.
+  With `locked: false` (a project without locks), the Airflow image installs them unpinned; for
   `vecten connector run` on this machine, ask the human to install them where vecten runs, for
-  example `uv tool install vecten --with <package>`.
+  example `uv tool install vecten --with <package>`. A failed re-lock exits non-zero naming
+  `vecten lock`: the connector is added, and `vecten up` refuses until the locks are rewritten.
 
 Exit 4 with "already exists" means the directory is there: edit it rather than adding again.
 `vecten.toml` now declares the connector, and the `Connect <name>` item is gone from `next`.
@@ -255,11 +259,31 @@ vecten answer access.<name> <groups> --json
 
 ## 8. The scheduled sync
 
-Tell the human how the source runs from here. `vecten connector add` wrote a daily sync DAG
-with catch-up off. In the local Airflow that `vecten up` starts, the DAG appears paused, because
-new DAGs start paused; once unpaused, its first scheduled run is at the next midnight UTC, not
-straight away. To load now, `vecten connector run <name>` syncs from this machine. In a deployed
-environment the DAG starts unpaused and first runs at the midnight UTC after it ships.
+Tell the human how the source runs from here. `vecten connector add` wrote one sync DAG per
+object group, `orchestration/dags/sync_<name>_<group>.py`, running daily in UTC with catch-up
+off; a connector from an extension may come with several groups on their own schedules. In the
+local Airflow that `vecten up` starts, a new DAG appears paused; once unpaused, it syncs the
+latest whole day at once, then runs after each midnight. To load now without Airflow,
+`vecten connector run <name>` syncs from this machine. In a deployed environment a new DAG
+starts unpaused, unless that environment's `deploy/envs/<env>.tfvars` sets
+`dags_paused_at_creation = true`; then it starts paused and runs only once someone unpauses it
+in that environment's Airflow. A sync whose object fails publishes nothing, so the dbt build
+does not run on partial data.
+
+Each DAG file is one call to `build_sync_dag`. When the human asks for one of the following,
+add the keyword to that call rather than writing a DAG by hand:
+
+| The human wants | Keyword |
+|---|---|
+| A run at a local time | `schedule="0 6 * * *", timezone="Europe/Warsaw"` |
+| A child object that reads its parent's ids | `stages=[["<parent>"], ["<child>", ...]]`: each stage starts once the one before it synced |
+| A backfill start date or a per-run cap on manual runs | `params={"since": Param(None, type=["null", "string"])}`, with `from airflow.sdk import Param`. Every parameter reaches `source()` as a keyword argument, so give `source()` the same parameter with a default, which is what `vecten connector run` uses |
+| An API rate limit shared with another DAG | `pool="<pool>"`; the pool must exist in Airflow, so ask the human to create it (Admin, Pools) in every environment, or the object tasks never start |
+| A switch that stops syncing, such as a quota flag | `guard=<function>`, defined in the DAG file, returning false to skip the run without failing it |
+| The DAG to stay paused until someone unpauses it | `paused_at_creation=True`; it applies only when Airflow first sees the DAG |
+
+After changing `source()`'s parameters, run `vecten connector run <name> --json` again to
+prove the connector still syncs.
 
 ## 9. Finish
 

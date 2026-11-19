@@ -17,6 +17,7 @@ module "host" {
   compose_plugin_version = local.compose_plugin_version
   buildx_plugin_version  = local.buildx_plugin_version
   certbot_image          = local.certbot_image
+  root_volume_size_gb    = var.root_volume_size_gb
 
   # The Elastic IP is attached before boot, and AWS refuses it until the gateway exists.
   depends_on = [aws_internet_gateway.this, aws_route_table_association.public]

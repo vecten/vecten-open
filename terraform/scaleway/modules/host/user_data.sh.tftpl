@@ -41,8 +41,8 @@ ${watch_config}
 WATCH
 
 # The metadata server serves the VM key to any root process, and Docker grants containers the
-# low source port it requires; container traffic to it is dropped. The rules do not survive a
-# reboot or a Docker restart, so the unit re-adds them with Docker.
+# low source port it requires; container traffic to it is dropped. A reboot clears the rules,
+# so the unit re-adds them whenever Docker starts.
 cat > /etc/systemd/system/vecten-metadata-guard.service <<'UNIT'
 [Unit]
 Description=Vecten: keep containers off the instance metadata server

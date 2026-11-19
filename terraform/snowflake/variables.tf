@@ -29,7 +29,7 @@ variable "size" {
 }
 
 variable "components" {
-  description = "Components deployed beside the warehouse; the platform builds it, the MCP adds PROVISIONER."
+  description = "Components deployed beside the warehouse; the platform builds it, the MCP adds the provisioner role."
   type        = list(string)
 
   validation {
@@ -72,6 +72,46 @@ variable "warehouse_name" {
   }
 }
 
+variable "analyst_role_name" {
+  description = "Role that reads core and marts, which the MCP grants to people."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.analyst_role_name))
+    error_message = "analyst_role_name is an unquoted upper-case Snowflake identifier."
+  }
+}
+
+variable "loader_role_name" {
+  description = "Role dlt loads and dbt builds with, owner of the convention's schemas."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.loader_role_name))
+    error_message = "loader_role_name is an unquoted upper-case Snowflake identifier."
+  }
+}
+
+variable "loader_user_name" {
+  description = "Service user dlt and dbt sign in as; they pass the loader role's name as the user, so the two are equal."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.loader_user_name))
+    error_message = "loader_user_name is an unquoted upper-case Snowflake identifier."
+  }
+}
+
+variable "provisioner_role_name" {
+  description = "Role the MCP's provisioner acts as; created only with the mcp component."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.provisioner_role_name))
+    error_message = "provisioner_role_name is an unquoted upper-case Snowflake identifier."
+  }
+}
+
 variable "warehouse_size" {
   description = "Warehouse size; null takes the size tier's entry in sizing.json."
   type        = string
@@ -84,11 +124,25 @@ variable "warehouse_size" {
 }
 
 variable "loader_public_key" {
-  description = "PEM public key of the LOADER service user's key pair; its private half never reaches Terraform."
+  description = "PEM public key of the loader service user's key pair; its private half never reaches Terraform."
   type        = string
 
   validation {
     condition     = strcontains(var.loader_public_key, "BEGIN PUBLIC KEY") && !strcontains(var.loader_public_key, "PRIVATE")
     error_message = "loader_public_key is a PEM public key; a private key never belongs in Terraform."
+  }
+}
+
+variable "loader_sign_in" {
+  description = "In a shared account, the schema and the name of the key-pair-only authentication policy set on the loader user, so that no External OAuth integration in the account signs in as it; null with fixed names."
+  type = object({
+    schema = string
+    policy = string
+  })
+  default = null
+
+  validation {
+    condition     = var.loader_sign_in == null || (can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.loader_sign_in.schema)) && can(regex("^[A-Z][A-Z0-9_]{0,254}$", var.loader_sign_in.policy)))
+    error_message = "loader_sign_in names its schema and policy as unquoted upper-case Snowflake identifiers."
   }
 }

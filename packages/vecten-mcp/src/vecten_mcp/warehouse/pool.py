@@ -14,6 +14,9 @@ class Pool:
     sessions: dict[str, tuple[float, float]] = field(default_factory=dict)
     connections: list = field(default_factory=list)
     busy: set[int] = field(default_factory=set)
+    # The roles each connection was opened with, by id; a connection serves only requests
+    # validated to the same roles.
+    roles: dict[int, frozenset] = field(default_factory=dict)
 
 
 class PrincipalPools:
@@ -42,7 +45,23 @@ class PrincipalPools:
             if pool is None:
                 self.adapter.open_membership(principal["warehouse_name"])
                 pool = self.pools[pid] = Pool(principal)
-            connection = next((c for c in pool.connections if id(c) not in pool.busy), None)
+            wanted = frozenset(roles)
+            for stale in [
+                c
+                for c in pool.connections
+                if id(c) not in pool.busy and pool.roles.get(id(c)) != wanted
+            ]:
+                pool.connections.remove(stale)
+                pool.roles.pop(id(stale), None)
+                stale.close()
+            connection = next(
+                (
+                    c
+                    for c in pool.connections
+                    if id(c) not in pool.busy and pool.roles.get(id(c)) == wanted
+                ),
+                None,
+            )
             if connection is None:
                 if len(pool.connections) >= self.max_connections:
                     raise ValueError("principal connection pool is busy; retry")
@@ -53,6 +72,7 @@ class PrincipalPools:
                         self._close(pid)
                     raise
                 pool.connections.append(connection)
+                pool.roles[id(connection)] = wanted
             pool.sessions[session_id] = (expires_at, now)
             pool.busy.add(id(connection))
         try:
@@ -61,6 +81,7 @@ class PrincipalPools:
             with self.lock:
                 if connection in pool.connections:
                     pool.connections.remove(connection)
+                    pool.roles.pop(id(connection), None)
                     connection.close()
             raise
         finally:

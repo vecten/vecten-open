@@ -18,6 +18,14 @@ BUILD_COMMAND = "vecten dbt-build-local"
 DESCRIBED_LAYERS = ("core", "marts")
 
 
+def described_layers(config: VectenConfig) -> list[str]:
+    """`core`, `marts` and each declared area's `core_<area>` and `marts_<area>` folders."""
+    return [
+        *DESCRIBED_LAYERS,
+        *(f"{layer}_{area}" for area in config.areas for layer in DESCRIBED_LAYERS),
+    ]
+
+
 def sha256_of(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
@@ -42,9 +50,12 @@ def _no_snapshot_items(dbt_dir: Path) -> list[Item]:
     return items
 
 
-def _unread_snapshot_items(dbt_dir: Path) -> list[Item]:
-    core = dbt_dir / "models" / "core"
-    core_sql = [p.read_text(encoding="utf-8") for p in sorted(core.rglob("*.sql"))]
+def _unread_snapshot_items(dbt_dir: Path, config: VectenConfig) -> list[Item]:
+    folders = [dbt_dir / "models" / layer for layer in described_layers(config)]
+    core_folders = [f for f in folders if f.name.split("_")[0] == "core"]
+    core_sql = [
+        p.read_text(encoding="utf-8") for f in core_folders for p in sorted(f.rglob("*.sql"))
+    ]
     items: list[Item] = []
     for snapshot in sorted((dbt_dir / "snapshots").glob("snapshot_*.sql")):
         ref = re.compile(r"ref\(\s*(['\"])" + re.escape(snapshot.stem) + r"\1\s*\)")
@@ -85,9 +96,9 @@ def _first_gap(entry: dict | None) -> tuple[bool, str | None]:
     return False, None
 
 
-def _undescribed_items(dbt_dir: Path) -> list[Item]:
+def _undescribed_items(dbt_dir: Path, config: VectenConfig) -> list[Item]:
     items: list[Item] = []
-    for layer in DESCRIBED_LAYERS:
+    for layer in described_layers(config):
         for model in sorted((dbt_dir / "models" / layer).rglob("*.sql")):
             missing, column = _first_gap(_schema_entries(model.parent).get(model.stem))
             if missing:
@@ -103,8 +114,8 @@ def modelling_items(root: Path, config: VectenConfig) -> list[Item]:
     items = [
         *_no_staging_items(dbt_dir, config),
         *_no_snapshot_items(dbt_dir),
-        *_unread_snapshot_items(dbt_dir),
-        *_undescribed_items(dbt_dir),
+        *_unread_snapshot_items(dbt_dir, config),
+        *_undescribed_items(dbt_dir, config),
     ]
     record = read_record(root, BUILD_RECORD)
     if not record or not record.get("ok"):

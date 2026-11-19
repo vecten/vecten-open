@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from vecten.stack.compose import LOCAL_AIRFLOW_API_PORT
-from vecten.stack.env import FIXED
+from vecten_shared.stack_secrets import FIXED
 from vecten_shared.versions import VERSIONS, minor_constraint
 
 

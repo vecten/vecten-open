@@ -1,0 +1,31 @@
+name: base-branch
+# `edited` is the event a change of base fires, so a pull request retargeted to main is checked
+# again and one retargeted away from a red result is not left waiting for a push. The check
+# lives outside ci so that an edit of the title or body does not run the whole suite.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+    branches: [main]
+concurrency:
+  group: base-branch-${{ github.ref }}
+  cancel-in-progress: true
+permissions: {}
+jobs:
+  base-branch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      # A fork can name its branch release/x, so the head must also live in this repository.
+      # The names reach the script through the environment because a branch name is the
+      # author's text.
+      - name: main takes release and hotfix branches only
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [[ "$HEAD_REPO" == "$GITHUB_REPOSITORY" && "$HEAD_REF" =~ ^(release|hotfix)/.+ ]]; then
+            exit 0
+          fi
+          open=$(git ls-remote --heads "https://github.com/${GITHUB_REPOSITORY}" 'release/*' | sed 's|.*refs/heads/||' | paste -sd' ' -)
+          echo "::error::main takes release/ and hotfix/ branches only. Retarget this pull request to the open release branch: ${open:-see CONTRIBUTING.md}."
+          exit 1

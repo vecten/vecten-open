@@ -22,6 +22,8 @@ class Resolved:
 # A dynamically registered client may hold a secret, but never the client_credentials grant:
 # that belongs to service principals, which only an admin creates.
 REGISTERED_AUTH_METHODS = ("none", "client_secret_post", "client_secret_basic")
+# The server's maximum session lifetime: an OAuth session and a gate session end by then.
+SESSION_SECONDS = 604800
 
 
 class RegistrationError(ValueError):
@@ -217,7 +219,7 @@ class OAuthService:
             principal_id=principal_id,
             client_id=client_id,
             started_at=self.clock(),
-            expires_at=self.clock() + 604800,
+            expires_at=self.clock() + SESSION_SECONDS,
         )
         self.state.put("sessions", sid, session, expires_at=session["expires_at"], conn=conn)
         client = self.state.get("clients", client_id, conn=conn)
@@ -335,6 +337,7 @@ class OAuthService:
                 self.revoke(sid)
 
     def revoke_principal(self, principal_id):
+        self.state.end_gate_sessions(principal_id)
         for sid, session in self.state.scan("sessions"):
             if session["principal_id"] == principal_id:
                 self.revoke(sid)
@@ -361,6 +364,15 @@ class OAuthService:
             ),
         )
         return dict(client_id=cid, client_secret=secret)
+
+    def replace_service_credentials(self, principal_id):
+        """New client credentials for a service principal; every earlier client of it and
+        every session they opened stop working first."""
+        for client_id, client in self.state.scan("clients"):
+            if client.get("principal_id") == principal_id:
+                self.state.remove("clients", client_id)
+        self.revoke_principal(principal_id)
+        return self.service_credentials(principal_id)
 
     def client_credentials(self, client_id, secret, resource):
         client = self.client(client_id)

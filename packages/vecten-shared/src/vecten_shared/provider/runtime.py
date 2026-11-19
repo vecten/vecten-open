@@ -16,13 +16,13 @@ from vecten_shared.provider import (
     DbName,
     LogTarget,
     check_db_name,
+    shipped_account,
     snowflake_names,
 )
 from vecten_shared.provider.environment import EnvironmentOutputs, environment_file, load_outputs
 
 # Only standing MCP credentials may be rotated by the runtime.
 RUNTIME_WRITABLE = frozenset({"MCP_IMPERSONATOR_PASSWORD", "MCP_SIGNING_KEY"})
-SNOWFLAKE_ANALYST_ROLE = "ANALYST"
 EXISTING_WAREHOUSE_ROLE = "impersonator"
 POSTGRES_PORT = 5432
 
@@ -137,17 +137,17 @@ class OutputsRuntimeProvider:
 
     def _snowflake_warehouse(self) -> ConnectionSpec:
         config = self.config()
-        if not config.warehouse.account:
+        names = snowflake_names(config, self.env, account=shipped_account())
+        if not names.account:
             raise Failure(
                 ExitCode.CONFIG, "vecten.toml: warehouse.account is required on Snowflake"
             )
-        names = snowflake_names(config, self.env)
         return ConnectionSpec(
             kind="snowflake",
             database=names.database,
-            role=SNOWFLAKE_ANALYST_ROLE,
+            role=names.analyst_role,
             auth="external_oauth",
-            account=config.warehouse.account,
+            account=names.account,
             warehouse=names.warehouse,
         )
 

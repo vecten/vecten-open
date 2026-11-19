@@ -85,6 +85,21 @@ def _id(source: str, *parts: str) -> str:
     return "_".join(("iss", source, *(_part(p) for p in parts)))
 
 
+SYNC_TASK = "sync"
+# A sync DAG with ordered objects maps one task per stage instead of the one `sync` task.
+_SYNC_STAGE_TASK = re.compile(r"sync_stage_[1-9][0-9]*")
+
+
+def sync_stage_task(stage: int) -> str:
+    """The task id of the `stage`-th (from 1) stage of a sync DAG with ordered objects."""
+    return f"sync_stage_{stage}"
+
+
+def is_sync_task(task_id: str) -> bool:
+    """Whether `task_id` is a sync DAG's per-object mapped task, whose failures are per object."""
+    return task_id == SYNC_TASK or _SYNC_STAGE_TASK.fullmatch(task_id) is not None
+
+
 def sync_task_key(object_name: str) -> str:
     """The key of one object's mapped sync task: each object fails and recovers on its own."""
     return f"sync.{object_name}"

@@ -13,6 +13,29 @@ from vecten_shared.output import ExitCode, Failure, Result
 connector = typer.Typer(help="Wire dlt sources into the project and run them locally.")
 
 
+def _relock(root, name: str, dependencies: list[str]) -> bool:
+    """Re-lock a project that has locks, so the new dependencies are pinned like the rest.
+
+    A connector without dependencies leaves fresh locks fresh, and re-locking needs Docker.
+    """
+    from vecten import extensions as project_extensions
+    from vecten import locking
+
+    # A connector without dependencies changes no lock's inputs, so whatever state the locks
+    # are in, fresh or an earlier release's, adding it gives no reason to resolve again.
+    if not dependencies or not any((root / f).is_file() for f in locking.LOCK_FILES.values()):
+        return False
+    try:
+        project_extensions.lock(root)
+    except Failure as failure:
+        raise Failure(
+            failure.code,
+            f"added {name}, but its dependencies are not locked yet ({failure.message}); "
+            "fix that and run `vecten lock`",
+        ) from None
+    return True
+
+
 @connector.command(
     "add", help="Wire a dlt verified source, an extension connector or a generic scaffold."
 )
@@ -34,6 +57,7 @@ def add(
         root = ctx.require_project()
         extensions = extension_connectors(load_config(root)) if from_kind is None else {}
         res = add_connector(root, name, from_kind, get_verified_sources(), extensions)
+        locked = _relock(root, name, res.dependencies)
         lines = [
             f"added {name} ({res.source}); files: {len(res.files)}; dags: {', '.join(res.dags)}"
         ]
@@ -41,7 +65,9 @@ def add(
             lines.append(
                 "secrets to set: " + ", ".join(f"`vecten secret set {s}`" for s in res.secrets)
             )
-        if res.dependencies:
+        if res.dependencies and locked:
+            lines.append("python requirements locked: " + ", ".join(res.dependencies))
+        elif res.dependencies:
             lines.append(
                 "python requirements (installed in the Airflow image; install them where vecten "
                 "runs, for example `uv tool install vecten --with <package>`): "
@@ -55,6 +81,7 @@ def add(
                 "dags": res.dags,
                 "secrets": res.secrets,
                 "dependencies": res.dependencies,
+                "locked": locked,
             },
             message="\n".join(lines),
         )

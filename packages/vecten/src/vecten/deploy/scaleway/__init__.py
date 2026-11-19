@@ -16,7 +16,7 @@ import binascii
 import json
 import os
 import tempfile
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -130,6 +130,7 @@ class ScalewayProvider(ScalewayRuntimeProvider):
         self._operator: str | None = None
         self._organization: str | None = None
         self._storages: dict[str, Any] = {}
+        self.orphaned_volumes: dict[str, list[str]] = {}
         self._known: set[str] = set()
         # The hosts `after_cloud_apply` handed a key to, which ship gives the first-ship window.
         self._keyed: frozenset[str] = frozenset()
@@ -473,11 +474,13 @@ class ScalewayProvider(ScalewayRuntimeProvider):
         env: str,
         outputs: EnvironmentOutputs,
         commit: str,
+        *,
+        sources: Mapping[str, Path] | None = None,
     ) -> list[str]:
         """Build and ship one bundle per host, setup host first; stops at the first failure."""
         self._check_env(env)
         return ship_mod.ship_hosts(
-            self, project_root, config, env, outputs, commit, keyed=self._keyed
+            self, project_root, config, env, outputs, commit, keyed=self._keyed, sources=sources
         )
 
     # --- destroy -----------------------------------------------------------------------------

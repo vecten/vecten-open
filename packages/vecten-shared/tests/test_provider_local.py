@@ -7,7 +7,7 @@ import pytest
 from vecten_shared.config import VectenConfig, save_config, stack_project_name
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import ConnectionSpec, Provider, get_provider
-from vecten_shared.provider.local import LocalProvider
+from vecten_shared.provider.local import LOCAL_PG_PORT_ENV, LocalProvider
 
 
 def test_get_provider_lists_the_three_names(tmp_path):
@@ -71,9 +71,26 @@ def test_connections_point_at_the_local_postgres(tmp_path):
     assert "warehouse, airflow, mcp_state" in exc.value.message
 
 
-def test_host_view_uses_published_port(tmp_path):
+def test_host_view_uses_published_port(tmp_path, monkeypatch):
+    monkeypatch.delenv(LOCAL_PG_PORT_ENV, raising=False)
     c = LocalProvider(tmp_path, inside_compose=False).connection("local", "warehouse")
     assert (c.host, c.port) == ("localhost", 55432)
+
+
+def test_host_view_follows_the_port_the_environment_names(tmp_path, monkeypatch):
+    monkeypatch.setenv(LOCAL_PG_PORT_ENV, "23456")
+    on_host = LocalProvider(tmp_path, inside_compose=False).connection("local", "warehouse")
+    in_stack = LocalProvider(tmp_path).connection("local", "warehouse")
+    assert (on_host.port, in_stack.port) == (23456, 5432)
+
+
+@pytest.mark.parametrize("value", ["0", "65536", "port", "-1", " 5432"])
+def test_a_port_override_that_is_no_port_is_refused(tmp_path, monkeypatch, value):
+    monkeypatch.setenv(LOCAL_PG_PORT_ENV, value)
+    with pytest.raises(Failure) as exc:
+        LocalProvider(tmp_path, inside_compose=False).connection("local", "warehouse")
+    assert exc.value.code == ExitCode.USAGE
+    assert LOCAL_PG_PORT_ENV in exc.value.message
 
 
 def test_noops(tmp_path):

@@ -1,6 +1,7 @@
 import json
 import logging
 import subprocess
+from unittest import mock
 
 import pytest
 
@@ -59,6 +60,44 @@ def test_snowflake_emulation_keeps_sqlglot_warnings_quiet(tmp_path, caplog):
         _fakesnow_connect("PUBLIC").cursor().execute("show user functions in WAREHOUSE.PUBLIC")
     assert not [r for r in caplog.records if r.name.startswith("sqlglot")]
     assert logging.getLogger("sqlglot").level == before
+
+
+def test_snowflake_emulation_accepts_copy_grants(tmp_path):
+    # dbt-snowflake's `copy_grants: true` adds COPY GRANTS to every rebuild, and
+    # `dbt-build-local` runs the same project against the emulation.
+    with snowflake_emulation(tmp_path):
+        cur = _fakesnow_connect("PUBLIC").cursor()
+        cur.execute("create schema WAREHOUSE.MARTS")
+        cur.execute("create or replace table WAREHOUSE.MARTS.T as (select 1 as id)")
+        cur.execute(
+            "create or replace transient table WAREHOUSE.MARTS.T copy grants as (select 2 as id)"
+        )
+        cur.execute(
+            "create or replace view WAREHOUSE.MARTS.V copy grants as "
+            "(select id from WAREHOUSE.MARTS.T)"
+        )
+        assert cur.execute("select id from WAREHOUSE.MARTS.V").fetchall() == [(2,)]
+
+
+def test_dbt_snowflake_is_fitted_to_the_emulation_only_inside_it(tmp_path):
+    from dbt.adapters.snowflake import SnowflakeAdapter
+    from dbt.contracts.graph.manifest import Manifest
+
+    hook = SnowflakeAdapter.pre_model_hook
+    find = Manifest.find_materialization_macro_by_name
+    asked = []
+
+    def record(manifest, project_name, materialization_name, adapter_type):
+        asked.append(materialization_name)
+
+    with mock.patch.object(Manifest, "find_materialization_macro_by_name", record):
+        with snowflake_emulation(tmp_path):
+            assert SnowflakeAdapter.pre_model_hook(None, {"snowflake_warehouse": "BIG_WH"}) is None
+            for name in ("dynamic_table", "table", "view"):
+                Manifest.find_materialization_macro_by_name(None, "acme", name, "snowflake")
+        assert asked == ["table", "table", "view"]
+    assert SnowflakeAdapter.pre_model_hook is hook
+    assert Manifest.find_materialization_macro_by_name is find
 
 
 def test_postgres_target_needs_docker(monkeypatch):

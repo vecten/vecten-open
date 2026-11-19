@@ -1,8 +1,9 @@
 """A project repository with real git history, and the GitHub that holds its pull requests.
 
 `ScenarioGh` answers the `gh api` reads that shipping makes for reviewed gap fixes from the
-pull requests `FixtureRepository.merge` recorded, so a ship sees the same review evidence as
-it would on GitHub.
+pull requests `FixtureRepository.merge` recorded, and for a commit's statuses from the ones
+a ship set, so a ship sees the same evidence as it would on GitHub. The repository's `main`
+is pushed to a local `origin`, which a ship inside Actions fetches as GitHub's default branch.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ class ScenarioGh:
         self.pulls: dict[int, dict] = {}
         self.reviews: dict[int, list[dict]] = {}
         self.calls: list[list[str]] = []
+        # (commit, `-f` fields) of every commit status a ship set.
+        self.statuses: list[tuple[str, list[str]]] = []
 
     def which(self) -> str:
         return "/usr/bin/gh"
@@ -33,12 +36,26 @@ class ScenarioGh:
 
     def run(self, args, cwd, input=None) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
+        if args[:3] == ["repo", "view", self.repository]:
+            body = {"nameWithOwner": self.repository, "defaultBranchRef": {"name": "main"}}
+            return self._answer(args, body)
         if args[:1] != ["api"]:
             return subprocess.CompletedProcess(args, 1, "", "gh: not answered by the scenario")
-        endpoint = args[1]
         prefix = f"repos/{self.repository}"
+        if args[1:3] == ["-X", "POST"] and args[3].startswith(prefix + "/statuses/"):
+            self.statuses.append((args[3].rsplit("/", 1)[-1], args[4:]))
+            return self._answer(args, {})
+        endpoint = args[1]
         if endpoint == prefix:
             return self._answer(args, {"full_name": self.repository})
+        if endpoint.startswith(prefix + "/commits/") and "/status?" in endpoint:
+            commit = endpoint[len(prefix + "/commits/") :].split("/", 1)[0]
+            latest: dict[str, dict] = {}
+            for sha, fields in self.statuses:
+                if sha == commit:
+                    status = dict(f.split("=", 1) for f in fields if f != "-f")
+                    latest[status["context"]] = status
+            return self._answer(args, {"sha": commit, "statuses": list(latest.values())})
         if endpoint.startswith("search/issues?"):
             query = parse_qs(urlparse(endpoint).query)["q"][0]
             gap = json.loads(query.split(" in:body ", 1)[1])
@@ -72,11 +89,16 @@ class FixtureRepository:
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.name", "Scenario")
         self.git("config", "user.email", "scenario@acme.test")
+        origin = self.root.parent / f"{self.root.name}-origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+        self.git("remote", "add", "origin", str(origin))
         return self.commit("Initial project")
 
     def commit(self, message: str) -> str:
         self.git("add", "-A")
         self.git("commit", "-q", "-m", message)
+        if self.git("rev-parse", "--abbrev-ref", "HEAD") == "main":
+            self.git("push", "-q", "origin", "main")
         return self.git("rev-parse", "HEAD")
 
     def branch(self, name: str) -> None:
@@ -87,6 +109,7 @@ class FixtureRepository:
         head = self.git("rev-parse", branch)
         self.git("checkout", "-q", "main")
         self.git("merge", "-q", "--no-ff", branch, "-m", f"Merge pull request #{number}")
+        self.git("push", "-q", "origin", "main")
         merge = self.git("rev-parse", "HEAD")
         merged_at = datetime.now(UTC)
         self.gh.pulls[number] = {

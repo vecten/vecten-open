@@ -8,22 +8,7 @@ from cryptography.fernet import Fernet
 from vecten_shared.config import VectenConfig
 from vecten_shared.envfile import read_env_values
 from vecten_shared.provider.local import LocalProvider
-
-GENERATED = (
-    "AIRFLOW_DB_PASSWORD",
-    "MCP_STATE_DB_PASSWORD",
-    "LOADER_PASSWORD",
-    "PROVISIONER_PASSWORD",
-    "IMPERSONATOR_PASSWORD",
-    "POSTGRES_MASTER_PASSWORD",
-    "AIRFLOW_ADMIN_PASSWORD",
-    "AIRFLOW_API_SECRET_KEY",
-    "AIRFLOW_JWT_SECRET",
-)
-FIXED = {"AIRFLOW_ADMIN_USER": "admin"}
-# An older laptop's .env still holds these; they stay the stack's, never offered for a cloud.
-RETIRED = ("AIRFLOW_BASIC_AUTH_PASSWORD", "AIRFLOW_BASIC_AUTH_USER")
-STACK_MANAGED: frozenset[str] = frozenset({*GENERATED, *FIXED, *RETIRED, "AIRFLOW_FERNET_KEY"})
+from vecten_shared.stack_secrets import FIXED, GENERATED
 
 
 def _read_env(env_file: Path) -> dict[str, str | None]:

@@ -113,10 +113,17 @@ locals {
           {
             include = contains(cs, "mcp")
             statement = {
-              Sid      = "ReadBuiltCommit"
-              Effect   = "Allow"
-              Action   = ["s3:GetObject"]
-              Resource = ["${local.artifacts_bucket_arn}/platform/dbt/built_commit"]
+              Sid    = "ReadBuiltCommit"
+              Effect = "Allow"
+              Action = ["s3:GetObject"]
+              # Every record vecten_shared.osi.revision reads: the commit dbt last built, when
+              # its last build finished, on which a Postgres MCP reconciles, and the relations
+              # the last full build made, against which the MCP lists the ones no model builds.
+              Resource = [
+                "${local.artifacts_bucket_arn}/platform/dbt/built_commit",
+                "${local.artifacts_bucket_arn}/platform/dbt/build_finished_at",
+                "${local.artifacts_bucket_arn}/platform/dbt/built_relations.json",
+              ]
             }
           },
         ] : s.statement if s.include

@@ -52,3 +52,8 @@ variable "certbot_image" {
   description = "certbot image the renewal timer runs."
   type        = string
 }
+
+variable "root_volume_size_gb" {
+  description = "Size in GiB of the encrypted gp3 root volume, which holds the images and the named volumes."
+  type        = number
+}

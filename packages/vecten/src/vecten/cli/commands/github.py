@@ -38,6 +38,8 @@ def push(
         text = f"pushed {data['commit'][:8]}"
         if data["ship"]:
             text += f"; shipped: {data['ship']['run_url']}"
+        if data["promote"]:
+            text += f"; run `{data['promote']}` to ship it on"
         return Result(data=data, message=text)
 
     run_command(json_output, run)

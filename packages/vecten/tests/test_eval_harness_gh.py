@@ -291,6 +291,10 @@ def test_vecten_github_bootstrap_deploy_and_a_push_run_against_the_standin(tmp_p
         assert (cloud / "hosts" / host / "current").read_text().strip() == pushed["commit"]
     shipped = vecten(env, root, "ship", "--env", "prod")
     assert shipped["dispatched"] is True and shipped["head_sha"] == pushed["commit"]
+    status = json.loads(gh(env, "api", f"repos/{REPO}/commits/{pushed['commit']}/status").stdout)
+    assert [(s["context"], s["state"]) for s in status["statuses"]] == [
+        ("vecten/ship/prod", "success")
+    ]
 
     logged = calls(env)
     assert all(call["answered"] for call in logged), [c for c in logged if not c["answered"]]

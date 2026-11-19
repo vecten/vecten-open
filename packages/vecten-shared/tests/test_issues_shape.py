@@ -10,7 +10,9 @@ from vecten_shared.issues import (
     failure_class,
     freshness_issue_id,
     gap_issue_id,
+    is_sync_task,
     redact,
+    sync_stage_task,
     sync_task_key,
     untrusted,
 )
@@ -132,3 +134,10 @@ def test_failure_class_unwraps_the_sync_wrapper():
     assert failure_class("ObjectSyncError", "hubspot.deals: KeyError: 'dealname'") == "KeyError"
     assert failure_class("ObjectSyncError", "no class here") == "ObjectSyncError"
     assert failure_class("ValueError", "x: KeyError: y") == "ValueError"
+
+
+def test_the_per_object_sync_tasks_are_the_parallel_one_and_each_stage():
+    assert is_sync_task("sync") and is_sync_task(sync_stage_task(1))
+    assert is_sync_task("sync_stage_12")
+    for other in ("discover", "check", "publish", "sync_stage_", "sync_stage_0", "sync_2"):
+        assert not is_sync_task(other), other

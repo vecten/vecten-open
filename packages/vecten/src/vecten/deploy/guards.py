@@ -52,6 +52,11 @@ def _git_failure(args: list[str], result: subprocess.CompletedProcess) -> Failur
     return Failure(ExitCode.TOOL_FAILED, message + (f": {tail}" if tail else ""))
 
 
+def branch_ref(branch: str) -> str:
+    """The full ref of `branch`: a bare name fetches a tag of that name first."""
+    return f"refs/heads/{branch}"
+
+
 def _git(git: ToolRunner, project_root: Path, *args: str) -> str:
     result = git.run(list(args), project_root)
     if result.returncode != 0:
@@ -71,7 +76,7 @@ def require_on_default_branch(
     """
     require_gh(gh, project_root)
     branch = default_branch(gh, project_root, repository)
-    _git(git, project_root, "fetch", "origin", branch)
+    _git(git, project_root, "fetch", "origin", branch_ref(branch))
     if _git(git, project_root, "status", "--porcelain", "--", *DEPLOY_FILES).strip():
         raise Failure(
             ExitCode.REFUSED,
@@ -97,6 +102,35 @@ def require_on_default_branch(
     if ancestry.returncode != 0:
         raise _git_failure(ancestry_args, ancestry)
     return branch
+
+
+def require_commit_on_default_branch(
+    project_root: Path, git: ToolRunner, branch: str, commit: str
+) -> None:
+    """Refuse `commit` unless the remote default branch holds it.
+
+    Every environment deploys from the default branch only, so a commit only a feature
+    branch holds has not passed review.
+    """
+    _git(git, project_root, "fetch", "origin", branch_ref(branch))
+    require_commit_on_fetched_branch(project_root, git, branch, commit, "FETCH_HEAD")
+
+
+def require_commit_on_fetched_branch(
+    project_root: Path, git: ToolRunner, branch: str, commit: str, head: str
+) -> None:
+    """Refuse `commit` unless `head`, the remote default branch `branch` as fetched, holds it."""
+    ancestry_args = ["merge-base", "--is-ancestor", commit, head]
+    ancestry = git.run(ancestry_args, project_root)
+    # `--is-ancestor` exits 1 for "not an ancestor"; any other non-zero exit is an error.
+    if ancestry.returncode == 1:
+        raise Failure(
+            ExitCode.REFUSED,
+            f"commit {commit[:8]} is not on origin/{branch}; every environment ships only "
+            f"commits of {branch}, so merge it to {branch} first",
+        )
+    if ancestry.returncode != 0:
+        raise _git_failure(ancestry_args, ancestry)
 
 
 def require_deployed(config: VectenConfig, env: str) -> None:

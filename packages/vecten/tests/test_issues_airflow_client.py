@@ -83,7 +83,16 @@ def test_a_refused_login_is_an_unavailable_source(monkeypatch):
     transport = httpx.MockTransport(lambda r: httpx.Response(401, json={}))
     monkeypatch.setattr(airflow, "TRANSPORT", transport)
     client = AirflowClient("http://127.0.0.1:8482", username="admin", password="wrong")
-    with pytest.raises(SourceUnavailable, match="refused the login"):
+    with pytest.raises(SourceUnavailable, match="refused the login") as exc:
+        client.task_instances(SINCE)
+    assert "[airflow] allow" not in str(exc.value)
+
+
+def test_a_login_refused_by_the_front_door_names_the_allow_list(monkeypatch):
+    transport = httpx.MockTransport(lambda r: httpx.Response(403, text="Forbidden"))
+    monkeypatch.setattr(airflow, "TRANSPORT", transport)
+    client = AirflowClient("https://airflow.data.acme.com", username="admin", password="pw")
+    with pytest.raises(SourceUnavailable, match=r"HTTP 403.*\[airflow\] allow"):
         client.task_instances(SINCE)
 
 

@@ -23,8 +23,14 @@ class Runtime:
     audit: object = None
     queries: object = None
     feedback_resolution: object = None
+    gate: object = None
+    apps: object = None
+    # Reads when the dbt DAG last finished a build; None where rebuilds keep their grants.
+    build_finished: object = None
     maintenance_task: object = field(default=None, init=False)
     last_reconcile: float = field(default=0, init=False)
+    last_build_finished: object = field(default=None, init=False)
+    build_record_error: object = field(default=None, init=False)
     last_model_check: float = field(default=0, init=False)
     last_audit_maintenance: float = field(default=0, init=False)
 
@@ -44,10 +50,15 @@ class Runtime:
     def start(self):
         if self.adapter:
             registry = dict(self.state.scan("provisioner_registry"))
-            self.adapter.check_scope(registry)
+            bound = any(True for _ in self.state.scan("bindings"))
+            self.adapter.check_scope(registry, bound=bound)
             self.adapter.cleanup_sessions()
         if self.model:
             self.model.reload()
+        if self.apps and self.access:
+            # A ship restarts the server with the new bundle, so admission follows its binding
+            # from the first request, before the first reconciliation.
+            self.access.admit()
         if self.feedback_resolution:
             try:
                 self.feedback_resolution.reconcile()
@@ -94,9 +105,23 @@ class Runtime:
                 self.last_model_check = now
         if self.feedback_resolution:
             attempt(self.feedback_resolution.reconcile)
-        if self.access and now - self.last_reconcile >= 900:
-            if attempt(self.access.reconcile):
+        if self.access:
+            finished = None
+            if self.build_finished:
+                try:
+                    finished = self.build_finished()
+                    self.build_record_error = None
+                except Exception as exc:
+                    # Read every 30 seconds, so one failure is logged once until a read succeeds.
+                    error = describe_error(exc)
+                    if error != self.build_record_error:
+                        logger.error("MCP build record unreadable: %s", error)
+                    self.build_record_error = error
+            rebuilt = finished is not None and finished != self.last_build_finished
+            if (rebuilt or now - self.last_reconcile >= 900) and attempt(self.access.reconcile):
                 self.last_reconcile = now
+                if finished is not None:
+                    self.last_build_finished = finished
         if self.password_rotation:
             attempt(self.password_rotation.tick)
         attempt(self.oauth.keys.maintain)
@@ -119,6 +144,13 @@ class Runtime:
 
 
 def build_runtime(root, config, extensions):
-    from vecten_mcp.runtime_setup import configured_runtime
+    import os
 
+    from vecten_mcp.runtime_setup import configured_runtime
+    from vecten_shared.declarations import check_settings
+    from vecten_shared.extension_record import read_record
+
+    # The server loads every extension now, so it checks their settings now, before /health
+    # can answer: a tool must never run on settings its manifest refuses.
+    check_settings(config, read_record(root) or {}, os.environ.get("VECTEN_ENV", "local"))
     return configured_runtime(root, config, extensions)

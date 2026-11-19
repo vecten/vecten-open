@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import typer
 
@@ -77,13 +79,17 @@ def build_images(
         if not print_only:
             # The Dockerfiles glob dist/ by package name; a wheel of another version would collide.
             shutil.rmtree(root / "dist", ignore_errors=True)
-            for cmd in commands:
-                try:
-                    r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
-                except FileNotFoundError:
-                    raise Failure(ExitCode.TOOL_FAILED, f"{cmd[0]} not found on PATH") from None
-                if r.returncode != 0:
-                    raise Failure(ExitCode.TOOL_FAILED, f"{cmd[0]} failed: {r.stderr[-2000:]}")
+            wheels, *builds = commands
+            run_tool(wheels, root)
+            if push:
+                # A release stops at the first failed build, so that failure pushes no later image.
+                for cmd in builds:
+                    run_tool(cmd, root)
+            else:
+                # The builds only read the checkout and cache apart, so they run side by side.
+                with ThreadPoolExecutor(len(builds)) as pool:
+                    for done in [pool.submit(run_tool, cmd, root) for cmd in builds]:
+                        done.result()
         data = {"commands": commands, "images": images}
         message = "\n".join(" ".join(c) for c in commands)
         if push and not print_only:
@@ -92,6 +98,15 @@ def build_images(
         return Result(data=data, message=message)
 
     run_command(json_output, run)
+
+
+def run_tool(cmd: list[str], root: Path) -> None:
+    try:
+        r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise Failure(ExitCode.TOOL_FAILED, f"{cmd[0]} not found on PATH") from None
+    if r.returncode != 0:
+        raise Failure(ExitCode.TOOL_FAILED, f"{cmd[0]} failed: {r.stderr[-2000:]}")
 
 
 def check_published(refs: list[str]) -> dict[str, str]:

@@ -1,4 +1,4 @@
-"""The access answer: which groups may read a connector's raw schema."""
+"""The access answer: which groups may read a connector's raw schema or a restricted area."""
 
 from __future__ import annotations
 
@@ -24,13 +24,18 @@ def parse_groups(raw: str) -> list[str]:
     return groups
 
 
-def set_access(project_root: Path, connector: str, raw: str) -> list[str]:
+def set_access(project_root: Path, name: str, raw: str) -> list[str]:
+    """Record the groups that may read a connector's raw schema or a declared area; the two
+    share no name, so `access.<name>` names one of them."""
     config = load_config(project_root)
-    decl = config.connector(connector)
+    decl = config.connector(name) or config.areas.get(name)
     if decl is None:
         known = ", ".join(c.name for c in config.connectors) or "none"
+        areas = ", ".join(sorted(config.areas)) or "none"
         raise Failure(
-            ExitCode.USAGE, f"no connector named {connector!r} in vecten.toml; declared: {known}"
+            ExitCode.USAGE,
+            f"no connector or area named {name!r} in vecten.toml; "
+            f"declared: {known}; areas: {areas}",
         )
     groups = parse_groups(raw)
     decl.access = AccessDecl(groups=groups)

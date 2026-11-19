@@ -171,8 +171,10 @@ def build_fixture(
         runner.resolve_dependencies(
             project_dir=dbt_dir, config=config, env=env, in_process=target.in_process
         )
-        runs = runner.run_build(project_dir=dbt_dir, env=env, in_process=target.in_process)
-        steps = [(["docs", "generate"], env)] if docs else []
+        runs = runner.run_build(
+            project_dir=dbt_dir, env=env, in_process=target.in_process, areas=config.areas
+        )
+        steps = [(["docs", "generate", *runner.area_vars(config.areas)], env)] if docs else []
         steps += [(["parse"], parse_env)] if validate else []
         for args, step_env in steps:
             if all(r.returncode == 0 for r in runs):

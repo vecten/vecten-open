@@ -92,3 +92,32 @@ def test_outputs_of_another_environment_refused(tmp_path):
         write_outputs(tmp_path, "staging", terraform_json(VALUES))
     assert "'prod'" in exc.value.message and "'staging'" in exc.value.message
     assert not outputs_path(tmp_path, "staging").exists()
+
+
+def test_a_host_without_service_hostnames_reads_as_empty_and_writes_as_before():
+    from vecten.deploy.outputs import outputs_text
+
+    outputs = EnvironmentOutputs.model_validate(VALUES)
+    assert outputs.hosts["mcp"].service_hostnames == []
+    # Outputs from a module without the field keep their bytes in the bundle.
+    assert json.loads(outputs_text(outputs)) == VALUES
+
+
+def test_a_module_listing_no_service_hostname_writes_the_same_file():
+    from vecten.deploy.outputs import outputs_text
+
+    listed = json.loads(json.dumps(VALUES))
+    listed["hosts"]["mcp"]["service_hostnames"] = []
+    assert outputs_text(EnvironmentOutputs.model_validate(listed)) == outputs_text(
+        EnvironmentOutputs.model_validate(VALUES)
+    )
+
+
+def test_service_hostnames_are_kept_per_host():
+    from vecten.deploy.outputs import outputs_text
+
+    listed = json.loads(json.dumps(VALUES))
+    listed["hosts"]["mcp"]["service_hostnames"] = ["portal.data.acme.com"]
+    outputs = EnvironmentOutputs.model_validate(listed)
+    assert outputs.hosts["mcp"].service_hostnames == ["portal.data.acme.com"]
+    assert json.loads(outputs_text(outputs)) == listed

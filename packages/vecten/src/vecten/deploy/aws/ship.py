@@ -24,6 +24,7 @@ from vecten.deploy.shipping import (
     HEALTH,
     POLL_INTERVAL,
     Health,
+    agent_volumes,
     airflow_healthy,
     answers_200,
     bundle_key,
@@ -250,8 +251,9 @@ def _invocation_failure(host: str, invocation: Invocation) -> Failure:
     )
 
 
-def ship_host(provider: AwsProvider, host: str, bundle: Path, commit: str) -> None:
-    """Upload `bundle`, run the agent on `host`, poll its components, roll back a failed poll.
+def ship_host(provider: AwsProvider, host: str, bundle: Path, commit: str) -> list[str]:
+    """Upload `bundle`, run the agent on `host`, poll its components, roll back a failed poll;
+    the orphaned service volumes the agent named.
 
     A failed agent run is not rolled back from here: the agent restores the previous release
     itself when it fails after its swap, and leaves `current` alone before it; its line says
@@ -304,3 +306,4 @@ def ship_host(provider: AwsProvider, host: str, bundle: Path, commit: str) -> No
                 "container_log": log,
             },
         )
+    return agent_volumes(invocation.stderr)

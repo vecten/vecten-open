@@ -9,40 +9,49 @@ layout here is the agent's contract: `.vecten/ship/host.json` (every key in
 from __future__ import annotations
 
 import gzip
+import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import tarfile
 import tempfile
+from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from vecten import git_extensions
 from vecten.deploy.feedback import feedback_manifest
 from vecten.deploy.names import name_prefix
 from vecten.deploy.outputs import outputs_text
 from vecten.deploy.sizing import tier
-from vecten.deploy.tfvars import check_tfvars
-from vecten.deploy.vm.apply import HOST_KEYS, PLUGIN_DIRS
+from vecten.deploy.tfvars import DAGS_PAUSED_AT_CREATION, check_tfvars
+from vecten.deploy.vm.apply import HOST_KEYS, OPTIONAL_HOST_KEYS, PLUGIN_DIRS
 from vecten.github.gh import ToolRunner, get_git
 from vecten.stack.compose import (
     PROJECT_MOUNTS,
     STACK_DIR,
-    connector_secrets,
     generate_compose,
+    host_services,
+    platform_secrets,
+    served_services,
     vm_hostnames,
     write_extension_dag_loader,
 )
 from vecten.stack.images import write_project_layer
-from vecten.stack.nginx import write_nginx
+from vecten.stack.nginx import service_site, write_nginx
 from vecten.stack.up import PUBLISHED_REGISTRY
 from vecten_shared.config import VectenConfig
+from vecten_shared.declarations import check_settings
+from vecten_shared.extension_record import Extension, read_record
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.records import write_text_atomic
+from vecten_shared.services import Bound, check_bindings
 from vecten_shared.sql import setup_sql_path
 from vecten_shared.versions import VERSIONS
 
@@ -52,6 +61,8 @@ CONTENT: tuple[str, ...] = (
     "requirements.lock",
     "requirements-airflow.lock",
     "requirements-mcp.lock",
+    "extensions.lock.json",
+    "extensions",
     "orchestration/dags",
     "orchestration/docker-compose.override.yml",
     "connectors",
@@ -69,8 +80,12 @@ SKIPPED_SUFFIXES = (".pyc",)
 SKIPPED_PATHS = frozenset(
     {"dbt/target", "dbt/logs", "dbt/dbt_packages", "dbt/packages.yml", "dbt/package-lock.yml"}
 )
-# Every member carries this mtime and owner, so a bundle's bytes depend on its content only.
+# Every member carries this owner, and a directory this mtime, so a bundle's bytes depend on
+# its content only.
 MEMBER_MTIME = 0
+# A file's mtime, from 2001-09-09 on, follows its content (see `content_mtime`).
+CONTENT_MTIME_BASE = 1_000_000_000
+CONTENT_MTIME_SPAN = 2**29
 DEFAULT_PLATFORM_SIZE = "small"
 # The commit names the release directory on the VM and appears in its shell commands.
 _COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
@@ -116,6 +131,25 @@ def compose_project(config: VectenConfig, env: str) -> str:
     return name_prefix(config.project.name, env)
 
 
+# A package's local build output is rebuilt on the host from its source.
+SKIPPED_BUILD_OUTPUT = frozenset({"dist", "build"})
+
+
+def _extension_build_output(rel: str, name: str) -> bool:
+    """A build tool's output at an extension's root, or setuptools' egg-info beside its code.
+
+    Deeper folders of these names are package data, such as a portal's built static files.
+    """
+    parts = rel.split("/")
+    if parts[0] != "extensions" or len(parts) < 3:
+        return False
+    at_root = len(parts) == 3
+    under_src = len(parts) == 4 and parts[2] == "src"
+    return (at_root and name in SKIPPED_BUILD_OUTPUT) or (
+        (at_root or under_src) and name.endswith(".egg-info")
+    )
+
+
 def _skipped(rel: str, name: str) -> bool:
     return (
         name in SKIPPED_NAMES
@@ -123,6 +157,7 @@ def _skipped(rel: str, name: str) -> bool:
         or name.startswith(".env.")
         or name.endswith(SKIPPED_SUFFIXES)
         or rel in SKIPPED_PATHS
+        or _extension_build_output(rel, name)
     )
 
 
@@ -165,12 +200,41 @@ def _copy_content(project_root: Path, stage: Path) -> None:
             _copy_tree(project_root, stage, entry)
 
 
+def _write_git_sources(stage: Path, sources: Mapping[str, Path]) -> None:
+    """Place each fetched git source at `extensions/<name>/`, beside the in-repo extensions."""
+    for name, directory in sorted(sources.items()):
+        target = stage / "extensions" / name
+        if target.exists():
+            raise Failure(
+                ExitCode.REFUSED,
+                f"extensions/{name} is a folder of the project, but {name} comes from git; "
+                "remove the folder, or add it as an in-repo extension with "
+                f"`vecten extension add ./extensions/{name}`",
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(directory, target)
+
+
+def _served(
+    config: VectenConfig, record: dict[str, Extension], outputs: EnvironmentOutputs, host: str
+) -> list[tuple[Bound, str]]:
+    return served_services(
+        config,
+        record,
+        list(outputs.hosts[host].components),
+        vm_hostnames(outputs),
+        outputs.hosts[host].service_hostnames,
+    )
+
+
 def _render_stack(
     stage: Path,
     config: VectenConfig,
     outputs: EnvironmentOutputs,
     components: list[str],
     project: str,
+    tfvars: dict[str, Any],
+    served: list[tuple[Bound, str]],
 ) -> None:
     stack_dir = stage / STACK_DIR
     stack_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +243,16 @@ def _render_stack(
             (stack_dir / "empty" / empty).mkdir(parents=True, exist_ok=True)
     write_extension_dag_loader(stack_dir)
     hosts = vm_hostnames(outputs)
-    doc = generate_compose(config, "vm", components, stack_dir, project=project, hosts=hosts)
+    doc = generate_compose(
+        config,
+        "vm",
+        components,
+        stack_dir,
+        project=project,
+        hosts=hosts,
+        dags_paused_at_creation=tfvars.get(DAGS_PAUSED_AT_CREATION, False),
+        snowflake_account=tfvars.get("snowflake_account"),
+    )
     write_text_atomic(stack_dir / "docker-compose.yml", yaml.safe_dump(doc, sort_keys=False))
     write_nginx(
         stack_dir,
@@ -188,6 +261,8 @@ def _render_stack(
         "vm",
         admin_panel=config.mcp.admin_panel,
         admin_allow=config.mcp.admin_allow,
+        airflow_allow=config.airflow.allow,
+        services=[service_site(bound, name) for bound, name in served],
     )
     write_project_layer(stack_dir, config, PUBLISHED_REGISTRY)
 
@@ -223,15 +298,19 @@ def host_document(
     host: str,
     commit: str,
     tfvars: dict[str, Any],
+    record: dict[str, Extension] | None = None,
 ) -> dict[str, Any]:
     if config.deploy is None:
         raise Failure(ExitCode.REFUSED, "no deploy answers; run `vecten init --deploy` first")
     cloud = config.deploy.cloud
     sizing = _host_tier(host, cloud, tfvars)
+    components = list(outputs.hosts[host].components)
+    service_secrets, service_network = host_services(config, record or {}, components)
+    served = _served(config, record or {}, outputs, host)
     doc = {
         "host": host,
         "cloud": cloud,
-        "components": list(outputs.hosts[host].components),
+        "components": components,
         "env": env,
         "project": config.project.name,
         "region": outputs.region,
@@ -239,10 +318,12 @@ def host_document(
         "bucket": outputs.bucket,
         "commit": commit,
         "setup_host": outputs.setup_host == host,
-        "hostnames": list(outputs.hosts[host].hostnames),
+        # The agent issues and renews a certificate for every name listed here.
+        "hostnames": [*outputs.hosts[host].hostnames, *sorted(name for _, name in served)],
         "secret_prefix": outputs.secret_prefix,
         "compose_project": compose_project(config, env),
-        "connector_secrets": connector_secrets(config),
+        # Every platform name the project and its extensions declare, not connectors' alone.
+        "connector_secrets": platform_secrets(config, record or {}),
         "private_package_index": config.packages.private_index,
         "compose_plugin_version": VERSIONS.docker_compose_plugin,
         "buildx_plugin_version": VERSIONS.docker_buildx_plugin,
@@ -251,8 +332,12 @@ def host_document(
         "airflow_parallelism": sizing["airflow_parallelism"],
         "mcp_pool_cap": sizing["mcp_pool_cap"],
         "plugin_dir": PLUGIN_DIRS[cloud],
+        "service_secrets": service_secrets,
+        "service_network": service_network,
     }
-    if set(doc) != set(HOST_KEYS):
+    if config.areas:
+        doc["areas"] = sorted(config.areas)
+    if set(doc) - set(OPTIONAL_HOST_KEYS) != set(HOST_KEYS):
         raise Failure(ExitCode.INTERNAL, "host.json keys differ from the agent's HOST_KEYS")
     return doc
 
@@ -268,21 +353,41 @@ def _write_ship_files(stage: Path, env: str, outputs: EnvironmentOutputs, host_d
     shutil.copyfile(setup_sql_path(), ship_dir / "warehouse_setup.sql")
 
 
-def _normalised(info: tarfile.TarInfo) -> tarfile.TarInfo:
+def content_mtime(data: bytes) -> int:
+    """The mtime a member with these bytes carries: equal content, equal time.
+
+    BuildKit reuses a build-context file it already holds whose size and mtime match, even one
+    from another release's directory; a time drawn from the content's sha256 makes two contents
+    of one size share it with a chance of 1 in 2**29."""
+    digest = int.from_bytes(hashlib.sha256(data).digest()[:8], "big")
+    return CONTENT_MTIME_BASE + digest % CONTENT_MTIME_SPAN
+
+
+def _normalised(
+    info: tarfile.TarInfo, sources: frozenset[str] = frozenset(), data: bytes | None = None
+) -> tarfile.TarInfo:
     info.uid = info.gid = 0
     info.uname = info.gname = ""
-    info.mtime = MEMBER_MTIME
+    info.mtime = MEMBER_MTIME if data is None else content_mtime(data)
     # Airflow runs in group 0 and dbt writes into its own project directory.
     writable = info.name == DBT_DIR or info.name.startswith(f"{DBT_DIR}/")
-    # No file needs an execute bit: the agent is started as `python3 <path>`.
+    # A git source's executable bits are part of the source_sha256 the host's build checks.
+    # Nothing else needs one: the agent is started as `python3 <path>`.
+    parts = info.name.split("/")
+    executable = (
+        len(parts) > 2
+        and parts[0] == "extensions"
+        and parts[1] in sources
+        and bool(info.mode & 0o100)
+    )
     if info.isdir():
         info.mode = 0o775 if writable else 0o755
     else:
-        info.mode = 0o664 if writable else 0o644
+        info.mode = 0o755 if executable else 0o664 if writable else 0o644
     return info
 
 
-def _write_tarball(stage: Path, target: Path) -> None:
+def _write_tarball(stage: Path, target: Path, sources: frozenset[str] = frozenset()) -> None:
     entries = sorted((p.relative_to(stage).as_posix(), p) for p in stage.rglob("*"))
     fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
     try:
@@ -292,12 +397,12 @@ def _write_tarball(stage: Path, target: Path) -> None:
             tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar,
         ):
             for name, path in entries:
-                info = _normalised(tar.gettarinfo(str(path), arcname=name))
+                info = tar.gettarinfo(str(path), arcname=name)
                 if info.isfile():
-                    with path.open("rb") as handle:
-                        tar.addfile(info, handle)
+                    data = path.read_bytes()
+                    tar.addfile(_normalised(info, sources, data), io.BytesIO(data))
                 else:
-                    tar.addfile(info)
+                    tar.addfile(_normalised(info, sources))
         os.replace(tmp, target)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -325,8 +430,12 @@ def build_host_bundle(
     out_dir: Path,
     *,
     metadata: tuple | None = None,
+    sources: Mapping[str, Path] | None = None,
 ) -> Path:
-    """Write `<out_dir>/<host>-<commit>.tar.gz`; equal inputs give byte-identical tarballs."""
+    """Write `<out_dir>/<host>-<commit>.tar.gz`; equal inputs give byte-identical tarballs.
+
+    `sources` holds the git sources `git_extensions.write_sources` wrote, by name; without it
+    they are fetched here."""
     check_commit(commit)
     if host not in outputs.hosts:
         raise Failure(
@@ -334,13 +443,28 @@ def build_host_bundle(
             f"host {host!r} is not in the outputs of {env!r}; hosts: {', '.join(outputs.hosts)}",
         )
     tfvars = check_tfvars(project_root, config, env)
-    host_doc = host_document(config, env, outputs, host, commit, tfvars)
+    record = read_record(project_root) or {}
+    check_settings(config, record, env)
+    check_bindings(config, record)
+    host_doc = host_document(config, env, outputs, host, commit, tfvars, record)
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / bundle_name(host, commit)
     with tempfile.TemporaryDirectory(dir=out_dir, prefix=".bundle-") as tmp:
-        stage = Path(tmp)
+        stage = Path(tmp) / "stage"
+        stage.mkdir()
+        if sources is None:
+            sources = git_extensions.write_sources(project_root, config, Path(tmp) / "sources")
         _copy_content(project_root, stage)
-        _render_stack(stage, config, outputs, host_doc["components"], host_doc["compose_project"])
+        _write_git_sources(stage, sources)
+        _render_stack(
+            stage,
+            config,
+            outputs,
+            host_doc["components"],
+            host_doc["compose_project"],
+            tfvars,
+            _served(config, record, outputs, host),
+        )
         _write_ship_files(stage, env, outputs, host_doc)
         lineage, feedback = metadata or prepare_bundle_metadata(
             project_root, config, commit, with_mcp="mcp" in host_doc["components"]
@@ -353,5 +477,5 @@ def build_host_bundle(
             stage / SHIP_DIR / "feedback.json",
             json.dumps(feedback, sort_keys=True) + "\n",
         )
-        _write_tarball(stage, target)
+        _write_tarball(stage, target, frozenset(sources))
     return target

@@ -49,11 +49,13 @@ module "environment" {
   profile           = var.profile
   size              = var.size
   warehouse         = var.warehouse
+  service_hostnames = var.service_hostnames
 [%- if warehouse == 'snowflake' %]
   snowflake_account = var.snowflake_account
 [%- endif %]
 
   platform_size           = var.platform_size
+  root_volume_size_gb     = var.root_volume_size_gb
   instance_type_overrides = var.instance_type_overrides
   database_public_cidrs   = var.database_public_cidrs
 [%- if cloud == 'aws' %]

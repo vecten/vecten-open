@@ -7,6 +7,7 @@ from pathlib import Path
 from vecten.next.items import Item
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, VectenConfig
+from vecten_shared.identity_setup import ACCESS_VERSION
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import read_record
 
@@ -26,18 +27,46 @@ def existing_warehouse_items(root: Path, config: VectenConfig, env: str) -> list
     # External OAuth cannot do without it, so its script waits for the deploy questions.
     if config.deploy is None and config.warehouse.kind == "snowflake":
         return items
-    if not _script_confirmed(root, config, env):
+    if not script_runs(root, config, env):
         command = "vecten mcp provisioner-script" + (f" --env {env}" if config.deploy else "")
         items.append(Item("command", "Prepare the existing warehouse for the MCP", command))
-    return items
+        return items
+    rerun = access_rerun_item(root, config, env)
+    return [*items, rerun] if rerun else items
 
 
-def _script_confirmed(root: Path, config: VectenConfig, env: str) -> bool:
-    facts = config.environments.get(env) or EnvironmentFacts()
-    # Every run grants on the one existing warehouse, so a run confirmed for either counts.
-    return facts.provisioner_script_run or any(
-        (read_record(root, f"provisioner-{name}") or {}).get("confirmed") for name in (env, "local")
+def script_runs(root: Path, config: VectenConfig, env: str) -> list[int]:
+    """The access version each confirmed run of the provisioner script that counts for `env`
+    installed, 1 where the run recorded none."""
+    # Postgres grants on the one existing warehouse whichever environment the script was run
+    # for. Snowflake's External OAuth names an issuer: `env`'s own, or prod's for the laptop.
+    if config.warehouse.kind == "postgres":
+        names = [*config.environments, "local"]
+    else:
+        names = [env, "local"] if env == "prod" else [env]
+    runs = []
+    for name in dict.fromkeys([env, *names]):
+        facts = config.environments.get(name) or EnvironmentFacts()
+        record = read_record(root, f"provisioner-{name}") or {}
+        if facts.provisioner_script_run or record.get("confirmed"):
+            versions = [facts.access_version, record.get("access_version")]
+            runs.append(max((v for v in versions if isinstance(v, int)), default=1))
+    return runs
+
+
+def access_rerun_item(root: Path, config: VectenConfig, env: str) -> Item | None:
+    """The provisioner script again while the access procedures it installed for `env` are
+    older than the ones this release's MCP needs; only Snowflake's procedures carry a version."""
+    if config.warehouse.kind != "snowflake" or not config.has("mcp"):
+        return None
+    runs = script_runs(root, config, env)
+    if not runs or max(runs) >= ACCESS_VERSION:
+        return None
+    title = (
+        f"Rerun the provisioner script for {env}: the access procedures it installed are "
+        "older than this release's"
     )
+    return Item("command", title, f"vecten mcp provisioner-script --env {env}")
 
 
 def provisioner_secrets_item(config: VectenConfig, env: str) -> Item | None:

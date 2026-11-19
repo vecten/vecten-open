@@ -238,6 +238,42 @@ run "rejects_an_unknown_platform_size" {
   expect_failures = [var.platform_size]
 }
 
+run "root_volume_size_gb_sizes_every_boot_volume" {
+  command = plan
+
+  variables {
+    root_volume_size_gb = 40
+  }
+
+  assert {
+    condition     = alltrue([for h in module.host : h.settings.root_volume.size_in_gb == 40])
+    error_message = "root_volume_size_gb sizes every host's boot volume, local SSD or SBS"
+  }
+}
+
+run "root_volume_defaults_to_30_gb" {
+  command = plan
+
+  variables {
+    root_volume_size_gb = null
+  }
+
+  assert {
+    condition     = alltrue([for h in module.host : h.settings.root_volume.size_in_gb == 30])
+    error_message = "a null root_volume_size_gb, which the thin root passes when tfvars sets none, keeps 30 GB"
+  }
+}
+
+run "rejects_a_root_volume_below_30_gb" {
+  command = plan
+
+  variables {
+    root_volume_size_gb = 20
+  }
+
+  expect_failures = [var.root_volume_size_gb]
+}
+
 run "rejects_an_arm_vm_override" {
   command = plan
 

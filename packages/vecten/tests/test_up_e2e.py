@@ -62,6 +62,19 @@ def vecten(*args, cwd):
     )
 
 
+def use_checkout_wheels(tmp_path, monkeypatch) -> None:
+    """Point uv at wheels of this checkout's four packages: a lock pins them at its version,
+    which is on PyPI only once the release is published."""
+    wheels = tmp_path / "checkout-wheels"
+    subprocess.run(
+        ["uv", "build", "--all-packages", "--wheel", "--out-dir", str(wheels)],
+        cwd=REPO,
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setenv("UV_FIND_LINKS", str(wheels))
+
+
 def add_existing_warehouse(proj):
     # MCP validates warehouse access at startup. Exercise onboarding against a separate
     # database instead of a placeholder hostname or the stack's managed warehouse.

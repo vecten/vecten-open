@@ -1,9 +1,13 @@
+from functools import partial
+
 import pytest
 
+from vecten_platform.sync import destination
 from vecten_platform.sync.context import RuntimeContext
 from vecten_platform.sync.destination import build_destination, warehouse_destination
+from vecten_shared.config import VectenConfig, save_config
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.provider import ConnectionSpec
+from vecten_shared.provider import ConnectionSpec, snowflake_names
 
 
 def test_postgres_destination_carries_the_spec_and_password():
@@ -115,21 +119,44 @@ def _ctx(tmp_path, provider, env):
     return RuntimeContext(tmp_path, tmp_path / "connectors", env, provider, tmp_path / "dlt")
 
 
-def test_a_deployed_snowflake_project_loads_as_the_loader_by_key_pair(tmp_path):
-    analysts = ConnectionSpec(
-        kind="snowflake",
-        database="ACME",
-        role="ANALYST",
-        auth="external_oauth",
-        account="ACME-PROD",
-        warehouse="ACME_PROD_WH",
+def _snowflake_project(root):
+    config = VectenConfig.model_validate(
+        {
+            "users": 1,
+            "components": ["platform"],
+            "project": {"name": "acme", "scaffold_version": "0.1.1"},
+            "warehouse": {"kind": "snowflake", "account": "ACME-PROD"},
+        }
     )
-    provider = Provider(analysts, PEM)
+    save_config(root, config)
+
+
+ANALYSTS = ConnectionSpec(
+    kind="snowflake",
+    database="ACME",
+    role="ANALYST",
+    auth="external_oauth",
+    account="ACME-PROD",
+    warehouse="ACME_PROD_WH",
+)
+
+
+def test_a_deployed_snowflake_project_loads_as_the_loader_by_key_pair(tmp_path):
+    _snowflake_project(tmp_path)
+    provider = Provider(ANALYSTS, PEM)
     dest = warehouse_destination(_ctx(tmp_path, provider, "prod"))
     assert provider.read == ["SNOWFLAKE_LOADER_PRIVATE_KEY"]
     creds = dest.config_params["credentials"]
     assert creds["username"] == "LOADER" and creds["role"] == "LOADER"
     assert creds["private_key"] == PEM and "password" not in creds
+
+
+def test_the_loader_takes_its_user_and_role_from_the_snowflake_names(tmp_path, monkeypatch):
+    _snowflake_project(tmp_path)
+    shared = partial(snowflake_names, shared_account=True)
+    monkeypatch.setattr(destination, "snowflake_names", shared)
+    spec, _ = destination.loader_connection(_ctx(tmp_path, Provider(ANALYSTS, PEM), "dev"))
+    assert spec.role == "LOADER_ACME_DEV" and spec.auth == "key_pair"
 
 
 def test_a_postgres_project_loads_with_the_loader_password(tmp_path):

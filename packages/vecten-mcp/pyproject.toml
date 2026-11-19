@@ -1,6 +1,6 @@
 [project]
 name = "vecten-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "The MCP server of Vecten Open"
 requires-python = ">=3.14"
 license = "Apache-2.0 AND OFL-1.1"
@@ -15,7 +15,7 @@ classifiers = [
     "Topic :: Database",
 ]
 dependencies = [
-    "vecten-shared==0.1.0",
+    "vecten-shared==0.1.1",
     "starlette>=1.9,<2",
     "uvicorn>=0.54,<1",
     "mcp>=2.3,<2.4",
@@ -64,3 +64,4 @@ packages = ["src/vecten_mcp"]
 "read_audit_row" = "vecten_mcp.tools:read_audit_row_tool"
 "list_grants" = "vecten_mcp.tools:list_grants_tool"
 "read_settings" = "vecten_mcp.tools:read_settings_tool"
+"list_apps" = "vecten_mcp.tools:list_apps_tool"

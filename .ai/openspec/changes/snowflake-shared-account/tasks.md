@@ -1,0 +1,82 @@
+## 1. One source for every Snowflake name (no behaviour change)
+
+- [x] 1.1 `snowflake_names(config, env)` returns the account, suffix, database, warehouse, `analyst`, `loader` and `provisioner` roles, loader and provisioner users, integration, access schema and authentication policy; with fixed names each equals today's literal
+- [x] 1.2 `vecten_platform.sync.destination.loader_connection` takes the loader's user and role from it; `SNOWFLAKE_LOADER_ROLE` goes
+- [x] 1.3 `OutputsRuntimeProvider._snowflake_warehouse` takes the analyst role, database, warehouse and account from it; `SNOWFLAKE_ANALYST_ROLE` goes
+- [x] 1.4 `vecten_mcp.runtime_setup.configured_runtime` signs in as the names' provisioner user and role, with the names' account and audience
+- [x] 1.5 `identity_setup.provisioner_script`, `snowflake_access_helper` and `_leftover_grants` take the names; `snowflake_access.js` receives the analyst role, provisioner role and suffix as baked values
+- [x] 1.6 `SnowflakeAdapter.check_scope` and `_grant` compare with the names; the CLI messages in `deploy/snowflake.py`, `deploy/run.py` and `cli/commands/deploy.py` name them
+- [x] 1.7 Tests: the fixed names equal the literals on `release/0.1.1` for several projects and environments, and every caller reads them from the function (a test that greps the runtime packages for the old literals)
+
+## 2. Terraform
+
+- [x] 2.1 `terraform/snowflake`: role names and the loader user's name become variables, with `local.roles` a map keyed by purpose; every object keeps the `vecten <project> <env>` comment
+- [x] 2.2 The scaffolded Snowflake thin root declares the new variables; `deploy` passes them with `-var` beside `database_name` and `warehouse_name`
+- [x] 2.3 `terraform test`: fixed names give today's resource names; a shared-account run gives the suffixed names; two runs with different environments share no name
+- [x] 2.4 The rendered-root static test counts the new variables
+
+## 3. The layout setting and the account per environment
+
+- [x] 3.1 `[warehouse] shared_account` in `vecten.toml` (default `false`), refused without the `platform` component; `[environments.<env>] snowflake_shared_account` recorded by `deploy`
+- [x] 3.2 `deploy` refuses an environment whose recorded layout differs from the setting, except a fixed environment alone in its account
+- [x] 3.2a The laptop records the layout once GitHub accepted the dispatch, never after a failed `gh workflow run` (part of #99; a layout missed by a run nobody follows to its end stays open there)
+- [x] 3.3 `check_tfvars`: the account comparison applies to `prod` only; fixed environments refuse a shared account; shared environments refuse a hyphen in the environment name, a suffix over 64 characters, and an account a fixed environment names
+- [x] 3.4 `generate_compose` writes the environment's account into every deployed host's Compose environment; the runtime reads it; the laptop is unchanged
+- [x] 3.5 `next` asks `snowflake_shared_account` after the Snowflake account; `answer` accepts it; `init --deploy` writes it
+- [x] 3.6 Tests: config validation, the record and its refusal, each `check_tfvars` rule, the Compose environment per host, the `next` item and its order
+
+## 4. Identities in a shared account
+
+- [x] 4.1 The provisioner script in the shared layout: suffixed roles and users, the authentication policy and `APPLY` on it, the environment's integration, comments on every object, and the stop on a foreign comment; every change inside one block that stops on a foreign owner or comment and at the first error; the provisioner and loader users signing in by key pair only (a key-pair-only policy, the provisioner's set by the script, the loader's by the Snowflake root)
+- [x] 4.2 `READ_GRANT` refuses a target whose name does not end in the environment's suffix before the ownership check, which stays the guard; its TARGET pattern (`^[A-Z][A-Z0-9_]{0,62}$` today) must admit a suffixed group role, up to 63 characters before a suffix of up to 64
+- [x] 4.3 `SnowflakeAdapter` appends the suffix when it names users and roles, strips it from `SHOW GRANTS` before registry lookups, sets the authentication policy on every user it creates, and refuses adoption in a shared account
+- [x] 4.4 `check_scope` accepts `APPLY` on the environment's policy and nothing of another environment
+- [x] 4.5 Tests: the script's statements for fixed and shared layouts (no fixed name in the shared script); `READ_GRANT` refusals; adapter names, adoption refusal and scope check against a mocked connector
+- [x] 4.6 The script, in both layouts and on every path, selects the environment's warehouse before its first statement, since its `RESULT_SCAN` checks need one and an ACCOUNTADMIN session may have none (0.1.1rc1 live check: error 000606); the owned users and roles print under a column that names when to drop them, since on a running environment they are the MCP's group roles
+
+## 5. The semantic model's database
+
+- [x] 5.1 The model loader reads a source naming the project's database as the environment's database, for source checks, compiled SQL, dataset grants and `describe`
+- [x] 5.2 Tests: one `osi/` loaded for two environments of a shared account; fixed names read as written; a source naming another database untouched
+
+## 6. Destroy
+
+- [x] 6.1 With a shared account, `destroy` lists by ownership what stays outside Terraform; `--delete-data` refuses while the provisioner owns a user or role and prints the `DROP` statements; the provisioner user is ACCOUNTADMIN-owned and carries `SERVICE_SIGN_IN`, a policy inside the environment's database, so the printed statements unset that policy and drop the user before the database goes (live check 9.4)
+- [x] 6.2 Tests: the listing from mocked `SHOW GRANTS`, no name-pattern match, the refusal and the printed statements
+
+## 7. dbt and #53
+
+- [x] 7.1 `vecten dbt --env` (#53, merged in #60) takes every connection name from `snowflake_names`
+- [x] 7.2 Test: `profile_env` for a shared-account environment carries the suffixed user and role, the database and the warehouse
+
+## 8. Docs
+
+- [x] 8.1 Runbook template: the Snowflake section per layout, the authentication policy, per-environment deploy users, data deletion's cleanup, and moving an environment into a shared account
+- [x] 8.2 `docs/mcp-identity.md`: per-environment users in a shared account, role-keyed policies, no adoption
+- [x] 8.3 `docs/GLOSSARY.md`: "Shared account" and "Environment suffix"
+- [x] 8.4 `CHANGELOG.md` under `[Unreleased]`
+
+## 9. Proven only on a live Snowflake account (the `snowflake_live` tier and a sandbox deploy)
+
+- [x] 9.1 Two `CUSTOM` External OAuth integrations with different issuers coexist in one account, and each accepts only its own issuer's tokens
+  - Live, 0.1.1rc2 on AWS: two integrations with different issuers coexist, each accepting only its own issuer's tokens.
+- [x] 9.2 An authentication policy with `SECURITY_INTEGRATIONS` naming one integration refuses a token from the other for that user
+  - Live, 0.1.1rc2 on AWS: the policy naming one integration refuses the other's token for that user.
+- [x] 9.3 A role holding `APPLY` on the policy and ownership of a user can set the policy on it, without `APPLY AUTHENTICATION POLICY` on the account
+  - Live, 0.1.1rc2 on AWS: `APPLY` on the policy plus ownership of the user sufficed.
+- [x] 9.4 What `DROP DATABASE` does while users carry a policy that the database holds
+  - Live, 0.1.1rc2 on AWS: Snowflake refuses the drop ("Cannot drop database because policy … is set on user …") and the policy stays active, so the leftovers statements are required; a second `SET` without `UNSET` is refused too.
+- [x] 9.5 An existing fixed-name sandbox environment plans empty after `vecten update`
+  - Live, 0.1.1rc1: the fixed-name sandbox planned `0 to add, 0 to change, 0 to destroy` on Snowflake after `vecten update`.
+- [ ] 9.6 Two environments in one account: `dev`'s loader key, provisioner key and MCP signing key each fail to read `prod`'s marts; `destroy --env dev --delete-data dev` leaves every `prod` object in place
+  - Not run live for 0.1.1: it needs a destroy of the sandbox, which is kept.
+- [x] 9.7 External OAuth is refused for a `TYPE = SERVICE` user carrying a key-pair-only authentication policy (`AUTHENTICATION_METHODS = ('KEYPAIR')`), so another environment's integration cannot sign in as `PROVISIONER_<BASE>_<ENV>` or `LOADER_<BASE>_<ENV>`
+  - Live, 0.1.1rc2 on AWS: External OAuth was refused for a `TYPE = SERVICE` user with a key-pair-only policy.
+- [x] 9.8 `SHOW GRANTS TO ROLE` names the provisioner's grant on the sign-in policy with `granted_on = AUTHENTICATION_POLICY` and the name `<DB>.VECTEN_ACCESS.MCP_SIGN_IN`, as `SnowflakeAdapter.check_scope` expects
+  - Live, 0.1.1rc2 on AWS: each environment's provisioner holds `APPLY`, `granted_on = AUTHENTICATION_POLICY`, on `<DB>.VECTEN_ACCESS.MCP_SIGN_IN`.
+- [x] 9.9 The shared provisioner script runs as one `EXECUTE IMMEDIATE` block: `SHOW` with `RESULT_SCAN`, `CREATE SECURITY INTEGRATION`, single-quoted procedure bodies, `UNSET RSA_PUBLIC_KEY_2` and `UNSET PASSWORD` on a service user, and the `UNSET`/`SET AUTHENTICATION POLICY` pair on a rerun; a squatted role, user or integration (another owner or comment) stops it before any change; so do a stranger holding the provisioner or analyst role (`SHOW GRANTS OF ROLE`, the correlated `RESULT_SCAN` over the provisioner's ownerships) and an access schema or sign-in policy another role owns; `EXECUTE IMMEDIATE :blocked` sets `EXTERNAL_OAUTH_BLOCKED_ROLES_LIST` to SYSADMIN and the deploy role while the privileged roles stay blocked
+  - Live, 0.1.1rc2 on AWS: first run and rerun end in `done`, every statement form included; a foreign comment on a role, user or integration, a stranger holding the provisioner role, and a sign-in policy owned by another role each stop the block before any change.
+- [ ] 9.10 The deploy role can create the loader's authentication policy and set it on the loader user it owns (the Snowflake root's `snowflake_user_authentication_policy_attachment`)
+  - Failed on rc2 (000606 reading back the attachment with no default warehouse); fixed in #120. Recheck on the first deploy of 0.1.1.
+- [x] 9.11 The fixed and the shared script each run with `snow sql -f` as an ACCOUNTADMIN with no default warehouse, to the end
+  - Live, 0.1.1rc2 on AWS: both scripts ran to their last query as ACCOUNTADMIN from a session with no warehouse.

@@ -1,4 +1,4 @@
-"""init, up, connector add, run --record, raw schema, replay, the DAG in Airflow, down."""
+"""init, connector add, up, run --record, raw schema, replay, the DAG in Airflow, down."""
 
 import json
 import os
@@ -17,7 +17,7 @@ from dotenv import dotenv_values
 
 from vecten.stack.compose import LOCAL_HTTPS_PORT, compose_project_name
 from vecten_shared.config import load_config, save_config
-from vecten_shared.provider.local import LOCAL_PG_PUBLISHED_PORT
+from vecten_shared.provider.local import local_pg_published_port
 
 from .docker_util import remove_stack_images
 
@@ -97,15 +97,18 @@ def poll(fetch, done, timeout: int, interval: float = 3):
         time.sleep(interval)
 
 
-def trigger_dag_run(api: AirflowApi) -> str:
+def unpause_for_the_first_run(api: AirflowApi) -> str:
+    """Unpausing a fresh `@daily` DAG without catchup queues a run of the latest whole interval,
+    so a fresh deploy syncs at once; that run is the one returned."""
     # The dag-processor parses the mounted dags folder every few seconds.
     dag = poll(lambda: api.get(f"/api/v2/dags/{DAG_ID}"), lambda r: r.status_code == 200, 180)
     assert dag.json()["dag_id"] == DAG_ID
     unpaused = api.request("PATCH", f"/api/v2/dags/{DAG_ID}", json={"is_paused": False})
     assert unpaused.status_code == 200, unpaused.text
-    run = api.request("POST", f"/api/v2/dags/{DAG_ID}/dagRuns", json={"logical_date": None})
-    assert run.status_code == 200, run.text
-    return run.json()["dag_run_id"]
+    runs = poll(lambda: api.get(f"/api/v2/dags/{DAG_ID}/dagRuns").json()["dag_runs"], bool, 120)
+    (run,) = runs
+    assert run["run_type"] == "scheduled", run
+    return run["dag_run_id"]
 
 
 def wait_for_dag_run(api: AirflowApi, run_id: str) -> str:
@@ -129,9 +132,6 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
     project = compose_project_name(proj, load_config(proj))
     drop_volumes(project)
     try:
-        up = vecten("up", "--json", cwd=proj)
-        assert up.returncode == 0, up.stdout + up.stderr
-
         add = vecten("connector", "add", "demo", "--from", "rest", "--json", cwd=proj)
         assert add.returncode == 0, add.stdout + add.stderr
         # The skill replaces the scaffold body; the fixture connector stands in for its work.
@@ -144,6 +144,22 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
             input="t\n",
         )
         assert set_secret.returncode == 0, set_secret.stdout + set_secret.stderr
+        # The skill declares the secret the connector reads; `up` then hands it to Airflow.
+        config = load_config(proj)
+        config.connector("demo").secrets = ["DEMO_TOKEN"]
+        save_config(proj, config)
+        dag_file = proj / "orchestration" / "dags" / f"{DAG_ID}.py"
+        assert str(dag_file.relative_to(proj)) in json.loads(add.stdout)["dags"]
+        rendered = dag_file.read_text()
+        quick = rendered.replace(
+            'schedule="@daily")', 'schedule="@daily", retry_delay=timedelta(seconds=1))'
+        )
+        assert quick != rendered
+        dag_file.write_text("from datetime import timedelta\n" + quick)
+        # The stack starts with the connector in place, so Airflow parses its DAG while the
+        # steps below run on the laptop.
+        up = vecten("up", "--json", cwd=proj)
+        assert up.returncode == 0, up.stdout + up.stderr
 
         before = vecten("raw", "schema", "demo", "--json", cwd=proj)
         assert before.returncode == 0, before.stdout + before.stderr
@@ -158,7 +174,7 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
         env = dotenv_values(proj / ".env", interpolate=False)
         with psycopg.connect(
             host="127.0.0.1",
-            port=LOCAL_PG_PUBLISHED_PORT,
+            port=local_pg_published_port(),
             user="loader",
             password=env["LOADER_PASSWORD"],
             dbname="warehouse",
@@ -206,24 +222,9 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
         )
         assert replay.returncode == 0 and "1 passed" in replay.stdout, replay.stdout + replay.stderr
 
-        # The skill declares the secret the connector reads; `up` then hands it to Airflow.
-        config = load_config(proj)
-        config.connector("demo").secrets = ["DEMO_TOKEN"]
-        save_config(proj, config)
-        dag_file = proj / "orchestration" / "dags" / f"{DAG_ID}.py"
-        assert str(dag_file.relative_to(proj)) in json.loads(add.stdout)["dags"]
-        rendered = dag_file.read_text()
-        quick = rendered.replace(
-            'schedule="@daily")', 'schedule="@daily", retry_delay=timedelta(seconds=1))'
-        )
-        assert quick != rendered
-        dag_file.write_text("from datetime import timedelta\n" + quick)
-        again = vecten("up", "--json", cwd=proj)
-        assert again.returncode == 0, again.stdout + again.stderr
-
         env = dotenv_values(proj / ".env", interpolate=False)
         with airflow_api(env) as api:
-            run_id = trigger_dag_run(api)
+            run_id = unpause_for_the_first_run(api)
             state = wait_for_dag_run(api, run_id)
             assert state == "failed"
             instances = api.get(f"/api/v2/dags/{DAG_ID}/dagRuns/{run_id}/taskInstances")
@@ -232,11 +233,9 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
             for ti in instances.json()["task_instances"]:
                 by_task.setdefault(ti["task_id"], []).append(ti["state"])
             assert Counter(by_task["sync"]) == {"failed": 1, "success": 2}, by_task
-            assert by_task["publish"] == ["success"] and by_task["check"] == ["failed"], by_task
-            # Unpausing a @daily DAG shortly after a cron fire time also queues that scheduled
-            # run; max_active_runs=1 finishes it before the triggered one, and it loads good_b too.
-            runs = api.get(f"/api/v2/dags/{DAG_ID}/dagRuns").json()["dag_runs"]
-            assert all(r["state"] in ("success", "failed") for r in runs), runs
+            assert by_task["check"] == ["failed"], by_task
+            # dbt_build schedules on the asset, which a failed object leaves unpublished.
+            assert by_task["publish"] == ["upstream_failed"], by_task
 
         # `vecten issues` reads the same failure through the local Airflow API: the object's
         # task, keyed by the rendered map index, with the log the API serves.
@@ -255,16 +254,16 @@ def test_connector_lifecycle_on_laptop_postgres(tmp_path):
 
         with psycopg.connect(
             host="127.0.0.1",
-            port=LOCAL_PG_PUBLISHED_PORT,
+            port=local_pg_published_port(),
             user="loader",
             password=env["LOADER_PASSWORD"],
             dbname="warehouse",
         ) as conn:
             # good_a's incremental cursor comes back from the warehouse, so it loads nothing new.
             assert conn.execute("select count(*) from raw_demo.good_a").fetchone()[0] == 2
-            # One row from the recorded run, then one per DAG run.
+            # One row from the recorded run, then one from the DAG run.
             good_b = conn.execute("select count(*) from raw_demo.good_b").fetchone()[0]
-            assert good_b == 1 + len(runs)
+            assert good_b == 2
     finally:
         cleanup = vecten("down", "--volumes", "--json", cwd=proj)
         drop_volumes(project)

@@ -17,5 +17,5 @@ fi
 # The local container is the minimal profile's one instance: every database lives in it.
 psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" -d postgres \
   -v with_airflow=true -v with_mcp_state="$with_mcp" -v with_warehouse=true \
-  -v with_mcp="$with_mcp" \
+  -v with_mcp="$with_mcp" -v areas="${VECTEN_AREAS:-}" \
   -f "$(dirname "${BASH_SOURCE[0]}")/vecten/warehouse_setup.sql"

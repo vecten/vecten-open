@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from unittest import mock
 
 from vecten_platform.dbt.profile import profile_env
 from vecten_shared.config import VectenConfig
@@ -170,6 +171,33 @@ def disposable_postgres(
 
 
 @contextmanager
+def _emulated_dbt_snowflake() -> Iterator[None]:
+    """Fits dbt-snowflake in this process to what the emulation serves.
+
+    The emulation has one warehouse and no `current_warehouse()`, which dbt-snowflake calls
+    to switch to a model's `snowflake_warehouse`, so no model switches. It accepts
+    `CREATE DYNAMIC TABLE` but not the statements dbt-snowflake follows it with, so a dynamic
+    table is built as a table of the same name. dbt in another process, as under Airflow,
+    keeps both.
+    """
+    from dbt.adapters.snowflake import SnowflakeAdapter
+    from dbt.contracts.graph.manifest import Manifest
+
+    find = Manifest.find_materialization_macro_by_name
+
+    def table_for_dynamic_table(manifest, project_name, materialization_name, adapter_type):
+        if materialization_name == "dynamic_table":
+            materialization_name = "table"
+        return find(manifest, project_name, materialization_name, adapter_type)
+
+    with (
+        mock.patch.object(SnowflakeAdapter, "pre_model_hook", lambda adapter, config: None),
+        mock.patch.object(Manifest, "find_materialization_macro_by_name", table_for_dynamic_table),
+    ):
+        yield
+
+
+@contextmanager
 def snowflake_emulation(
     workdir: Path, *, database: str = DEFAULT_DATABASE
 ) -> Iterator[LocalTarget]:
@@ -199,7 +227,7 @@ def snowflake_emulation(
     level = sqlglot_log.level
     sqlglot_log.setLevel(logging.ERROR)
     try:
-        with fakesnow.patch(db_path=db_path):
+        with fakesnow.patch(db_path=db_path), _emulated_dbt_snowflake():
             yield LocalTarget(
                 kind="snowflake",
                 spec=spec,

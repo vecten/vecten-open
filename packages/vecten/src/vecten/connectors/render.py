@@ -28,8 +28,16 @@ def scaffold_hash(connector_py: str) -> str:
     return hashlib.sha256(connector_py.encode("utf-8")).hexdigest()
 
 
-def render_dag_file(name: str, group: str, objects: list[str]) -> str:
-    return _ENV.get_template("sync_dag.py.j2").render(name=name, group=group, objects=objects)
+def render_dag_file(
+    name: str,
+    group: str,
+    objects: list[str],
+    schedule: str = "@daily",
+    timezone: str | None = None,
+) -> str:
+    return _ENV.get_template("sync_dag.py.j2").render(
+        name=name, group=group, objects=objects, schedule=schedule, timezone=timezone
+    )
 
 
 def _write(target: Path, files: dict[str, str]) -> None:

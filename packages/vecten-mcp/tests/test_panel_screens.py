@@ -163,6 +163,81 @@ def test_grants_and_reconcile_from_the_access_screen(panel):
     assert post(panel, "/admin/access/reconcile", {}).status_code == 303
 
 
+def test_an_area_is_granted_from_the_access_screen(panel):
+    panel.runtime.access.areas = frozenset({"finance"})
+    page = panel.http.get("/admin/access").text
+    assert re.search(r'<option[^>]*value="area"', page)
+    response = post(
+        panel,
+        "/admin/access/grant",
+        {"group": "default", "kind": "area", "target": "finance", "action": "grant"},
+    )
+    assert response.status_code == 303
+    assert ("schema", "analyst", "marts_finance", True) in panel.adapter.operations
+    assert re.search(r"default\s+area\s+finance", text(panel.http.get("/admin/access")))
+
+
+def test_a_group_is_created_with_a_role_and_binds_an_existing_one(panel):
+    adapter = panel.adapter
+    adapter.bind_statement = lambda bound, role, grant=True: (
+        f"{'GRANT' if grant else 'REVOKE'} {bound} {role}"
+    )
+    adapter.review_statement = lambda bound: f"SHOW {bound}"
+    adapter.bound_role_problem = lambda bound, managed: None
+    held = set()
+    adapter.holds_role = lambda role, bound: (role, bound) in held
+    response = post(
+        panel,
+        "/admin/groups/create",
+        {"name": "finance", "role": "fin_readers"},
+        origin="/admin/users",
+    )
+    assert response.status_code == 303
+    assert panel.runtime.state.group("finance")["warehouse_role"] == "fin_readers"
+    response = post(
+        panel,
+        "/admin/groups/bind",
+        {"group": "finance", "role": "finance_analyst"},
+        origin="/admin/users",
+    )
+    assert response.status_code == 200
+    page = text(response)
+    assert "GRANT finance_analyst fin_readers" in page and "SHOW finance_analyst" in page
+    assert re.search(
+        r"finance\s+fin_readers\s+finance_analyst \(pending\)", text(panel.http.get("/admin/users"))
+    )
+    held.add(("fin_readers", "finance_analyst"))
+    response = post(panel, "/admin/groups/finance/confirm", {}, origin="/admin/users")
+    assert response.status_code == 303
+    assert "finance_analyst (confirmed)" in text(panel.http.get("/admin/users"))
+    response = post(panel, "/admin/groups/finance/unbind", {}, origin="/admin/users")
+    assert response.status_code == 200
+    assert "REVOKE finance_analyst fin_readers" in text(response)
+    assert panel.runtime.state.get("bindings", "finance") is None
+
+
+def test_a_revoke_the_warehouse_refuses_is_named_on_the_access_screen(panel):
+    panel.runtime.access.grant("default", "schema", "staging")
+    adapter = panel.adapter
+    original = adapter.schema_grant
+
+    def refuse(role, schema, grant=True):
+        if not grant:
+            raise RuntimeError("the target still holds SELECT in D.STAGING")
+        return original(role, schema, grant)
+
+    adapter.schema_grant = refuse
+    response = post(
+        panel,
+        "/admin/access/grant",
+        {"group": "default", "kind": "schema", "target": "staging", "action": "revoke"},
+        origin="/admin/access",
+    )
+    assert response.status_code == 303
+    page = text(panel.http.get(response.headers["location"]))
+    assert "refused the revoke" in page and "Grant revoked." not in page
+
+
 def test_denying_a_column_hides_it_from_the_next_describe(panel):
     response = post(
         panel, "/admin/access/denied", {"group": "default", "columns": "orders.email\r\n"}
@@ -283,6 +358,25 @@ def test_changing_retention_drives_audit_expiry(panel, monkeypatch):
 def test_redaction_toggle_is_saved_as_a_boolean(panel):
     post(panel, "/admin/settings", {"key": "redact", "value": "true"}, origin="/admin/settings")
     assert panel.runtime.state.get("settings", "redact") == {"value": True}
+
+
+def test_reconcile_drift_is_chosen_from_its_two_values(panel):
+    page = panel.http.get("/admin/settings").text
+    assert '<option value="report"' in page and '<option value="revoke"' in page
+    post(
+        panel,
+        "/admin/settings",
+        {"key": "reconcile_drift", "value": "report"},
+        origin="/admin/settings",
+    )
+    assert panel.runtime.state.get("settings", "reconcile_drift") == {"value": "report"}
+    response = post(
+        panel,
+        "/admin/settings",
+        {"key": "reconcile_drift", "value": "ignore"},
+        origin="/admin/settings",
+    )
+    assert response.status_code == 400
 
 
 def test_invalid_setting_is_refused(panel):

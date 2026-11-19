@@ -9,6 +9,9 @@ group = typer.Typer(help="MCP groups and membership.")
 @group.command("add")
 def add(
     name: str | None = typer.Argument(None),
+    role: str | None = typer.Option(
+        None, "--role", help="The warehouse role to create for the group; its name by default."
+    ),
     env: str = typer.Option("prod", "--env"),
     json_output: bool = JsonFlag,
 ):
@@ -19,8 +22,69 @@ def add(
             raise Failure(ExitCode.USAGE, "group add needs a name")
         client = AdminClient(ctx.require_project(), env)
         existing = next((g for g in client.call("groups") if g["name"] == name), None)
-        data = existing or client.call("groups/create", {"name": name})
+        request = {"name": name, **({"role": role} if role else {})}
+        data = existing or client.call("groups/create", request)
         return Result(data=data, message=f"Group {name} is available.")
+
+    run_command(json_output, run)
+
+
+@group.command("bind")
+def bind(
+    name: str | None = typer.Argument(None),
+    role: str | None = typer.Argument(None, help="A role the warehouse already has."),
+    confirm: bool = typer.Option(
+        False, "--confirm", help="Record the binding once an administrator ran the statement."
+    ),
+    env: str = typer.Option("prod", "--env"),
+    json_output: bool = JsonFlag,
+):
+    def run(ctx):
+        from vecten.mcp_client import AdminClient
+
+        if not name or not role:
+            raise Failure(ExitCode.USAGE, "group bind needs a group and an existing role")
+        client = AdminClient(ctx.require_project(), env)
+        data = client.call("groups/bind", {"group": name, "role": role})
+        if confirm:
+            data = client.call("groups/confirm", {"group": name})
+            return Result(data=data, message=f"Group {name} reads through {role}.")
+        if data.get("confirmed"):
+            return Result(
+                data=data,
+                message=(
+                    f"The binding of {role} to {name} is confirmed. If the grant is gone, a "
+                    f"warehouse administrator runs: {data['statement']}"
+                ),
+            )
+        return Result(
+            data=data,
+            message=(
+                f"Review what {role} reads first: {data['review']}\n"
+                f"Then a warehouse administrator runs: {data['statement']}\n"
+                f"Then record it: vecten group bind {name} {role} --confirm --env {env}"
+            ),
+        )
+
+    run_command(json_output, run)
+
+
+@group.command("unbind")
+def unbind(
+    name: str | None = typer.Argument(None),
+    env: str = typer.Option("prod", "--env"),
+    json_output: bool = JsonFlag,
+):
+    def run(ctx):
+        from vecten.mcp_client import AdminClient
+
+        if not name:
+            raise Failure(ExitCode.USAGE, "group unbind needs a group")
+        data = AdminClient(ctx.require_project(), env).call("groups/unbind", {"group": name})
+        return Result(
+            data=data,
+            message=f"Binding forgotten. A warehouse administrator runs: {data['statement']}",
+        )
 
     run_command(json_output, run)
 

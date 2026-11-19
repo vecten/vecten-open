@@ -26,6 +26,11 @@ class ModelNotReady(ToolError):
         )
 
 
+class AppReadsNothing(ToolError, ValueError):
+    """An app principal's query that its own roles or admission stop; the app's operator
+    fixes it with `vecten app connect` or a grant, so the reason is shown."""
+
+
 class NoWarehouseAccess(ToolError):
     """The caller's own account state, so telling them reveals nothing about the server."""
 

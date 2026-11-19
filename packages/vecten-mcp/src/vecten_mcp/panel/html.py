@@ -20,6 +20,7 @@ NAV = (
     ("/admin/access", "Grants and deny lists"),
     ("/admin/model", "Model"),
     ("/admin/analytics", "Usage"),
+    ("/admin/apps", "Analytics"),
     ("/admin/gaps", "Gaps"),
     ("/admin/audit", "Audit"),
     ("/admin/clients", "Connected clients"),
@@ -91,7 +92,7 @@ def form(action, csrf, *parts, button="Save", method="post", class_=None):
     )
 
 
-def layout(title, body, *, csrf=None, status=200, nav=True, notice=None):
+def layout(title, body, *, csrf=None, status=200, nav=True, notice=None, brand="Vecten admin"):
     menu = ""
     if nav:
         items = join(*(tag("li", link(href, text)) for href, text in NAV))
@@ -101,8 +102,8 @@ def layout(title, body, *, csrf=None, status=200, nav=True, notice=None):
     page = (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{esc(title)} · Vecten admin</title>{STYLESHEET}</head>"
-        f'<body class="panel"><header><p class="brand">{LOGO}Vecten admin</p>{menu}</header>'
+        f"<title>{esc(title)} · {esc(brand)}</title>{STYLESHEET}</head>"
+        f'<body class="panel"><header><p class="brand">{LOGO}{esc(brand)}</p>{menu}</header>'
         f"<main><h1>{esc(title)}</h1>{message}{esc(body)}</main></body></html>"
     )
     return HTMLResponse(page, status_code=status, headers=HEADERS)

@@ -274,9 +274,9 @@ one check only the server can make: that every dataset `source` table exists in 
 
 Model health is on the [admin panel](admin-panel.md)'s Model screen and in the `model_health`
 admin tool; the admin API serves the same answer at
-`GET https://mcp.<domain>/api/admin/model-health`, where `<domain>` is
-`[deploy] domain` in `vecten.toml`, sending an administrator's access token as
-`Authorization: Bearer <token>`. `vecten login` stores that token as `access_token` under the
+`GET https://mcp.<domain>/api/admin/model-health`, where `<domain>` is the environment's
+`domain` in `deploy/envs/<env>.tfvars` (for `prod`, `[deploy] domain` in `vecten.toml`), sending
+an administrator's access token as `Authorization: Bearer <token>`. `vecten login` stores that token as `access_token` under the
 server's address in `~/.config/vecten/tokens.json` (`$XDG_CONFIG_HOME/vecten/tokens.json` when
 that variable is set). It lasts an hour; any `vecten user` command, such as `vecten user list`,
 refreshes an expired one. Administrators are the people listed under `[mcp] admins` in

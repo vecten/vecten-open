@@ -1,9 +1,10 @@
-"""Panel sign-in through the server's own authorization code flow, and its session cookie."""
+"""Sign-in through the server's own authorization code flow, and its session cookie, for the
+admin panel under /admin and for the apps page under /apps."""
 
 import secrets
 from urllib.parse import urlencode
 
-from vecten_mcp.auth.identity import challenge, digest
+from vecten_mcp.auth.identity import challenge, cookie_name, cookie_value, digest
 from vecten_mcp.auth.service import Resolved
 
 PANEL_CLIENT = "vecten-admin-panel"
@@ -16,8 +17,23 @@ LOOPBACK_REDIRECTS = 4
 
 
 class PanelSessions:
-    def __init__(self, oauth):
+    def __init__(
+        self,
+        oauth,
+        *,
+        base="/admin",
+        client_id=PANEL_CLIENT,
+        client_name="Vecten admin panel",
+        cookie=SESSION_COOKIE,
+        login_cookie=LOGIN_COOKIE,
+        kind="panel",
+    ):
         self.oauth, self.state = oauth, oauth.state
+        # Each surface signs in through its own client, cookies and state kinds, so a
+        # session on one is never a session on the other.
+        self.base, self.client_id, self.client_name = base, client_id, client_name
+        self.session_cookie, self.login_cookie = cookie, login_cookie
+        self.sessions, self.logins = f"{kind}_sessions", f"{kind}_logins"
 
     def origin(self, request):
         # A browser reaches the panel either at the issuer or, with /admin off the public
@@ -28,10 +44,10 @@ class PanelSessions:
         return self.oauth.issuer
 
     def client(self, redirect):
-        issuer_redirect = self.oauth.issuer + "/admin/callback"
-        client = self.state.get("clients", PANEL_CLIENT) or dict(
-            client_id=PANEL_CLIENT,
-            client_name="Vecten admin panel",
+        issuer_redirect = self.oauth.issuer + self.base + "/callback"
+        client = self.state.get("clients", self.client_id) or dict(
+            client_id=self.client_id,
+            client_name=self.client_name,
             redirect_uris=[],
             token_endpoint_auth_method="none",
             grant_types=["authorization_code"],
@@ -43,26 +59,35 @@ class PanelSessions:
         loopback = [redirect] if redirect != issuer_redirect else []
         uris = [issuer_redirect, *loopback, *others[: LOOPBACK_REDIRECTS - len(loopback)]]
         if uris != client["redirect_uris"]:
-            self.state.put("clients", PANEL_CLIENT, {**client, "redirect_uris": uris})
+            self.state.put("clients", self.client_id, {**client, "redirect_uris": uris})
+
+    def attributes(self, name, origin):
+        # On HTTPS the __Host- prefix keeps a sibling hostname from planting a login nonce or a
+        # session, and requires Path=/; the cookie names keep the two surfaces apart. A plain
+        # HTTP tunnel cannot hold a Secure cookie, so there the path scopes it instead.
+        secure = origin.startswith("https:")
+        return cookie_name(name, secure), dict(
+            path="/" if secure else self.base, secure=secure, httponly=True, samesite="strict"
+        )
 
     def cookie(self, response, name, value, max_age, origin):
-        response.set_cookie(
-            name,
-            value,
-            max_age=max_age,
-            path="/admin",
-            secure=origin.startswith("https:"),
-            httponly=True,
-            samesite="strict",
-        )
+        key, attributes = self.attributes(name, origin)
+        response.set_cookie(key, value, max_age=max_age, **attributes)
+
+    def clear(self, response, name, origin):
+        key, attributes = self.attributes(name, origin)
+        response.delete_cookie(key, **attributes)
+
+    def read(self, request, name):
+        return cookie_value(request, self.attributes(name, self.origin(request))[0])
 
     def begin(self, request):
         origin = self.origin(request)
-        redirect = origin + "/admin/callback"
+        redirect = origin + self.base + "/callback"
         self.client(redirect)
         verifier, state, nonce = (secrets.token_urlsafe(48) for _ in range(3))
         self.state.put(
-            "panel_logins",
+            self.logins,
             digest(nonce),
             {"verifier": verifier, "state": state, "redirect_uri": redirect},
             expires_at=self.oauth.clock() + LOGIN_SECONDS,
@@ -70,7 +95,7 @@ class PanelSessions:
         query = urlencode(
             {
                 "response_type": "code",
-                "client_id": PANEL_CLIENT,
+                "client_id": self.client_id,
                 "redirect_uri": redirect,
                 "code_challenge": challenge(verifier),
                 "code_challenge_method": "S256",
@@ -82,14 +107,14 @@ class PanelSessions:
 
     def finish(self, request):
         """Exchange the code and return the caller; raises ValueError on any mismatch."""
-        nonce = request.cookies.get(LOGIN_COOKIE, "")
-        pending = self.state.take("panel_logins", digest(nonce), now=self.oauth.clock())
+        nonce = self.read(request, self.login_cookie)
+        pending = self.state.take(self.logins, digest(nonce), now=self.oauth.clock())
         supplied = request.query_params.get("state", "")
         if not pending or not secrets.compare_digest(supplied, pending["state"]):
             raise ValueError("sign-in expired or was started elsewhere")
         tokens = self.oauth.exchange(
             request.query_params.get("code", ""),
-            PANEL_CLIENT,
+            self.client_id,
             pending["redirect_uri"],
             pending["verifier"],
             self.oauth.resource,
@@ -103,7 +128,7 @@ class PanelSessions:
         ends = session.get("expires_at", self.oauth.clock())
         expires = min(self.oauth.clock() + SESSION_SECONDS, ends)
         self.state.put(
-            "panel_sessions",
+            self.sessions,
             digest(token),
             {
                 "sid": caller.session_id,
@@ -116,9 +141,9 @@ class PanelSessions:
 
     def current(self, request):
         """The caller and session record, re-read from state on every request."""
-        key = digest(request.cookies.get(SESSION_COOKIE, ""))
+        key = digest(self.read(request, self.session_cookie))
         now = self.oauth.clock()
-        record = self.state.get("panel_sessions", key, now=now)
+        record = self.state.get(self.sessions, key, now=now)
         if not record:
             return None
         session = self.state.get("sessions", record["sid"], now=now)
@@ -129,7 +154,7 @@ class PanelSessions:
             or not principal["enabled"]
             or session["principal_id"] != principal["id"]
         ):
-            self.state.remove("panel_sessions", key)
+            self.state.remove(self.sessions, key)
             return None
         caller = Resolved(
             principal,
@@ -144,5 +169,5 @@ class PanelSessions:
         return secrets.compare_digest(str(form.get("csrf", "")), record["csrf"])
 
     def close(self, record):
-        self.state.remove("panel_sessions", record["key"])
+        self.state.remove(self.sessions, record["key"])
         self.oauth.revoke(record["sid"])

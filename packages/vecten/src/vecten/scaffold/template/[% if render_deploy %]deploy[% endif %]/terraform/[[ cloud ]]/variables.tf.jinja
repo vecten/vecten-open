@@ -18,6 +18,11 @@ variable "platform_size" {
   default = null
 }
 
+variable "root_volume_size_gb" {
+  type    = number
+  default = null
+}
+
 variable "instance_type_overrides" {
   type    = map(string)
   default = null
@@ -37,6 +42,20 @@ variable "log_line_prefix" {
 [%- endif %]
 
 variable "destroying" {
+  type    = bool
+  default = null
+}
+
+# `vecten deploy` sets it from the hostnames vecten.toml binds; each label gets a DNS record.
+variable "service_hostnames" {
+  type    = map(string)
+  default = {}
+}
+
+# Read by `vecten ship`, which renders the hosts' Airflow from it; the module takes no such
+# input, and the declaration keeps the plan free of an undeclared-variable warning.
+# tflint-ignore: terraform_unused_declarations
+variable "dags_paused_at_creation" {
   type    = bool
   default = null
 }

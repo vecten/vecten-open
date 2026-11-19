@@ -27,5 +27,7 @@ contracts). Python 3.14 and uv.
   change starts there. The glossary is docs/GLOSSARY.md.
 - A code comment states the constraint that makes the code correct, never the change
   history.
+- Branch from the open release/<version> branch and open pull requests against it; main
+  takes only release/ and hotfix/ merges. CONTRIBUTING.md has the branch and release rules.
 - Never commit secrets. The maintainer merges; deployments and publication need explicit
   approval.

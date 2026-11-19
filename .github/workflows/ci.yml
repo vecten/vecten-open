@@ -2,7 +2,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -59,6 +59,11 @@ jobs:
   browser-auth:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # The image carries Chromium, WebKit and their system libraries, so the job installs
+    # nothing from apt. It holds one Playwright release's browser builds only, so the versions
+    # table pins it at the playwright version uv.lock resolves.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.64.1-noble@sha256:330d401ae23c905896a0c26c66c36fc971b621519e7b11b435a8328d7bf6e031
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -66,7 +71,6 @@ jobs:
           enable-cache: true
       - run: uv python install 3.14
       - run: uv sync --locked --all-packages --group browser
-      - run: uv run --group browser playwright install --with-deps chromium webkit
       - run: uv run --group browser pytest packages/vecten-mcp/tests/test_oauth_browser.py packages/vecten/tests/test_eval_harness_person_tools.py -q
 
   render-matrix:
@@ -105,22 +109,49 @@ jobs:
       fail-fast: false
       matrix:
         # The longest e2e tests each get a runner; every other docker or network test, including
-        # any new one, falls to the two `rest` halves. Each runner has its own ports, so the
-        # stack tests, which publish fixed ones, never meet.
+        # any new one, falls to the four `rest` quarters. Each runner has its own ports, so the
+        # stack tests, which publish fixed ones, never meet. `images` names the versions-table
+        # images the part's tests pull; `build` marks the parts whose tests build the two base
+        # images.
         include:
           - part: connector
+            build: true
             tests: packages/vecten/tests/test_connector_e2e.py
+            images: airflow mcp_base postgres nginx log_cleaner
           - part: pipeline
+            build: true
             tests: packages/vecten/tests/test_laptop_pipeline_e2e.py
+            images: airflow mcp_base postgres nginx log_cleaner
+          - part: up
+            build: true
+            tests: >-
+              packages/vecten/tests/test_up_e2e.py
+              packages/vecten/tests/test_services_up_docker.py
+              packages/vecten/tests/test_gate_up_docker.py
+              packages/vecten/tests/test_apps_docker.py
+            images: airflow mcp_base postgres nginx log_cleaner
           - part: images
+            build: true
             tests: >-
               packages/vecten-platform/tests/test_sync_dag_in_image.py
               packages/vecten-platform/tests/test_dbt_dag_in_image.py
-              packages/vecten/tests/test_up_e2e.py
+              packages/vecten/tests/test_extension_images_docker.py
+              packages/vecten/tests/test_component_dependencies_docker.py
+              packages/vecten/tests/test_in_repo_images_docker.py
+              packages/vecten/tests/test_git_sources_images_docker.py
+            images: airflow mcp_base
           - part: rest-1
-            tests: --shard 1/2 $REST
+            tests: --shard 1/4 $REST
+            images: postgres mcp_base nginx
           - part: rest-2
-            tests: --shard 2/2 $REST
+            tests: --shard 2/4 $REST
+            images: postgres mcp_base nginx
+          - part: rest-3
+            tests: --shard 3/4 $REST
+            images: postgres mcp_base nginx
+          - part: rest-4
+            tests: --shard 4/4 $REST
+            images: postgres mcp_base nginx
     env:
       REST: >-
         packages/vecten-shared/tests packages/vecten-mcp/tests
@@ -128,17 +159,40 @@ jobs:
         --ignore=packages/vecten/tests/test_connector_e2e.py
         --ignore=packages/vecten/tests/test_laptop_pipeline_e2e.py
         --ignore=packages/vecten/tests/test_up_e2e.py
+        --ignore=packages/vecten/tests/test_services_up_docker.py
+        --ignore=packages/vecten/tests/test_gate_up_docker.py
+        --ignore=packages/vecten/tests/test_apps_docker.py
+        --ignore=packages/vecten/tests/test_extension_images_docker.py
+        --ignore=packages/vecten/tests/test_component_dependencies_docker.py
+        --ignore=packages/vecten/tests/test_in_repo_images_docker.py
+        --ignore=packages/vecten/tests/test_git_sources_images_docker.py
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The pulls run while uv sets up, and the tests find the images in place.
+      - name: Pull the part's images in the background
+        run: |
+          (
+            for image in $(python3 scripts/ci_images.py ${{ matrix.images }}); do
+              docker pull -q "$image" &
+            done
+            wait
+            touch "$RUNNER_TEMP/pulled"
+          ) > "$RUNNER_TEMP/pull.log" 2>&1 &
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
       - run: uv python install 3.14
       - run: uv sync --locked --all-packages
       - run: docker info
-      # The local stack binds 127.0.0.1:55432, which a holder outside the tests occasionally
-      # takes; only root sees docker-proxy's process. Logged before the tests and again on
-      # failure, since an earlier test's stack in the same run can hold it too.
+      # The build waits on its base image's pull; Docker fetches each layer once for both.
+      - name: Build the base images
+        if: matrix.build
+        run: uv run vecten dev build-images --json
+      # A pull that failed here is retried by the test that needs the image.
+      - name: Wait for the image pulls
+        run: |
+          until [ -e "$RUNNER_TEMP/pulled" ]; do sleep 1; done
+          cat "$RUNNER_TEMP/pull.log"
       - name: Who holds port 55432
         run: |
           sudo ss -ltnp 'sport = :55432'
@@ -149,3 +203,17 @@ jobs:
         run: |
           sudo ss -ltnp 'sport = :55432'
           docker ps -a --format '{{.ID}} {{.Names}} {{.Status}} {{.Ports}}'
+
+  # The check the rulesets require of this workflow: a matrix job reports under one name per
+  # matrix entry. `always()` makes it run after a failed job, where a skipped check would pass.
+  required:
+    if: always()
+    needs: [lint, test, browser-auth, render-matrix, laptop-e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          [[ ! "$RESULTS" =~ failure|cancelled ]]

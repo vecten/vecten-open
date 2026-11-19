@@ -3028,7 +3028,7 @@ wheels = [
 
 [[package]]
 name = "vecten"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/vecten" }
 dependencies = [
     { name = "copier" },
@@ -3065,7 +3065,7 @@ requires-dist = [
 
 [[package]]
 name = "vecten-mcp"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/vecten-mcp" }
 dependencies = [
     { name = "argon2-cffi" },
@@ -3135,7 +3135,7 @@ dev = [
 
 [[package]]
 name = "vecten-platform"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/vecten-platform" }
 dependencies = [
     { name = "dbt-core" },
@@ -3162,7 +3162,7 @@ requires-dist = [
 
 [[package]]
 name = "vecten-shared"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/vecten-shared" }
 dependencies = [
     { name = "boto3" },
@@ -3174,6 +3174,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "sqlglot" },
     { name = "tomli-w" },
+    { name = "tomlkit" },
 ]
 
 [package.metadata]
@@ -3187,6 +3188,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "sqlglot", specifier = ">=30.22,<30.23" },
     { name = "tomli-w", specifier = ">=1.1,<2" },
+    { name = "tomlkit", specifier = ">=0.15,<1" },
 ]
 
 [[package]]

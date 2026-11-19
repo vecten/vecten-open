@@ -113,6 +113,7 @@ def test_renamed_field(invoke, tmp_path, monkeypatch):
     monkeypatch.setattr(feedback_mod, "get_gh", lambda: repo.gh)
     monkeypatch.setattr(gh_mod, "get_gh", lambda: repo.gh)
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/data")
     monkeypatch.setenv("VECTEN_TERRAFORM_RUNNER", f"{__name__}:RecordingTerraform")
     RecordingTerraform.created = 0
 

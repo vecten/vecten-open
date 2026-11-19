@@ -1,7 +1,7 @@
 {#- A core model's primary key is a column carrying both the unique and the not_null test. -#}
 {%- set violations = [] -%}
 {%- for node in vecten_convention.convention_models() -%}
-    {%- if node.resource_type == 'model' and (node.schema | lower) == 'core' -%}
+    {%- if node.resource_type == 'model' and vecten_convention.convention_layer(node.schema) == 'core' -%}
         {%- set tests_by_column = {} -%}
         {%- for test in graph.nodes.values() -%}
             {%- if test.resource_type == 'test' and test.attached_node == node.unique_id and test.column_name

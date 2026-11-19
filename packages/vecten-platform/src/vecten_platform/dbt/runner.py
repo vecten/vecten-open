@@ -7,7 +7,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,10 +20,43 @@ log = logging.getLogger(__name__)
 
 # The convention's singular tests inspect the whole built graph, so they run after the build.
 _CONVENTION_TESTS = f"package:{CONVENTION_PACKAGE},test_type:singular"
-BUILD_STEP = ("build", "--exclude", _CONVENTION_TESTS)
+
+
+def selectors(value: str | Sequence[str]) -> list[str]:
+    """dbt node selectors from a space-separated string or a list, as `--select` takes them.
+
+    A run parameter reaches dbt's argument list, so a token that dbt would read as a flag of
+    its own is refused rather than passed on.
+    """
+    tokens = value.split() if isinstance(value, str) else [t for v in value for t in v.split()]
+    flags = [token for token in tokens if token.startswith("-")]
+    if flags:
+        raise ValueError(f"a dbt selector does not start with '-': {', '.join(flags)}")
+    return tokens
+
+
+def build_args(
+    select: str | Sequence[str] = (),
+    exclude: str | Sequence[str] = (),
+    *,
+    full_refresh: bool = False,
+) -> tuple[str, ...]:
+    """`dbt build` over `select` (every node when empty) less `exclude` and the convention tests."""
+    args = ["build"]
+    if chosen := selectors(select):
+        args += ["--select", *chosen]
+    args += ["--exclude", _CONVENTION_TESTS, *selectors(exclude)]
+    if full_refresh:
+        args.append("--full-refresh")
+    return tuple(args)
+
+
+BUILD_STEP = build_args()
 CONVENTION_STEP = ("test", "--select", _CONVENTION_TESTS)
 _BUILD_STEPS = (BUILD_STEP, CONVENTION_STEP)
 _FAILED_STATUSES = {"error", "fail", "runtime error"}
+# The convention tests read the areas `vecten.toml` declares from this dbt var.
+AREAS_VAR = "vecten_areas"
 # `dbt_project.yml` reads its `osi-paths` entry from this variable and falls back to `../osi`.
 OSI_PATH_VAR = "VECTEN_OSI_PATH"
 TAIL_CHARS = 2000
@@ -45,9 +78,15 @@ def dbt_argv(args: list[str]) -> list[str]:
     return [sys.executable, "-c", _DBT_MAIN, *args]
 
 
-def base_env(project_dir: Path, profile: dict[str, str]) -> dict[str, str]:
-    """dbt reads the root `osi/` unless a caller points `OSI_PATH_VAR` elsewhere explicitly."""
-    inherited = {k: v for k, v in os.environ.items() if k != OSI_PATH_VAR}
+def base_env(
+    project_dir: Path, profile: dict[str, str], inherited: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """dbt reads the root `osi/` unless a caller points `OSI_PATH_VAR` elsewhere explicitly.
+
+    `inherited` is the environment passed on beneath the settings here, `os.environ` by default.
+    """
+    source = os.environ if inherited is None else inherited
+    inherited = {k: v for k, v in source.items() if k != OSI_PATH_VAR}
     return {
         **inherited,
         "DBT_PROJECT_DIR": str(project_dir),
@@ -121,9 +160,22 @@ def dbt_step(
     return run_dbt(args, project_dir=project_dir, env=env)
 
 
-def run_build(*, project_dir: Path, env: dict[str, str], in_process: bool) -> list[DbtRun]:
+def area_vars(areas: Iterable[str]) -> tuple[str, ...]:
+    """The `--vars` that pass the declared areas to dbt; none for a project without areas.
+
+    Every dbt step vecten runs for a project passes the same vars, since dbt re-parses the
+    whole project when they change.
+    """
+    names = sorted(areas)
+    return ("--vars", json.dumps({AREAS_VAR: names})) if names else ()
+
+
+def run_build(
+    *, project_dir: Path, env: dict[str, str], in_process: bool, areas: Iterable[str] = ()
+) -> list[DbtRun]:
     runs: list[DbtRun] = []
     for args in _BUILD_STEPS:
+        args = (*args, *area_vars(areas))
         run = dbt_step(list(args), project_dir=project_dir, env=env, in_process=in_process)
         runs.append(run)
         if run.returncode != 0:

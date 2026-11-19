@@ -12,7 +12,8 @@ what it says, or read `skills/guide/SKILL.md`.
 ## Schema convention, version [[ convention_version ]]
 
 [% if 'platform' in components %]The full text is `docs/schema-convention.md`; read it before
-writing a model. Schemas: `raw_<source>`, `staging`, `snapshots`, `core`, `marts`. Models:
+writing a model. Schemas: `raw_<source>`, `staging`, `snapshots`, `core`, `marts`, and
+`core_<area>` and `marts_<area>` for each restricted area `vecten.toml` declares. Models:
 `staging_<source>_<entity>`, `snapshot_<source>_<entity>`, core entities as singular nouns
 (`company`, `contact`, `deal`), marts prefixed by domain (`sales_pipeline`). Lowercase, single
 underscores, no leading digit. Rules no test can check: full words, never abbreviations, and
@@ -21,13 +22,17 @@ adds `_loaded_at` and `_source`; one snapshot per staging model, `check` strateg
 columns only; core reads the snapshots' current rows; marts are built from core and carry a domain
 prefix. Every core and mart model and column has a description in `schema.yml`. Every core entity
 declares a primary key tested `unique` and `not_null`; every mart declares one too, the same way
-or as a composite key under `meta.osi.primary_key`. Use `vecten_convention.normalize_domain`,
+or as a composite key under `meta.osi.primary_key`. An area's models follow their layer's rules,
+and a core model whose rows the default group must not read goes to `core_<area>`. No model,
+snapshot or seed sets dbt's `grants` config. Use `vecten_convention.normalize_domain`,
 `normalize_email` and `add_days` rather than writing those expressions by hand.
 
 The build runs in two steps, because the convention tests read the built graph:
 `dbt build --exclude package:vecten_convention,test_type:singular`, then
 `dbt test --select package:vecten_convention,test_type:singular`. `vecten dbt-build-local` and the
-`dbt_build` DAG run both; `vecten dbt build` forwards only what you pass it.
+`dbt_build` DAG run both; `vecten dbt build` forwards only what you pass it, plus the areas
+`vecten.toml` declares as the dbt var `vecten_areas`, which plain `dbt` needs as
+`--vars '{"vecten_areas": ["finance"]}'`.
 [% else %]The full text is `docs/schema-convention.md`. This project runs only the MCP over an
 existing warehouse: the convention's dbt rules apply to whoever builds that warehouse, and its
 rules for `osi/` apply here.

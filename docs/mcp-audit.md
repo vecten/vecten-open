@@ -69,7 +69,8 @@ primary key is `(id, at)`. The server generates a fresh ID for each invocation.
 | `duration_ms` | Invocation duration in milliseconds, including audit preparation. |
 | `error_class` | Exception class, without exception messages or driver credentials; null for successful calls. |
 | `resolution` | `compiled`, `agent_sql`, `refused`, or `error`. Successful non-SQL tools use `compiled`; `sql-exec` uses `agent_sql`. |
-| `refusal_reason` | Present for explicit refusals, such as `join_required` or `tool_not_available`. |
+| `refusal_reason` | Present for explicit refusals, such as `join_required`, `tool_not_available`, or `app_scope` (an analytics app's principal reached outside its declared datasets). |
+| `on_behalf_of` | Present only on an analytics app principal's calls that send `X-Vecten-On-Behalf-Of`: the viewer's email as the app passed it. Recorded, never used to decide access. |
 | `redacted` | Whether the global toggle or a denied-column value caused redaction. |
 
 One record covers each invocation, including an authenticated attempt to invoke an unavailable

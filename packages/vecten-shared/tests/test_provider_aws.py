@@ -9,14 +9,11 @@ import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
 from moto import mock_aws
 
-from vecten_shared.config import VectenConfig
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import (
     ConnectionSpec,
     LogTarget,
-    SnowflakeNames,
     get_provider,
-    snowflake_names,
 )
 from vecten_shared.provider.aws import RUNTIME_WRITABLE, AwsRuntimeProvider
 from vecten_shared.provider.environment import (
@@ -231,22 +228,6 @@ def test_existing_snowflake_warehouse_keeps_the_snowflake_spec(tmp_path, monkeyp
         auth="external_oauth",
         account="ACMEORG-PROD1",
         warehouse="ACME_PROD_WH",
-    )
-
-
-def test_snowflake_names():
-    def config(name, database=None):
-        return VectenConfig.model_validate(
-            {
-                "users": 3,
-                "project": {"name": name, "scaffold_version": "0.1.0"},
-                "warehouse": {"kind": "snowflake", "account": "O-A", "database": database},
-            }
-        )
-
-    assert snowflake_names(config("acme"), "prod") == SnowflakeNames("ACME", "ACME_PROD_WH")
-    assert snowflake_names(config("acme-co", "analytics"), "prod-2") == SnowflakeNames(
-        database="ANALYTICS", warehouse="ACME_CO_PROD_2_WH"
     )
 
 
@@ -482,3 +463,36 @@ def test_constructing_the_provider_reads_nothing(tmp_path, monkeypatch):
     no_cloud_api(monkeypatch)
     provider = AwsRuntimeProvider(tmp_path / "absent", "prod")
     assert provider.env == "prod"
+
+
+def test_the_snowflake_connection_takes_every_name_from_the_snowflake_names(tmp_path, monkeypatch):
+    from functools import partial
+
+    from vecten_shared.provider import runtime, snowflake_names
+
+    aws_credentials(monkeypatch, tmp_path)
+    write_aws_project(
+        tmp_path,
+        outputs=mcp_only_outputs(),
+        warehouse={"kind": "snowflake", "existing": True, "account": "ACMEORG-PROD1"},
+    )
+    monkeypatch.setattr(runtime, "snowflake_names", partial(snowflake_names, shared_account=True))
+    spec = AwsRuntimeProvider(tmp_path, "prod").connection("prod", "warehouse")
+    assert (spec.role, spec.database, spec.warehouse, spec.account) == (
+        "ANALYST_ACME_PROD",
+        "ACME_PROD",
+        "ACME_PROD_WH",
+        "ACMEORG-PROD1",
+    )
+
+
+def test_the_snowflake_connection_reaches_the_account_ship_handed_the_host(tmp_path, monkeypatch):
+    aws_credentials(monkeypatch, tmp_path)
+    write_aws_project(
+        tmp_path,
+        outputs=mcp_only_outputs(),
+        warehouse={"kind": "snowflake", "existing": True, "account": "ACMEORG-PROD1"},
+    )
+    monkeypatch.setenv("VECTEN_SNOWFLAKE_ACCOUNT", "ACMEORG-DEV1")
+    spec = AwsRuntimeProvider(tmp_path, "dev").connection("dev", "warehouse")
+    assert spec.account == "ACMEORG-DEV1"

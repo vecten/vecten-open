@@ -2,4 +2,4 @@
 
 from vecten_platform.sync.airflow_dag import build_sync_dag
 
-dag = build_sync_dag(connector="{{ name }}", group="{{ group }}", objects={{ objects | tojson }}, schedule="@daily")
+dag = build_sync_dag(connector="{{ name }}", group="{{ group }}", objects={{ objects | tojson }}, schedule={{ schedule | tojson }}{% if timezone %}, timezone={{ timezone | tojson }}{% endif %})

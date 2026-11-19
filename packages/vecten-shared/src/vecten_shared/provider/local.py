@@ -21,6 +21,18 @@ from vecten_shared.provider import (
 from vecten_shared.records import write_text_atomic
 
 LOCAL_PG_PUBLISHED_PORT = 55432
+# Moves the published port for stacks that must not meet on 55432, such as the test suite's.
+# `up` and every host-side command read it, so the same value must reach each of them.
+LOCAL_PG_PORT_ENV = "VECTEN_LOCAL_PG_PORT"
+
+
+def local_pg_published_port() -> int:
+    value = os.environ.get(LOCAL_PG_PORT_ENV)
+    if not value:
+        return LOCAL_PG_PUBLISHED_PORT
+    if not value.isdigit() or not 0 < int(value) < 65536:
+        raise Failure(ExitCode.USAGE, f"{LOCAL_PG_PORT_ENV} must be a TCP port, not {value!r}")
+    return int(value)
 
 
 _BARE_VALUE = re.compile(r"[A-Za-z0-9_./:@+=,\-]*")
@@ -124,7 +136,7 @@ class LocalProvider:
             role=ROLE_FOR_DB[db],
             auth="password",
             host="postgres" if self.inside_compose else "localhost",
-            port=5432 if self.inside_compose else LOCAL_PG_PUBLISHED_PORT,
+            port=5432 if self.inside_compose else local_pg_published_port(),
         )
 
     def log_target(self, env: str) -> LogTarget:

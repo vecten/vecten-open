@@ -72,4 +72,8 @@ def test_sync_dag_tests_pass_inside_the_airflow_image(tmp_path):
         timeout=1500,
     )
     assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-4000:]
-    assert "7 passed" in proc.stdout, proc.stdout[-4000:]
+    # The image has Airflow and the docker-marked dag.test() cases need nothing more, so a
+    # skip there means a test silently stopped exercising the DAG.
+    summary = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+    assert "passed" in summary, proc.stdout[-4000:]
+    assert not any(word in summary for word in ("failed", "error", "skipped")), summary

@@ -6,6 +6,8 @@ import pytest
 from vecten.github import gh as gh_mod
 from vecten_shared.config import EnvironmentFacts, load_config, save_config
 
+from .test_deploy_promotion import ordered
+
 LOCAL = ("--name", "acme", "--users", "8", "--source", "hubspot")
 DEPLOY = (
     "--cloud",
@@ -274,3 +276,64 @@ def test_init_without_repository_answer(invoke, workdir, monkeypatch):
     monkeypatch.setattr(gh_mod, "get_gh", lambda: FakeGh())
     r = invoke("github", "init", "--json")
     assert r.exit_code == 4 and "init --deploy" in json.loads(r.stdout)["error"]
+
+
+def deploy_in_order(invoke, project, fake, monkeypatch, deployed):
+    """Declare the order dev, prod and record a deploy of each environment in `deployed`."""
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: fake)
+    monkeypatch.setattr("vecten.deploy.github_env.sleep", lambda seconds: None)
+    invoke("github", "init", "--json")
+    ordered(project)
+    config = load_config(project)
+    for env in deployed:
+        config.environments[env].deployed_commit = "abc123"
+    save_config(project, config)
+
+
+def test_a_push_with_an_order_ships_dev_and_names_the_promotion_to_prod(
+    invoke, project, monkeypatch
+):
+    fake = ShipGh()
+    deploy_in_order(invoke, project, fake, monkeypatch, deployed=("dev", "prod"))
+    r = invoke("github", "push", "--json")
+    assert r.exit_code == 0, r.stdout
+    doc = json.loads(r.stdout)
+    assert doc["ship"] == {"run_url": SHIP_URL, "conclusion": "success"}
+    assert doc["promote"] == "vecten promote --env prod"
+    invoke("github", "push", "--json")
+    (project / "connectors" / "hubspot.py").write_text("x = 2\n")
+    text = invoke("github", "push")
+    assert text.exit_code == 0, text.stdout
+    assert "`vecten promote --env prod`" in text.stdout
+
+
+def test_a_push_waits_only_once_the_first_environment_is_deployed(invoke, project, monkeypatch):
+    fake = ShipGh()
+    deploy_in_order(invoke, project, fake, monkeypatch, deployed=("prod",))
+    r = invoke("github", "push", "--json")
+    assert r.exit_code == 0, r.stdout
+    doc = json.loads(r.stdout)
+    assert doc["ship"] is None and doc["promote"] is None
+    assert fake.run_calls() == []
+
+
+def test_a_push_without_an_order_names_no_promotion(invoke, project, monkeypatch):
+    fake = ShipGh()
+    deploy_and_change(invoke, project, fake, monkeypatch)
+    r = invoke("github", "push", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert json.loads(r.stdout)["promote"] is None
+    (project / "connectors" / "hubspot.py").write_text("x = 2\n")
+    text = invoke("github", "push")
+    assert text.exit_code == 0, text.stdout
+    assert text.stdout.strip().endswith(f"shipped: {SHIP_URL}")
+
+
+def test_a_push_names_no_promotion_to_an_environment_never_deployed(invoke, project, monkeypatch):
+    fake = ShipGh()
+    deploy_in_order(invoke, project, fake, monkeypatch, deployed=("dev",))
+    r = invoke("github", "push", "--json")
+    assert r.exit_code == 0, r.stdout
+    doc = json.loads(r.stdout)
+    assert doc["ship"] == {"run_url": SHIP_URL, "conclusion": "success"}
+    assert doc["promote"] is None

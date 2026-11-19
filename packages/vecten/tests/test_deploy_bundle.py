@@ -7,9 +7,9 @@ import pytest
 import yaml
 
 from vecten.deploy.aws.ship import component_url
-from vecten.deploy.bundle import build_host_bundle
+from vecten.deploy.bundle import build_host_bundle, host_document
 from vecten.deploy.vm import apply as agent
-from vecten_shared.config import load_config
+from vecten_shared.config import load_config, save_config
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider.environment import EnvironmentOutputs
 from vecten_shared.sql import setup_sql_path
@@ -23,6 +23,7 @@ from .deploy_fixtures import (
     render_aws,
     set_facts,
 )
+from .services_fixtures import locked
 
 
 @pytest.fixture
@@ -116,6 +117,17 @@ def test_bundle_leaves_out_secrets_history_records_and_build_output(project, tmp
     assert not [t for t in texts if "hunter2" in t]
 
 
+def test_bundle_ships_the_project_packages_and_not_the_generated_ones(project, tmp_path):
+    listed = "packages:\n  - package: dbt-labs/dbt_utils\n    version: 1.3.0\n"
+    (project / "dbt" / "project-packages.yml").write_text(listed)
+    (project / "dbt" / "packages.yml").write_text("packages:\n  - local: /laptop/path\n")
+    (project / "dbt" / "package-lock.yml").write_text("packages: []\n")
+    bundle = build(project, tmp_path / "out")
+    names = members(bundle)
+    assert read(bundle, "dbt/project-packages.yml") == listed
+    assert "dbt/packages.yml" not in names and "dbt/package-lock.yml" not in names
+
+
 def test_compose_file_is_for_this_host_only(project, tmp_path):
     platform = yaml.safe_load(
         read(build(project, tmp_path / "a"), ".vecten/stack/docker-compose.yml")
@@ -143,6 +155,44 @@ def test_nginx_conf_uses_letsencrypt_for_the_host_names(project, tmp_path):
     assert "mcp.data.acme.com" not in conf
 
 
+PAUSED = "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"
+
+
+def test_shipped_dags_start_paused_only_when_the_tfvars_opt_in(project, tmp_path):
+    def paused(out):
+        doc = yaml.safe_load(read(build(project, out), ".vecten/stack/docker-compose.yml"))
+        return doc["services"]["airflow-scheduler"]["environment"][PAUSED]
+
+    assert paused(tmp_path / "default") == "False"
+    tfvars = project / "deploy" / "envs" / "prod.tfvars"
+    rendered = tfvars.read_text()
+    tfvars.write_text(rendered + "dags_paused_at_creation = true\n")
+    assert paused(tmp_path / "opted-in") == "True"
+    tfvars.write_text(rendered + "dags_paused_at_creation = false\n")
+    assert paused(tmp_path / "opted-out") == "False"
+
+
+def test_a_snowflake_host_ships_with_its_environments_account(tmp_path):
+    root = render_aws(tmp_path / "snow", warehouse="snowflake", snowflake_account="ACME-PROD")
+    outputs = json.loads(json.dumps(STANDARD_OUTPUTS))
+    del outputs["postgres"]["warehouse"]
+    for host, service in (("platform", "airflow-scheduler"), ("mcp", "mcp-server")):
+        out = build(root, tmp_path / host, host=host, outputs=outputs)
+        doc = yaml.safe_load(read(out, ".vecten/stack/docker-compose.yml"))
+        assert doc["services"][service]["environment"]["VECTEN_SNOWFLAKE_ACCOUNT"] == "ACME-PROD"
+
+
+def test_shipped_nginx_carries_the_airflow_allow_list(project, tmp_path):
+    path = ".vecten/stack/nginx/conf.d/default.conf"
+    assert "deny all;" not in read(build(project, tmp_path / "open"), path)
+    config = load_config(project)
+    config.airflow.allow = ["203.0.113.0/24"]
+    save_config(project, config)
+    conf = read(build(project, tmp_path / "narrowed"), path)
+    assert "allow 203.0.113.0/24;" in conf and "deny all;" in conf
+    assert "location = /api/v2/monitor/health {" in conf
+
+
 def test_host_json_satisfies_the_agent_contract(project, tmp_path):
     host = json.loads(read(build(project, tmp_path / "out"), ".vecten/ship/host.json"))
     assert set(host) == set(agent.HOST_KEYS)
@@ -164,6 +214,29 @@ def test_host_json_satisfies_the_agent_contract(project, tmp_path):
     # The platform VM is small unless tfvars sets platform_size.
     assert host["airflow_parallelism"] == 4
     assert host["mcp_pool_cap"] == 3
+
+
+def test_host_json_carries_the_declared_areas_only_when_there_are_some(project, tmp_path):
+    from vecten_shared.config import AreaDecl
+
+    before = build(project, tmp_path / "plain")
+    config = load_config(project)
+    config.areas = {"payroll": AreaDecl(), "finance": AreaDecl()}
+    save_config(project, config)
+    host = json.loads(read(build(project, tmp_path / "areas"), ".vecten/ship/host.json"))
+    assert host["areas"] == ["finance", "payroll"]
+    assert set(host) == set(agent.HOST_KEYS) | {"areas"}
+    config.areas = {}
+    save_config(project, config)
+    again = build(project, tmp_path / "again")
+    with tarfile.open(before, "r:gz") as first, tarfile.open(again, "r:gz") as second:
+        # vecten.toml itself is rewritten by the save, comments and layout aside.
+        names = [m.name for m in first.getmembers() if m.isfile() and m.name != "vecten.toml"]
+        assert names == [
+            m.name for m in second.getmembers() if m.isfile() and m.name != "vecten.toml"
+        ]
+        for name in names:
+            assert first.extractfile(name).read() == second.extractfile(name).read(), name
 
 
 def test_setup_host_is_flagged(project, tmp_path):
@@ -211,6 +284,28 @@ def test_two_builds_at_one_commit_are_byte_identical(project, tmp_path):
         assert member.mtime == members(second)[member.name].mtime
     names = list(members(first))
     assert names == sorted(names)
+
+
+def test_a_files_mtime_follows_its_content_so_buildkit_never_reuses_another_releases(
+    project, tmp_path
+):
+    from vecten.deploy.bundle import content_mtime
+
+    first = build(project, tmp_path / "a")
+    model, name = project / "dbt/models/marts/orders.sql", "dbt/models/marts/orders.sql"
+    model.write_text("select 1\n")
+    one = members(build(project, tmp_path / "b"))[name].mtime
+    model.write_text("select 2\n")
+    two = members(build(project, tmp_path / "c"))[name].mtime
+    assert one != two and one == content_mtime(b"select 1\n")
+    for member in members(first).values():
+        if member.isfile():
+            body = read(first, member.name).encode()
+            assert member.mtime == content_mtime(body), member.name
+            # 2001-09-09 to 2018: no tool reads such a time as unset or in the future.
+            assert 1_000_000_000 <= member.mtime < 1_000_000_000 + 2**29
+        else:
+            assert member.mtime == 0
 
 
 def test_missing_mount_dirs_get_their_stand_ins(tmp_path):
@@ -400,3 +495,241 @@ def test_bundle_carries_feedback_manifest_and_mcp_mount(project, tmp_path):
     server = compose["services"]["mcp-server"]
     assert server["environment"]["VECTEN_FEEDBACK_MANIFEST"] == "/app/feedback.json"
     assert "../ship/feedback.json:/app/feedback.json:ro" in server["volumes"]
+
+
+def test_bundle_ships_the_extension_record(project, tmp_path):
+    from vecten import locking
+
+    (project / locking.RECORD_FILE).write_text(locking.record_text({}))
+    (project / "requirements.txt").write_text("")
+    from vecten_shared.config import load_config
+
+    config = load_config(project)
+    for component in locking.components(config):
+        roots = locking.roots(config, {}, {}, component)
+        stamp = locking.stamp_line(component, locking.inputs_hash(component, roots))
+        (project / locking.LOCK_FILES[component]).write_text(stamp + "\n")
+    bundle = build(project, tmp_path / "out")
+    assert locking.RECORD_FILE in members(bundle)
+
+
+def test_a_stale_lock_stops_the_bundle_build(project, tmp_path):
+    from vecten import locking
+
+    (project / locking.RECORD_FILE).write_text(locking.record_text({}))
+    (project / "requirements.txt").write_text("")
+    for name in locking.LOCK_FILES.values():
+        (project / name).write_text("# vecten-lock: component=x inputs=0\n")
+    with pytest.raises(Failure, match="vecten lock"):
+        build(project, tmp_path / "out")
+
+
+def test_host_json_carries_every_declared_platform_secret(project, tmp_path):
+    from vecten_shared.extension_record import Extension, record_text
+
+    (project / "extensions.lock.json").write_text(
+        record_text({"acme": Extension("1.0", (), secrets=("ACME_API_KEY", "MCP_ACME_TOKEN"))})
+    )
+    doc = host_document(
+        load_config(project),
+        "prod",
+        EnvironmentOutputs.model_validate(STANDARD_OUTPUTS),
+        "platform",
+        COMMIT,
+        {},
+        {"acme": Extension("1.0", (), secrets=("ACME_API_KEY", "MCP_ACME_TOKEN"))},
+    )
+    assert "ACME_API_KEY" in doc["connector_secrets"]
+    assert "HUBSPOT_API_KEY" in doc["connector_secrets"]
+    assert "MCP_ACME_TOKEN" not in doc["connector_secrets"]
+
+
+def test_the_bundle_build_checks_the_environments_settings(project, tmp_path):
+    from .settings_fixtures import with_settings
+
+    with_settings(project, {"env": {"prod": {"daily_cap": "500"}}})
+    with pytest.raises(Failure, match="settings.acme.daily_cap in prod"):
+        build(project, tmp_path / "out")
+
+
+def test_the_bundle_carries_in_repo_extensions_without_build_output(project, tmp_path):
+    ext = project / "extensions" / "acme-portal"
+    (ext / "src" / "acme_portal").mkdir(parents=True)
+    (ext / "pyproject.toml").write_text("[project]\nname = 'acme-portal'\n")
+    (ext / "src" / "acme_portal" / "__init__.py").write_text("")
+    for junk in ("dist/acme.whl", "build/lib/x.py", "src/acme_portal.egg-info/PKG-INFO"):
+        (ext / junk).parent.mkdir(parents=True, exist_ok=True)
+        (ext / junk).write_text("x")
+    names = members(build(project, tmp_path / "out"))
+    assert "extensions/acme-portal/pyproject.toml" in names
+    assert "extensions/acme-portal/src/acme_portal/__init__.py" in names
+    assert not any(
+        "dist/" in n or "/build/" in n or "egg-info" in n
+        for n in names
+        if n.startswith("extensions")
+    )
+
+
+def test_build_output_is_skipped_only_at_an_extension_root(project, tmp_path):
+    ext = project / "extensions" / "acme-portal"
+    for kept in ("src/acme_portal/static/dist/app.js", "src/acme_portal/build/__init__.py"):
+        (ext / kept).parent.mkdir(parents=True, exist_ok=True)
+        (ext / kept).write_text("x")
+    (ext / "pyproject.toml").write_text("[project]\nname = 'acme-portal'\n")
+    names = members(build(project, tmp_path / "out"))
+    assert "extensions/acme-portal/src/acme_portal/static/dist/app.js" in names
+    assert "extensions/acme-portal/src/acme_portal/build/__init__.py" in names
+
+
+def test_the_bundle_build_checks_the_service_bindings(project, tmp_path):
+    from .services_fixtures import with_services
+
+    with_services(project, {"bot": {"host": "mcp"}})
+    with pytest.raises(Failure, match="services.acme.bot.host"):
+        build(project, tmp_path / "out")
+
+
+def host_json(bundle):
+    return json.loads(read(bundle, ".vecten/ship/host.json"))
+
+
+def test_a_host_without_services_carries_empty_isolation_keys(project, tmp_path):
+    host = host_json(build(project, tmp_path / "out"))
+    assert host["service_secrets"] == [] and host["service_network"] == ""
+
+
+def test_a_host_running_a_service_names_its_bridge_and_its_secrets(project, tmp_path):
+    from vecten.stack.compose import SERVICES_BRIDGE
+
+    from .services_fixtures import with_services
+
+    with_services(project, {"bot": {}}, secrets=("ACME_BOT_TOKEN", "MCP_ACME_TOKEN"))
+    locked(project)
+    bundle = build(project, tmp_path / "platform")
+    host = host_json(bundle)
+    assert host["service_network"] == SERVICES_BRIDGE
+    # Only the names the platform host may read; MCP_ names belong to the MCP host's scope.
+    assert host["service_secrets"] == ["ACME_BOT_TOKEN"]
+    compose = yaml.safe_load(read(bundle, ".vecten/stack/docker-compose.yml"))
+    assert "svc-acme-bot" in compose["services"]
+    other = host_json(build(project, tmp_path / "mcp", host="mcp"))
+    assert other["service_secrets"] == [] and other["service_network"] == ""
+
+
+def test_a_service_on_the_mcp_host_gets_its_mcp_secrets_there(project, tmp_path):
+    from .services_fixtures import BOT, with_services
+
+    with_services(
+        project,
+        {"bot": {"host": "mcp"}},
+        declared={"bot": {**BOT, "components": ["platform", "mcp"]}},
+        secrets=("ACME_BOT_TOKEN", "MCP_ACME_TOKEN"),
+    )
+    locked(project)
+    mcp = host_json(build(project, tmp_path / "mcp", host="mcp"))
+    assert mcp["service_network"] == "vecten-services"
+    assert mcp["service_secrets"] == ["MCP_ACME_TOKEN"]
+    platform = host_json(build(project, tmp_path / "platform"))
+    assert platform["service_secrets"] == [] and platform["service_network"] == ""
+
+
+def test_one_vm_under_minimal_reads_each_service_secret_from_its_hosts_scope(tmp_path):
+    from .services_fixtures import BOT, with_services
+
+    root = render_aws(tmp_path / "proj", profile="minimal")
+    with_services(
+        root,
+        {"bot": {}, "admin": {"host": "mcp"}},
+        declared={"bot": BOT, "admin": {**BOT, "components": ["mcp"]}},
+        secrets=("ACME_BOT_TOKEN", "MCP_ACME_TOKEN"),
+    )
+    host = host_json(build(locked(root), tmp_path / "out", host="main", outputs=minimal_outputs()))
+    assert host["service_network"] == "vecten-services"
+    assert host["service_secrets"] == ["ACME_BOT_TOKEN", "MCP_ACME_TOKEN"]
+
+
+def _outputs_with(names: dict[str, list[str]]) -> dict:
+    import copy
+
+    outputs = copy.deepcopy(STANDARD_OUTPUTS)
+    for host, listed in names.items():
+        outputs["hosts"][host]["service_hostnames"] = listed
+    return outputs
+
+
+def _portal_and_bot(root):
+    from .services_fixtures import BOT, with_services
+
+    portal = {**BOT, "components": ["platform", "mcp"]}
+    with_services(
+        root,
+        {
+            "bot": {"hostname": "bot", "routes": {"webhook": {"access": "public"}}},
+            "portal": {
+                "hostname": "portal",
+                "host": "mcp",
+                "routes": {"admin": {"access": "public"}},
+            },
+        },
+        declared={"bot": BOT, "portal": portal},
+    )
+    return locked(root)
+
+
+def test_host_json_appends_the_service_hostnames_the_outputs_list_for_the_host(project, tmp_path):
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com"], "mcp": ["portal.data.acme.com"]})
+    platform = host_json(build(project, tmp_path / "p", outputs=outputs))
+    assert platform["hostnames"] == ["airflow.data.acme.com", "bot.data.acme.com"]
+    mcp = host_json(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert mcp["hostnames"] == ["mcp.data.acme.com", "portal.data.acme.com"]
+
+
+def test_a_bound_hostname_missing_from_the_outputs_is_not_handed_to_the_agent(project, tmp_path):
+    _portal_and_bot(project)
+    platform = host_json(build(project, tmp_path / "p"))
+    assert platform["hostnames"] == ["airflow.data.acme.com"]
+
+
+def test_a_listed_hostname_no_longer_bound_on_the_host_is_not_handed_to_the_agent(
+    project, tmp_path
+):
+    # The record still points at the platform VM while the binding moved the portal to mcp.
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com", "portal.data.acme.com"]})
+    platform = host_json(build(project, tmp_path / "p", outputs=outputs))
+    assert platform["hostnames"] == ["airflow.data.acme.com", "bot.data.acme.com"]
+    mcp = host_json(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert mcp["hostnames"] == ["mcp.data.acme.com"]
+
+
+def nginx_conf(bundle):
+    return read(bundle, ".vecten/stack/nginx/conf.d/default.conf")
+
+
+def test_the_bundle_serves_each_listed_service_hostname_on_the_host_that_runs_it(project, tmp_path):
+    _portal_and_bot(project)
+    outputs = _outputs_with({"platform": ["bot.data.acme.com"], "mcp": ["portal.data.acme.com"]})
+    platform = nginx_conf(build(project, tmp_path / "p", outputs=outputs))
+    assert "server_name bot.data.acme.com;" in platform
+    assert "set $upstream http://svc-acme-bot:8000;" in platform
+    assert "portal.data.acme.com" not in platform
+    mcp = nginx_conf(build(project, tmp_path / "m", host="mcp", outputs=outputs))
+    assert "server_name portal.data.acme.com;" in mcp
+    assert "server_name bot.data.acme.com;" not in mcp
+
+
+def test_a_hostname_waiting_for_deploy_is_not_rendered(project, tmp_path):
+    _portal_and_bot(project)
+    platform = nginx_conf(build(project, tmp_path / "p"))
+    assert "bot.data.acme.com" not in platform
+    assert "svc-acme-bot" not in platform
+
+
+def test_a_bundle_without_services_renders_the_nginx_of_a_project_without_them(project, tmp_path):
+    from vecten.stack.compose import vm_hostnames
+    from vecten.stack.nginx import generate_nginx_conf
+
+    outputs = EnvironmentOutputs.model_validate(STANDARD_OUTPUTS)
+    expected = generate_nginx_conf(["platform"], vm_hostnames(outputs), "vm")
+    assert nginx_conf(build(project, tmp_path / "p")) == expected

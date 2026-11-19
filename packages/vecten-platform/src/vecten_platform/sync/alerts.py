@@ -8,12 +8,17 @@ from collections.abc import Callable
 
 import httpx
 
-from vecten_shared.issues import airflow_issue_id, failure_class, redact, sync_task_key
+from vecten_shared.issues import (
+    airflow_issue_id,
+    failure_class,
+    is_sync_task,
+    redact,
+    sync_task_key,
+)
 
 log = logging.getLogger(__name__)
 
 ERROR_LIMIT = 200
-SYNC_TASK = "sync"
 
 
 def first_line(text: str) -> str:
@@ -21,9 +26,9 @@ def first_line(text: str) -> str:
 
 
 def _task_key(task_id: str, exc: BaseException | None) -> str:
-    # The mapped sync task fails per object, and `vecten issues` keys it by the object name.
+    # A mapped sync task fails per object, and `vecten issues` keys it by the object name.
     object_name = getattr(exc, "object_name", None)
-    return sync_task_key(object_name) if task_id == SYNC_TASK and object_name else task_id
+    return sync_task_key(object_name) if is_sync_task(task_id) and object_name else task_id
 
 
 def alert_payload(context: dict) -> dict:

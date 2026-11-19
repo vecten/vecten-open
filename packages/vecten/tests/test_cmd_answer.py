@@ -91,6 +91,23 @@ def test_access_answer_rejects_a_hyphenated_group(invoke, workdir, monkeypatch):
     assert "access" not in tomllib.loads((root / "vecten.toml").read_text())["connectors"][0]
 
 
+def test_access_answer_lands_on_a_declared_area(invoke, workdir, monkeypatch):
+    from vecten_shared.config import AreaDecl
+
+    root = _project_with_connector(invoke, workdir, monkeypatch)
+    config = load_config(root)
+    config.areas = {"finance": AreaDecl()}
+    save_config(root, config)
+    r = invoke("answer", "access.finance", "finance, board", "--json")
+    assert r.exit_code == 0, r.stdout + r.stderr
+    doc = tomllib.loads((root / "vecten.toml").read_text())
+    assert doc["areas"]["finance"]["access"] == {"groups": ["board", "finance"]}
+    assert "access" not in doc["connectors"][0]
+    r = invoke("answer", "access.payroll", "hr", "--json")
+    assert r.exit_code == 2
+    assert "areas: finance" in json.loads(r.stdout)["error"]
+
+
 def test_access_answer_outside_a_project_is_refused(invoke):
     r = invoke("answer", "access.hubspot", "sales", "--json")
     assert r.exit_code == 4

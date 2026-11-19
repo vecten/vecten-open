@@ -11,6 +11,28 @@ from vecten_mcp.audit import audit_statements, bound_sql, bound_sql_hash, receip
 from vecten_shared.osi.expressions import selected_expression
 
 current_audit = ContextVar("vecten_audit_call", default=None)
+# The request's X-Vecten-On-Behalf-Of value. It is recorded for an app principal only and is
+# never read for an authorization decision.
+current_viewer = ContextVar("vecten_viewer", default=None)
+VIEWER_HEADER = b"x-vecten-on-behalf-of"
+
+
+class ViewerHeader:
+    """Carries each HTTP request's X-Vecten-On-Behalf-Of header to the audit of its calls."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        values = [value for name, value in scope["headers"] if name == VIEWER_HEADER]
+        # A repeated header has no single viewer to record.
+        token = current_viewer.set(values[0].decode("latin-1") if len(values) == 1 else None)
+        try:
+            return await self.app(scope, receive, send)
+        finally:
+            current_viewer.reset(token)
 
 
 class AuditCall:
@@ -45,6 +67,13 @@ class AuditCall:
             "resolution": "agent_sql" if name == "sql-exec" else "compiled",
             "plugin": runtime.extensions.plugin_for(name),
         }
+        apps = getattr(runtime, "apps", None)
+        if apps is not None and apps.scope(caller.principal["id"]) is not None:
+            from vecten_mcp.apps import viewer
+
+            seen = viewer(current_viewer.get())
+            if seen:
+                self.row["on_behalf_of"] = seen
 
     def policy(self, runtime):
         denied = runtime.access.denied(self.caller.principal["id"]) if runtime.access else set()

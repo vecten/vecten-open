@@ -47,7 +47,7 @@ def extension(tmp_path, monkeypatch):
     sys.modules.pop("vecten_test_extension", None)
 
 
-def test_all_nine_groups_land(extension):
+def test_all_twelve_groups_land(extension):
     from vecten.connectors.extensions import extension_connectors
     from vecten.extension_skills import link_extension_skills
     from vecten_mcp.extensions import McpExtensions
@@ -59,7 +59,10 @@ def test_all_nine_groups_land(extension):
     root, config = extension
     dist = importlib.metadata.distribution("vecten-test-extension")
     assert {p.group for p in dist.entry_points} == set(GROUPS)
-    assert extension_connectors(config)["fixture"].package == dist.name
+    connector = extension_connectors(config)["fixture"]
+    assert connector.package == dist.name
+    assert connector.groups["daily"].schedule == "0 6 * * *"
+    assert connector.groups["daily"].timezone == "Europe/Warsaw"
     assert extension_packages(config)[0][1].name == "dbt"
     assert [p.name for p in dag_files(config)] == ["fixture.py"]
     assert (
@@ -208,3 +211,120 @@ def test_semantic_digest_is_stable_when_extension_environment_moves(
     assert osi_digest(root / "osi") == before
     (moved / "fixture.json").write_text("{}")
     assert osi_digest(root / "osi") != before
+
+
+def test_the_manifest_reaches_the_record_the_laptop_stack_and_the_read_api(extension, monkeypatch):
+    from vecten.extensions import load_manifests
+    from vecten.stack.compose import generate_compose
+    from vecten_shared import context
+    from vecten_shared.extension_record import Extension, record_text
+
+    root, config = extension
+    manifest = load_manifests(config)["vecten-test-extension"]
+    assert manifest.secrets == ("FIXTURE_TOKEN", "MCP_FIXTURE_TOKEN")
+    record = {
+        "vecten-test-extension": Extension(
+            "1.0", (), secrets=manifest.secrets, settings=manifest.settings
+        )
+    }
+    (root / "extensions.lock.json").write_text(record_text(record))
+    stack = root / ".vecten" / "stack"
+    stack.mkdir(parents=True)
+    doc = generate_compose(config, "local", ["platform", "mcp"], stack)
+    assert doc["services"]["airflow-scheduler"]["environment"]["FIXTURE_TOKEN"]
+    assert doc["services"]["mcp-server"]["environment"]["MCP_FIXTURE_TOKEN"]
+
+    monkeypatch.setenv("VECTEN_PROJECT_ROOT", str(root))
+    monkeypatch.setenv("VECTEN_ENV", "local")
+    monkeypatch.delenv("VECTEN_PROVIDER", raising=False)
+    monkeypatch.setenv("FIXTURE_TOKEN", "dag-token")
+    monkeypatch.setenv("MCP_FIXTURE_TOKEN", "tool-token")
+    monkeypatch.setenv("VECTEN_COMPONENT", "platform")
+    in_a_dag = context.extension("vecten-test-extension")
+    assert in_a_dag.secret("FIXTURE_TOKEN") == "dag-token"
+    assert in_a_dag.settings["greeting"] == "hello"
+    monkeypatch.setenv("VECTEN_COMPONENT", "mcp")
+    assert context.extension("vecten-test-extension").secret("MCP_FIXTURE_TOKEN") == "tool-token"
+
+
+def test_the_stub_service_and_both_routes_reach_the_record_the_binding_and_compose(
+    extension, monkeypatch
+):
+    from vecten.extensions import _bind_services, load_services
+    from vecten.stack.compose import generate_compose
+    from vecten_shared.config import load_config
+    from vecten_shared.extension_record import Extension, parse_record, record_text
+
+    root, config = extension
+    declared = load_services(config)["vecten-test-extension"]["portal"]
+    assert declared.unknown == ()
+    assert {n: r.access for n, r in declared.service.routes.items()} == {
+        "hook": "public",
+        "home": "login",
+    }
+    entry = Extension("1.0", (), services={"portal": declared.service})
+    (root / "extensions.lock.json").write_text(record_text({"vecten-test-extension": entry}))
+    assert parse_record((root / "extensions.lock.json").read_text())[
+        "vecten-test-extension"
+    ].services == {"portal": declared.service}
+
+    import tomlkit
+
+    doc = tomlkit.parse((root / "vecten.toml").read_text())
+    _bind_services(doc, config, "vecten-test-extension", entry, {"vecten-test-extension": entry})
+    (root / "vecten.toml").write_text(tomlkit.dumps(doc))
+    bound = load_config(root)
+    assert set(bound.services["vecten-test-extension"]["portal"].routes) == {"hook", "home"}
+    stack = root / ".vecten" / "stack"
+    stack.mkdir(parents=True)
+    compose = generate_compose(bound, "local", ["platform", "mcp"], stack)
+    assert compose["services"]["svc-vecten-test-extension-portal"]["command"] == [
+        "python",
+        "-m",
+        "vecten_test_extension.portal",
+    ]
+
+
+def test_the_stub_apps_reach_the_record_the_binding_compose_and_nginx(extension):
+    import tomlkit
+
+    from vecten.extensions import _bind_apps, load_apps
+    from vecten.stack.compose import generate_compose, local_hostnames
+    from vecten.stack.nginx import generate_nginx_conf, service_site
+    from vecten_shared.config import load_config
+    from vecten_shared.extension_record import Extension, parse_record, record_text
+    from vecten_shared.services import bound_services
+
+    root, config = extension
+    declared = load_apps(config)["vecten-test-extension"]
+    assert {name: d.app.kind for name, d in declared.items()} == {
+        "dashboard": "container",
+        "warehouse": "snowflake",
+    }
+    assert all(d.unknown == () for d in declared.values())
+    entry = Extension("1.0", (), apps={name: d.app for name, d in declared.items()})
+    (root / "extensions.lock.json").write_text(record_text({"vecten-test-extension": entry}))
+    record = parse_record((root / "extensions.lock.json").read_text())
+    assert record["vecten-test-extension"].apps == entry.apps
+
+    doc = tomlkit.parse((root / "vecten.toml").read_text())
+    _bind_apps(doc, config, "vecten-test-extension", entry, {"vecten-test-extension": entry})
+    (root / "vecten.toml").write_text(tomlkit.dumps(doc))
+    bound = load_config(root)
+    assert set(bound.apps["vecten-test-extension"]) == {"dashboard", "warehouse"}
+    [app] = bound_services(bound, record)
+    assert app.app == "dashboard"
+    stack = root / ".vecten" / "stack"
+    stack.mkdir(parents=True)
+    compose = generate_compose(bound, "local", ["platform", "mcp"], stack)
+    assert compose["services"]["svc-vecten-test-extension-app-dashboard"]["command"] == [
+        "python",
+        "-m",
+        "vecten_shared.launch",
+        "streamlit",
+        "vecten_test_extension/dashboard.py",
+    ]
+    site = service_site(app, "dashboard.localhost:8443")
+    nginx = generate_nginx_conf(["platform", "mcp"], local_hostnames(), "local", services=[site])
+    assert "server_name dashboard.localhost;" in nginx
+    assert [(r.path, r.access, r.websocket) for r in site.routes] == [("/", "login", True)]

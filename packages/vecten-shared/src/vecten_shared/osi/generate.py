@@ -1,13 +1,14 @@
 """The datasets document, generated from the manifest and catalog of a green dbt build.
 
-One dataset per mart, ordered by alias, with fields in declared column order, so the same
-project renders the same bytes on every warehouse.
+One dataset per mart, in `marts` or a declared area's `marts_<area>`, ordered by alias, with
+fields in declared column order, so the same project renders the same bytes on every warehouse.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from typing import Literal
 
 from vecten_shared.osi import OSI_VERSION
@@ -288,22 +289,40 @@ def generate_datasets(
     database: str,
     model_name: str,
     schema: str = MARTS_SCHEMA,
+    areas: Iterable[str] = (),
 ) -> dict:
     """`database` is the deployed warehouse's name; the build target's database is a local one.
 
-    `schema` both selects the mart models and names their source schema.
+    `schema` and the `marts_<area>` schema of each of `areas` select the mart models, and each
+    model's schema names its source schema.
     """
-    schema = schema.lower()
+    schemas = {schema.lower(), *(f"{MARTS_SCHEMA}_{area}" for area in areas)}
     marts = sorted(
         (
             n
             for n in manifest["nodes"].values()
-            if n.get("resource_type") == "model" and str(n.get("schema", "")).lower() == schema
+            if n.get("resource_type") == "model" and str(n.get("schema", "")).lower() in schemas
         ),
-        key=lambda n: n["alias"],
+        key=lambda n: (n["alias"], str(n["schema"]).lower()),
     )
     issues: list[Issue] = []
-    datasets = [_dataset(n, catalog, database, schema, manifest, issues) for n in marts]
+    # A dataset is named by its alias alone, which models in two schemas may share.
+    by_alias: dict[str, list[str]] = {}
+    for node in marts:
+        by_alias.setdefault(node["alias"], []).append(
+            f"{str(node['schema']).lower()}.{node['alias']}"
+        )
+    for alias, places in by_alias.items():
+        if len(places) > 1:
+            issues.append(
+                Issue(
+                    "duplicate_dataset",
+                    f"marts {', '.join(places)} would all be dataset {alias}; give one an alias",
+                )
+            )
+    datasets = [
+        _dataset(n, catalog, database, str(n["schema"]).lower(), manifest, issues) for n in marts
+    ]
     if issues:
         raise GeneratorError(issues)
     return {"version": OSI_VERSION, "semantic_model": [{"name": model_name, "datasets": datasets}]}

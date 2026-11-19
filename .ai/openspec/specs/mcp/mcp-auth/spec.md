@@ -184,3 +184,22 @@ When a person sets a password through a one-time link or the first admin's link,
 
 - **WHEN** two set-password links are issued for a person and the newer one is used
 - **THEN** the older link is refused
+
+### Requirement: Browser cookies on the MCP hostname are host-only
+
+Every cookie the server sets for a browser on its HTTPS hostname SHALL carry the `__Host-` prefix, with `Secure`, `Path=/` and no `Domain`, and the server SHALL read that cookie only under its prefixed name. This covers the sign-in's browser binding (`__Host-vecten_csrf`), the browser session (`__Host-vecten_browser`), the connected-clients and set-password form tokens, and the admin panel's and `/apps` page's sessions and sign-ins in progress, which keep apart by name. A cookie any other hostname under the domain could set SHALL NOT bind, finish or sign in anything. Where the browser reaches the server over plain HTTP (an `http://` issuer, or a loopback tunnel), a cookie cannot be `Secure`: there the same cookies use their names without the prefix, and the panel's and `/apps` page's are scoped to `/admin` and `/apps`.
+
+#### Scenario: A sibling hostname plants the sign-in cookie
+
+- **WHEN** a page on another hostname under the domain sets `vecten_csrf` for the whole domain with the value of a sign-in someone else started, and the victim's browser returns from the identity provider to `/oidc/callback`
+- **THEN** the server refuses the callback and the other person's sign-in stays unauthenticated
+
+#### Scenario: A planted session
+
+- **WHEN** a browser sends the bare name of the browser session, the panel session or the `/apps` session, or of a panel or `/apps` sign-in in progress, holding another person's value
+- **THEN** the server treats the browser as not signed in and finishes no sign-in
+
+#### Scenario: Through a loopback tunnel
+
+- **WHEN** an admin signs in to the panel at `http://127.0.0.1:8001/admin`
+- **THEN** the sign-in completes with cookies without the prefix and not `Secure`, and the panel's own cookies are scoped to `/admin`

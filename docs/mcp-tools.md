@@ -165,6 +165,7 @@ Admin reads return a `data` envelope. They share a service with corresponding ad
 | `read_audit_row` | `row_id` | One audit row and its request chain |
 | `list_grants` | `{}` | `grants` per group and each group's `denied` columns |
 | `read_settings` | `{}` | Every deployment setting with its current value, defaults filled in |
+| `list_apps` | `{}` | Each bound analytics app: title, URL, bound and admitted groups, datasets, state, its principal and access-health failures |
 
 `set_gap_status` is the one admin mutation tool. Pass `gap_id` and `status` (`open`, `triaged`,
 `dismissed` or `resolved`); it returns the updated gap directly. This changes tracking status,
@@ -202,6 +203,10 @@ and optional boolean `admin`. `groups: ["*"]` allows any authenticated principal
 require membership in at least one listed group. `admin: true` also requires a human
 admin. Group changes are checked again at invocation. Duplicate tool names, including attempts
 to replace a built-in, fail startup.
+
+A tool reads its extension's settings and secrets with `vecten_shared.context.extension(<name>)`.
+It receives only `MCP_` names its manifest declares; a name without the prefix is delivered to
+Airflow and refused here. See [secrets and settings](extensions.md#secrets-and-settings).
 
 ## Feedback lifecycle
 

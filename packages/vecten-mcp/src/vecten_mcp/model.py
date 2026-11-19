@@ -28,6 +28,35 @@ def source_tables(source, kind):
     return list(tables.values())
 
 
+def _names(identifier, database):
+    """Whether `identifier` names `database`, an unquoted name, as Snowflake resolves it."""
+    if identifier.args.get("quoted"):
+        return identifier.name == database.upper()
+    return identifier.name.upper() == database.upper()
+
+
+def read_database(source, kind, written, database):
+    """`source` with every table in the database `written` read from `database`.
+
+    One commit of `osi/` names the project's database, while each environment of a shared
+    Snowflake account reads its own; a source naming no database or another one is kept.
+    """
+    if written.upper() == database.upper():
+        return source
+    tree = parse_one("SELECT * FROM " + source, read=kind)
+    tables = [
+        table
+        for table in tree.find_all(exp.Table)
+        if table.args.get("catalog") is not None and _names(table.args["catalog"], written)
+    ]
+    if not tables:
+        return source
+    for table in tables:
+        quoted = table.args["catalog"].args.get("quoted")
+        table.set("catalog", exp.to_identifier(database.upper(), quoted=quoted))
+    return tree.args["from_"].this.sql(dialect=kind)
+
+
 def search_index(model):
     entries = []
     for name, dataset in model.datasets.items():
@@ -67,11 +96,18 @@ class ModelService:
         commit=lambda: None,
         built=lambda: None,
         on_swap=None,
+        checks=None,
         clock=time.time,
+        database=None,
     ):
         self.directory, self.state, self.kind = directory, state, kind
         self.source_exists, self.platform = source_exists, platform
         self.commit, self.built, self.on_swap, self.clock = commit, built, on_swap, clock
+        # Warnings about the live model from outside it, such as an app's missing dataset.
+        self.checks = checks
+        # (the database the sources name, the environment's database), or None to read them
+        # as written.
+        self.database = database
         self._lock = threading.RLock()
         self._pending_hook = False
         # (revision, commit, when) of the last source check that found every source.
@@ -88,9 +124,12 @@ class ModelService:
 
     def health(self):
         with self._lock:
-            return copy.deepcopy(
+            health = copy.deepcopy(
                 {**self._health, "live_commit": self.current.commit if self.current else None}
             )
+            if self.checks:
+                health["warnings"] = health["warnings"] + self.checks(self.current)
+            return health
 
     def _hook(self):
         if not self._pending_hook or not self.on_swap:
@@ -120,6 +159,11 @@ class ModelService:
                 commit = self.commit() or revision
                 health["candidate_commit"] = commit
                 candidate = SemanticModel.load(self.directory, kind=self.kind, commit=commit)
+                if self.database:
+                    for dataset in candidate.datasets.values():
+                        dataset["source"] = read_database(
+                            dataset["source"], self.kind, *self.database
+                        )
                 health["warnings"] = candidate.report.get("warnings", [])
                 if content_revision(self.directory) != revision:
                     health["errors"] = [

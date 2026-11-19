@@ -1,5 +1,8 @@
 resource "scaleway_domain_record" "hostname" {
-  for_each = { for c in local.components : local.hostname_of[c] => local.host_of[c] }
+  for_each = merge(
+    { for c in local.components : local.hostname_of[c] => local.host_of[c] },
+    local.service_hostname_of,
+  )
 
   dns_zone   = var.dns_zone
   name       = trimsuffix(each.key, ".${var.dns_zone}")
