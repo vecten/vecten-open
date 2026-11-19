@@ -354,52 +354,41 @@ def test_the_build_arguments_are_those_build_images_passes(invoke):
             assert computed[output] == passed[name]
 
 
-EXPECTED_ACTIONS = [
-    "actions/checkout",
-    "actions/download-artifact",
-    None,  # the ref-to-version step, the job's only shell
-    "docker/setup-qemu-action",
-    "docker/setup-buildx-action",
-    "docker/login-action",
-    "docker/build-push-action",
-    "docker/build-push-action",
+# The job that can push images runs these actions, by these commits, and no other step but the
+# one shell step below; a change to either is a change to what holds the registry credential.
+IMAGE_JOB_ACTIONS = [
+    "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+    None,
+    "docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1",
+    "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+    "docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550",
+    "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+    "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
 ]
-# Tree code: an interpreter, a package tool, the CLI, or a file of the checkout.
-TREE_CODE = re.compile(
-    r"\b(uv|uvx|python3?|pip3?|vecten|make|source)\b|scripts/|\./|(^|\s)\.\s|\b(ba)?sh\s+\S*/",
-    re.M,
-)
+IMAGE_JOB_SHELL = """\
+pattern='^v[0-9]+\\.[0-9]+\\.[0-9]+(rc[0-9]+)?$'
+if ! [[ $REF_NAME =~ $pattern ]]; then
+  echo "refused: the ref $REF_NAME is not vX.Y.Z or vX.Y.ZrcN" >&2
+  exit 1
+fi
+echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
+"""
 
 
-def test_the_image_job_runs_only_pinned_actions_and_its_own_shell():
+def test_the_image_job_runs_only_its_pinned_actions_and_its_own_shell():
     steps = JOBS["images"]["steps"]
-    actions = [s["uses"].split("@")[0] if "uses" in s else None for s in steps]
-    assert actions == EXPECTED_ACTIONS
+    assert [s.get("uses") for s in steps] == IMAGE_JOB_ACTIONS
+    (shell,) = [s for s in steps if "uses" not in s]
+    assert shell == {
+        "id": "version",
+        "shell": "bash",
+        "env": {"REF_NAME": "${{ github.ref_name }}"},
+        "run": IMAGE_JOB_SHELL,
+    }
     for step in steps:
         if "uses" in step:
-            assert re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", step["uses"]), step
             assert "run" not in step
-    (shell,) = [s for s in steps if "run" in s]
-    assert shell["id"] == "version"
-    assert shell["shell"] == "bash"
-    assert not TREE_CODE.search(shell["run"]), shell["run"]
-
-
-@pytest.mark.parametrize(
-    "line",
-    [
-        "uv run vecten dev build-images",
-        "python3 scripts/published_images.py",
-        "pip install .",
-        "make images",
-        "./build.sh",
-        "bash images/build.sh",
-        "sh -c x; sh images/x",
-        ". images/env",
-    ],
-)
-def test_the_tree_code_pattern_catches_what_it_names(line):
-    assert TREE_CODE.search(line)
 
 
 def test_no_step_of_the_image_job_runs_after_a_failure():

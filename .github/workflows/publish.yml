@@ -84,11 +84,13 @@ jobs:
           VERSION: ${{ needs.target.outputs.version }}
         run: python3 scripts/published_images.py ghcr.io/vecten "$VERSION"
 
-  # This job can write to the registry, so it executes nothing from the tagged tree: only pinned
-  # actions and its own shell. The image tag comes from the pushed ref, which the App can name
-  # only as a candidate. The tree's Dockerfiles run inside BuildKit, with no token in the build
-  # context. The job names no environment, so a release takes one approval: it starts only once
-  # the approved packages job has succeeded.
+  # This job can write to the registry, so no step of it executes a script, build backend or CLI
+  # from the tagged tree: only pinned actions and its own shell, and the image tag comes from the
+  # pushed ref, which the App can name only as a candidate. The tree's Dockerfiles (their RUN
+  # steps, and the frontend a `# syntax=` line names) still run, inside BuildKit's container,
+  # which is not handed the registry credential: reaching it takes an escape from that container.
+  # The job names no environment, so a release takes one approval: it starts only once the
+  # approved packages job has succeeded.
   images:
     needs: [target, packages, published]
     if: >-
@@ -127,7 +129,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # One build per image puts both platforms in one index, so a tag never exists with one
-      # platform only; the mcp image is built only once the airflow image is pushed.
+      # platform only; the mcp image is built only once the airflow image is pushed. The context
+      # is the checkout's path: the action's default git context would pass the job's token to
+      # the build as a secret.
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
