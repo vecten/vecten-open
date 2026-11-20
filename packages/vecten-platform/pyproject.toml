@@ -21,6 +21,7 @@ dependencies = [
     "httpx>=0.28,<1",
     "pyyaml>=6.0,<7",
     "dbt-core>=1.12,<1.13",
+    "metricflow>=0.213,<0.214",
     "dbt-postgres>=1.11,<1.12",
     "dbt-snowflake>=1.12,<1.13",
     "fakesnow>=0.11,<0.12",

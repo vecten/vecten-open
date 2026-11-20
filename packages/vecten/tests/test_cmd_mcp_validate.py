@@ -247,3 +247,28 @@ def test_first_metric_checks_the_generated_marts_with_metricflow(invoke, tmp_pat
     for culprit in ["order_lines", "customer_id", "order_status", "status"]:
         assert culprit in result.stderr
     assert "Invalid name" not in result.stderr
+
+
+def test_metric_activates_reserved_keyword_check(invoke, tmp_path, monkeypatch):
+    root = render_fixture(tmp_path, "snowflake")
+    monkeypatch.chdir(root)
+    path = root / "osi/datasets.json"
+    doc = json.loads(path.read_text())
+    fields = doc["semantic_model"][0]["datasets"][0]["fields"]
+    column = next(field for field in fields if field.get("dimension"))
+    fields.append({**column, "name": "select"})
+    path.write_text(json.dumps(doc))
+    result = invoke("mcp", "validate", "--json")
+    assert result.exit_code == 6 and "'select' is an SQL reserved keyword" in result.stdout
+
+
+def test_unavailable_metricflow_validator_names_dependency(invoke, tmp_path, monkeypatch):
+    import sys
+
+    root = render_fixture(tmp_path, "snowflake")
+    monkeypatch.chdir(root)
+    monkeypatch.setitem(sys.modules, "vecten_platform.dbt.metricflow", None)
+    result = invoke("mcp", "validate", "--json")
+    assert result.exit_code == 6
+    assert "Cannot load MetricFlow validation" in result.stdout
+    assert read_record(root, "mcp-validate")["ok"] is False

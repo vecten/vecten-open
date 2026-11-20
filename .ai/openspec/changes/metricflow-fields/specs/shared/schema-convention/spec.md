@@ -12,3 +12,8 @@ requires a single tested key column per mart. Matching names alone SHALL NOT imp
 
 - **WHEN** a platform project adds a metric and a mart has multiple primary entities
 - **THEN** validation identifies the mart and explains how to model a single key
+
+When both datasets and metrics are present, validation SHALL run the supported MetricFlow
+version's default semantic-manifest rules over the converted Ossie documents. Only errors
+SHALL fail validation. Checks requiring dbt project nodes, time spines or saved queries
+remain the responsibility of dbt parse.

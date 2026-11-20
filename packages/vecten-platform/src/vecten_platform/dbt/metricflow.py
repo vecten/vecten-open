@@ -1,4 +1,4 @@
-"""Check dataset rules that dbt activates when its manifest contains metrics."""
+"""Check the Ossie-derived manifest with the semantic rules dbt runs when metrics exist."""
 
 from pathlib import Path
 
@@ -12,15 +12,19 @@ from metricflow_semantic_interfaces.implementations.semantic_manifest import (
 )
 from metricflow_semantic_interfaces.validations.element_const import ElementConsistencyRule
 from metricflow_semantic_interfaces.validations.primary_entity import PrimaryEntityRule
+from metricflow_semantic_interfaces.validations.semantic_manifest_validator import (
+    SemanticManifestValidator,
+)
 from metricflow_semantic_interfaces.validations.unique_valid_name import (
     PrimaryEntityDimensionPairs,
     UniqueAndValidNameRule,
 )
+from metricflow_semantic_interfaces.validations.validator_helpers import ValidationError
 
 from vecten_shared.osi.issues import Issue
 
 
-def dataset_issues(osi_dir: Path) -> list[Issue]:
+def semantic_manifest_issues(osi_dir: Path) -> list[Issue]:
     # dbt converts each document independently, then validates all its models together.
     models = []
     metrics = []
@@ -40,12 +44,17 @@ def dataset_issues(osi_dir: Path) -> list[Issue]:
         project_configuration=PydanticProjectConfiguration(),
     )
     issues = []
-    for rule, remedy in (
-        (PrimaryEntityRule, "Declare a single unique, non-null key column for the mart."),
-        (ElementConsistencyRule, "Give unrelated columns distinct aliases in the mart models."),
-        (PrimaryEntityDimensionPairs, "Give the overlapping key or dimension a distinct alias."),
-        (UniqueAndValidNameRule, "Use distinct, lowercase MetricFlow identifiers."),
-    ):
-        for error in rule.validate_manifest(manifest):
-            issues.append(Issue("dbt_semantic_model", f"{error.message} {remedy}"))
+    remedies = {
+        PrimaryEntityRule: "Declare a single unique, non-null key column for the mart.",
+        ElementConsistencyRule: "Give unrelated columns distinct aliases in the mart models.",
+        PrimaryEntityDimensionPairs: "Give the overlapping key or dimension a distinct alias.",
+        UniqueAndValidNameRule: "Use distinct, lowercase MetricFlow identifiers.",
+    }
+    for rule in SemanticManifestValidator.DEFAULT_RULES:
+        for finding in rule.validate_manifest(manifest):
+            if isinstance(finding, ValidationError):
+                message = finding.message
+                if remedy := remedies.get(type(rule)):
+                    message = f"{message} {remedy}"
+                issues.append(Issue("dbt_semantic_model", message))
     return issues
