@@ -15,7 +15,7 @@ from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
 from vecten_mcp.warehouse.base import Absent, RoleExists
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, LISTING_VERSION
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
@@ -530,7 +530,15 @@ class AccessService:
     def _outdated(self):
         installed = self.adapter.access_version()
         if installed < ACCESS_VERSION:
-            fix = OUTDATED_FIX if installed < GRANTS_VERSION else LISTING_FIX
+            if installed < GRANTS_VERSION:
+                fix = OUTDATED_FIX
+            elif installed < LISTING_VERSION:
+                fix = LISTING_FIX
+            else:
+                fix = (
+                    "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and "
+                    "confirms it with --confirm-run to update partial grant and revoke handling."
+                )
             return {"installed": installed, "required": ACCESS_VERSION, "fix": fix}
         return None
 
@@ -569,6 +577,11 @@ class AccessService:
                     done.pop()
                     if allowed:
                         missing.append(schema)
+                    continue
+                except Exception as exc:
+                    if allowed or grant["kind"] != "area":
+                        raise
+                    refused.append(f"{schema}: {describe_error(exc)}")
                     continue
                 refused += [f"{schema}: {kind}" for kind in kinds]
                 if allowed and not kinds:
@@ -967,7 +980,7 @@ class AccessService:
         build did not make, each with the statement that drops it, and the listing's error.
         Without a current record any relation could be one a later build made, so none is
         listed; the server never drops one."""
-        if self.built is None or outdated:
+        if self.built is None or (outdated and outdated["installed"] < LISTING_VERSION):
             return [], None
         try:
             record = self.built()

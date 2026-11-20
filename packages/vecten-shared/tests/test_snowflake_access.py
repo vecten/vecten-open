@@ -696,10 +696,10 @@ const snowflake = {execute: ({sqlText}) => {
     }
     if (sqlText.startsWith('SELECT TABLE_TYPE')) return rows([{1: p.tableType}]);
     if (sqlText.indexOf('INFORMATION_SCHEMA.SCHEMATA') !== -1) return rows([{1: 1}]);
-    if (sqlText.startsWith('SHOW GRANTS TO ROLE')) return rows(held);
-    if (sqlText.startsWith('SHOW FUTURE GRANTS TO ROLE')) return rows(future);
     const refused = p.refuse.find(part => sqlText.indexOf(part) !== -1);
     if (refused) throw new Error('SQL compilation error: ' + refused + ' is not supported');
+    if (sqlText.startsWith('SHOW GRANTS TO ROLE')) return rows(held);
+    if (sqlText.startsWith('SHOW FUTURE GRANTS TO ROLE')) return rows(future);
     statements.push(sqlText);
     // A statement on the wrong object type of a relation succeeds and changes nothing.
     const m = sqlText.match(single);
@@ -896,7 +896,9 @@ const snowflake = {execute: ({sqlText, binds}) => {
     };
     const quotedSchema = '"D"."' + p.schema + '"';
     if (sqlText.indexOf(quotedSchema) !== -1) {
-        if (p.schemas.indexOf(p.schema) === -1 || p.refusing) refuse("Schema 'D." + p.schema + "'");
+        if (!p.schemas.includes(p.schema) || (p.refusing && sqlText.includes(p.refusing))) {
+            refuse("Schema 'D." + p.schema + "'");
+        }
         const kinds = 'TABLE|VIEW|MATERIALIZED VIEW|DYNAMIC TABLE|EXTERNAL TABLE|ICEBERG TABLE';
         const single = sqlText.match(new RegExp(
             '^(GRANT|REVOKE) SELECT ON (?:' + kinds + ') "D"[.]"[^"]+"[.]"([^"]+)"'));
@@ -928,14 +930,13 @@ def _absent(
     schemas=(),
     relations=(),
     invisible=(),
-    refusing=False,
+    refusing=None,
     held=(),
     target="FINANCE",
     owned=True,
 ):
     """READ_GRANT over an account holding `schemas` and `relations`. INFORMATION_SCHEMA lists
-    none of `invisible`, and with `refusing` every statement on the schema is refused, as for
-    an owner that may not use it."""
+    none of `invisible`, and `refusing` names the SQL fragment the account refuses."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
@@ -973,9 +974,8 @@ def _touching(output, schema):
     return [t for t in texts if t.startswith(("GRANT", "REVOKE")) and f'"{schema}"' in t]
 
 
-@pytest.mark.parametrize("relation", [None, "INVOICE"])
-def test_a_grant_on_a_schema_the_owner_cannot_find_answers_absent_and_grants_nothing(relation):
-    output = _absent("CORE_FINANCE", True, relation=relation, schemas=["MARTS_FINANCE"])
+def test_a_grant_on_a_schema_the_owner_cannot_find_answers_absent_and_grants_nothing():
+    output = _absent("CORE_FINANCE", True, schemas=["MARTS_FINANCE"])
     assert output["error"] is None and output["value"] == "absent", output
     assert _touching(output, "CORE_FINANCE") == []
     [lookup] = _lookups(output)
@@ -988,7 +988,7 @@ def test_a_grant_on_a_schema_the_owner_cannot_find_answers_absent_and_grants_not
 
 def test_a_grant_on_an_existing_schema_the_owner_cannot_see_fails_closed_as_absent():
     output = _absent(
-        "CORE_FINANCE", True, schemas=["CORE_FINANCE"], invisible=["CORE_FINANCE"], refusing=True
+        "CORE_FINANCE", True, schemas=["CORE_FINANCE"], invisible=["CORE_FINANCE"], refusing="ON "
     )
     assert output["value"] == "absent", output
     assert _touching(output, "CORE_FINANCE") == []
@@ -1000,11 +1000,7 @@ def test_a_grant_on_an_existing_schema_the_owner_cannot_see_fails_closed_as_abse
     [([], []), (["CORE_FINANCE"], ["CORE_FINANCE"])],
     ids=["missing", "invisible"],
 )
-def test_a_revoke_the_owner_cannot_make_fails_rather_than_answering_absent(
-    relation, schemas, invisible
-):
-    # INFORMATION_SCHEMA cannot tell a dropped schema from one its owner may not use, so the
-    # failure stands and the MCP keeps retrying the revoke.
+def test_a_refused_revoke_fails_while_the_role_holds_select(relation, schemas, invisible):
     output = _absent(
         "CORE_FINANCE",
         False,
@@ -1012,7 +1008,8 @@ def test_a_revoke_the_owner_cannot_make_fails_rather_than_answering_absent(
         schemas=schemas,
         relations=["INVOICE"] if schemas else [],
         invisible=invisible,
-        refusing=True,
+        refusing="ON ",
+        held=["D.CORE_FINANCE.INVOICE"],
     )
     assert output["value"] is None and "does not exist or not authorized" in output["error"]
     assert _lookups(output) == []
@@ -1036,9 +1033,9 @@ def test_a_revoke_on_a_table_the_owner_cannot_list_is_issued_and_read_back():
     assert output["held"] == []
 
 
-def test_a_revoke_on_a_dropped_table_fails():
+def test_a_revoke_on_a_dropped_table_finishes_when_the_role_has_no_select():
     output = _absent("MARTS_FINANCE", False, relation="INVOICE", schemas=["MARTS_FINANCE"])
-    assert output["value"] is None and "does not exist or not authorized" in output["error"]
+    assert (output["value"], output["error"]) == ("ok", None)
     assert _touching(output, "MARTS_FINANCE") == []
 
 
@@ -1071,3 +1068,40 @@ def test_read_grant_grant_on_a_relation_the_owner_cannot_find_fails_naming_it():
     assert "dataset relation does not exist or is not visible" in output["error"]
     assert "MARTS_FINANCE.INVOICE" in output["error"]
     assert _touching(output, "MARTS_FINANCE") == []
+
+
+def test_a_refused_select_after_schema_usage_succeeds_is_never_absent():
+    output = _absent(
+        "CORE_FINANCE",
+        True,
+        schemas=["CORE_FINANCE"],
+        invisible=["CORE_FINANCE"],
+        refusing="SELECT ON ALL TABLES",
+    )
+    assert "does not exist or not authorized" in output["error"], output
+    assert any("GRANT USAGE ON SCHEMA" in s for s in _touching(output, "CORE_FINANCE"))
+    assert _lookups(output) == []
+
+
+@pytest.mark.parametrize(
+    ("held", "future", "complete"),
+    [
+        ([{"privilege": "USAGE", "granted_on": "SCHEMA", "name": "D.MARTS"}], [], False),
+        ([{"privilege": "SELECT", "granted_on": "TABLE", "name": "D.MARTS.T"}], [], False),
+        ([], [DYNAMIC_FUTURE], False),
+        ([{"privilege": "USAGE", "granted_on": "SCHEMA", "name": "D.MARTS_OTHER"}], [], True),
+        ([], [], True),
+    ],
+)
+def test_failed_schema_revoke_checks_schema_usage_and_current_and_future_select(
+    held, future, complete
+):
+    output = _kinds(enabled=False, refuse=["ALL TABLES"], held=held, future=future)
+    assert (output["error"] is None) is complete, output
+    assert output["value"] == ("ok" if complete else None)
+
+
+@pytest.mark.parametrize("listing", ["SHOW GRANTS TO ROLE", "SHOW FUTURE GRANTS TO ROLE"])
+def test_a_failed_revoke_stays_unresolved_when_the_grants_cannot_be_read(listing):
+    output = _kinds(enabled=False, refuse=["ALL TABLES", listing])
+    assert output["value"] is None and listing in output["error"]

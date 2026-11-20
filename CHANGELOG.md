@@ -5,6 +5,14 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Fixed
+
+- An area revoke attempts every previously granted schema and reports any that still need
+  a retry. Snowflake access procedures version 7 track partial schema grants and check a
+  refused revoke against the role's remaining privileges. An ACCOUNTADMIN installs the
+  update with `vecten mcp provisioner-script` and confirms it with `--confirm-run`
+  ([#116](https://github.com/vecten/vecten-open/issues/116), [#117](https://github.com/vecten/vecten-open/issues/117)).
+
 ## [0.1.1] - 2026-11-18
 
 ### Added

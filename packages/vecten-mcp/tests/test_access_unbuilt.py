@@ -5,7 +5,7 @@ import pytest
 
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, LISTING_VERSION
 
 
 class Adapter:
@@ -170,3 +170,12 @@ def test_the_grants_version_is_the_oldest_that_serves_area_grants(version):
             access.grant("finance", "area", "finance")
     else:
         assert access.grant("finance", "area", "finance")["kind"] == "area"
+
+
+def test_version_six_keeps_relation_listing_while_requesting_the_procedure_update():
+    adapter = Adapter(PRESENT, version=LISTING_VERSION)
+    access = service(adapter, RECORD)
+    assert access.reconcile()["complete"]
+    health = access.health()
+    assert adapter.listed and health["unbuilt"]
+    assert "partial grant and revoke" in health["outdated"]["fix"]
