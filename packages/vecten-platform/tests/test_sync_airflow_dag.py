@@ -294,6 +294,15 @@ def test_dag_test_one_object_fails_others_keep_checkpoints(tmp_path, monkeypatch
     }
 
 
+@pytest.mark.docker
+@pytest.mark.parametrize("credits, attempts", [(0, 1), (1, 3)])
+def test_metered_object_attempts(tmp_path, monkeypatch, credits, attempts):
+    run, _, _ = run_demo_dag(tmp_path, monkeypatch, ["bad"], params={"credits": credits})
+    sync = next(ti for ti in run.get_task_instances() if ti.task_id == "sync")
+    assert sync.state == "failed"
+    assert sync.try_number == attempts
+
+
 def warehouse_count(tmp_path, table: str) -> int | None:
     import duckdb
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import dlt
 
+from vecten_platform.sync import TerminalConnectorError
 from vecten_platform.sync.recording import record_to
 from vecten_shared.output import Failure
 
@@ -20,6 +21,7 @@ class ObjectOutcome:
     error: str | None = None
     # The normalised top-level tables the load wrote to, which `rows` counts.
     tables: tuple[str, ...] = ()
+    terminal: bool = False
 
 
 def pipeline_name(connector: str, object_name: str) -> str:
@@ -123,15 +125,22 @@ def run_object(
             recording.discard()
         # dlt wraps whatever a resource body raises in PipelineStepFailed, Ctrl-C included;
         # an interrupt must stop the run, not count as one object's failure.
-        interrupt = next((e for e in _chain(exc) if not isinstance(e, Exception)), None)
+        chain = _chain(exc)
+        interrupt = next((e for e in chain if not isinstance(e, Exception)), None)
         if interrupt is not None:
             raise interrupt from None
         # A missing secret or provider problem is a precondition, not a source failure, even
         # when a resource body raised it and dlt wrapped it.
-        failure = next((e for e in _chain(exc) if isinstance(e, Failure)), None)
+        failure = next((e for e in chain if isinstance(e, Failure)), None)
         if failure is not None:
             raise failure from None
-        return ObjectOutcome(object_name, False, 0, _describe(exc))
+        return ObjectOutcome(
+            object_name,
+            False,
+            0,
+            _describe(exc),
+            terminal=any(isinstance(e, TerminalConnectorError) for e in chain),
+        )
     except BaseException:
         if recording is not None:
             recording.discard()

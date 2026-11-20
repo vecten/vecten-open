@@ -79,6 +79,15 @@ def test_one_failing_object_does_not_block_or_reset_the_others(demo, duckdb_dest
     assert names == {"demo__good_a", "demo__good_b"}
 
 
+@pytest.mark.parametrize("credits, terminal", [(0, True), (1, False)])
+def test_wrapped_metered_failure(demo, duckdb_dest, tmp_path, credits, terminal):
+    outcome = run_object(
+        "demo", lambda: demo.source(credits=credits), "bad", duckdb_dest, tmp_path / "dlt"
+    )
+    assert not outcome.ok
+    assert outcome.terminal is terminal
+
+
 def test_checkpoint_survives_a_fresh_dlt_dir(demo, duckdb_dest, tmp_path):
     run_object("demo", demo.source, "good_a", duckdb_dest, tmp_path / "dlt1")
     again = run_object("demo", demo.source, "good_a", duckdb_dest, tmp_path / "dlt2")

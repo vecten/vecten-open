@@ -72,7 +72,14 @@ def sync_one(connector: str, object_name: str, params: Mapping[str, Any] | None 
         # and the alert and `vecten issues` key every such failure by its object.
         raise ObjectSyncError(connector, object_name, _describe(exc)) from exc
     if not outcome.ok:
-        raise ObjectSyncError(connector, object_name, outcome.error or "failed")
+        error = ObjectSyncError(connector, object_name, outcome.error or "failed")
+        if outcome.terminal:
+            from airflow.exceptions import AirflowFailException
+
+            failure = AirflowFailException(str(error))
+            failure.object_name = object_name
+            raise failure
+        raise error
     return {"object": object_name, "rows": outcome.rows}
 
 

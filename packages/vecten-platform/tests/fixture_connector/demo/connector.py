@@ -2,7 +2,7 @@
 
 import dlt
 
-from vecten_platform.sync import secret
+from vecten_platform.sync import TerminalConnectorError, secret
 
 
 @dlt.resource(name="good_a", write_disposition="append")
@@ -11,7 +11,9 @@ def good_a(limit=None, cursor=dlt.sources.incremental("id", initial_value=0)):  
 
 
 @dlt.resource(name="bad")
-def bad():
+def bad(credits=None):
+    if credits == 0:
+        raise TerminalConnectorError("metered source is out of credits")
     raise RuntimeError("upstream returned 500")
     yield
 
@@ -22,9 +24,9 @@ def good_b():
 
 
 @dlt.source(name="demo")
-def demo_source(token: str, limit: int | None = None):
-    return [good_a(limit=limit), bad, good_b]
+def demo_source(token: str, limit: int | None = None, credits: int | None = None):
+    return [good_a(limit=limit), bad(credits=credits), good_b]
 
 
-def source(limit: int | None = None):
-    return demo_source(token=secret("DEMO_TOKEN"), limit=limit)
+def source(limit: int | None = None, credits: int | None = None):
+    return demo_source(token=secret("DEMO_TOKEN"), limit=limit, credits=credits)
