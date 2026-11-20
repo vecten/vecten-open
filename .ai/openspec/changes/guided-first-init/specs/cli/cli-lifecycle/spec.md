@@ -12,6 +12,7 @@ and count only files it renders. Other top-level entries SHALL cause a refusal t
   and the completed local intake
 - **WHEN** the guide runs `vecten init` there
 - **THEN** the project is rendered directly in that directory and its existing entries are preserved
+- **AND** the generated Git ignore rules exclude local Claude settings, write logs and Finder metadata while allowing shared Claude configuration
 
 #### Scenario: The target contains unrelated work
 

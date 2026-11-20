@@ -1,4 +1,7 @@
 .vecten/
+/.claude/settings.local.json
+/.claude/.cc-writes/
+.DS_Store
 .env
 __pycache__/
 *.pyc

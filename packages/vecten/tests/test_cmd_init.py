@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 import yaml
@@ -276,6 +277,16 @@ def test_guide_initializes_in_the_session_directory(invoke, workdir):
         if p.relative_to(workdir).parts[0] not in {".claude", ".DS_Store", ".vecten", answers.name}
     )
     assert doc["files"] == expected
+
+    (claude / ".cc-writes" / "session.log").touch()
+    (claude / "settings.json").write_text("{}")
+    subprocess.run(["git", "init", "-q"], cwd=workdir, check=True)
+    git = ["git", "-c", "core.excludesFile=/dev/null"]
+    subprocess.run([*git, "add", "-A"], cwd=workdir, check=True)
+    staged = subprocess.check_output([*git, "ls-files"], cwd=workdir, text=True).splitlines()
+    assert ".claude/settings.json" in staged
+    local_files = {".DS_Store", ".claude/settings.local.json", ".claude/.cc-writes/session.log"}
+    assert local_files.isdisjoint(staged)
 
 
 def test_init_refuses_non_empty_target(invoke, workdir):
