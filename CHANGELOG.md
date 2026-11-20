@@ -10,8 +10,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - `vecten up` starts Airflow locally for Snowflake projects configured with both platform
   and MCP components. The generated NGINX service depends only on the local Airflow API
   ([#133](https://github.com/vecten/vecten-open/issues/133)).
-- `vecten init` renders the fixed-name Snowflake runbook when the recorded
-  `snowflake_shared_account` answer is `no`
+- `vecten init` keeps a Snowflake platform project’s recorded shared-account choice in
+  `vecten.toml` and renders the corresponding runbook through subsequent updates
   ([#132](https://github.com/vecten/vecten-open/issues/132)).
 
 ## [0.1.1] - 2026-11-18
