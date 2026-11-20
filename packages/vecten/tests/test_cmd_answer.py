@@ -1,6 +1,7 @@
 import json
 import tomllib
 
+import pytest
 import yaml
 
 from vecten.intake.answers import SOURCES_NEED_PLATFORM
@@ -23,6 +24,24 @@ def test_answer_records_value(invoke, workdir):
         "file": "vecten-answers.yml",
     }
     assert yaml.safe_load((workdir / "vecten-answers.yml").read_text()) == {"cloud": "aws"}
+
+
+@pytest.mark.parametrize("invalid", ["Acme Data Warehouse", "4acme", "acmé", "a" * 64])
+def test_answer_and_init_apply_the_same_project_name_rule(invoke, workdir, invalid):
+    valid = "a-_" + "1" * 60
+    assert invoke("answer", "name", valid).exit_code == 0
+    answers = workdir / "vecten-answers.yml"
+    before = answers.read_bytes()
+    answer = invoke("answer", "name", invalid, "--json")
+    init = invoke(
+        "init", "project", "--name", invalid, "--users", "4", "--source", "demo", "--json"
+    )
+    assert answer.exit_code == init.exit_code == 2
+    error = json.loads(answer.stdout)["error"]
+    assert "lowercase" in error and "63" in error
+    assert error == json.loads(init.stdout)["error"]
+    assert answers.read_bytes() == before
+    assert not (workdir / "project").exists()
 
 
 def test_answer_inside_a_project_writes_at_the_project_root(invoke, workdir, monkeypatch):

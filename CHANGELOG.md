@@ -5,6 +5,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Fixed
+
+- The first guided project now initializes in the folder where Claude Code started, even
+  when it contains `.claude/` or Finder's `.DS_Store`. If other entries block initialization,
+  the CLI lists them. The guide explains the project name format and checks it when you answer.
+
 ## [0.1.1] - 2026-11-18
 
 ### Added
