@@ -1037,14 +1037,17 @@ def _add_extension(root: Path, package: str, fetched: Path, settings: list[str])
             if not sep or not key.strip() or key.strip() == "env":
                 raise Failure(ExitCode.USAGE, "--set expects a base setting as key=value")
             try:
-                value = tomlkit.value(raw)
+                value = tomlkit.value(raw.strip())
             except ValueError:
                 value = raw
             doc["settings"][name][key.strip()] = value
         try:
             config = VectenConfig.model_validate(doc.unwrap())
         except ValidationError as exc:
-            raise Failure(ExitCode.CONFIG, f"settings for {name}: {exc}") from None
+            first = exc.errors()[0]
+            loc = ".".join(str(part) for part in first["loc"])
+            where = f"{loc}: " if loc else ""
+            raise Failure(ExitCode.CONFIG, f"settings for {name}: {where}{first['msg']}") from None
     files, report = lock_project(root, config, added=dist)
     record = locking.parse_record(files[root / locking.RECORD_FILE]) or {}
     services = _bind_services(doc, config, name, record.get(name), record)
