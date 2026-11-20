@@ -1007,7 +1007,10 @@ def test_secrets_check_names_the_tracked_files_holding_a_secret(tmp_path):
     git(project, "add", "infra/leak.tf", "README.md")
     result = access(tmp_path, "secrets-check", str(project))
     assert result.returncode == 1
-    assert result.stdout == "infra/leak.tf\n"
+    assert result.stdout.splitlines() == [
+        "infra/leak.tf  (in the working tree, staged)",
+        "untracked.txt  (in the working tree)",
+    ]
     assert AWS_SECRET not in result.stdout + result.stderr
 
 
@@ -1390,7 +1393,8 @@ def test_project_check_public_runs_from_the_tools_copy(tmp_path):
     (project / ".env").write_text("A=1\n")
     git(project, "add", ".env")
     leaking = access(tmp_path, "project", "check-public", str(project))
-    assert (leaking.returncode, leaking.stdout) == (1, ".env  (file name)\n")
+    expected = ".env  (file name; in the working tree, staged)\n"
+    assert (leaking.returncode, leaking.stdout) == (1, expected)
 
 
 def test_check_public_runs_no_command_the_projects_git_configuration_names(tmp_path):
@@ -1649,17 +1653,27 @@ def test_the_secret_check_lists_files_under_the_os_sandbox(tmp_path):
     result = access(
         tmp_path, "secrets-check", str(project), PLATFORM="darwin", SANDBOX_EXEC=str(fake)
     )
-    assert (result.returncode, result.stdout) == (1, "infra/leak.tf\n")
-    [call] = invocations(record)
-    assert call[2:] == ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"]
-    [env] = environments(record)
-    no_credential_in(env)
+    assert (result.returncode, result.stdout) == (
+        1,
+        "infra/leak.tf  (in the working tree, staged)\n",
+    )
+    calls = invocations(record)
+    assert [call[2:5] for call in calls] == [["git", "-c", "core.fsmonitor=false"]] * 5
+    assert [call[5] for call in calls] == [
+        "ls-files",
+        "ls-files",
+        "rev-parse",
+        "rev-list",
+        "cat-file",
+    ]
+    for env in environments(record):
+        no_credential_in(env)
     closed = script(tmp_path / "closed-sandbox-exec", "exit 71")
     failed = access(
         tmp_path, "secrets-check", str(project), PLATFORM="darwin", SANDBOX_EXEC=str(closed)
     )
     assert (failed.returncode, failed.stdout) == (2, "")
-    assert "cannot list the tracked files" in failed.stderr
+    assert "cannot read what" in failed.stderr
 
 
 def test_doctor_reads_the_tools_commit_under_the_os_sandbox(tmp_path):
@@ -1678,7 +1692,10 @@ def test_check_public_through_the_wrapper_runs_both_checks(tmp_path):
     home(tmp_path)
     files = {".env": "A=1\n", "infra/main.tf": f'x = "{AWS_SECRET}"\n'}
     project, _ = project_with_workflow(tmp_path, files)
-    expected = [".env  (file name)", "infra/main.tf  (credential value)"]
+    expected = [
+        ".env  (file name; in the working tree, staged)",
+        "infra/main.tf  (credential value; in the working tree, staged)",
+    ]
     forged = {"VECTEN_LIVE_SECRET_HITS": "[]"}
     fake, _ = recording_sandbox(tmp_path)
     for platform in ("linux", "darwin"):
@@ -1701,7 +1718,7 @@ def test_check_public_through_the_wrapper_is_refused_where_it_cannot_list(tmp_pa
     plain.mkdir()
     result = access(tmp_path, "project", "check-public", str(plain))
     assert (result.returncode, result.stdout) == (3, "")
-    assert "cannot list the tracked files" in result.stderr
+    assert "cannot read what" in result.stderr
 
 
 @pytest.mark.parametrize("args", [["--", "sweep"], [], ["made-up"], ["--help"]])
@@ -1860,3 +1877,147 @@ def test_the_os_sandbox_holds_against_renames_and_any_checkouts_agent_files(tmp_
     assert moved.returncode != 0
     assert (checkout / ".claude/settings.local.json").exists()
     assert sandboxed(f'printf x >> "{checkout}/.claude/worktrees/notes"').returncode == 0
+
+
+REWRITE = "removing the file is not enough: rewrite the history or render the project afresh"
+
+
+def publishable(tmp_path):
+    """A project with one clean commit on main, as `vecten github init` leaves it."""
+    project = tmp_path / "project"
+    project.mkdir()
+    git(project, "init", "-q", "--initial-branch=main")
+    (project / "README.md").write_text("# Sandbox\n")
+    git(project, "add", "README.md")
+    git(project, *IDENTITY, "commit", "-q", "-m", "first")
+    return project
+
+
+def commit(project, message):
+    git(project, "add", "--all")
+    git(project, *IDENTITY, "commit", "-q", "-m", message)
+
+
+def both_checks(tmp_path, project):
+    return (
+        access(tmp_path, "secrets-check", str(project)),
+        access(tmp_path, "project", "check-public", str(project)),
+    )
+
+
+def test_a_credential_still_staged_after_the_file_was_cleaned_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "leak.tf").write_text(f'secret = "{AWS_SECRET}"\n')
+    git(project, "add", "leak.tf")
+    (project / "leak.tf").write_text('secret = "none"\n')
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (1, "leak.tf  (staged)\n")
+    assert (public.returncode, public.stdout) == (1, "leak.tf  (credential value; staged)\n")
+    assert AWS_SECRET not in secrets.stdout + secrets.stderr + public.stdout + public.stderr
+
+
+def test_a_credential_committed_and_then_removed_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "leak.tf").write_text(f'secret = "{AWS_SECRET}"\n')
+    commit(project, "leak")
+    git(project, "rm", "-q", "leak.tf")
+    commit(project, "remove the leak")
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (1, f"leak.tf  (in a commit: {REWRITE})\n")
+    assert (public.returncode, public.stdout) == (
+        1,
+        f"leak.tf  (credential value; in a commit: {REWRITE})\n",
+    )
+
+
+def test_a_credential_in_an_untracked_file_add_all_would_stage_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "notes.txt").write_text(AWS_SECRET)
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (1, "notes.txt  (in the working tree)\n")
+    assert public.returncode == 1
+    assert public.stdout == "notes.txt  (credential value; in the working tree)\n"
+
+
+def test_a_credential_only_in_an_ignored_file_passes(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / ".gitignore").write_text("deploy.secret\n")
+    commit(project, "ignore")
+    (project / "deploy.secret").write_text(AWS_SECRET)
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (0, "")
+    assert (public.returncode, public.stdout) == (0, ""), public.stderr
+
+
+def test_a_credential_on_another_branch_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    git(project, "switch", "-q", "-c", "other")
+    (project / "leak.tf").write_text(f'secret = "{AWS_SECRET}"\n')
+    commit(project, "leak on another branch")
+    git(project, "switch", "-q", "main")
+    assert not (project / "leak.tf").exists()
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (1, f"leak.tf  (in a commit: {REWRITE})\n")
+    assert public.returncode == 1
+    assert public.stdout == f"leak.tf  (credential value; in a commit: {REWRITE})\n"
+
+
+def test_a_forbidden_file_name_only_in_an_earlier_commit_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "deploy.key").write_text("not a credential of the home\n")
+    commit(project, "key")
+    git(project, "rm", "-q", "deploy.key")
+    commit(project, "remove the key")
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (0, "")
+    assert (public.returncode, public.stdout) == (
+        1,
+        f"deploy.key  (file name; in a commit: {REWRITE})\n",
+    )
+
+
+def test_a_clean_project_with_several_commits_passes(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    for number in range(3):
+        (project / f"file{number}.txt").write_text(f"content {number}\n")
+        commit(project, f"commit {number}")
+    (project / "file0.txt").write_text("changed, not staged\n")
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (0, "")
+    assert (public.returncode, public.stdout) == (0, ""), public.stderr
+
+
+def test_a_project_with_no_commit_yet_is_checked(tmp_path):
+    home(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    git(project, "init", "-q")
+    (project / "README.md").write_text("# Sandbox\n")
+    (project / "leak.tf").write_text(AWS_SECRET)
+    git(project, "add", "--all")
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (1, "leak.tf  (in the working tree, staged)\n")
+    assert public.returncode == 1
+
+
+def test_a_git_that_fails_listing_the_history_is_a_refusal(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    real_git = shutil.which("git")
+    script(
+        tmp_path / "bin/git",
+        'case " $* " in *" rev-list "*) echo "fatal: history unreadable" >&2; exit 128;; esac\n'
+        f'exec "{real_git}" "$@"',
+    )
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (2, "")
+    assert "git rev-list failed: fatal: history unreadable" in secrets.stderr
+    assert (public.returncode, public.stdout) == (3, "")
+    assert "git rev-list failed" in public.stderr

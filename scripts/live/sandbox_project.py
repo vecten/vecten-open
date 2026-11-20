@@ -21,6 +21,12 @@ REFUSED = 3
 VERSION_VARIABLES = ("$VECTEN_VERSION", "${VECTEN_VERSION}")
 # The wrapper's own secret check, which it runs before this script when it runs `check-public`.
 SECRET_HITS = "VECTEN_LIVE_SECRET_HITS"
+# Reading the index would run any fsmonitor command the project configures.
+GIT = ["git", "-c", "core.fsmonitor=false"]
+# Where a push can publish a file from: `vecten github push` stages everything `git add --all`
+# would, and a push sends every commit its refs reach. The same keys as the secret check's JSON.
+PLACES = {"working-tree": "in the working tree", "staged": "staged", "commit": "in a commit"}
+REWRITE = "removing the file is not enough: rewrite the history or render the project afresh"
 
 PIN = re.compile(r'vecten==([^"\s]+)')
 INSTALL = re.compile(rf'(uv tool install "vecten==[^"\s]+")(?: {re.escape(FIND_LINKS)})?')
@@ -82,69 +88,132 @@ def rewrite(project: Path, convert) -> None:
         path.write_bytes(data)
 
 
-def tracked_files(project: Path) -> list[str]:
-    # Reading the index would run any fsmonitor command the project configures.
-    listed = subprocess.run(
-        ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"], cwd=project, capture_output=True
-    )
+def _git(project: Path, *args: str) -> bytes:
+    try:
+        done = subprocess.run([*GIT, *args], cwd=project, capture_output=True)
+    except OSError as error:
+        raise Refused(f"git could not start: {error}") from None
+    if done.returncode != 0:
+        lines = done.stderr.decode(errors="replace").strip().splitlines()
+        last = lines[-1] if lines else f"exit {done.returncode}"
+        raise Refused(f"cannot read what {project} would publish: git {args[0]} failed: {last}")
+    return done.stdout
+
+
+def _names(output: bytes) -> list[str]:
+    return [name for name in output.decode(errors="surrogateescape").split("\0") if name]
+
+
+def _has_head(project: Path) -> bool:
+    """Whether HEAD names a commit; a repository with none yet answers exit 1 and nothing else."""
+    try:
+        done = subprocess.run(
+            [*GIT, "rev-parse", "--verify", "--quiet", "HEAD"], cwd=project, capture_output=True
+        )
+    except OSError as error:
+        raise Refused(f"git could not start: {error}") from None
+    if done.returncode == 1 and not done.stdout.strip() and not done.stderr.strip():
+        return False
+    if done.returncode != 0:
+        raise Refused(f"cannot read what {project} would publish: git rev-parse failed")
+    return True
+
+
+def published_paths(project: Path) -> dict[str, set[str]]:
+    """Every path a push could publish, with where: the working tree as `git add --all` would
+    stage it, the index, and every commit a ref or HEAD reaches."""
+    listed = subprocess.run([*GIT, "ls-files", "-z", "--stage"], cwd=project, capture_output=True)
     if listed.returncode != 0:
         raise Refused(f"{project} is not a git work tree")
-    names = [name for name in listed.stdout.decode().split("\0") if name]
-    if not names:
+    staged = [entry.partition("\t")[2] for entry in _names(listed.stdout)]
+    if not staged:
         raise Refused(f"the git index of {project} is empty; add the files to push first")
-    return names
+    places: dict[str, set[str]] = {}
+    staging = _git(project, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+    for name in _names(staging):
+        if os.path.lexists(project / name):
+            places.setdefault(name, set()).add("working-tree")
+    for name in staged:
+        places.setdefault(name, set()).add("staged")
+    revisions = ["--all", *(["HEAD"] if _has_head(project) else [])]
+    listing = _git(project, "rev-list", "--objects", "--filter=object:type=blob", *revisions)
+    for line in listing.decode(errors="surrogateescape").splitlines():
+        name = line.partition(" ")[2]
+        if name:
+            places.setdefault(name, set()).add("commit")
+    return places
 
 
-def secret_names(names: Sequence[str]) -> list[str]:
+def secret_names(published: dict[str, set[str]]) -> list[dict]:
     # The patterns are lower case, and a secret file's name may be written in any case.
     return [
-        name
-        for name in names
+        {"path": name, "found": [place for place in PLACES if place in published[name]]}
+        for name in sorted(published)
         if any(fnmatch.fnmatchcase(PurePosixPath(name).name.lower(), p) for p in SECRET_FILE_NAMES)
     ]
 
 
-def secret_values(project: Path, tracked: Sequence[str]) -> list[str]:
+def _findings(text: str, published: dict[str, set[str]]) -> list[dict]:
+    """The secret check's JSON findings, each a path a push could publish and where it was."""
+    try:
+        findings = json.loads(text)
+    except ValueError:
+        findings = None
+    if not isinstance(findings, list) or not all(
+        isinstance(finding, dict)
+        and isinstance(finding.get("path"), str)
+        and isinstance(finding.get("found"), list)
+        and finding["found"]
+        and set(finding["found"]) <= set(PLACES)
+        for finding in findings
+    ):
+        raise Refused("the secret check's findings cannot be read")
+    if not {finding["path"] for finding in findings} <= set(published):
+        raise Refused("the secret check named a path a push of this project would not publish")
+    return findings
+
+
+def secret_values(project: Path, published: dict[str, set[str]]) -> list[dict]:
     handed = os.environ.get(SECRET_HITS)
     if handed is not None:
-        try:
-            paths = json.loads(handed)
-        except ValueError:
-            paths = None
-        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
-            raise Refused("the secret check handed over something other than a list of paths")
-        if not set(paths) <= set(tracked):
-            raise Refused("the secret check named a path that is not in the git index")
-        return paths
+        return _findings(handed, published)
     try:
         checked = subprocess.run(
-            [sys.executable, "-I", str(ACCESS), "secrets-check", str(project)],
+            [sys.executable, "-I", str(ACCESS), "secrets-check", "--json", str(project)],
             capture_output=True,
             text=True,
         )
     except OSError as error:
         raise Refused(f"the secret check could not run: {error}") from None
     if checked.returncode == 0:
-        if checked.stdout.strip():
-            raise Refused("the secret check exited 0 but printed output")
+        if checked.stdout.strip() != "[]":
+            raise Refused("the secret check exited 0 but printed findings")
         return []
     if checked.returncode == 1:
-        paths = [line for line in checked.stdout.splitlines() if line]
-        if not paths:
+        if not checked.stdout.strip():
             last = (checked.stderr.strip().splitlines() or [""])[-1]
             raise Refused(f"the secret check failed without naming a path: {last}")
-        if not set(paths) <= set(tracked):
-            raise Refused("the secret check named a path that is not in the git index")
-        return paths
+        findings = _findings(checked.stdout, published)
+        if not findings:
+            raise Refused("the secret check exited 1 but named no path")
+        return findings
     message = checked.stderr.strip() or checked.stdout.strip() or f"exit {checked.returncode}"
     raise Refused(f"the secret check could not run: {message}")
 
 
+def describe(finding: dict, kind: str) -> str:
+    """One line for a path that must not be published; never the value that was found."""
+    places = finding["found"]
+    note = f": {REWRITE}" if "commit" in places else ""
+    return f"{finding['path']}  ({kind}; {', '.join(PLACES[p] for p in places)}{note})"
+
+
 def check_public(project: Path) -> int:
-    names = tracked_files(project)
-    hits = [f"{name}  (file name)" for name in secret_names(names)]
+    published = published_paths(project)
+    hits = [describe(finding, "file name") for finding in secret_names(published)]
     try:
-        hits += [f"{name}  (credential value)" for name in secret_values(project, names)]
+        values = secret_values(project, published)
+        hits += [describe(finding, "credential value") for finding in values]
     except Refused:
         for hit in hits:
             print(hit)

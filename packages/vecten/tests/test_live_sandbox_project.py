@@ -378,12 +378,25 @@ def handed(monkeypatch, value):
 
 def test_check_public_takes_the_secret_check_the_wrapper_hands_over(tmp_path, monkeypatch, capsys):
     root = project(tmp_path, {"README.md": "x\n", "infra/main.tf": "y\n"})
-    assert handed(monkeypatch, '["infra/main.tf"]').main(["check-public", str(root)]) == 1
-    assert capsys.readouterr().out == "infra/main.tf  (credential value)\n"
+    finding = '[{"path": "infra/main.tf", "found": ["working-tree", "staged"]}]'
+    assert handed(monkeypatch, finding).main(["check-public", str(root)]) == 1
+    expected = "infra/main.tf  (credential value; in the working tree, staged)\n"
+    assert capsys.readouterr().out == expected
     assert handed(monkeypatch, "[]").main(["check-public", str(root)]) == 0
 
 
-@pytest.mark.parametrize("value", ['["elsewhere.txt"]', "not json", '{"a": 1}', "[1]"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        '[{"path": "elsewhere.txt", "found": ["working-tree"]}]',
+        '[{"path": "README.md", "found": ["somewhere"]}]',
+        '[{"path": "README.md", "found": []}]',
+        '["README.md"]',
+        "not json",
+        '{"a": 1}',
+        "[1]",
+    ],
+)
 def test_check_public_refuses_a_handed_secret_check_it_cannot_trust(tmp_path, monkeypatch, value):
     root = project(tmp_path, {"README.md": "x\n"})
     assert handed(monkeypatch, value).main(["check-public", str(root)]) == 3

@@ -46,7 +46,11 @@ SIBLINGS = {
     "project": "sandbox_project.py",
 }
 # Reading the index would run any fsmonitor command the checked repository configures.
-LS_FILES = ["git", "-c", "core.fsmonitor=false", "ls-files", "-z"]
+GIT = ["git", "-c", "core.fsmonitor=false"]
+# Where a push can publish a file from: `vecten github push` stages everything `git add --all`
+# would, and a push sends every commit its refs reach. Keys as the secret check's JSON gives them.
+PLACES = {"working-tree": "in the working tree", "staged": "staged", "commit": "in a commit"}
+REWRITE = "removing the file is not enough: rewrite the history or render the project afresh"
 # The secret check's findings for the public check, which cannot start a sandbox inside its own;
 # a sibling's environment comes from an allowlist, so only the wrapper can set it.
 SECRET_HITS = "VECTEN_LIVE_SECRET_HITS"
@@ -703,48 +707,133 @@ def _tracked_text(path: Path, root: Path) -> str | None:
     return path.read_bytes().decode(errors="ignore")
 
 
-def secret_hits(directory: Path) -> list[str]:
-    """The tracked files of `directory` that hold a value of the credential home.
+def _git(directory: Path, sandbox: list[str], env: dict, *args: str, given: bytes = b"") -> bytes:
+    try:
+        done = subprocess.run(
+            [*sandbox, *GIT, *args], cwd=directory, env=env, input=given, capture_output=True
+        )
+    except OSError as error:
+        raise NotListed(f"git could not start in {directory}: {error.strerror}") from None
+    if done.returncode != 0:
+        lines = done.stderr.decode(errors="replace").strip().splitlines()
+        last = lines[-1] if lines else f"exit {done.returncode}"
+        raise NotListed(f"cannot read what {directory} would publish: git {args[0]} failed: {last}")
+    return done.stdout
 
-    The wrapper reads the secrets and the files itself; git, which obeys the repository's own
-    configuration, lists the files under the OS sandbox and without a credential.
+
+def _has_head(directory: Path, sandbox: list[str], env: dict) -> bool:
+    """Whether HEAD names a commit; a repository with none yet answers exit 1 and nothing else."""
+    command = [*sandbox, *GIT, "rev-parse", "--verify", "--quiet", "HEAD"]
+    try:
+        done = subprocess.run(command, cwd=directory, env=env, capture_output=True)
+    except OSError as error:
+        raise NotListed(f"git could not start in {directory}: {error.strerror}") from None
+    if done.returncode == 1 and not done.stdout.strip() and not done.stderr.strip():
+        return False
+    if done.returncode != 0:
+        raise NotListed(f"cannot read what {directory} would publish: git rev-parse failed")
+    return True
+
+
+def _names(output: bytes) -> list[str]:
+    return [name for name in output.decode(errors="surrogateescape").split("\0") if name]
+
+
+def _blobs(directory: Path, sandbox: list[str], env: dict, names: list[str]) -> dict[str, str]:
+    """The content of each object named, as text, from one `git cat-file --batch`."""
+    if not names:
+        return {}
+    out = _git(
+        directory,
+        sandbox,
+        env,
+        "cat-file",
+        "--batch",
+        given="".join(f"{name}\n" for name in names).encode(),
+    )
+    contents, position = {}, 0
+    while position < len(out):
+        header_end = out.index(b"\n", position)
+        fields = out[position:header_end].decode(errors="replace").split()
+        if len(fields) != 3:
+            raise NotListed(
+                f"cannot read what {directory} would publish: object {fields[0]} is missing"
+            )
+        size = int(fields[2])
+        contents[fields[0]] = out[header_end + 1 : header_end + 1 + size].decode(errors="ignore")
+        position = header_end + 1 + size + 1
+    return contents
+
+
+def secret_hits(directory: Path) -> list[dict]:
+    """Every path a push of `directory` could publish holding a value of the credential home,
+    with where it was found: the working tree, the index or any commit a ref or HEAD reaches.
+
+    The wrapper reads the secrets and searches the bytes itself; git, which obeys the
+    repository's own configuration, lists and reads under the OS sandbox and without a
+    credential. A git command that fails refuses the check rather than pass it.
     """
     home = credential_home()
     if not home.is_dir():
         raise Refused(f"no credential home at {home}")
     secrets = secret_values(home)
-    try:
-        listed = subprocess.run(
-            [*_os_sandbox(), *LS_FILES],
-            cwd=directory,
-            env=plain_env(),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-        )
-    except OSError as error:
-        raise NotListed(f"cannot list the tracked files of {directory}: {error}") from None
-    if listed.returncode != 0:
-        raise NotListed(f"cannot list the tracked files of {directory}; is it a git work tree?")
+    sandbox, env = _os_sandbox(), plain_env()
+    found: dict[str, set[str]] = {}
+
+    def look(path: str, text: str | None, place: str) -> None:
+        if text is not None and any(secret in text for secret in secrets):
+            found.setdefault(path, set()).add(place)
+
     root = directory.resolve()
-    hits = []
-    for name in filter(None, listed.stdout.decode(errors="surrogateescape").split("\0")):
+    staging = _git(
+        directory, sandbox, env, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
+    )
+    for name in _names(staging):
         try:
-            text = _tracked_text(directory / name, root)
+            look(name, _tracked_text(directory / name, root), "working-tree")
         except OSError:
             continue
-        if text is not None and any(secret in text for secret in secrets):
-            hits.append(name)
-    return hits
+    staged: dict[str, list[str]] = {}
+    for entry in _names(_git(directory, sandbox, env, "ls-files", "-z", "--stage")):
+        meta, _, name = entry.partition("\t")
+        mode, sha = meta.split()[:2]
+        # A submodule entry names a commit of another repository, which this push does not send.
+        if mode != "160000":
+            staged.setdefault(sha, []).append(name)
+    revisions = ["--all", *(["HEAD"] if _has_head(directory, sandbox, env) else [])]
+    listing = _git(
+        directory, sandbox, env, "rev-list", "--objects", "--filter=object:type=blob", *revisions
+    )
+    history: dict[str, set[str]] = {}
+    for line in listing.decode(errors="surrogateescape").splitlines():
+        sha, _, name = line.partition(" ")
+        if name:
+            history.setdefault(sha, set()).add(name)
+    blobs = _blobs(directory, sandbox, env, list(dict.fromkeys([*staged, *history])))
+    for place, objects in (("staged", staged), ("commit", history)):
+        for sha, names in objects.items():
+            for name in names:
+                look(name, blobs[sha], place)
+    return [
+        {"path": path, "found": [k for k in PLACES if k in found[path]]} for path in sorted(found)
+    ]
 
 
-def _secrets_check(directory: Path) -> int:
+def describe(path: str, places: list[str]) -> str:
+    """One line for a path that must not be published; never the value that was found."""
+    note = f": {REWRITE}" if "commit" in places else ""
+    return f"{path}  ({', '.join(PLACES[place] for place in places)}{note})"
+
+
+def _secrets_check(directory: Path, as_json: bool) -> int:
     try:
         hits = secret_hits(directory)
     except NotListed as refused:
         print(f"access: {refused}", file=sys.stderr)
         return 2
-    for name in hits:
-        print(name)
+    lines = [json.dumps(hits)] if as_json else [describe(h["path"], h["found"]) for h in hits]
+    for line in lines:
+        print(line)
     return 1 if hits else 0
 
 
@@ -809,8 +898,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.add_argument("command", nargs=argparse.REMAINDER)
     actions.add_parser("doctor", help="check every identity")
-    check = actions.add_parser("secrets-check", help="list tracked files holding a secret")
+    check = actions.add_parser(
+        "secrets-check", help="list the files a push could publish holding a secret"
+    )
     check.add_argument("directory", type=Path)
+    check.add_argument("--json", action="store_true", help="print the findings as JSON")
     show = actions.add_parser("show", help="print one non-secret setting of the credential home")
     show.add_argument("name", help=", ".join(SHOWN))
     show.add_argument("combination", nargs="?")
@@ -819,7 +911,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "doctor":
             return _doctor()
         if args.action == "secrets-check":
-            return _secrets_check(args.directory)
+            return _secrets_check(args.directory, args.json)
         if args.action == "show":
             return _show(args.name, args.combination)
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
