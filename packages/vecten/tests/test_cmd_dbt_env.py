@@ -577,3 +577,53 @@ def test_prod_runs_beside_the_convention_packages_grants_check(invoke, snowflake
     result = invoke("dbt", "--env", "prod", "test")
     assert result.exit_code == 3, result.stderr
     assert len(snowflake["runs"]) == 1
+
+
+def test_target_specific_osi_parses_without_a_warehouse(tmp_path):
+    from vecten_platform.dbt.runner import run_dbt
+
+    dbt_dir = tmp_path / "dbt"
+    models = dbt_dir / "models"
+    models.mkdir(parents=True)
+    from importlib.resources import files
+
+    spine = files("vecten_platform").joinpath("dbt_packages/vecten_convention/models")
+    for name in ("metricflow_time_spine.sql", "schema.yml"):
+        (models / name).write_bytes(spine.joinpath(name).read_bytes())
+    (models / "customers.sql").write_text("select 1 as customer_id")
+    (dbt_dir / "dbt_project.yml").write_text(
+        "name: shop\nprofile: shop\nosi-paths: [\"{{ env_var('VECTEN_OSI_PATH', '../osi') }}\"]\n"
+    )
+    (dbt_dir / "profiles.yml").write_text(
+        "shop:\n  target: dev\n  outputs:\n    dev:\n      type: snowflake\n"
+        "      account: offline\n"
+        "      user: local\n      password: dummy\n      database: SHOP_DEV\n      schema: MARTS\n"
+        "      warehouse: local\n      threads: 1\n"
+    )
+    osi = tmp_path / "osi"
+    osi.mkdir()
+    dataset = {
+        "name": "customers",
+        "source": "SHOP.marts.customers",
+        "primary_key": ["customer_id"],
+        "fields": [
+            {
+                "name": "customer_id",
+                "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "CUSTOMER_ID"}]},
+            }
+        ],
+    }
+    path = osi / "datasets.json"
+    original = json.dumps(
+        {"version": "0.1.1", "semantic_model": [{"name": "shop", "datasets": [dataset]}]}
+    )
+    path.write_text(original)
+    args = ["parse", "--no-partial-parse", "--profiles-dir", "."]
+    env = dbt_env.base_env(dbt_dir, {})
+    failed = run_dbt(args, project_dir=dbt_dir, env=env)
+    assert failed.returncode and "does not match any dbt model" in failed.stdout
+    with dbt_env.target_osi(tmp_path, "shop", "SHOP_DEV") as overlay:
+        result = run_dbt(args, project_dir=dbt_dir, env={**env, **overlay})
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert path.read_text() == original
+    assert not Path(overlay["VECTEN_OSI_PATH"]).exists()
