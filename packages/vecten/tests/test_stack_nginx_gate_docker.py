@@ -199,7 +199,8 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
 
         good = "Cookie: a=1; __Host-vecten-gate=good; __Host-vecten-gate-state=V; b=2\r\n"
         assert head(port, ca, "GET", "/docs", FORGED + good)[0] == 200
-        assert head(port, ca, "POST", "/docs/form", good, body="field=1")[0] == 200
+        viewer = "X-Vecten-On-Behalf-Of: client-marker\r\n"
+        assert head(port, ca, "POST", "/docs/form", good + viewer, body="field=1")[0] == 200
         upgrade = request(
             port,
             ca,
@@ -256,6 +257,7 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
         assert sent["x-vecten-admin"] == "false"
         assert sent["cookie"] == "a=1; b=2"
         assert "x_vecten_user" not in sent
+        assert "x-vecten-on-behalf-of" not in sent
     hook = received[-1]["headers"]
     assert hook["cookie"] == "a=1; b=2"
     assert not [h for h in hook if h.replace("_", "-").startswith("x-vecten")], hook
