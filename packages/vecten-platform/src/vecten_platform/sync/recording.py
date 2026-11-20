@@ -52,6 +52,8 @@ class Recording:
             table_name = self.table_name
             if isinstance(meta, HintsMeta):
                 table_name = meta.hints.get("table_name", table_name)
+                if not meta.create_table_variant:
+                    self.table_name = table_name
             if callable(table_name):
                 self.row_tables.append(table_name(item))
             elif isinstance(meta, TableNameMeta):

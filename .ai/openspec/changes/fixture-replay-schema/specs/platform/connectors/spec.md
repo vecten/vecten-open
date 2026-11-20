@@ -15,3 +15,9 @@ The rendered connector test and `vecten dbt-build-local` SHALL use this informat
 
 - **WHEN** an object has a JSON Lines fixture without schema information
 - **THEN** replay appends the rows using dlt's default type and nesting inference
+
+#### Scenario: A resource changes its table name while yielding rows
+
+- **WHEN** an item carries a persistent table-name hint
+- **THEN** recording and replay use that name for the item and subsequent unmarked items
+- **AND** a per-item table variant routes only the marked item

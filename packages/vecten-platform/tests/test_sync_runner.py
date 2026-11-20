@@ -380,3 +380,38 @@ def test_recorded_routes_and_legacy_fixtures_share_a_source(duckdb_dest, tmp_pat
     assert set(schema.data_table_names()) == {"one", "two", "legacy", "legacy__labels"}
     for name in ("one", "two"):
         assert schema.tables[name]["x-normalizer"]["max_nesting"] == 0
+
+
+@pytest.mark.parametrize("variant", [False, True])
+def test_record_and_replay_midstream_table_hint(variant, duckdb_dest, tmp_path, monkeypatch):
+    import duckdb
+
+    from vecten_platform.sync.testing import replay_connector_test
+
+    @dlt.resource(name="items")
+    def items():
+        yield dlt.mark.with_hints(
+            {"id": 1}, dlt.mark.make_hints(table_name="renamed"), create_table_variant=variant
+        )
+        yield {"id": 2}
+        yield {"id": 3}
+
+    @dlt.source(name="crm")
+    def source():
+        return items
+
+    fixtures = tmp_path / "crm" / "fixtures"
+    outcome = run_object("crm", source, "items", duckdb_dest, tmp_path / "dlt", fixtures)
+    assert outcome.ok, outcome.error
+    expected = ["renamed", "items", "items"] if variant else ["renamed"] * 3
+    schema = json.loads((fixtures / "items.schema.json").read_text())
+    assert schema.get("row_tables", [schema["tables"][0]["name"]] * 3) == expected
+    work = tmp_path / "replay"
+    counts = {name: expected.count(name) for name in set(expected)}
+    assert set(outcome.tables) == set(counts)
+    assert replay_connector_test(fixtures.parent, "crm", work, monkeypatch) == counts
+    for database in (tmp_path / "wh.duckdb", work / "replay.duckdb"):
+        with duckdb.connect(str(database), read_only=True) as conn:
+            for name in counts:
+                rows = conn.execute(f"select id from raw_crm.{name} order by id").fetchall()
+                assert rows == [(i,) for i, table in enumerate(expected, start=1) if table == name]
