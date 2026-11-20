@@ -75,7 +75,7 @@ The default group SHALL be granted the `core` and `marts` schemas as schema gran
 ## ADDED Requirements
 
 ### Requirement: Restricted areas are closed until granted
-A restricted area SHALL be a pair of schemas, `core_<area>` and `marts_<area>`, declared in `vecten.toml`. No role SHALL hold a read grant in an area until an admin grants the area to a group. An area grant SHALL be a schema grant on both schemas, applied and revoked together, from the admin panel and `vecten grant --area <area>`. Each schema SHALL get its own schema-level future grant, so a relation dbt creates or replaces in the area is readable by the granted groups and by no one else. dbt creates a schema only when a model lands in it, so an area grant SHALL cover the area's schemas the warehouse can find, be recorded whole, and name the schemas it waits for; reconciliation SHALL grant a waiting schema once it is found. The state SHALL record which of an area's schemas were granted. Revoking or rolling back an area grant SHALL revoke only those, so a schema that only ever waited leaves the record with no revoke; a record without that list SHALL count every schema it names as granted. A revoke the warehouse refuses SHALL stay a failure and keep its record, unless the warehouse shows every object to every role (Postgres) and the object is gone. A schema or dataset grant on a missing object SHALL be refused, naming it.
+A restricted area SHALL be a pair of schemas, `core_<area>` and `marts_<area>`, declared in `vecten.toml`. No role SHALL hold a read grant in an area until an admin grants the area to a group. An area grant SHALL be a schema grant on both schemas, applied and revoked together, from the admin panel and `vecten grant --area <area>`. Each schema SHALL get its own schema-level future grant, so a relation dbt creates or replaces in the area is readable by the granted groups and by no one else. dbt creates a schema only when a model lands in it, so an area grant SHALL cover the area's schemas the warehouse can find, be recorded whole, and name the schemas it waits for; reconciliation SHALL grant a waiting schema once it is found. The state SHALL record which of an area's schemas were granted. Revoking or rolling back an area grant SHALL revoke only those, so a schema that only ever waited leaves the record with no revoke; a record without that list SHALL count every schema it names as granted. An area revoke SHALL attempt each held schema. A refused revoke SHALL keep its retry record on Snowflake even if no grant is visible. On Postgres a dropped object takes its grants with it. A schema or dataset grant on a missing object SHALL be refused, naming it.
 
 #### Scenario: Restricted mart rebuilt
 - **WHEN** `finance` is granted the area `finance` and dbt rebuilds `marts_finance.finance_revenue` with `CREATE OR REPLACE`
@@ -97,7 +97,8 @@ A restricted area SHALL be a pair of schemas, `core_<area>` and `marts_<area>`, 
 
 #### Scenario: Revoke the warehouse refuses
 - **WHEN** the `finance` area grant is revoked and Snowflake refuses the revoke on `core_finance`, which was granted, because the schema is gone or the procedure's owner cannot see it
-- **THEN** the applied record stays, and every reconciliation retries the revoke and lists its failure
+- **THEN** the MCP also attempts the revoke on every other held schema and reports each unresolved failure
+- **AND** the applied record stays until the warehouse confirms that all requested revocations are complete
 
 #### Scenario: Grant of an undeclared area
 - **WHEN** an admin runs `vecten grant --area hr --group people` and `vecten.toml` declares no area `hr`
