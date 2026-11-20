@@ -590,11 +590,12 @@ whatever path they are given (`live combos --ledger` and `--map`, `live cost --c
 `live cost` prices with the `vecten` of the tools copy. `live project check-public` runs both of
 its checks: the wrapper runs the secret check first and hands its findings to the script, which
 cannot start a sandbox inside its own. Both checks, for credential values and for forbidden file
-names, cover everything a push of the project can publish: every version of every file in every
-commit a branch, tag or HEAD reaches, the staged content of every index entry, and the
-working-tree content of every file `git add --all` would stage (tracked files and untracked ones
-that the project's own `.gitignore` files and `.git/info/exclude` do not ignore; no global
-ignore file counts, and a commit replaced through `refs/replace/` counts as itself).
+names, cover everything a push of the project can publish: every version of every file, under
+every path it had, in every commit a branch, tag or HEAD reaches, the staged content of every
+index entry, and the working-tree content of every file `git add --all` would stage (tracked
+files and untracked ones that the project's own `.gitignore` files and `.git/info/exclude` do
+not ignore; no global ignore file counts, and a commit replaced through `refs/replace/` counts
+as itself).
 `secrets-check` looks at the same three for credential values. Both take the project's top
 level and refuse a subdirectory. A git command that fails makes either check refuse, never
 pass. `doctor` checks every identity as
@@ -755,10 +756,10 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   skip a workflow that is a link within the project, and refuse one that leads outside it.
 - The public check (`live project check-public`, and `secrets-check` for its credential half)
   finds only what it looks for: the values of the credential home and the file names `.env`,
-  `.env.*`, `*.pem` and `*.key`. It looks wherever a push can publish them: every commit a
-  branch, tag or HEAD reaches, what is staged, and what `git add --all` would stage. A hit in a
-  commit is not fixed by removing the file: the history has to be rewritten, or the project
-  rendered afresh.
+  `.env.*`, `*.pem` and `*.key`. It looks wherever a push can publish them: every path a file
+  had in any commit a branch, tag or HEAD reaches, what is staged, and what `git add --all`
+  would stage. A hit in a commit is not fixed by removing the file: the history has to be
+  rewritten, or the project rendered afresh.
 - **Sandbox repositories are public.** While one exists, it publishes the project's domain
   (in `vecten.toml` and `deploy/envs/prod.tfvars`), on a Snowflake combination the Snowflake
   account identifier (in the tfvars), the sign-in address of `google/admin.toml` (in
@@ -1168,14 +1169,14 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    ~/vecten-live-tools/scripts/live/live project check-public <project>
    ```
 
-   The check looks at everything a push could publish: every commit a branch, tag or HEAD
-   reaches, what is staged, and what `git add --all` would stage, including untracked files
-   the project's own ignore files do not ignore. `<project>` is the project's top level; a
-   subdirectory is refused (exit 3). Exit 0, printing nothing, is a pass. Exit 1 lists each
-   path that holds a secret, by name or by value, once, with where it was found (in the
-   working tree, staged, in a commit), and never the value. One found in the working tree or
-   staged: take it out of the index and out of the project, and never push it. One found in a
-   commit: removing the file is not enough, since the push would publish the commit too; the
+   The check looks at everything a push could publish: every path a file had in any commit a
+   branch, tag or HEAD reaches, what is staged, and what `git add --all` would stage, including
+   untracked files the project's own ignore files do not ignore. `<project>` is the project's
+   top level; a subdirectory is refused (exit 3). Exit 0, printing nothing, is a pass. Exit 1
+   lists each path that holds a secret, by name or by value, once, with where it was found (in
+   the working tree, staged, in a commit), and never the value. One found in the working tree
+   or staged: take it out of the index and out of the project, and never push it. One found in
+   a commit: removing the file is not enough, since the push would publish the commit too; the
    history has to be rewritten, or the project rendered afresh in a new directory, before
    anything is pushed.
    Exit 3 names why the check could not run, a git command that failed included. The
