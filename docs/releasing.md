@@ -593,8 +593,11 @@ cannot start a sandbox inside its own. Both checks, for credential values and fo
 names, cover everything a push of the project can publish: every version of every file in every
 commit a branch, tag or HEAD reaches, the staged content of every index entry, and the
 working-tree content of every file `git add --all` would stage (tracked files and untracked ones
-that are not ignored). `secrets-check` looks at the same three for credential values. A git
-command that fails makes either check refuse, never pass. `doctor` checks every identity as
+that the project's own `.gitignore` files and `.git/info/exclude` do not ignore; no global
+ignore file counts, and a commit replaced through `refs/replace/` counts as itself).
+`secrets-check` looks at the same three for credential values. Both take the project's top
+level and refuse a subdirectory. A git command that fails makes either check refuse, never
+pass. `doctor` checks every identity as
 below, and `show` reads only the credential home. A wrapped command refuses (exit 3) to run
 inside the tools copy, as the current directory or as its `--cwd`: the copy is not a place to
 work in.
@@ -1167,12 +1170,14 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 
    The check looks at everything a push could publish: every commit a branch, tag or HEAD
    reaches, what is staged, and what `git add --all` would stage, including untracked files
-   that are not ignored. Exit 0, printing nothing, is a pass. Exit 1 lists each path that holds
-   a secret, by name or by value, once, with where it was found (in the working tree, staged,
-   in a commit), and never the value. One found in the working tree or staged: take it out of
-   the index and out of the project, and never push it. One found in a commit: removing the
-   file is not enough, since the push would publish the commit too; the history has to be
-   rewritten, or the project rendered afresh in a new directory, before anything is pushed.
+   the project's own ignore files do not ignore. `<project>` is the project's top level; a
+   subdirectory is refused (exit 3). Exit 0, printing nothing, is a pass. Exit 1 lists each
+   path that holds a secret, by name or by value, once, with where it was found (in the
+   working tree, staged, in a commit), and never the value. One found in the working tree or
+   staged: take it out of the index and out of the project, and never push it. One found in a
+   commit: removing the file is not enough, since the push would publish the commit too; the
+   history has to be rewritten, or the project rendered afresh in a new directory, before
+   anything is pushed.
    Exit 3 names why the check could not run, a git command that failed included. The
    repository is public from step 6 on, so run the last two commands again before every later
    `vecten github push` (steps 9, 10, 12 and 15), and push only after exit 0.
