@@ -97,9 +97,10 @@ source; that is why it is the fallback.
 Read the JSON the command prints:
 
 - `files`: what it wrote under `connectors/<name>/`, including `test_<name>.py`, which replays
-  the fixtures offline, and an empty `fixtures/` directory. The replay loads the fixtures
-  straight into the raw tables and never runs `connector.py`, so it does not catch a code
-  change that breaks a live sync: `vecten connector run <name> --json` is the live proof;
+  the fixtures offline, and an empty `fixtures/` directory. Output fixtures load directly into raw
+  tables. A source with an injectable reader can also test its parsing with saved input JSON
+  (`--record --record-inputs`). Check with the human that upstream fields are safe to save
+  before enabling input recording. Run `vecten connector run <name> --json` for a live sync;
 - `dags`: the sync DAG, `orchestration/dags/sync_<name>_default.py`;
 - `secrets`: the secret names the code reads, used in step 3;
 - `dependencies`: Python packages a verified source needs; `locked` says whether the command

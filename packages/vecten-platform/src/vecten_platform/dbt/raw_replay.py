@@ -51,6 +51,7 @@ def replay_fixtures(
     import dlt
     from dlt.pipeline.exceptions import PipelineStepFailed
 
+    from vecten_platform.sync.input_fixtures import verify_input_fixtures
     from vecten_platform.sync.recording import replay_source
     from vecten_platform.sync.runner import dataset_name
 
@@ -58,6 +59,7 @@ def replay_fixtures(
     for connector in config.connectors:
         name = connector.name
         fixtures_dir = _fixtures_dir(connectors_dir, name)
+        verify_input_fixtures(fixtures_dir.parent, name, target.workdir)
         if not fixture_files(fixtures_dir):
             loaded[name] = []
             continue

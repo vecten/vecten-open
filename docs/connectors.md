@@ -37,6 +37,57 @@ source that needs extra Python packages lists them in the declaration's `depende
 installs them, and on the laptop install them where the CLI runs, for example
 `uv tool install vecten --with <package>`.
 
+## Test connector parsing offline
+
+An output fixture such as `connectors/demo/fixtures/people.jsonl` holds the rows the connector already
+transformed. To exercise the transformation in CI, give the connector a reader that Vecten
+can replace with saved inputs. For example, in `connectors/demo/connector.py`:
+
+```python
+import dlt
+from vecten_platform.sync.input_fixtures import live_inputs
+
+
+def fetch_people():
+    # Replace this example with the live read, including credentials and pagination.
+    yield {"userId": 7}
+
+
+def source(*, inputs=live_inputs):
+    @dlt.resource(name="people")
+    def people():
+        for row in inputs(fetch_people):
+            yield {"user_id": row["userId"]}
+
+    return dlt.source(lambda: [people], name="demo")()
+```
+
+The example selects `people` with `--object people`. Put pagination inside `fetch_people`
+and call `inputs(fetch_people)` once. The callback can yield individual records or lists of
+records, one page at a time. Keep the parsing you want to test after that call. During a
+regular sync, `live_inputs` calls the callback. During replay, Vecten supplies the saved values.
+
+Each selected object can replay one call to `inputs(...)`, including all pages from that call. For example, a `deals` resource may
+first read a parent `companies` resource to get company IDs, then fetch deals for each ID.
+If both resources call `inputs(...)`, record the transformed deal rows with
+`vecten connector run demo --object deals --record` instead.
+
+1. Run `vecten connector run demo --object people --record --record-inputs` against a
+   source whose original payloads are safe to save. A sample holds up to 200 records. A list page contributes its row count, and Vecten
+   trims the final page to fit. An empty page uses one slot. Vecten writes `connectors/demo/fixtures/inputs/people.json`. The input file
+   contains the original fields, including fields your transformation drops. Inspect it
+   before committing it. Vecten refuses input recording when the connector defines
+   `redact_fixture`, because that hook operates on transformed output.
+2. From the project root, run `pytest connectors/demo/test_demo.py` (the test generated
+   by `vecten connector add`) or `vecten dbt-build-local`. Generated CI installs the connector
+   dependencies declared in `vecten.toml` for pytest and the local dbt build. Both pass the
+   inputs through the current connector with Python network access blocked. Changed row
+   values, counts or order fail the check. In the example, reading the wrong key fails even
+   though the saved output still contains a valid `user_id`.
+3. After an intentional change to the output, re-record with both flags. Review the diff
+   in `connectors/demo/fixtures/` before accepting the new expectation. Projects with only output fixtures keep loading
+   those rows directly into the local warehouse.
+
 ## Extensions
 
 A connector that several projects share, or that a company keeps private, is an extension: a

@@ -103,13 +103,25 @@ def _flip_edited_scaffold(project_root: Path, name: str) -> None:
 
 
 def run_connector(
-    project_root: Path, name: str, object_name: str | None, record: bool
+    project_root: Path,
+    name: str,
+    object_name: str | None,
+    record: bool,
+    *,
+    record_inputs: bool = False,
 ) -> RunResult:
     check_connector_name(name)
+    if record_inputs and not record:
+        raise Failure(ExitCode.USAGE, "--record-inputs requires --record")
     ctx = local_runtime(project_root)
     set_runtime(ctx)
     try:
         module = load_connector(ctx.connectors_dir, name)
+        if record_inputs and callable(getattr(module, "redact_fixture", None)):
+            raise Failure(
+                ExitCode.REFUSED,
+                f"{name} redacts output fixtures; upstream inputs would bypass redact_fixture",
+            )
         destination = make_destination(ctx)
         probe_warehouse(destination, ctx.dlt_dir)
         _flip_edited_scaffold(project_root, name)
@@ -133,7 +145,15 @@ def run_connector(
             )
         objects = [object_name] if object_name else available
         record_dir = project_root / "connectors" / name / "fixtures" if record else None
-        outcomes = run_objects(name, module.source, objects, destination, ctx.dlt_dir, record_dir)
+        outcomes = run_objects(
+            name,
+            module.source,
+            objects,
+            destination,
+            ctx.dlt_dir,
+            record_dir,
+            record_inputs=record_inputs,
+        )
     finally:
         set_runtime(None)
     landed = sorted({table for o in outcomes if o.ok for table in o.tables})
