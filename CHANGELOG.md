@@ -5,6 +5,13 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Security
+
+- Each running extension service and container app gets a Docker network shared only with
+  NGINX. Service ingress clears `X-Vecten-On-Behalf-Of` so apps can attribute MCP calls
+  to the viewer identified by the login gate.
+  ([#90](https://github.com/vecten/vecten-open/issues/90), [#118](https://github.com/vecten/vecten-open/issues/118))
+
 ## [0.1.1] - 2026-11-18
 
 ### Added

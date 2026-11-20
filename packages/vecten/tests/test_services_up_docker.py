@@ -202,6 +202,27 @@ def test_up_runs_services_isolated_and_keeps_their_volume(tmp_path, monkeypatch)
         )
         assert lookup.returncode != 0 and "gaierror" in lookup.stderr
         nginx = service_container(project, "nginx")
+        memberships = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{json .NetworkSettings.Networks}}",
+                web,
+                crash,
+                nginx,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        web_nets, crash_nets, nginx_nets = (
+            set(json.loads(line)) for line in memberships.stdout.splitlines()
+        )
+        assert len(web_nets) == len(crash_nets) == 1
+        assert web_nets.isdisjoint(crash_nets)
+        assert web_nets | crash_nets <= nginx_nets
+
         reached = subprocess.run(
             ["docker", "exec", nginx, "wget", "-qO-", "http://svc-acme-svc-web:8000/count"],
             capture_output=True,
