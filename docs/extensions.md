@@ -339,7 +339,9 @@ checked only for having a JSON type. TOML dates and times are refused; use strin
 `string`, `integer`, `number`, `boolean`, `array` or `object`, with `default`, `description`,
 `enum` and `const`. Arrays accept `items`, `minItems`, `maxItems` and `uniqueItems`. Strings
 accept `minLength`, `maxLength` and `pattern`. Numbers accept `minimum`, `maximum`,
-`exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`. Nested objects accept `properties`,
+`exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`. For example, a price with
+`multipleOf: 0.01` accepts `19.99`. Declare defaults on top-level settings. To supply
+nested values by default, put the complete object in the top-level setting's `default`. Nested objects accept `properties`,
 `required` and `additionalProperties` (a boolean or a typed schema). The top level accepts
 only declared settings and reserves `env` for overrides. `vecten lock` checks the laptop and every environment an
 override names, `vecten up` the laptop, `vecten ship` and `ship --check` the environment

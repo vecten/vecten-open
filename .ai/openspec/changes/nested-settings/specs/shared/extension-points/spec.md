@@ -12,3 +12,7 @@ the setting and environment. The top-level namespace continues to reject undecla
 
 - **WHEN** an extension's configured object lacks a required property
 - **THEN** lock fails with the setting path and missing property name
+
+Decimal multipleOf constraints SHALL use base-ten values for both defaults and configured
+settings. Only a top-level setting MAY supply a default. An object-valued default MAY
+contain nested values, which SHALL satisfy the object's entire schema.

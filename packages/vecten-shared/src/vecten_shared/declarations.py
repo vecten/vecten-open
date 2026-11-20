@@ -11,6 +11,8 @@ import datetime
 import json
 import math
 from dataclasses import dataclass
+from fractions import Fraction
+from functools import cache
 from typing import TYPE_CHECKING, Any
 
 from vecten_shared.apps import APP_CREDENTIAL
@@ -92,9 +94,25 @@ def _manifest_failure(extension: str, key: str, problem: str) -> Failure:
     return Failure(ExitCode.CONFIG, f"extension {extension}: manifest {key}: {problem}")
 
 
-def _check_property(fail, name: str, spec: object) -> None:
+@cache
+def _settings_validator_class():
+    from jsonschema import Draft202012Validator, ValidationError, validators
+
+    def multiple_of(validator, divisor, value, schema):
+        if validator.is_type(value, "number"):
+            # JSON and TOML spell numbers in base ten. Exact ratios preserve that spelling
+            # for divisibility even when float division rounds in either direction.
+            if Fraction(str(value)) % Fraction(str(divisor)):
+                yield ValidationError(f"{value} is not a multiple of {divisor}")
+
+    return validators.extend(Draft202012Validator, {"multipleOf": multiple_of})
+
+
+def _check_property(fail, name: str, spec: object, *, top_level: bool = False) -> None:
     if not isinstance(spec, dict) or spec.get("type") not in SETTING_TYPES:
         raise fail(f"{name}: type must be one of {', '.join(SETTING_TYPES)}")
+    if not top_level and "default" in spec:
+        raise fail(f"{name}: declare default on the top-level setting")
     allowed = PROPERTY_KEYS | SCHEMA_KEYS if spec["type"] == "object" else PROPERTY_KEYS
     if unknown := set(spec) - allowed:
         raise fail(f"{name}: unsupported keywords {', '.join(sorted(unknown))}")
@@ -142,13 +160,14 @@ def check_schema(extension: str, schema: object) -> dict[str, Any]:
     for name, spec in properties.items():
         if name == ENV_KEY:
             raise fail("a setting may not be named env, which holds per-environment overrides")
-        _check_property(fail, name, spec)
+        _check_property(fail, name, spec, top_level=True)
     required = schema.get("required", [])
     if not set(required) <= set(properties):
         raise fail("required must list declared properties")
+    validator = _settings_validator_class()
     for name, spec in properties.items():
         if "default" in spec:
-            for error in Draft202012Validator(spec).iter_errors(spec["default"]):
+            for error in validator(spec).iter_errors(spec["default"]):
                 raise fail(f"{name}: default {spec['default']!r}: {error.message}")
     return schema
 
@@ -216,8 +235,6 @@ def _settings_failure(namespace: str, key: str, env: str, problem: str) -> Failu
 
 def check_settings(config: VectenConfig, record: dict[str, Extension], env: str) -> None:
     """Every namespace's effective values in `env` against its extension's recorded schema."""
-    from jsonschema import Draft202012Validator
-
     from vecten_shared.requirements import parse_requirement
     from vecten_shared.versions import normalize_name
 
@@ -250,6 +267,7 @@ def check_settings(config: VectenConfig, record: dict[str, Extension], env: str)
         for key in schema.get("required", []):
             if key not in values:
                 raise _settings_failure(namespace, key, env, "required and not set")
-        for error in sorted(Draft202012Validator(schema).iter_errors(values), key=str):
+        validator = _settings_validator_class()(schema)
+        for error in sorted(validator.iter_errors(values), key=str):
             key = ".".join(map(str, error.path)) or "?"
             raise _settings_failure(namespace, key, env, error.message)

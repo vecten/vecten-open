@@ -284,6 +284,8 @@ def test_a_record_whose_in_repo_path_is_not_its_own_folder_reads_as_missing():
         ({"type": "integer", "exclusiveMinimum": 2}, 2, 3),
         ({"type": "integer", "exclusiveMaximum": 2}, 2, 1),
         ({"type": "number", "multipleOf": 3}, 4, 6),
+        ({"type": "number", "multipleOf": 0.01, "default": 19.99}, 19.991, 19.99),
+        ({"type": "number", "multipleOf": 0.1, "default": 0.3}, 0.31, 0.3),
         ({"type": "string", "const": "eu"}, "us", "eu"),
         (
             {
@@ -306,3 +308,16 @@ def test_setting_constraints_name_the_invalid_value(spec, bad, good):
     d.check_settings(config(settings={"acme": {"option": good}}), record(schema), "local")
     with pytest.raises(Failure, match=r"settings\.acme\.option"):
         d.check_settings(config(settings={"acme": {"option": bad}}), record(schema), "local")
+
+
+def test_nested_default_must_be_part_of_top_level_object():
+    price = {"type": "number", "multipleOf": 0.01}
+    option = {"type": "object", "properties": {"price": price}, "default": {"price": 19.99}}
+    schema = {"properties": {"order": option}}
+    assert d.check_schema("acme", schema) == schema
+    option["default"]["price"] = 19.991
+    with pytest.raises(Failure, match="order: default.*multiple"):
+        d.check_schema("acme", schema)
+    price["default"] = 19.99
+    with pytest.raises(Failure, match=r"order\.price: declare default on the top-level"):
+        d.check_schema("acme", schema)
