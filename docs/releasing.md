@@ -396,11 +396,20 @@ and the other files of the credential home, which live only on your laptop:
 9. **Package indexes.** On TestPyPI, add a trusted publisher to each of the four projects
    (`vecten`, `vecten-shared`, `vecten-platform`, `vecten-mcp`): GitHub, owner `vecten`,
    repository `vecten-open`, workflow `publish.yml`, environment `candidate`. On PyPI, the
-   same for each of the four with environment `release`. No index token is stored anywhere:
-   the `publish` workflow signs in to the index as itself.
+   same for each of the four with environment `release`. The `publish` workflow signs in to
+   each index as itself.
 
    Confirm: each project's Publishing page on both indexes lists exactly that publisher. The
-   first candidate the agent cuts is the first real test.
+   first candidate tests publishing to TestPyPI. A release tag on `main` tests PyPI.
+
+   The account-wide PyPI API token used to publish 0.1.0 by hand can still upload packages
+   until its owner revokes it. After confirming the four PyPI publisher registrations and
+   that the GitHub `release` environment requires maintainer approval, the person who
+   published 0.1.0 should open their [PyPI account settings](https://pypi.org/manage/account/#api-tokens)
+   and remove the token they used for that release. If they cannot identify it among
+   several account-wide tokens, leave those tokens in place and record the open question
+   in [#22](https://github.com/vecten/vecten-open/issues/22). Once the publisher confirms
+   the old token is gone from their account, record the revocation date there if known.
 
 10. **Google sign-in.** Each combination deploys under a fixed domain, so its callback address
     is registered once, not per run.
