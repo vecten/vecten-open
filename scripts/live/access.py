@@ -95,11 +95,12 @@ HOME_UNWRITABLE = (
     ".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".gitconfig",
 )  # fmt: skip
 HOME_UNWRITABLE_TREES = (".config/git", ".claude")
-# A Seatbelt regex for the `.claude` directory of any checkout under the real home, its settings
-# files and the trees whose scripts and prompts the agent runs: the directory itself and each
-# named entry are matched too, so none can be renamed away and back.
+# A Seatbelt regex for any directory named `.claude`, its settings files and the trees whose
+# scripts and prompts the agent runs. It matches by name anywhere, so a checkout moved out of
+# the home and back stays covered, and it matches the directory and each named entry too, so
+# none can be renamed away and back.
 CLAUDE_CONTROL = (
-    r"^{home}/(.*/)?\.claude"
+    r"^(.*/)?\.claude"
     r"(/(settings\.json|settings\.local\.json|hooks|skills|commands|agents)(/.*)?)?$"
 )
 # Any unix socket may belong to an agent or daemon that acts with the maintainer's access
@@ -226,16 +227,8 @@ def _filters(rules: Iterable[tuple[str, Path]]) -> str:
     return " ".join(f'({kind} "{v}")' for kind, path in rules for v in _variants(path))
 
 
-def _home_pattern(template: str, home: str) -> str:
-    return template.format(home="".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in home))
-
-
 def env_files_pattern(home: str) -> str:
-    return _home_pattern(ENV_FILES, home)
-
-
-def claude_control_pattern(home: str) -> str:
-    return _home_pattern(CLAUDE_CONTROL, home)
+    return ENV_FILES.format(home="".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in home))
 
 
 def _ancestors(rules: Iterable[tuple[str, Path]]) -> list[str]:
@@ -270,7 +263,7 @@ def sandbox_profile(
     """
     homes = _variants(account_home)
     env_files = " ".join(f'(regex #"{env_files_pattern(v)}")' for v in homes)
-    claude = " ".join(f'(regex #"{claude_control_pattern(v)}")' for v in homes)
+    claude = f'(regex #"{CLAUDE_CONTROL}")'
     credentials = [(kind, account_home / relative) for kind, relative in DENIED]
     guarded = [("subpath", live_home)]
     unwritable = [

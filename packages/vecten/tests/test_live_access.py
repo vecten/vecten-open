@@ -122,7 +122,7 @@ DENIED_TEXT = (
     ' (subpath "/Users/example/vecten-live-tools")'
     ' (subpath "/opt/example-python/3.14")'
     ' (subpath "/Users/example/vecten-live-tools/.venv")'
-    ' (regex #"^/Users/example/(.*/)?\\.claude'
+    ' (regex #"^(.*/)?\\.claude'
     '(/(settings\\.json|settings\\.local\\.json|hooks|skills|commands|agents)(/.*)?)?$"))'
     '(deny file-write-unlink (literal "/Users/example") (literal "/Users")'
     ' (literal "/Users/example/.config") (literal "/Users/example/Library")'
@@ -1877,6 +1877,40 @@ def test_the_os_sandbox_holds_against_renames_and_any_checkouts_agent_files(tmp_
     assert moved.returncode != 0
     assert (checkout / ".claude/settings.local.json").exists()
     assert sandboxed(f'printf x >> "{checkout}/.claude/worktrees/notes"').returncode == 0
+    away = tmp_path / "away"
+    away.mkdir()
+    relocated = sandboxed(
+        f'mv "{checkout}" "{away}/checkout"'
+        f' && printf x >> "{away}/checkout/.claude/settings.local.json"; written=$?;'
+        f' mv "{away}/checkout" "{checkout}"; exit $written'
+    )
+    assert relocated.returncode != 0
+    assert "Operation not permitted" in relocated.stderr
+    assert (checkout / ".claude/settings.local.json").read_text() == "{}\n"
+
+
+def test_the_control_file_pattern_matches_by_name_anywhere():
+    pattern = re.compile(mod().CLAUDE_CONTROL)
+    for denied in (
+        "/private/tmp/proj/.claude/settings.local.json",
+        "/private/tmp/proj/.claude/settings.json",
+        "/private/tmp/proj/.claude",
+        "/private/tmp/proj/.claude/hooks",
+        "/Users/example/src/checkout/.claude/hooks/pre.sh",
+        "/var/folders/x/.claude/skills/a/SKILL.md",
+        "/opt/proj/.claude/commands/go.md",
+        "/opt/proj/.claude/agents/reviewer.md",
+    ):
+        assert pattern.match(denied), denied
+    for allowed in (
+        "/private/tmp/proj/.claude-plugin/plugin.json",
+        "/private/tmp/proj/.claude/worktrees/x/f",
+        "/private/tmp/proj/.claude/live-checks-0.1.2.md",
+        "/private/tmp/proj/x.claude/settings.json",
+        "/private/tmp/proj/.claude/settings.json.bak",
+        "/private/tmp/proj/.claude/hooksmith/x",
+    ):
+        assert not pattern.match(allowed), allowed
 
 
 REWRITE = "removing the file is not enough: rewrite the history or render the project afresh"
