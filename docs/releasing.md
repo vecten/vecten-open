@@ -334,10 +334,12 @@ and the other files of the credential home, which live only on your laptop:
      pushed tag's name, which for the App is always a candidate's (`v*rc*`). What remains:
      - A candidate's image contents are whatever its tree builds, which is the point of a
        candidate.
-     - The image guard (`scripts/published_images.py`, in the `published` job) skips the build
-       when both of the version's images exist, so a candidate's tags are pushed once and never
-       over. The guard is the candidate tree's own code, so a tree written to defeat it could
-       push its own two tags again on a rerun.
+     - Before each push, the `images` job asks the registry whether that image's tag exists,
+       in shell written in the workflow file, on every attempt, a rerun of the failed jobs
+       included, and pushes each image only when its own tag is absent. A tag, a candidate's or
+       a release's, is therefore pushed once and never over. That holds for the current
+       `publish.yml`; an older version of it, which the test above keeps from running, has no
+       such check.
      - The tree's Dockerfiles do run in the `images` job: their `RUN` steps, and the frontend a
        `# syntax=` line or a `BUILDKIT_SYNTAX` build argument names, run inside BuildKit's
        container after `docker/login-action` has written the token to the runner's Docker
@@ -345,9 +347,9 @@ and the other files of the credential home, which live only on your laptop:
        from a Dockerfile takes an escape from the container. The stronger arrangement, not
        built: build the images to an archive in a job with no write permission, and push them
        from a job that runs no build.
-     - The `published` and `verify` jobs inspect the images anonymously, so both packages must
-       be public. If one is private, the run stops at `published`, which cannot tell whether
-       its image exists and refuses.
+     - The `images` job inspects the images after its registry login, but `verify` inspects
+       them without one, so both packages must be public. If one is private, the run stops at
+       `verify`, after the images were pushed.
 
      PyPI is not exposed the same way, since its trusted publisher is bound to the `release`
      environment.
@@ -733,8 +735,9 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   the pushed candidate tag. What remains, as the item says: the tree's Dockerfiles run in that
   job inside BuildKit's container, which is not handed the registry credential, so reaching it
   takes an escape from that container (building to an archive without write permission and
-  pushing from a job that runs no build would close it; not built); the image guard that keeps
-  a candidate's tags from being pushed twice is the candidate tree's own code; and
+  pushing from a job that runs no build would close it; not built); the check that keeps a tag
+  from being pushed twice is in the current workflow file only, so it holds only as far as the
+  test in item 7 does; and
   `setup-buildx-action` and `setup-qemu-action` pull the BuildKit and binfmt images by moving
   tags into the job that holds the credential, a supply-chain dependency the tree cannot
   reach.
@@ -1056,10 +1059,13 @@ command; type it again in that form.
    ```
 
    Its jobs: `target` checks the tag against the tree, `packages` publishes to TestPyPI,
-   `published` decides whether the two images still need building, `images` builds and pushes
-   them (skipped when both exist), and `verify` installs the published packages and runs
-   `vecten dev check-images` on the two images. `published` and `verify` inspect the images
-   anonymously, so a package that is not public stops the run at `published`. The run
+   `images` asks the registry before each image's push and builds and pushes only an image
+   whose tag is absent, and `verify` installs the published packages and runs
+   `vecten dev check-images` on the two images. `verify` inspects the images without a login,
+   so a package that is not public stops the run at `verify`. If the `images` job's check
+   fails with `refused: inspecting … failed` although the registry answered, its "not found"
+   wording differs from what the check expects: the run fails without pushing anything. That
+   is a finding to report, with the message (not yet tried against a live account). The run
    registers a few seconds after the push: until `gh run list` prints a run for
    `v<candidate>`, wait and list again.
    `gh run watch` exit 0: published. Otherwise read the failed step, with
@@ -1067,17 +1073,13 @@ command; type it again in that form.
    A failure that needs no change to the tree (the index or the registry was unreachable, a
    runner died) is rerun with
    `live run --github upstream -- gh run rerun <databaseId> --repo vecten/vecten-open --failed`:
-   the workflow is built for that, skipping packages the index already holds and, while the
-   candidate tree's own image guard is unmodified, never pushing over a published image tag
-   (setup item 7). A failure that needs any change is a
+   the workflow is built for that, skipping packages the index already holds and never
+   pushing over a published image tag, since the `images` job asks the registry again on every
+   attempt (this rests on the test of setup item 7). A version left with one image pushed and
+   the other missing is mended the same way, for a candidate or a release: the rerun pushes the
+   missing image and leaves the existing one untouched. A failure that needs any change is a
    [finding](#findings), and its fix is cut as the next candidate number. A tag is never moved,
    deleted or pushed again (not yet tried against a live account).
-
-   One failure no rerun mends: the image guard (the `published` job) refuses because exactly
-   one of the two images exists (`… exists but … does not`), so the candidate is half
-   published. Cut the next candidate number from the same tree (step 2 again, with the same
-   `--with` branches), and record why in the results file. For a release the same refusal
-   means stop and tell the maintainer, who deletes the lone image tag before a rerun.
 4. Confirm both images hold both platforms. This needs the Docker daemon running and no
    credential:
 
