@@ -367,6 +367,10 @@ const rows = (list) => {
 };
 const snowflake = {execute: ({sqlText}) => {
     statements.push(sqlText);
+    if (sqlText === 'SELECT INVOKER_ROLE()') return rows([{1:'CHECK_OWNER'}]);
+    if (sqlText === 'SHOW GRANTS TO ROLE "CHECK_OWNER" INCLUDE HIERARCHY') {
+        return rows(p.visible ? [{privilege:'MANAGE GRANTS', granted_on:'ACCOUNT'}] : []);
+    }
     if (sqlText.startsWith('SHOW GRANTS ON ROLE')) {
         return rows(p.owned ? [{privilege:'OWNERSHIP', granted_to:'ROLE',
                                 grantee_name:p.owner || 'PROVISIONER'}] : []);
@@ -1071,3 +1075,51 @@ def test_read_grant_grant_on_a_relation_the_owner_cannot_find_fails_naming_it():
     assert "dataset relation does not exist or is not visible" in output["error"]
     assert "MARTS_FINANCE.INVOICE" in output["error"]
     assert _touching(output, "MARTS_FINANCE") == []
+
+
+@pytest.mark.parametrize(
+    ("privilege", "kind", "name", "future", "expected"),
+    [
+        ("SELECT", "TABLE", "ACME_PROD.RAW.ORDERS", False, "ACME_PROD"),
+        ("USAGE", "DATABASE", "ACME_TEST", False, "ACME_TEST"),
+        ("SELECT", "TABLE", '"ACME_PROD"."Odd.Schema".<TABLE>', True, "ACME_PROD"),
+        ("USAGE", "ROLE", "ANALYST_ACME_PROD", False, "ANALYST_ACME_PROD"),
+        ("USAGE", "ROLE", "ANALYST_ACME_DEV", False, "ANALYST_ACME_DEV"),
+        ("USAGE", "ROLE", "SECURITYADMIN", False, "SECURITYADMIN"),
+        ("USAGE", "DATABASE_ROLE", "ACME_PROD.READER", False, "ACME_PROD"),
+        ("OWNERSHIP", "DATABASE", "ACME_DEV", False, "owns the environment database"),
+        ("CREATE ROLE", "ACCOUNT", "TEST_ACCOUNT", False, "on the account"),
+        ("USAGE", "SERVICE ROLE", "OTHER.SCHEMA.SVC!READ", False, "cannot be verified"),
+        ("SELECT", "TABLE", '"ACME_PROD.ARCHIVE".RAW.ORDERS', False, "ok"),
+        ("SELECT", "TABLE", '"acme_prod".RAW.ORDERS', False, "ok"),
+        ("SELECT", "TABLE", "OTHER_ACME_PROD.RAW.ORDERS", False, "ok"),
+        ("USAGE", "APPLICATION_ROLE", "SNOWFLAKE.PUBLIC", False, "ok"),
+        ("SELECT", "TABLE", "ACME_DEV.MARTS.<TABLE>", True, "ok"),
+    ],
+)
+def test_shared_binding_inspects_inherited_grants(privilege, kind, name, future, expected):
+    sql = shared_script()
+    handler = read_grant_body(sql[sql.index("CHECK_BINDING(TARGET VARCHAR)") :])
+    row = {
+        "privilege": privilege,
+        "grant_on" if future else "granted_on": kind,
+        "name": name,
+        "grantee_name": "NESTED_READER",
+    }
+    output = _run(
+        handler, ["TARGET"], ["FINANCE"], visible=True, **{"future" if future else "grants": [row]}
+    )
+    assert output["error"] is None
+    assert expected in output["value"]
+    assert 'SHOW GRANTS TO ROLE "FINANCE" INCLUDE HIERARCHY' in output["statements"]
+    if future or expected == "ok":
+        assert 'SHOW FUTURE GRANTS TO ROLE "FINANCE" INCLUDE HIERARCHY' in output["statements"]
+
+
+def test_binding_check_refuses_partial_visibility_and_is_only_installed_in_shared_accounts():
+    assert "CHECK_BINDING" not in _script()
+    sql = shared_script()
+    handler = read_grant_body(sql[sql.index("CHECK_BINDING(TARGET VARCHAR)") :])
+    output = _run(handler, ["TARGET"], ["FINANCE"], visible=False)
+    assert "owner with MANAGE GRANTS" in output["value"]
+    assert not any('"FINANCE"' in statement for statement in output["statements"])
