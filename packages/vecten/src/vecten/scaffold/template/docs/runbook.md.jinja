@@ -21,9 +21,10 @@ where `vecten` runs as well, for example `uv tool install vecten --with <package
 whenever the fixture should be refreshed. It writes `connectors/<source>/fixtures/<object>.jsonl` only
 for objects that synced and yielded records; the test `connectors/<source>/test_<source>.py` replays
 them into DuckDB with the network blocked and is skipped until fixtures exist. That test and
-`vecten dbt-build-local` load the fixtures straight into the raw tables and never run `connector.py`,
-so a code change that breaks every live sync still passes CI while the fixtures are unchanged; after
-changing `connector.py`, `vecten connector run <source> --json` is the live proof. Fixtures hold real
+`vecten dbt-build-local` also check connector parsing when you save upstream JSON with
+`--record --record-inputs` for a source that supports `inputs(fetch)`. With output fixtures
+alone they load the rows directly. Run `vecten connector run <source> --json` to check live
+access. Fixtures hold real
 records from the source (up to 200 per object) and are committed to the project, so check them for
 personal data before the repository is shared.
 

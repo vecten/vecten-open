@@ -202,3 +202,101 @@ def test_run_keeps_a_generic_kind_while_the_scaffold_is_untouched(invoke, projec
     (project / "vecten.toml").write_text(text)
     assert invoke("connector", "run", "demo", "--object", "good_a", "--json").exit_code == 0
     assert _connector_decl(project)["source"] == "rest"
+
+
+INPUT_CONNECTOR = """
+import dlt
+from vecten_platform.sync.input_fixtures import live_inputs
+from vecten_platform.sync.context import secret
+
+
+def fetch():
+    secret("DEMO_TOKEN")
+    yield {"userId": 7}
+
+
+def source(*, inputs=live_inputs):
+    @dlt.resource(name="people")
+    def people():
+        for row in inputs(fetch):
+            row["user_id"] = row.pop("userId")
+            yield row
+
+    people.add_map(lambda row: {**row, "active": True})
+    return dlt.source(lambda: [people], name="demo")()
+"""
+
+
+def test_record_inputs_and_replay_current_connector(invoke, project, tmp_path, monkeypatch):
+    from vecten_platform.dbt.local_warehouse import LocalTarget
+    from vecten_platform.dbt.raw_replay import replay_fixtures
+    from vecten_platform.sync.testing import replay_connector_test
+    from vecten_shared.output import Failure
+    from vecten_shared.provider import ConnectionSpec
+
+    directory = project / "connectors" / "demo"
+    module = directory / "connector.py"
+    module.write_text(INPUT_CONNECTOR)
+    command = ("connector", "run", "demo", "--object", "people", "--json")
+    assert invoke(*command, "--record-inputs").exit_code == 2
+    assert invoke(*command, "--record").exit_code == 0
+    sample = directory / "fixtures" / "inputs" / "people.json"
+    assert not sample.exists()
+    recorded = invoke(*command, "--record", "--record-inputs")
+    assert recorded.exit_code == 0, recorded.stdout + recorded.stderr
+    original = sample.read_bytes()
+    assert json.loads(original)["inputs"] == [{"userId": 7}]
+    assert json.loads((directory / "fixtures" / "people.jsonl").read_text()) == {
+        "user_id": 7,
+        "active": True,
+    }
+
+    module.write_text(
+        INPUT_CONNECTOR.replace('secret("DEMO_TOKEN")', 'raise AssertionError("live read")')
+    )
+    assert replay_connector_test(directory, "demo", tmp_path / "test", monkeypatch) == {"people": 1}
+    target = LocalTarget(
+        "snowflake",
+        ConnectionSpec(kind="snowflake", database="warehouse", role="loader", auth="password"),
+        "",
+        {},
+        True,
+        tmp_path,
+    )
+    (tmp_path / "fakesnow").mkdir()
+    config = load_config(project)
+    assert replay_fixtures(target, directory.parent, config) == {"demo": ["people"]}
+
+    module.write_text(INPUT_CONNECTOR.replace('row.pop("userId")', 'row.pop("missingKey")'))
+    failed = invoke(*command, "--record", "--record-inputs")
+    assert failed.exit_code == 5 and "missingKey" in failed.stdout
+    assert sample.read_bytes() == original
+    with pytest.raises(Failure, match=r"people.json.*missingKey"):
+        replay_connector_test(directory, "demo", tmp_path / "test", monkeypatch)
+
+    module.write_text(INPUT_CONNECTOR.replace('"active": True', '"active": False'))
+    with pytest.raises(Failure, match=r"people.json.*transformed output differs"):
+        replay_fixtures(target, directory.parent, config)
+
+    module.write_text(
+        'import socket\nsocket.getaddrinfo("example.invalid", 80)\n' + INPUT_CONNECTOR
+    )
+    with pytest.raises(Failure, match="network access is disabled"):
+        replay_connector_test(directory, "demo", tmp_path / "test", monkeypatch)
+
+
+def test_record_inputs_requires_an_injectable_reader(invoke, project):
+    result = invoke(
+        "connector", "run", "demo", "--object", "good_b", "--record", "--record-inputs", "--json"
+    )
+    assert result.exit_code == 5 and "inputs=live_inputs" in result.stdout
+
+
+def test_input_recording_respects_fixture_redaction(invoke, project):
+    directory = project / "connectors" / "demo"
+    (directory / "connector.py").write_text(
+        INPUT_CONNECTOR + "\ndef redact_fixture(name, row): return {}\n"
+    )
+    result = invoke("connector", "run", "demo", "--record", "--record-inputs", "--json")
+    assert result.exit_code == 4 and "redact_fixture" in result.stdout
+    assert not list((directory / "fixtures").iterdir())

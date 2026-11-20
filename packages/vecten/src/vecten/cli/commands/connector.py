@@ -96,6 +96,9 @@ def run_cmd(
     record: bool = typer.Option(
         False, "--record", help="Save the extracted items as fixtures for the rendered test."
     ),
+    record_inputs: bool = typer.Option(
+        False, "--record-inputs", help="Also save upstream JSON inputs for offline connector tests."
+    ),
     json_output: bool = JsonFlag,
 ) -> None:
     def run(ctx: CliContext) -> Result:
@@ -103,7 +106,9 @@ def run_cmd(
 
         if not name:
             raise Failure(ExitCode.USAGE, "connector run needs a source name")
-        res = run_connector(ctx.require_project(), name, object_name, record)
+        res = run_connector(
+            ctx.require_project(), name, object_name, record, record_inputs=record_inputs
+        )
         if not res.ok:
             failed = "; ".join(f"{o.object} ({o.error})" for o in res.objects if not o.ok)
             # The per-object outcomes ride in details so --json shows them beside the error.

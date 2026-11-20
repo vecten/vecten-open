@@ -83,7 +83,7 @@ def test_render_layout(tmp_path, params):
     assert (cfg.warehouse.host, cfg.warehouse.port) == (loc.host, loc.port)
     assert (cfg.warehouse.database, cfg.warehouse.account) == (loc.database, loc.account)
     runbook = (target / "docs" / "runbook.md").read_text()
-    replay_note = "never run `connector.py`" in runbook
+    replay_note = "--record --record-inputs" in runbook
     assert replay_note is ("platform" in params.components)
     scaleway_deploy = params.render_deploy and params.cloud == "scaleway"
     assert ("## Scaleway deployment" in runbook) is scaleway_deploy

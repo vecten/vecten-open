@@ -8,6 +8,7 @@ from pathlib import Path
 
 import dlt
 
+from vecten_platform.sync.input_fixtures import InputSample
 from vecten_platform.sync.recording import record_to
 from vecten_shared.output import Failure
 
@@ -96,6 +97,8 @@ def run_object(
     destination,
     dlt_dir: Path,
     record_dir: Path | None = None,
+    *,
+    record_inputs: bool = False,
 ) -> ObjectOutcome:
     pipeline = dlt.pipeline(
         pipeline_name(connector, object_name),
@@ -105,7 +108,10 @@ def run_object(
     )
     recording = None
     try:
-        source = make_source()
+        sample = InputSample() if record_inputs else None
+        if sample is not None and record_dir is None:
+            raise ValueError("--record-inputs requires --record")
+        source = sample.source(make_source, object_name) if sample is not None else make_source()
         if object_name not in source.resources:
             known = ", ".join(source.resources.keys())
             return ObjectOutcome(object_name, False, 0, f"unknown object; the source has: {known}")
@@ -116,6 +122,8 @@ def run_object(
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
             # recording truncates the object's tables, resets its state and reloads everything.
             pipeline.run(selected, refresh="drop_data")
+            if sample is not None:
+                sample.save(record_dir, object_name)
         else:
             pipeline.run(selected)
     except Exception as exc:
@@ -149,8 +157,18 @@ def run_objects(
     destination,
     dlt_dir: Path,
     record_dir: Path | None = None,
+    *,
+    record_inputs: bool = False,
 ) -> list[ObjectOutcome]:
     return [
-        run_object(connector, make_source, name, destination, dlt_dir, record_dir)
+        run_object(
+            connector,
+            make_source,
+            name,
+            destination,
+            dlt_dir,
+            record_dir,
+            record_inputs=record_inputs,
+        )
         for name in objects
     ]

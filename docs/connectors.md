@@ -37,6 +37,51 @@ source that needs extra Python packages lists them in the declaration's `depende
 installs them, and on the laptop install them where the CLI runs, for example
 `uv tool install vecten --with <package>`.
 
+## Test connector parsing offline
+
+An output fixture such as `connectors/demo/fixtures/people.jsonl` holds the rows the connector already
+transformed. To exercise the transformation in CI, give the connector a reader that Vecten
+can replace with saved inputs. For example, in `connectors/demo/connector.py`:
+
+```python
+import dlt
+from vecten_platform.sync.input_fixtures import live_inputs
+
+
+def fetch_people():
+    # Replace this example with the live read, including credentials and pagination.
+    yield {"userId": 7}
+
+
+def source(*, inputs=live_inputs):
+    @dlt.resource(name="people")
+    def people():
+        for row in inputs(fetch_people):
+            yield {"user_id": row["userId"]}
+
+    return dlt.source(lambda: [people], name="demo")()
+```
+
+Call `inputs(fetch_people)` once for each dlt resource you want to test. Here the resource
+named `people` is the object selected on the command line. The callback yields JSON values.
+Keep the parsing you want to test after that call. During a regular sync, `live_inputs`
+calls the callback. During replay, Vecten supplies the saved values and skips the live read.
+
+1. Run `vecten connector run demo --object people --record --record-inputs` against a
+   source whose original payloads are safe to save. This samples up to 200 input values
+   and writes `connectors/demo/fixtures/inputs/people.json`. The input file
+   contains the original fields, including fields your transformation drops. Inspect it
+   before committing it. Vecten refuses input recording when the connector defines
+   `redact_fixture`, because that hook operates on transformed output.
+2. From the project root, run `pytest connectors/demo/test_demo.py` (the test generated
+   by `vecten connector add`) or `vecten dbt-build-local`. Both pass the
+   inputs through the current connector with Python network access blocked. Changed row
+   values, counts or order fail the check. In the example, reading the wrong key fails even
+   though the saved output still contains a valid `user_id`.
+3. After an intentional change to the output, re-record with both flags. Review the diff
+   in `connectors/demo/fixtures/` before accepting the new expectation. Projects with only output fixtures keep loading
+   those rows directly into the local warehouse.
+
 ## Extensions
 
 A connector that several projects share, or that a company keeps private, is an extension: a

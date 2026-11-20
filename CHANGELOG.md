@@ -5,6 +5,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
+- Connector authors can opt into `--record --record-inputs` to test parsing against saved
+  upstream JSON in connector tests and local dbt builds. See [connector fixtures](docs/connectors.md#test-connector-parsing-offline).
+  ([#6](https://github.com/vecten/vecten-open/issues/6))
+
 ## [0.1.1] - 2026-11-18
 
 ### Added

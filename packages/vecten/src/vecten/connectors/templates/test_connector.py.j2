@@ -1,9 +1,8 @@
-"""Replays the recorded fixtures for {{ name }} offline.
+"""Replay recorded fixtures for {{ name }} offline.
 
-The replay loads the fixtures straight into the raw tables and never runs connector.py, so it
-does not catch a code change that breaks a live sync; `vecten connector run {{ name }} --json`
-is the live proof. Skipped until `vecten connector run {{ name }} --record` has written
-connectors/{{ name }}/fixtures/.
+`vecten connector run {{ name }} --record` saves output rows for a local load.
+For a source with an injectable reader, add `--record-inputs` to test connector.py
+against saved upstream JSON. Run `vecten connector run {{ name }} --json` for a live sync.
 """
 
 from pathlib import Path
