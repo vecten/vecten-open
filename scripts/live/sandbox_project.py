@@ -21,8 +21,18 @@ REFUSED = 3
 VERSION_VARIABLES = ("$VECTEN_VERSION", "${VECTEN_VERSION}")
 # The wrapper's own secret check, which it runs before this script when it runs `check-public`.
 SECRET_HITS = "VECTEN_LIVE_SECRET_HITS"
-# Reading the index would run any fsmonitor command the project configures.
-GIT = ["git", "-c", "core.fsmonitor=false"]
+# The check must see at least what a push sends and `git add --all` would stage. A push sends
+# the original objects, not what `refs/replace/` substitutes, and the push runs with another
+# home, so only the project's own ignore files (.gitignore, .git/info/exclude, which `add`
+# honours too) may hide a file; and reading the index would run any configured fsmonitor.
+GIT = [
+    "git",
+    "--no-replace-objects",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    f"core.excludesFile={os.devnull}",
+]
 # Where a push can publish a file from: `vecten github push` stages everything `git add --all`
 # would, and a push sends every commit its refs reach. The same keys as the secret check's JSON.
 PLACES = {"working-tree": "in the working tree", "staged": "staged", "commit": "in a commit"}
@@ -125,6 +135,10 @@ def published_paths(project: Path) -> dict[str, set[str]]:
     listed = subprocess.run([*GIT, "ls-files", "-z", "--stage"], cwd=project, capture_output=True)
     if listed.returncode != 0:
         raise Refused(f"{project} is not a git work tree")
+    # Listing from a subdirectory would cover only its part of the work tree and index.
+    top = Path(_git(project, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+    if top != project.resolve():
+        raise Refused(f"{project} is not the top level of its work tree, {top}")
     staged = [entry.partition("\t")[2] for entry in _names(listed.stdout)]
     if not staged:
         raise Refused(f"the git index of {project} is empty; add the files to push first")

@@ -1658,13 +1658,22 @@ def test_the_secret_check_lists_files_under_the_os_sandbox(tmp_path):
         "infra/leak.tf  (in the working tree, staged)\n",
     )
     calls = invocations(record)
-    assert [call[2:5] for call in calls] == [["git", "-c", "core.fsmonitor=false"]] * 5
-    assert [call[5] for call in calls] == [
-        "ls-files",
-        "ls-files",
-        "rev-parse",
-        "rev-list",
-        "cat-file",
+    git = [
+        "git",
+        "--no-replace-objects",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        f"core.excludesFile={os.devnull}",
+    ]
+    assert [call[2:8] for call in calls] == [git] * 6
+    assert [call[8:10] for call in calls] == [
+        ["rev-parse", "--show-toplevel"],
+        ["ls-files", "-z"],
+        ["ls-files", "-z"],
+        ["rev-parse", "--verify"],
+        ["rev-list", "--objects"],
+        ["cat-file", "--batch"],
     ]
     for env in environments(record):
         no_credential_in(env)
@@ -1879,13 +1888,16 @@ def test_the_os_sandbox_holds_against_renames_and_any_checkouts_agent_files(tmp_
     assert sandboxed(f'printf x >> "{checkout}/.claude/worktrees/notes"').returncode == 0
     away = tmp_path / "away"
     away.mkdir()
-    relocated = sandboxed(
-        f'mv "{checkout}" "{away}/checkout"'
-        f' && printf x >> "{away}/checkout/.claude/settings.local.json"; written=$?;'
-        f' mv "{away}/checkout" "{checkout}"; exit $written'
-    )
-    assert relocated.returncode != 0
-    assert "Operation not permitted" in relocated.stderr
+    relocated = away / "checkout"
+    settings = relocated / ".claude/settings.local.json"
+    moved_out = sandboxed(f'mv "{checkout}" "{relocated}"')
+    assert moved_out.returncode == 0, moved_out.stderr
+    assert settings.exists() and not checkout.exists()
+    written = sandboxed(f'printf x >> "{settings}"')
+    assert written.returncode != 0
+    assert f"{settings}: Operation not permitted" in written.stderr
+    moved_back = sandboxed(f'mv "{relocated}" "{checkout}"')
+    assert moved_back.returncode == 0, moved_back.stderr
     assert (checkout / ".claude/settings.local.json").read_text() == "{}\n"
 
 
@@ -2055,3 +2067,53 @@ def test_a_git_that_fails_listing_the_history_is_a_refusal(tmp_path):
     assert "git rev-list failed: fatal: history unreadable" in secrets.stderr
     assert (public.returncode, public.stdout) == (3, "")
     assert "git rev-list failed" in public.stderr
+
+
+def git_output(project, *args):
+    done = subprocess.run(
+        ["git", *IDENTITY, *args], cwd=project, check=True, capture_output=True, text=True
+    )
+    return done.stdout.strip()
+
+
+def test_a_replaced_commit_still_counts_as_what_it_was(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    first = git_output(project, "rev-parse", "HEAD")
+    (project / "leak.tf").write_text(f'secret = "{AWS_SECRET}"\n')
+    commit(project, "leak")
+    leaking = git_output(project, "rev-parse", "HEAD")
+    git(project, "rm", "-q", "leak.tf")
+    commit(project, "remove the leak")
+    clean = git_output(project, "commit-tree", f"{first}^{{tree}}", "-p", first, "-m", "clean")
+    git(project, "replace", leaking, clean)
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (1, f"leak.tf  (in a commit: {REWRITE})\n")
+    assert public.returncode == 1
+    assert public.stdout == f"leak.tf  (credential value; in a commit: {REWRITE})\n"
+
+
+def test_a_global_ignore_file_in_the_checks_home_hides_nothing(tmp_path):
+    root = home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "notes.txt").write_text(AWS_SECRET)
+    ignore = root / "home-plain/.config/git/ignore"
+    ignore.parent.mkdir(parents=True)
+    ignore.write_text("notes.txt\n")
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (1, "notes.txt  (in the working tree)\n")
+    assert public.returncode == 1, public.stderr
+    assert public.stdout == "notes.txt  (credential value; in the working tree)\n"
+
+
+def test_a_subdirectory_of_a_project_is_refused(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "infra").mkdir()
+    (project / "infra/main.tf").write_text("x = 1\n")
+    commit(project, "infra")
+    secrets, public = both_checks(tmp_path, project / "infra")
+    for result in (secrets, public):
+        assert (result.returncode, result.stdout) == (3, ""), result.stderr
+        assert len(result.stderr.strip().splitlines()) == 1
+        assert f"top level of its work tree, {project.resolve()}" in result.stderr

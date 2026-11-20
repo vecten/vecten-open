@@ -288,6 +288,13 @@ def test_check_public_refuses_a_non_repository_and_an_empty_index(tmp_path, run)
     assert run("check-public", project(tmp_path, {}), home=home).returncode == 3
 
 
+def test_check_public_refuses_a_subdirectory_of_the_project(tmp_path, run):
+    root = project(tmp_path, {"README.md": "x\n", "infra/main.tf": "x = 1\n"})
+    result = run("check-public", root / "infra", home=credential_home(tmp_path))
+    assert (result.returncode, result.stdout) == (3, "")
+    assert f"top level of its work tree, {root.resolve()}" in result.stderr
+
+
 @pytest.mark.parametrize(
     "body",
     [

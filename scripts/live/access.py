@@ -45,8 +45,18 @@ SIBLINGS = {
     "candidate": "candidate.py",
     "project": "sandbox_project.py",
 }
-# Reading the index would run any fsmonitor command the checked repository configures.
-GIT = ["git", "-c", "core.fsmonitor=false"]
+# The check must see at least what a push sends and `git add --all` would stage. A push sends
+# the original objects, not what `refs/replace/` substitutes, and the push runs with another
+# home, so only the project's own ignore files (.gitignore, .git/info/exclude, which `add`
+# honours too) may hide a file; and reading the index would run any configured fsmonitor.
+GIT = [
+    "git",
+    "--no-replace-objects",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    f"core.excludesFile={os.devnull}",
+]
 # Where a push can publish a file from: `vecten github push` stages everything `git add --all`
 # would, and a push sends every commit its refs reach. Keys as the secret check's JSON gives them.
 PLACES = {"working-tree": "in the working tree", "staged": "staged", "commit": "in a commit"}
@@ -771,6 +781,10 @@ def secret_hits(directory: Path) -> list[dict]:
         raise Refused(f"no credential home at {home}")
     secrets = secret_values(home)
     sandbox, env = _os_sandbox(), plain_env()
+    # Listing from a subdirectory would cover only its part of the work tree and index.
+    top = _git(directory, sandbox, env, "rev-parse", "--show-toplevel").decode().strip()
+    if Path(top).resolve() != directory.resolve():
+        raise Refused(f"{directory} is not the top level of its work tree, {Path(top).resolve()}")
     found: dict[str, set[str]] = {}
 
     def look(path: str, text: str | None, place: str) -> None:
