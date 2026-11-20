@@ -18,3 +18,9 @@ disable recording, which SHALL refuse before loading connector code.
 - **WHEN** an author checks hand-written JSON Lines fixtures
 - **THEN** the CLI validates object records and checks filenames against explicit object groups offline
 - **AND** a project that disables recording receives instructions for synthetic fixtures
+
+#### Scenario: A REST endpoint reads its parent to fetch children
+
+- **WHEN** a recording selects a dependent resource with a row limit
+- **THEN** the runner bounds the synchronous parent and child iterators separately
+- **AND** recording a connector still attempts its other declared objects

@@ -309,3 +309,45 @@ def source():
 def test_invalid_recording_limits_stop_before_import(invoke, project, arguments):
     (project / "connectors/demo/connector.py").write_text("raise AssertionError('opened source')")
     assert invoke("connector", "run", "demo", *arguments).exit_code == 2
+
+
+def test_record_dependent_rest_endpoint_bounds_parent_and_child(invoke, project, monkeypatch):
+    from dlt.sources.helpers.rest_client import RESTClient
+
+    requests = []
+    (project / "connectors/demo/connector.py").write_text(
+        """import dlt
+from dlt.sources.rest_api import rest_api_source
+
+def source():
+    rest = rest_api_source({
+        "client": {"base_url": "https://example.invalid/"},
+        "resources": [
+            {"name": "parents", "endpoint": "parents"},
+            {"name": "children", "endpoint": {"path": "parents/{resources.parents.id}/children"}},
+            {"name": "other", "endpoint": "other"},
+        ]
+    }, name="demo")
+    resources = [rest.resources[name] for name in ("parents", "children", "other")]
+    return dlt.source(lambda: resources, name="demo")()
+"""
+    )
+
+    def paginate(self, path, **kwargs):
+        for start in range(0, 100, 2):
+            requests.append((path, start))
+            yield [{"id": start}, {"id": start + 1}]
+
+    monkeypatch.setattr(RESTClient, "paginate", paginate)
+    result = invoke("connector", "run", "demo", "--record", "--limit", "3", "--json")
+    assert result.exit_code == 0, result.output
+    assert {name: obj["rows"] for name, obj in json.loads(result.stdout)["objects"].items()} == {
+        "parents": 3,
+        "children": 3,
+        "other": 3,
+    }
+    assert [page for path, page in requests if path == "parents"] in ([0, 2, 0], [0, 2, 0, 2])
+    child_requests = [(path, page) for path, page in requests if path.endswith("/children")]
+    assert len(child_requests) == 2
+    assert [page for path, page in requests if path == "other"] == [0, 2]
+    assert requests[-1] == ("other", 2)

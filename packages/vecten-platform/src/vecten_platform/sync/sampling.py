@@ -1,8 +1,8 @@
 """Bound the source iterator before dlt's incremental and user transforms."""
 
-from dlt.extract.items_transform import LimitItem
+from collections.abc import Iterator
 
-from vecten_shared.output import ExitCode, Failure
+from dlt.extract.items_transform import LimitItem
 
 
 class RecordingLimit(LimitItem):
@@ -18,12 +18,35 @@ class RecordingLimit(LimitItem):
         return super().__call__(item, meta)
 
 
+def _bounded_transform(transform, budget):
+    def run(item, meta=None):
+        if budget.exhausted:
+            return
+        output = transform(item, meta=meta)
+        if not isinstance(output, Iterator):
+            yield output
+            return
+        try:
+            while not budget.exhausted:
+                try:
+                    value = next(output)
+                except StopIteration:
+                    return
+                yield value
+        finally:
+            if close := getattr(output, "close", None):
+                close()
+
+    return run
+
+
 def bound_recording(resource, limit: int) -> None:
-    if resource.is_transformer:
-        raise Failure(
-            ExitCode.REFUSED,
-            f"{resource.name} transforms an upstream resource; use a synthetic fixture "
-            "because the upstream pull cannot be bounded here",
-        )
-    # Keep any tighter limit installed by the connector. dlt's add_limit replaces it.
-    resource.add_step(RecordingLimit(limit), insert_at=1)
+    # A dependent REST endpoint is a pipe whose generator runs once per parent page.
+    # Limit every ancestor and stop advancing the child iterator once its sample is full.
+    pipe = resource._pipe
+    while pipe is not None:
+        budget = RecordingLimit(limit)
+        if pipe.has_parent:
+            pipe.replace_gen(_bounded_transform(pipe.gen, budget))
+        pipe.insert_step(budget, pipe.steps.index(pipe.gen) + 1)
+        pipe = pipe.parent
