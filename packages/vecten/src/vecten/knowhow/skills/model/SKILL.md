@@ -258,10 +258,10 @@ the marts. The document carries `ok`,
 
 - **0**: green. `datasets_changed: true` means the build rewrote `osi/datasets.json`;
   `false` means nothing the datasets are generated from changed, so the file is already fresh.
-- **3**: a prerequisite. "no fixtures for <source>" names
-  `vecten connector run <source> --record`, which writes real records into the project to be
-  committed, so hand the source to the `connector` skill, which tells the human first. "Docker
-  is needed" means asking the human to start Docker.
+- **3**: "no fixtures for <source>" names the connector whose offline inputs are missing.
+  Hand it to the `connector` skill. When its declaration sets `record = false`, write and
+  check synthetic fixtures. Otherwise confirm with the human before recording real rows.
+  "Docker is needed" means asking the human to start Docker.
 - **5**: dbt failed. Fix each node `failed` names, then build again. Repeat until exit 0. A
   staging node failing because its raw relation does not exist means a declared table has no
   fixture: stop and hand back as step 1 says, rather than building again.

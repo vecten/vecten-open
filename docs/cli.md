@@ -74,7 +74,7 @@ commands need an explicit `--env` and the owner's approval.
 | Intake | `vecten answer name my-project`; `vecten init my-project --name my-project --users 5 --source hubspot` |
 | Guidance | `vecten guide`; `vecten estimate`; `vecten next --json`; `vecten version` |
 | Local stack | `vecten up`; `vecten down`; use `--volumes` only to delete local data |
-| Ingestion | `vecten connector add demo --from rest`; `vecten connector run demo --record`; `vecten raw schema demo --json` |
+| Ingestion | `vecten connector add demo --from rest`; `vecten connector run demo --record --limit 3`; `vecten connector check-fixtures demo`; `vecten raw schema demo --json` |
 | Modelling | `vecten dbt ls`; `vecten dbt-build-local`; `vecten dbt-build-local --check` |
 | Semantic files | `vecten mcp validate`; `vecten mcp connection` prints the configured endpoint, not proof of a working query session |
 | Secrets | `vecten secret set DEMO_TOKEN` prompts privately; `vecten secret list` prints names |

@@ -646,3 +646,9 @@ def test_a_connector_named_like_an_area_is_refused_before_anything_is_written(in
     assert "area hubspot" in result.stdout
     assert not (project / "connectors" / "hubspot").exists()
     assert (project / "vecten.toml").read_text() == before
+
+
+def test_extension_can_disable_recording(invoke, project, monkeypatch):
+    use_extension(project, monkeypatch, lambda: {**attio_connector(), "record": False})
+    assert invoke("connector", "add", "attio").exit_code == 0
+    assert config(project)["connectors"][0]["record"] is False

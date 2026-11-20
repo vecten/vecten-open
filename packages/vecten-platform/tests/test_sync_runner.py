@@ -211,14 +211,14 @@ def _count(dest_path: Path, table: str) -> int:
         con.close()
 
 
-def test_record_caps_the_fixture_but_loads_every_item(duckdb_dest, tmp_path):
+def test_record_caps_the_fixture_and_the_load(duckdb_dest, tmp_path):
     record_dir = tmp_path / "fixtures"
     outcome = run_object(
         "sizes", _sizes_source, "many", duckdb_dest, tmp_path / "dlt", record_dir=record_dir
     )
-    assert outcome.ok and outcome.rows == 300
+    assert outcome.ok and outcome.rows == 200
     assert len((record_dir / "many.jsonl").read_text().splitlines()) == 200
-    assert _count(tmp_path / "wh.duckdb", "many") == 300
+    assert _count(tmp_path / "wh.duckdb", "many") == 200
 
 
 def test_record_of_an_object_with_no_items_leaves_no_fixture(duckdb_dest, tmp_path):

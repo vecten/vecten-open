@@ -8,7 +8,8 @@ from pathlib import Path
 
 import dlt
 
-from vecten_platform.sync.recording import record_to
+from vecten_platform.sync.recording import RECORD_LIMIT, record_to
+from vecten_platform.sync.sampling import bound_recording
 from vecten_shared.output import Failure
 
 
@@ -96,6 +97,9 @@ def run_object(
     destination,
     dlt_dir: Path,
     record_dir: Path | None = None,
+    *,
+    limit: int = RECORD_LIMIT,
+    redact_fixture: Callable | None = None,
 ) -> ObjectOutcome:
     pipeline = dlt.pipeline(
         pipeline_name(connector, object_name),
@@ -111,10 +115,14 @@ def run_object(
             return ObjectOutcome(object_name, False, 0, f"unknown object; the source has: {known}")
         selected = source.with_resources(object_name)
         if record_dir is not None:
-            recording = record_to(record_dir / f"{object_name}.jsonl")
-            selected.resources[object_name].add_map(recording)
+            resource = selected.resources[object_name]
+            bound_recording(resource, limit)
+            if redact_fixture is not None:
+                resource.add_map(lambda row: redact_fixture(object_name, row))
+            recording = record_to(record_dir / f"{object_name}.jsonl", limit=limit)
+            resource.add_map(recording)
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
-            # recording truncates the object's tables, resets its state and reloads everything.
+            # recording truncates the object's tables, resets its state and loads the sample.
             pipeline.run(selected, refresh="drop_data")
         else:
             pipeline.run(selected)
@@ -149,8 +157,20 @@ def run_objects(
     destination,
     dlt_dir: Path,
     record_dir: Path | None = None,
+    *,
+    limit: int = RECORD_LIMIT,
+    redact_fixture: Callable | None = None,
 ) -> list[ObjectOutcome]:
     return [
-        run_object(connector, make_source, name, destination, dlt_dir, record_dir)
+        run_object(
+            connector,
+            make_source,
+            name,
+            destination,
+            dlt_dir,
+            record_dir,
+            limit=limit,
+            redact_fixture=redact_fixture,
+        )
         for name in objects
     ]

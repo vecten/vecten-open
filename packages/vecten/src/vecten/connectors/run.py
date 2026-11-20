@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from vecten.connectors.names import check_connector_name, run_record_name
@@ -13,6 +13,7 @@ from vecten.connectors.sources_yml import add_tables
 from vecten_platform.sync import RuntimeContext, set_runtime
 from vecten_platform.sync.destination import warehouse_destination
 from vecten_platform.sync.loader import load_connector
+from vecten_platform.sync.recording import RECORD_LIMIT
 from vecten_platform.sync.runner import ObjectOutcome, list_objects, run_objects
 from vecten_shared.config import GENERIC_KINDS, load_config, save_config
 from vecten_shared.output import ExitCode, Failure
@@ -103,10 +104,19 @@ def _flip_edited_scaffold(project_root: Path, name: str) -> None:
 
 
 def run_connector(
-    project_root: Path, name: str, object_name: str | None, record: bool
+    project_root: Path, name: str, object_name: str | None, record: bool, limit: int | None = None
 ) -> RunResult:
     check_connector_name(name)
     ctx = local_runtime(project_root)
+    if limit is not None and (not record or not 1 <= limit <= RECORD_LIMIT):
+        raise Failure(
+            ExitCode.USAGE, f"--limit needs --record and a value from 1 to {RECORD_LIMIT}"
+        )
+    if record:
+        decl = load_config(project_root).connector(name)
+        if decl is not None and not decl.record:
+            raise Failure(ExitCode.REFUSED, f"{name} disables recording; write synthetic fixtures")
+        ctx = replace(ctx, record_limit=limit or RECORD_LIMIT)
     set_runtime(ctx)
     try:
         module = load_connector(ctx.connectors_dir, name)
@@ -133,7 +143,16 @@ def run_connector(
             )
         objects = [object_name] if object_name else available
         record_dir = project_root / "connectors" / name / "fixtures" if record else None
-        outcomes = run_objects(name, module.source, objects, destination, ctx.dlt_dir, record_dir)
+        outcomes = run_objects(
+            name,
+            module.source,
+            objects,
+            destination,
+            ctx.dlt_dir,
+            record_dir,
+            limit=limit or RECORD_LIMIT,
+            redact_fixture=getattr(module, "redact_fixture", None),
+        )
     finally:
         set_runtime(None)
     landed = sorted({table for o in outcomes if o.ok for table in o.tables})
