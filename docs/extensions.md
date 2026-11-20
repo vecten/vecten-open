@@ -337,8 +337,13 @@ checked only for having a JSON type. TOML dates and times are refused; use strin
 
 **Checks.** Values are checked against the manifest's schema, which may use `properties` typed
 `string`, `integer`, `number`, `boolean`, `array` or `object`, with `default`, `description`,
-`enum`, `minimum`, `maximum` and `items`, plus `required`; unknown settings are always refused,
-and no setting may be named `env`. `vecten lock` checks the laptop and every environment an
+`enum` and `const`. Arrays accept `items`, `minItems`, `maxItems` and `uniqueItems`. Strings
+accept `minLength`, `maxLength` and `pattern`. Numbers accept `minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`. For example, a price with
+`multipleOf: 0.01` accepts `19.99`. Declare defaults on top-level settings. To supply
+nested values by default, put the complete object in the top-level setting's `default`. Nested objects accept `properties`,
+`required` and `additionalProperties` (a boolean or a typed schema). The top level accepts
+only declared settings and reserves `env` for overrides. `vecten lock` checks the laptop and every environment an
 override names, `vecten up` the laptop, `vecten ship` and `ship --check` the environment
 shipped, and the MCP server every extension's settings before it starts serving. An error
 names `settings.<namespace>.<key>` and the environment, before anything starts. On a VM a change
