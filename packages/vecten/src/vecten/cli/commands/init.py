@@ -8,9 +8,11 @@ import typer
 
 from vecten.cli.context import CliContext
 from vecten.cli.runner import JsonFlag, run_command
+from vecten.deploy.tfvars import has_snowflake_root
 from vecten.intake.answers import ANSWERS_FILE, read_answers, read_answers_file, source_names
 from vecten.scaffold.params import ScaffoldParams
 from vecten.scaffold.render import render_project
+from vecten_shared.config import load_config, save_config
 from vecten_shared.output import ExitCode, Failure, Result
 from vecten_shared.records import write_record
 
@@ -104,6 +106,12 @@ def register(app: typer.Typer) -> None:
             created = not target.exists()
             try:
                 files = render_project(target, params)
+                if params.snowflake_shared_account:
+                    # The layout is an editable project choice outside the pristine scaffold.
+                    config = load_config(target)
+                    if has_snowflake_root(config):
+                        config.warehouse.shared_account = True
+                        save_config(target, config)
             except BaseException:
                 # A half-rendered directory init made itself would make the retry refuse as busy.
                 if created:
