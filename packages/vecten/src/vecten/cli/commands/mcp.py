@@ -32,6 +32,10 @@ def validate(
         osi_dir = root / "osi"
         kind = config.warehouse.kind
         report = validate_osi(osi_dir, warehouse_kind=kind)
+        if report.ok and "platform" in config.components and report.homes:
+            from vecten_platform.dbt.metricflow import dataset_issues
+
+            report.errors.extend(dataset_issues(osi_dir))
         record = {
             "ok": report.ok,
             "errors": len(report.errors),

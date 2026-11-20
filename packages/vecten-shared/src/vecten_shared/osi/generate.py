@@ -204,7 +204,7 @@ def _field(
     name: str, column: dict, catalog_type: str, is_key: bool, where: str, issues: list[Issue]
 ) -> dict:
     field: dict = {
-        "name": name,
+        "name": name.lower(),
         "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": name}]},
     }
     kind = classify(name, catalog_type, is_key=is_key)
@@ -270,7 +270,7 @@ def _dataset(
         fields.append(_field(name, column, built[name.lower()], is_key, alias, issues))
     dataset: dict = {"name": alias, "source": f"{database}.{schema}.{alias}"}
     if primary_key:
-        dataset["primary_key"] = primary_key
+        dataset["primary_key"] = [key.lower() for key in primary_key]
     if node.get("description"):
         dataset["description"] = node["description"]
     synonyms = _synonyms(node, f"model {alias}", issues)
