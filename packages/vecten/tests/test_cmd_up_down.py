@@ -1,6 +1,5 @@
 import json
 import socket
-import stat
 import subprocess
 from pathlib import Path
 
@@ -104,7 +103,6 @@ def test_up_generates_stack_and_prints_urls(invoke, workdir, fake, monkeypatch):
         "build/airflow.Dockerfile",
         "build/mcp.Dockerfile",
         "build/requirements.txt",
-        "airflow_passwords.json",
         "pg-init/vecten/warehouse_setup.sql",
         "pg-init/10-vecten.sh",
     ):
@@ -187,12 +185,15 @@ def test_up_outside_project_refused(invoke):
     assert invoke("up", "--json").exit_code == 4
 
 
-def test_up_writes_the_airflow_passwords_file_owner_only(invoke, workdir, fake, monkeypatch):
+@pytest.mark.parametrize("command", ["up", "down"])
+def test_removes_legacy_password_file(invoke, workdir, fake, monkeypatch, command):
     invoke("init", "p", *LOCAL, "--json")
     monkeypatch.chdir(workdir / "p")
-    assert invoke("up", "--json").exit_code == 0
     passwords = workdir / "p" / ".vecten" / "stack" / "airflow_passwords.json"
-    assert stat.S_IMODE(passwords.stat().st_mode) == 0o600
+    passwords.parent.mkdir(parents=True, exist_ok=True)
+    passwords.write_text("legacy")
+    assert invoke(command, "--json").exit_code == 0
+    assert not passwords.exists()
 
 
 def test_down_keeps_volumes_by_default(invoke, workdir, fake, monkeypatch):
@@ -366,8 +367,8 @@ def test_build_context_holds_only_the_project_layer(invoke, workdir, fake, monke
         "mcp.Dockerfile",
         "requirements.txt",
     ]
-    for secret in ("airflow_passwords.json", "certs"):
-        assert (stack / secret).exists() and stack / "build" not in (stack / secret).parents
+    assert (stack / "certs").is_dir()
+    assert not (stack / "airflow_passwords.json").exists()
 
 
 def test_up_failure_without_local_base_images_says_how_to_build_them(invoke, workdir, monkeypatch):
