@@ -1,0 +1,3 @@
+- [x] Reproduce the JSON-column mismatch with a recording and a DuckDB replay.
+- [x] Record and replay the schema of the sampled rows.
+- [x] Verify both offline entry points and fixtures without schema files.
