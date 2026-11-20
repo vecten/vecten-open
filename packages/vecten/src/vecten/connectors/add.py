@@ -111,6 +111,7 @@ def _stage_extension(stage: Path, name: str, ext: ExtensionConnector) -> Connect
     decl = ConnectorDecl(
         name=name,
         source=ext.kind,
+        record=ext.record,
         secrets=list(ext.secrets),
         dependencies=list(ext.dependencies),
         extension=ext.package,
@@ -260,6 +261,8 @@ def add_connector(
         from_extension = (
             extensions.get(name) if decl.extension or decl.source == "vecten-managed" else None
         )
+        if from_extension is not None and not from_extension.record:
+            decl.record = False
         dag_files = _dag_files(
             project_root,
             decl,

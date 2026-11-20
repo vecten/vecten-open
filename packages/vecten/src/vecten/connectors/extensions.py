@@ -38,6 +38,7 @@ class ExtensionConnector:
     write: Callable[[Path], None]
     # Empty when the extension declares no groups: the connector gets the one default group.
     groups: dict[str, ExtensionGroup] = field(default_factory=dict)
+    record: bool = True
 
 
 def entry_points_for(group: str):
@@ -138,6 +139,8 @@ def extension_connectors(config: VectenConfig) -> dict[str, ExtensionConnector]:
                 f"extension {package} declares connector {ep.name} with invalid secret names "
                 f"{bad!r}; a secret name is {SECRET_RULE}",
             )
+        if not isinstance(spec.get("record", True), bool):
+            raise _refuse(package, ep.name, "record that is not a boolean")
         found[ep.name] = ExtensionConnector(
             name=ep.name,
             package=package,
@@ -146,6 +149,7 @@ def extension_connectors(config: VectenConfig) -> dict[str, ExtensionConnector]:
             secrets=secrets,
             dependencies=dependencies,
             write=spec["write"],
+            record=spec.get("record", True),
             groups=_groups(spec, package, ep.name),
         )
     return found

@@ -193,27 +193,30 @@ is down: run `vecten up --json`, then retry.
 Before the first run, tell the human what a fixture is: `--record` writes up to 200 real
 records per object to `connectors/<name>/fixtures/<object>.jsonl`. Those files are committed to
 the project and replayed by the connector test and by `vecten dbt-build-local`, so they are real
-data in git. Ask which objects hold personal data they do not want there.
+data in git. When the recorder also writes an `<object>.schema.json` file, commit it with the
+rows so replay can restore their table structure. Ask which objects hold personal data they
+do not want there.
 
 After any later change to `connector.py`, run `vecten connector run <name> --json` again before
 calling the change done. Neither the connector test nor `vecten dbt-build-local` runs the code,
 so a green CI says nothing about it.
 
-Every object the connector keeps needs a fixture. `vecten dbt-build-local` replays fixtures
-only, so an object synced without one leaves a table that `sources.yml` declares, `next` asks to
-model, and the local build cannot build. To leave personal data out, drop that object from the
-connector instead: remove its entry from `resources` in `connector.py` (for a verified or
-extension source, leave it out of `.with_resources(...)`), so it is neither synced nor declared.
-Then record everything the connector keeps:
+Each object needs a fixture for offline builds. For sensitive or billed sources, set
+`record = false` in the connector's `[[connectors]]` entry in `vecten.toml`. Supply invented
+rows in `connectors/<name>/fixtures/<object>.jsonl`, one JSON object per line. Run
+`vecten connector check-fixtures <name>` to check the JSON and names against the declared
+object groups without opening the source. Use this route whenever recording is disabled.
 
-```bash
-vecten connector run <name> --record --json
-```
+For recording, use `vecten connector run <name> --record --limit 3 --json` to sample three
+rows per object. This replaces the object's local raw data with the sample. A paginated
+connector can read `runtime().record_limit` from `vecten_platform.sync` to size each request
+before the source bills it. Define `redact_fixture(object_name, row)` in `connector.py` to
+return a sanitized row before the sample reaches the local warehouse or fixture file.
 
 Ask before the first run, because a table a sync has landed stays declared in
 `dbt/models/staging/sources.yml`, a file the CLI writes and you never edit. When an object the
 human now wants out was already synced or recorded, drop it from `connector.py`, delete its
-`connectors/<name>/fixtures/<object>.jsonl`, run `vecten connector run <name> --record --json`
+`connectors/<name>/fixtures/<object>.jsonl` and any companion `<object>.schema.json`, run `vecten connector run <name> --record --json`
 again, and tell the human that its table entry stays in `sources.yml` until they remove it by
 hand.
 
@@ -231,7 +234,7 @@ other objects' outcomes.
 | `404` in an `error` | The path or base URL is wrong | Check `base_url` ends in `/` and the path against the documentation. |
 | Exit 5, "source() failed" | `connector.py` raised before any object ran | Read the exception and fix the code. |
 | Exit 2, "has no object" | The `--object` name is not a resource | Use one of the names the error lists. |
-| An object with `"rows": 0` | It yielded nothing, so a recording keeps no fixture for it | Confirm the scope with the human: is that object empty in their account, does the credential cover it, is `initial_value` too recent, is `data_selector` right. Never invent records. |
+| An object with `"rows": 0` | It yielded nothing, so a recording keeps no fixture for it | Confirm the scope with the human: is that object empty in their account, does the credential cover it, is `initial_value` too recent, is `data_selector` right. Ask the human for representative invented values if the object needs a synthetic fixture. |
 
 ## 6. Show the raw tables
 

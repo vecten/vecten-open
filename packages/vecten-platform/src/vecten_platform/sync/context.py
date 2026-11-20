@@ -18,6 +18,7 @@ class RuntimeContext:
     env: str
     provider: Provider
     dlt_dir: Path
+    record_limit: int | None = None
 
 
 _RUNTIME: RuntimeContext | None = None
