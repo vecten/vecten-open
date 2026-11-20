@@ -67,7 +67,7 @@ and call `inputs(fetch_people)` once. The callback can yield individual records 
 records, one page at a time. Keep the parsing you want to test after that call. During a
 regular sync, `live_inputs` calls the callback. During replay, Vecten supplies the saved values.
 
-Each selected object can replay one upstream read. For example, a `deals` resource may
+Each selected object can replay one call to `inputs(...)`, including all pages from that call. For example, a `deals` resource may
 first read a parent `companies` resource to get company IDs, then fetch deals for each ID.
 If both resources call `inputs(...)`, record the transformed deal rows with
 `vecten connector run demo --object deals --record` instead.
