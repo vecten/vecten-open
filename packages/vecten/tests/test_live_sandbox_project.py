@@ -288,6 +288,23 @@ def test_check_public_refuses_a_non_repository_and_an_empty_index(tmp_path, run)
     assert run("check-public", project(tmp_path, {}), home=home).returncode == 3
 
 
+def test_a_forbidden_name_renamed_away_and_deleted_is_found_on_its_own(tmp_path, run):
+    root = project(tmp_path, {"README.md": "x\n", "deploy.key": "a-project-credential\n"})
+    identity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
+    identity += ["-c", "commit.gpgsign=false"]
+    git(root, *identity, "commit", "-q", "-m", "key")
+    git(root, "mv", "deploy.key", "deploy.key.bak")
+    git(root, *identity, "commit", "-q", "-m", "rename the key")
+    git(root, "rm", "-q", "deploy.key.bak")
+    git(root, *identity, "commit", "-q", "-m", "remove the key")
+    result = run("check-public", root, home=credential_home(tmp_path))
+    rewrite = "removing the file is not enough: rewrite the history or render the project afresh"
+    assert (result.returncode, result.stdout) == (
+        1,
+        f"deploy.key  (file name; in a commit: {rewrite})\n",
+    ), result.stderr
+
+
 def test_check_public_refuses_a_subdirectory_of_the_project(tmp_path, run):
     root = project(tmp_path, {"README.md": "x\n", "infra/main.tf": "x = 1\n"})
     result = run("check-public", root / "infra", home=credential_home(tmp_path))

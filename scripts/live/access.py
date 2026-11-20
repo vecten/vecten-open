@@ -768,6 +768,46 @@ def _blobs(directory: Path, sandbox: list[str], env: dict, names: list[str]) -> 
     return contents
 
 
+def _history(directory: Path, sandbox: list[str], env: dict) -> dict[str, set[str]]:
+    """Every blob in any commit a ref or HEAD reaches, with every path it had there.
+
+    Each commit is compared with each of its parents, and a root commit with nothing: a blob
+    at a path in a commit's tree is either new there against some parent, or the same in a
+    parent, whose own comparisons are listed too, so walking back finds where it came in.
+    """
+    revisions = ["--all", *(["HEAD"] if _has_head(directory, sandbox, env) else [])]
+    commits = _git(directory, sandbox, env, "rev-list", *revisions)
+    raw = _git(
+        directory,
+        sandbox,
+        env,
+        "diff-tree",
+        "--stdin",
+        "--root",
+        "-r",
+        "-m",
+        "--no-renames",
+        "--no-commit-id",
+        "--raw",
+        "-z",
+        given=commits,
+    )
+    history: dict[str, set[str]] = {}
+    fields = raw.decode(errors="surrogateescape").split("\0")
+    # Each entry is ":<old mode> <new mode> <old blob> <new blob> <status>" then its path.
+    for meta, name in zip(fields[0::2], fields[1::2], strict=False):
+        parts = meta.split()
+        if not meta.startswith(":") or len(parts) != 5:
+            raise NotListed(
+                f"cannot read what {directory} would publish: git diff-tree said {meta!r}"
+            )
+        new_mode, new_blob = parts[1], parts[3]
+        # A deleted path has no new blob, and a submodule names another repository's commit.
+        if set(new_blob) != {"0"} and new_mode != "160000":
+            history.setdefault(new_blob, set()).add(name)
+    return history
+
+
 def secret_hits(directory: Path) -> list[dict]:
     """Every path a push of `directory` could publish holding a value of the credential home,
     with where it was found: the working tree, the index or any commit a ref or HEAD reaches.
@@ -807,15 +847,7 @@ def secret_hits(directory: Path) -> list[dict]:
         # A submodule entry names a commit of another repository, which this push does not send.
         if mode != "160000":
             staged.setdefault(sha, []).append(name)
-    revisions = ["--all", *(["HEAD"] if _has_head(directory, sandbox, env) else [])]
-    listing = _git(
-        directory, sandbox, env, "rev-list", "--objects", "--filter=object:type=blob", *revisions
-    )
-    history: dict[str, set[str]] = {}
-    for line in listing.decode(errors="surrogateescape").splitlines():
-        sha, _, name = line.partition(" ")
-        if name:
-            history.setdefault(sha, set()).add(name)
+    history = _history(directory, sandbox, env)
     blobs = _blobs(directory, sandbox, env, list(dict.fromkeys([*staged, *history])))
     for place, objects in (("staged", staged), ("commit", history)):
         for sha, names in objects.items():

@@ -98,9 +98,9 @@ def rewrite(project: Path, convert) -> None:
         path.write_bytes(data)
 
 
-def _git(project: Path, *args: str) -> bytes:
+def _git(project: Path, *args: str, given: bytes = b"") -> bytes:
     try:
-        done = subprocess.run([*GIT, *args], cwd=project, capture_output=True)
+        done = subprocess.run([*GIT, *args], cwd=project, input=given, capture_output=True)
     except OSError as error:
         raise Refused(f"git could not start: {error}") from None
     if done.returncode != 0:
@@ -131,7 +131,7 @@ def _has_head(project: Path) -> bool:
 
 def published_paths(project: Path) -> dict[str, set[str]]:
     """Every path a push could publish, with where: the working tree as `git add --all` would
-    stage it, the index, and every commit a ref or HEAD reaches."""
+    stage it, the index, and every path a file had in any commit a ref or HEAD reaches."""
     listed = subprocess.run([*GIT, "ls-files", "-z", "--stage"], cwd=project, capture_output=True)
     if listed.returncode != 0:
         raise Refused(f"{project} is not a git work tree")
@@ -149,13 +149,35 @@ def published_paths(project: Path) -> dict[str, set[str]]:
             places.setdefault(name, set()).add("working-tree")
     for name in staged:
         places.setdefault(name, set()).add("staged")
-    revisions = ["--all", *(["HEAD"] if _has_head(project) else [])]
-    listing = _git(project, "rev-list", "--objects", "--filter=object:type=blob", *revisions)
-    for line in listing.decode(errors="surrogateescape").splitlines():
-        name = line.partition(" ")[2]
-        if name:
-            places.setdefault(name, set()).add("commit")
+    for name in history_paths(project):
+        places.setdefault(name, set()).add("commit")
     return places
+
+
+def history_paths(project: Path) -> set[str]:
+    """Every path any file had in any commit a ref or HEAD reaches.
+
+    Each commit is compared with each of its parents, and a root commit with nothing: a path in
+    a commit's tree is either new or changed there against some parent, or the same in a
+    parent, whose own comparisons are listed too, so walking back finds where it came in. One
+    name per blob would miss a file renamed away from a forbidden name.
+    """
+    revisions = ["--all", *(["HEAD"] if _has_head(project) else [])]
+    commits = _git(project, "rev-list", *revisions)
+    changed = _git(
+        project,
+        "diff-tree",
+        "--stdin",
+        "--root",
+        "-r",
+        "-m",
+        "--no-renames",
+        "--no-commit-id",
+        "--name-only",
+        "-z",
+        given=commits,
+    )
+    return set(_names(changed))
 
 
 def secret_names(published: dict[str, set[str]]) -> list[dict]:

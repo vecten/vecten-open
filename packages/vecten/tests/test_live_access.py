@@ -1666,13 +1666,14 @@ def test_the_secret_check_lists_files_under_the_os_sandbox(tmp_path):
         "-c",
         f"core.excludesFile={os.devnull}",
     ]
-    assert [call[2:8] for call in calls] == [git] * 6
+    assert [call[2:8] for call in calls] == [git] * 7
     assert [call[8:10] for call in calls] == [
         ["rev-parse", "--show-toplevel"],
         ["ls-files", "-z"],
         ["ls-files", "-z"],
         ["rev-parse", "--verify"],
-        ["rev-list", "--objects"],
+        ["rev-list", "--all"],
+        ["diff-tree", "--stdin"],
         ["cat-file", "--batch"],
     ]
     for env in environments(record):
@@ -2053,20 +2054,21 @@ def test_a_project_with_no_commit_yet_is_checked(tmp_path):
     assert public.returncode == 1
 
 
-def test_a_git_that_fails_listing_the_history_is_a_refusal(tmp_path):
+@pytest.mark.parametrize("failing", ["rev-list", "diff-tree"])
+def test_a_git_that_fails_listing_the_history_is_a_refusal(tmp_path, failing):
     home(tmp_path)
     project = publishable(tmp_path)
     real_git = shutil.which("git")
     script(
         tmp_path / "bin/git",
-        'case " $* " in *" rev-list "*) echo "fatal: history unreadable" >&2; exit 128;; esac\n'
+        f'case " $* " in *" {failing} "*) echo "fatal: history unreadable" >&2; exit 128;; esac\n'
         f'exec "{real_git}" "$@"',
     )
     secrets, public = both_checks(tmp_path, project)
     assert (secrets.returncode, secrets.stdout) == (2, "")
-    assert "git rev-list failed: fatal: history unreadable" in secrets.stderr
+    assert f"git {failing} failed: fatal: history unreadable" in secrets.stderr
     assert (public.returncode, public.stdout) == (3, "")
-    assert "git rev-list failed" in public.stderr
+    assert f"git {failing} failed" in public.stderr
 
 
 def git_output(project, *args):
@@ -2117,3 +2119,117 @@ def test_a_subdirectory_of_a_project_is_refused(tmp_path):
         assert (result.returncode, result.stdout) == (3, ""), result.stderr
         assert len(result.stderr.strip().splitlines()) == 1
         assert f"top level of its work tree, {project.resolve()}" in result.stderr
+
+
+SYNTHETIC = "a-project-credential-not-in-the-credential-home"
+
+
+def test_a_forbidden_name_renamed_away_and_deleted_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "deploy.key").write_text(f"{SYNTHETIC}\n")
+    commit(project, "key")
+    git(project, "mv", "deploy.key", "deploy.key.bak")
+    commit(project, "rename the key")
+    git(project, "rm", "-q", "deploy.key.bak")
+    commit(project, "remove the key")
+    assert sorted(path.name for path in project.iterdir()) == [".git", "README.md"]
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (0, "")
+    assert (public.returncode, public.stdout) == (
+        1,
+        f"deploy.key  (file name; in a commit: {REWRITE})\n",
+    ), public.stderr
+
+
+def test_a_forbidden_name_from_a_merged_side_branch_later_removed_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    git(project, "switch", "-q", "-c", "side")
+    (project / ".env").write_text("A=1\n")
+    commit(project, "env on the side")
+    git(project, "switch", "-q", "main")
+    git(project, *IDENTITY, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    git(project, "branch", "-q", "-D", "side")
+    git(project, "rm", "-q", ".env")
+    commit(project, "remove env")
+    _, public = both_checks(tmp_path, project)
+    assert (public.returncode, public.stdout) == (
+        1,
+        f".env  (file name; in a commit: {REWRITE})\n",
+    ), public.stderr
+
+
+def test_a_forbidden_name_introduced_only_by_a_merge_commit_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    git(project, "switch", "-q", "-c", "side")
+    (project / "side.txt").write_text("side\n")
+    commit(project, "side")
+    git(project, "switch", "-q", "main")
+    (project / "main.txt").write_text("main\n")
+    commit(project, "main")
+    git(project, *IDENTITY, "merge", "-q", "--no-ff", "--no-commit", "side")
+    (project / "server.pem").write_text("made in the merge\n")
+    git(project, "add", "server.pem")
+    git(project, *IDENTITY, "commit", "-q", "-m", "merge side with a pem")
+    git(project, "branch", "-q", "-D", "side")
+    git(project, "rm", "-q", "server.pem")
+    commit(project, "remove the pem")
+    _, public = both_checks(tmp_path, project)
+    assert (public.returncode, public.stdout) == (
+        1,
+        f"server.pem  (file name; in a commit: {REWRITE})\n",
+    ), public.stderr
+
+
+def test_an_innocent_name_renamed_to_a_forbidden_one_and_deleted_is_found(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "notes.txt").write_text("certificate text\n")
+    commit(project, "notes")
+    git(project, "mv", "notes.txt", "server.pem")
+    commit(project, "rename")
+    git(project, "rm", "-q", "server.pem")
+    commit(project, "remove")
+    _, public = both_checks(tmp_path, project)
+    assert (public.returncode, public.stdout) == (
+        1,
+        f"server.pem  (file name; in a commit: {REWRITE})\n",
+    ), public.stderr
+
+
+def test_a_clean_history_with_renames_passes(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "a.txt").write_text("a\n")
+    commit(project, "a")
+    git(project, "mv", "a.txt", "b.txt")
+    commit(project, "rename")
+    git(project, "mv", "b.txt", "docs.md")
+    commit(project, "rename again")
+    secrets, public = both_checks(tmp_path, project)
+    assert (secrets.returncode, secrets.stdout) == (0, "")
+    assert (public.returncode, public.stdout) == (0, ""), public.stderr
+
+
+def test_a_credential_in_history_is_named_under_every_path_it_had(tmp_path):
+    home(tmp_path)
+    project = publishable(tmp_path)
+    (project / "first.tf").write_text(f'secret = "{AWS_SECRET}"\n')
+    commit(project, "leak")
+    git(project, "mv", "first.tf", "second.tf")
+    commit(project, "rename")
+    git(project, "rm", "-q", "second.tf")
+    commit(project, "remove")
+    secrets, public = both_checks(tmp_path, project)
+    assert secrets.returncode == 1
+    assert secrets.stdout.splitlines() == [
+        f"first.tf  (in a commit: {REWRITE})",
+        f"second.tf  (in a commit: {REWRITE})",
+    ]
+    assert public.returncode == 1, public.stderr
+    assert public.stdout.splitlines() == [
+        f"first.tf  (credential value; in a commit: {REWRITE})",
+        f"second.tf  (credential value; in a commit: {REWRITE})",
+    ]
