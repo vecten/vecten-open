@@ -1112,7 +1112,8 @@ def _shared_leftovers(
             ExitCode.REFUSED,
             f"users or roles {names.provisioner_role} owns, its user or the integration "
             f"{names.integration} stay in Snowflake, and the users' sign-in policies live in "
-            "the database --delete-data drops; nothing was destroyed. "
+            "the database --delete-data drops. The MCP sign-in policy references the integration "
+            "and must be dropped before it. Nothing was destroyed. "
             "Have an ACCOUNTADMIN run, in order:\n" + "\n".join(statements),
             details={"statements": statements},
         )
