@@ -17,4 +17,28 @@ jobs:
 [% endif %]      - run: uvx --with "vecten==[[ vecten_version ]]" vecten mcp validate
 [% if 'platform' in components %]      - run: docker info
       - run: uvx --with "vecten==[[ vecten_version ]]" vecten dbt-build-local --check
-[% endif %]
+[% endif %]  terraform:
+    runs-on: [[ github_runner ]]
+    permissions:
+      contents: read
+    steps:
+      - uses: [[ action_checkout ]]
+        with:
+          persist-credentials: false
+      - uses: [[ action_setup_terraform ]]
+        if: hashFiles('deploy/terraform/*/*.tf', 'deploy/terraform/*/*.tf.json') != ''
+        with:
+          terraform_version: "~[[ terraform_engine ]].0"
+          terraform_wrapper: false
+      - name: Validate project Terraform roots
+        if: hashFiles('deploy/terraform/*/*.tf', 'deploy/terraform/*/*.tf.json') != ''
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for root in deploy/terraform/*/; do
+            files=("$root"*.tf "$root"*.tf.json)
+            test -f "${files[0]}" || continue
+            terraform -chdir="$root" fmt -check
+            terraform -chdir="$root" init -backend=false -input=false
+            terraform -chdir="$root" validate
+          done

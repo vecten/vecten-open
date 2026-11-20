@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from vecten.deploy.outputs import OUTPUT_NAMES
 from vecten.scaffold.params import ScaffoldParams
@@ -819,3 +820,55 @@ def test_every_cloud_render_validates(tmp_path, params):
         main.write_text(re.sub(r'source = "git::[^"]+"', f'source = "{local}"', main.read_text()))
         assert (root / "backend.tf").is_file()
         _init_and_validate(root)
+
+
+def _ci_terraform_steps(project):
+    workflow = yaml.safe_load((project / ".github/workflows/ci.yml").read_text())
+    return workflow["jobs"]["terraform"]["steps"]
+
+
+def test_project_ci_skips_terraform_without_deploy_files(tmp_path):
+    project = tmp_path / "local"
+    render_project(project, ScaffoldParams.from_answers(LOCAL, {}))
+    _, setup, validate = _ci_terraform_steps(project)
+    assert (
+        setup["if"]
+        == validate["if"]
+        == "hashFiles('deploy/terraform/*/*.tf', 'deploy/terraform/*/*.tf.json') != ''"
+    )
+    assert not (project / "deploy").exists()
+    assert setup["with"]["terraform_version"] == f"~{VERSIONS.terraform}.0"
+
+
+@pytest.mark.terraform
+def test_project_ci_validates_extra_snowflake_files(tmp_path):
+    if shutil.which("terraform") is None:
+        pytest.skip("terraform is not installed")
+    cloud = _render(tmp_path, "snowflake")
+    project = cloud.parents[2]
+    for root in cloud.parent.iterdir():
+        main = root / "main.tf"
+        main.write_text(
+            re.sub(
+                r'source = "git::[^"]+"', f'source = "{LOCAL_MODULES[root.name]}"', main.read_text()
+            )
+        )
+    script = _ci_terraform_steps(project)[-1]["run"]
+
+    def check():
+        return subprocess.run(
+            ["bash", "-eo", "pipefail", "-c", script],
+            cwd=project,
+            env=_terraform_env(),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+    valid = check()
+    assert valid.returncode == 0, valid.stdout + valid.stderr
+    extra = cloud.parent / "snowflake" / "extra.tf"
+    extra.write_text('output "extra" { value = local.undeclared }\n')
+    invalid = check()
+    assert invalid.returncode != 0
+    assert "undeclared" in invalid.stderr and "extra.tf" in invalid.stderr
