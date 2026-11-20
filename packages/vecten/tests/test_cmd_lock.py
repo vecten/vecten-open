@@ -506,6 +506,45 @@ def test_extension_add_registers_an_in_repo_extension_by_its_path(invoke, projec
     assert fakes["inspected"] == []
 
 
+def test_install_with_required_settings_is_atomic(invoke, project, fakes, monkeypatch):
+    from vecten_shared.declarations import parse_manifest
+
+    make(project)
+    assert invoke("lock").exit_code == 0
+    files = ["vecten.toml", "requirements.txt", locking.RECORD_FILE, *locking.LOCK_FILES.values()]
+    before = {name: (project / name).read_bytes() for name in files}
+    schema = {
+        "properties": {"cap": {"type": "integer"}, "label": {"type": "string"}},
+        "required": ["cap"],
+    }
+    monkeypatch.setattr(
+        extensions,
+        "load_manifests",
+        lambda config: {"acme-portal": parse_manifest("acme-portal", {"settings": schema})},
+    )
+    args = ["extension", "add", "./extensions/acme-portal"]
+    for options in ([], ["--set", "cap=wrong"]):
+        result = invoke(*args, *options)
+        assert result.exit_code == ExitCode.CONFIG, result.output
+        assert "settings.acme-portal.cap" in result.output
+        assert {name: (project / name).read_bytes() for name in files} == before
+    invalid = invoke(*args, "--set", "cap=2026-01-01")
+    assert invalid.exit_code == ExitCode.CONFIG
+    assert "settings.acme-portal" in invalid.output and "pydantic.dev" not in invalid.output
+    assert {name: (project / name).read_bytes() for name in files} == before
+    result = invoke(*args, "--set", "cap = 12", "--set", 'label = "1.0"')
+    assert result.exit_code == 0, result.output
+    config = load_config(project)
+    assert config.extensions == ["acme-portal"]
+    assert config.settings["acme-portal"] == {"cap": 12, "label": "1.0"}
+    assert fakes["installed"][-1][1] == ("extensions/acme-portal",)
+    assert locking.lock_problems(project, config) == []
+    result = invoke(*args, "--set", "label=one=two")
+    assert (
+        result.exit_code == 0 and load_config(project).settings["acme-portal"]["label"] == "one=two"
+    )
+
+
 def test_each_lock_is_resolved_with_the_extension_as_input_and_holds_no_path(
     invoke, project, fakes
 ):
