@@ -35,6 +35,12 @@ LISTING_FIX = (
     "builds are not listed."
 )
 
+PARTIAL_GRANT_FIX = (
+    "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
+    "--confirm-run: until then a partial grant can be mistaken for a missing schema, "
+    "and a refused revoke lacks the remaining-grants diagnostic."
+)
+
 
 # `p_` is kept for one reader role per person; the others name administrators, services and
 # Postgres's predefined roles.
@@ -535,10 +541,7 @@ class AccessService:
             elif installed < LISTING_VERSION:
                 fix = LISTING_FIX
             else:
-                fix = (
-                    "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and "
-                    "confirms it with --confirm-run to update partial grant and revoke handling."
-                )
+                fix = PARTIAL_GRANT_FIX
             return {"installed": installed, "required": ACCESS_VERSION, "fix": fix}
         return None
 
@@ -594,7 +597,7 @@ class AccessService:
                     ", ".join(missing),
                 )
         if refused and not allowed:
-            raise RuntimeError("the warehouse refused part of the revoke: " + "; ".join(refused))
+            raise RuntimeError("part of the revoke failed: " + "; ".join(refused))
         if refused:
             logger.warning(
                 "%s of %s %s for %s left out: %s",

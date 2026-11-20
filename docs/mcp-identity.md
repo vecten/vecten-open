@@ -315,9 +315,9 @@ rolling back the grant revokes only those, so a schema that only ever waited nee
 On Snowflake an area schema waits when its USAGE grant fails and the procedure owner cannot
 see the schema. If USAGE succeeds and a later grant fails, the MCP tracks the partial grant
 until it can roll it back. An area revoke attempts each previously granted schema. If Snowflake
-refuses a revoke, the procedure checks the role's remaining privileges. A dataset revoke is
-complete when its SELECT is gone. A schema revoke is complete when its USAGE and its current
-and future SELECT grants are gone. A failed check or remaining access is reported and retried.
+refuses a revoke, the MCP keeps retrying it, including when the role shows no remaining access.
+Snowflake can hide grants from the procedure owner, and restoring a dropped object with
+`UNDROP` can restore its grants. Once the object is restored, reconciliation can revoke them.
 On Postgres a dropped schema or relation takes its grants with it.
 A schema or dataset grant on a missing object is refused, naming it. An area grant is refused
 for an area with no `[areas.<area>]` entry, and an area removed from `vecten.toml` has its

@@ -178,4 +178,5 @@ def test_version_six_keeps_relation_listing_while_requesting_the_procedure_updat
     assert access.reconcile()["complete"]
     health = access.health()
     assert adapter.listed and health["unbuilt"]
-    assert "partial grant and revoke" in health["outdated"]["fix"]
+    assert "partial grant" in health["outdated"]["fix"]
+    assert "refused revoke" in health["outdated"]["fix"]

@@ -1033,9 +1033,9 @@ def test_a_revoke_on_a_table_the_owner_cannot_list_is_issued_and_read_back():
     assert output["held"] == []
 
 
-def test_a_revoke_on_a_dropped_table_finishes_when_the_role_has_no_select():
+def test_a_revoke_on_a_dropped_table_stays_pending_for_undrop():
     output = _absent("MARTS_FINANCE", False, relation="INVOICE", schemas=["MARTS_FINANCE"])
-    assert (output["value"], output["error"]) == ("ok", None)
+    assert output["value"] is None and "no remaining grant is visible" in output["error"]
     assert _touching(output, "MARTS_FINANCE") == []
 
 
@@ -1084,24 +1084,26 @@ def test_a_refused_select_after_schema_usage_succeeds_is_never_absent():
 
 
 @pytest.mark.parametrize(
-    ("held", "future", "complete"),
+    ("held", "future", "visible"),
     [
-        ([{"privilege": "USAGE", "granted_on": "SCHEMA", "name": "D.MARTS"}], [], False),
-        ([{"privilege": "SELECT", "granted_on": "TABLE", "name": "D.MARTS.T"}], [], False),
-        ([], [DYNAMIC_FUTURE], False),
-        ([{"privilege": "USAGE", "granted_on": "SCHEMA", "name": "D.MARTS_OTHER"}], [], True),
-        ([], [], True),
+        ([{"privilege": "USAGE", "granted_on": "SCHEMA", "name": "D.MARTS"}], [], True),
+        ([{"privilege": "SELECT", "granted_on": "TABLE", "name": "D.MARTS.T"}], [], True),
+        ([], [DYNAMIC_FUTURE], True),
+        ([{"privilege": "USAGE", "granted_on": "SCHEMA", "name": "D.MARTS_OTHER"}], [], False),
+        ([], [], False),
     ],
 )
 def test_failed_schema_revoke_checks_schema_usage_and_current_and_future_select(
-    held, future, complete
+    held, future, visible
 ):
     output = _kinds(enabled=False, refuse=["ALL TABLES"], held=held, future=future)
-    assert (output["error"] is None) is complete, output
-    assert output["value"] == ("ok" if complete else None)
+    assert output["value"] is None and "ALL TABLES" in output["error"]
+    assert ("no remaining grant is visible" in output["error"]) is (not visible)
 
 
 @pytest.mark.parametrize("listing", ["SHOW GRANTS TO ROLE", "SHOW FUTURE GRANTS TO ROLE"])
 def test_a_failed_revoke_stays_unresolved_when_the_grants_cannot_be_read(listing):
     output = _kinds(enabled=False, refuse=["ALL TABLES", listing])
-    assert output["value"] is None and listing in output["error"]
+    assert output["value"] is None
+    assert "ALL TABLES is not supported" in output["error"]
+    assert f"{listing} is not supported" in output["error"]

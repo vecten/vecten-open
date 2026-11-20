@@ -325,10 +325,10 @@ class SnowflakeAdapter:
 
     def _grant(self, role, schema, relation, grant):
         """`<shape> <kind>: <warehouse message>` for each relation kind READ_GRANT reports the
-        account refused; the other kinds were applied. On a grant READ_GRANT answers `absent`,
+        account refused; the other kinds were applied. On a grant READ_GRANT answers `absent`
         when schema USAGE fails and its owner cannot list the schema. INFORMATION_SCHEMA
-        lists only what the owner may use. A refused revoke succeeds only once the role's
-        grants confirm the requested privileges are gone."""
+        lists only what the owner may use. A refused revoke stays pending even if the owner
+        sees no remaining grant."""
         if role != self.DEFAULT_ROLE:
             check_account(role)
         with self.control() as cursor:

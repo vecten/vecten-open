@@ -67,9 +67,18 @@ function readGrant() {
     try {
         return change(enabled, relation);
     } catch (e) {
-        // Dropping an object removes its grants. Only the role's privileges establish
-        // whether a failed revoke has anything left to remove.
-        if (!enabled && !holdsRead(relation)) return 'ok';
+        // SHOW filters grants by the owner's visibility. UNDROP also restores the grants
+        // of a dropped object, so an empty listing cannot discharge a refused revoke.
+        if (!enabled) {
+            var remaining;
+            try { remaining = holdsRead(relation); }
+            catch (readError) {
+                throw new Error('revoke failed: ' + e + '; checking remaining grants failed: ' + readError);
+            }
+            if (!remaining) {
+                throw new Error('revoke failed: ' + e + '; no remaining grant is visible to the procedure owner');
+            }
+        }
         throw e;
     }
 }
