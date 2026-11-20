@@ -972,16 +972,16 @@ def _refuse_bare_name_of_a_git_source(root: Path, req) -> None:
     )
 
 
-def add_extension(root: Path, package: str) -> dict:
+def add_extension(root: Path, package: str, *, settings: list[str] | None = None) -> dict:
     git = has_git_sources(root) or git_extensions.is_source(package)
     with (
         _git_project(git),
         tempfile.TemporaryDirectory(prefix="vecten-sources-") as fetched,
     ):
-        return _add_extension(root, package, Path(fetched))
+        return _add_extension(root, package, Path(fetched), settings or [])
 
 
-def _add_extension(root: Path, package: str, fetched: Path) -> dict:
+def _add_extension(root: Path, package: str, fetched: Path, settings: list[str]) -> dict:
     config = load_config(root)
     if in_repo.is_path(package):
         dist, package = _in_repo_package(root, package)
@@ -1024,11 +1024,29 @@ def _add_extension(root: Path, package: str, fetched: Path) -> dict:
     ]
     if registration not in config.extensions:
         config.extensions.append(registration)
-    files, report = lock_project(root, config, added=dist)
-    record = locking.parse_record(files[root / locking.RECORD_FILE]) or {}
     doc = tomlkit.parse((root / "vecten.toml").read_text())
     doc["extensions"] = config.extensions
     name = normalize_name(dist.name)
+    if settings:
+        if "settings" not in doc:
+            doc["settings"] = tomlkit.table(is_super_table=True)
+        if name not in doc["settings"]:
+            doc["settings"][name] = tomlkit.table()
+        for assignment in settings:
+            key, sep, raw = assignment.partition("=")
+            if not sep or not key.strip() or key.strip() == "env":
+                raise Failure(ExitCode.USAGE, "--set expects a base setting as key=value")
+            try:
+                value = tomlkit.value(raw)
+            except ValueError:
+                value = raw
+            doc["settings"][name][key.strip()] = value
+        try:
+            config = VectenConfig.model_validate(doc.unwrap())
+        except ValidationError as exc:
+            raise Failure(ExitCode.CONFIG, f"settings for {name}: {exc}") from None
+    files, report = lock_project(root, config, added=dist)
+    record = locking.parse_record(files[root / locking.RECORD_FILE]) or {}
     services = _bind_services(doc, config, name, record.get(name), record)
     apps = _bind_apps(doc, config, name, record.get(name), record)
     services["hostnames"] += apps["hostnames"]
