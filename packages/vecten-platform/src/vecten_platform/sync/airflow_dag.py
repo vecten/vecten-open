@@ -74,7 +74,7 @@ def sync_one(connector: str, object_name: str, params: Mapping[str, Any] | None 
     if not outcome.ok:
         error = ObjectSyncError(connector, object_name, outcome.error or "failed")
         if outcome.terminal:
-            from airflow.exceptions import AirflowFailException
+            from airflow.sdk.exceptions import AirflowFailException
 
             failure = AirflowFailException(str(error))
             failure.object_name = object_name
