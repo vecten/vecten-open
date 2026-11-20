@@ -308,6 +308,7 @@ class FakeGh:
         created_at: str = "2999-01-01T00:00:00Z",
         logged_in: bool = True,
         canonical: str = "acme/data",
+        default_branch: str | None = "main",
         failing: tuple[str, ...] = (),
         environments: tuple[str, ...] = (),
         branch_policies: bool = True,
@@ -341,6 +342,7 @@ class FakeGh:
         self.logged_in = logged_in
         # The repository as GitHub spells it, answered by `repo view`.
         self.canonical = canonical
+        self.default_branch = default_branch
         # Leading words (`api`, `variable`) of calls that exit 1.
         self.failing = failing
         # `repos/<repo>/environments/<env>` paths that exist, each with its
@@ -489,7 +491,14 @@ class FakeGh:
             return subprocess.CompletedProcess(
                 args,
                 0,
-                json.dumps({"nameWithOwner": self.canonical, "defaultBranchRef": {"name": "main"}}),
+                json.dumps(
+                    {
+                        "nameWithOwner": self.canonical,
+                        "defaultBranchRef": {"name": self.default_branch}
+                        if self.default_branch
+                        else None,
+                    }
+                ),
                 "",
             )
         if args[:2] == ["workflow", "run"]:
