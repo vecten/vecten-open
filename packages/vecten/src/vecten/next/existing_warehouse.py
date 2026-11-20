@@ -7,7 +7,8 @@ from pathlib import Path
 from vecten.next.items import Item
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, VectenConfig
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.identity_setup import snowflake_access_version
+from vecten_shared.provider import shared_layout
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import read_record
 
@@ -60,7 +61,7 @@ def access_rerun_item(root: Path, config: VectenConfig, env: str) -> Item | None
     if config.warehouse.kind != "snowflake" or not config.has("mcp"):
         return None
     runs = script_runs(root, config, env)
-    if not runs or max(runs) >= ACCESS_VERSION:
+    if not runs or max(runs) >= snowflake_access_version(shared_layout(config, env)):
         return None
     title = (
         f"Rerun the provisioner script for {env}: the access procedures it installed are "

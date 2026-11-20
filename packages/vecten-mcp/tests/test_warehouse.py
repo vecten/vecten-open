@@ -629,6 +629,7 @@ def test_the_scope_check_reads_and_compares_with_the_snowflake_names(monkeypatch
             ("USAGE", "DATABASE", "ACME_DEV", "false"),
             ("USAGE", "WAREHOUSE", "ACME_DEV_WH", "false"),
             ("USAGE", "SCHEMA", "ACME_DEV.VECTEN_ACCESS", "false"),
+            ("USAGE", "PROCEDURE", "ACME_DEV.VECTEN_ACCESS.CHECK_BINDING(VARCHAR)", "false"),
             (
                 "USAGE",
                 "PROCEDURE",

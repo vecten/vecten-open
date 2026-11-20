@@ -11,6 +11,7 @@ from vecten_mcp.warehouse.base import (
     check_account,
     drop_statement,
 )
+from vecten_shared.identity_setup import snowflake_access_version
 
 
 def quote(name):
@@ -43,6 +44,8 @@ class SnowflakeAdapter:
         self.provisioner_connect, self.query_connect = provisioner_connect, query_connect
         self.mint_token = mint_token
         self.names = names
+        self.recheck_bindings = bool(names.suffix)
+        self.required_access_version = snowflake_access_version(self.recheck_bindings)
         self.account, self.database, self.warehouse = names.account, names.database, names.warehouse
 
     # The registry's name of the default group's role, which both warehouses seed.
@@ -192,31 +195,21 @@ class SnowflakeAdapter:
         return f"REVOKE ROLE {quote(bound)} FROM ROLE {quote(self._role(role))};"
 
     def review_statement(self, bound):
-        """Every grant `bound` holds, through every role nested under it, for an administrator
-        to read: PROVISIONER cannot see a hierarchy it does not own, so in a shared account
-        the header also names the grants that reach another environment or Vecten's roles."""
+        """The administrator's queries for reviewing what the group will inherit."""
+        if self.names.suffix:
+            role = quote(bound)
+            return (
+                "-- Run as ACCOUNTADMIN to review current and future grants, including inherited "
+                "grants.\n"
+                f"SHOW GRANTS TO ROLE {role} INCLUDE HIERARCHY;\n"
+                f"SHOW FUTURE GRANTS TO ROLE {role} INCLUDE HIERARCHY;"
+            )
         name = "'" + bound.upper().replace("'", "''") + "'"
         header = (
             "-- Run as ACCOUNTADMIN. ACCOUNT_USAGE lags up to two hours. A row granted on\n"
             "-- ACCOUNT, or a role such as ACCOUNTADMIN, SECURITYADMIN, SYSADMIN or USERADMIN,\n"
             "-- makes the role unsafe to bind.\n"
         )
-        columns, recent = "g.grantee_name, g.privilege, g.granted_on, g.name", ""
-        if self.names.suffix:
-            base = self.names.suffix[1:].rsplit("_", 1)[0]
-            header += (
-                "-- This account holds every environment of the project, so USAGE on a\n"
-                f"-- role named *_{base}_<ENV> (any environment, this one's included)\n"
-                "-- makes it unsafe too, as does a grant on a database named\n"
-                f"-- {base}_<ENV> other than {self.names.database}, or on anything in one\n"
-                "-- (its TABLE_CATALOG).\n"
-            )
-            columns += ", g.table_catalog"
-            recent = (
-                "\n-- The grants made since ACCOUNT_USAGE caught up: run this, then the same\n"
-                "-- for every ROLE it lists.\n"
-                f"SHOW GRANTS TO ROLE {quote(bound)};"
-            )
         return (
             header + "WITH RECURSIVE reach (role) AS (\n"
             f"  SELECT {name}\n"
@@ -225,22 +218,35 @@ class SnowflakeAdapter:
             "  JOIN reach r ON g.grantee_name = r.role\n"
             "  WHERE g.granted_on = 'ROLE' AND g.privilege = 'USAGE' AND g.deleted_on IS NULL\n"
             ")\n"
-            f"SELECT {columns}\n"
+            "SELECT g.grantee_name, g.privilege, g.granted_on, g.name\n"
             "FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES g\n"
             "JOIN reach r ON g.grantee_name = r.role WHERE g.deleted_on IS NULL\n"
-            "ORDER BY 1, 3, 4;" + recent
+            "ORDER BY 1, 3, 4;"
         )
 
     def bound_role_problem(self, bound, managed):
-        """Why `bound` may not be bound, from its name: in a shared account a role ending in an
-        environment's suffix is Vecten's, this environment's reserved and `managed` roles
-        among them. PROVISIONER cannot read the grants of a role it neither owns nor holds, so
-        the review statement is the check of what `bound` reaches."""
-        if not self._project_role(bound):
+        """Check a shared-account role's name and its effective grants before binding it."""
+        if not self.names.suffix:
             return None
-        if bound.upper().endswith(self.names.suffix):
-            return f"{bound.upper()} is a role Vecten manages in this environment"
-        return f"{bound.upper()} belongs to another environment of this project"
+        if self._project_role(bound):
+            if bound.upper().endswith(self.names.suffix):
+                return f"{bound.upper()} is a role Vecten manages in this environment"
+            return f"{bound.upper()} belongs to another environment of this project"
+        from snowflake.connector.errors import ProgrammingError
+
+        with self.control() as cursor:
+            try:
+                row = cursor.execute(
+                    f"CALL {self._access()}.CHECK_BINDING(%s)", (bound.upper(),)
+                ).fetchone()
+            except ProgrammingError as exc:
+                raise ValueError(
+                    "Could not verify the binding. Check that the administrator has run the "
+                    "current `vecten mcp provisioner-script --env <env>` and the role exists."
+                ) from exc
+        if row and row[0] == "ok":
+            return None
+        return (row and row[0]) or "the binding check returned no verdict"
 
     def granted_roles(self, role):
         """The roles granted to the group's role, as SHOW GRANTS prints their names."""
@@ -422,6 +428,13 @@ class SnowflakeAdapter:
             key = self._registry_name(name)
             return key is not None and registry.get(key, {}).get("kind") in kinds
 
+        procedures = {
+            access + ".READ_GRANT(VARCHAR,VARCHAR,VARCHAR,BOOLEAN)",
+            access + ".READ_GRANTS(VARCHAR)",
+            access + ".SOURCE_EXISTS(VARCHAR,VARCHAR)",
+        }
+        if self.names.suffix:
+            procedures.add(access + ".CHECK_BINDING(VARCHAR)")
         owned = set()
         with self.control() as cursor:
             rows = cursor.execute(f"SHOW GRANTS TO ROLE {provisioner}").fetchall()
@@ -477,15 +490,7 @@ class SnowflakeAdapter:
                         kind == "PROCEDURE"
                         and privilege == "USAGE"
                         and str(grant.get("grant_option")).lower() == "false"
-                        and name.upper().replace(" ", "")
-                        in {
-                            access + "." + signature
-                            for signature in (
-                                "READ_GRANT(VARCHAR,VARCHAR,VARCHAR,BOOLEAN)",
-                                "READ_GRANTS(VARCHAR)",
-                                "SOURCE_EXISTS(VARCHAR,VARCHAR)",
-                            )
-                        }
+                        and name.upper().replace(" ", "") in procedures
                     )
                     or (
                         kind in {"DATABASE", "WAREHOUSE"}

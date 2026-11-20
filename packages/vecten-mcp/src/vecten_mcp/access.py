@@ -341,11 +341,12 @@ class AccessService:
                 raise ValueError(
                     f"group {group} already binds {held['bound_role']}: unbind it first"
                 )
+            if not held or getattr(self.adapter, "recheck_bindings", False):
+                self._check_bound(bound)
             if held:
                 # Binding the same role again prints its statement; the record, confirmed
                 # or not, stays as it is.
                 return self._binding(group, role, bound, confirmed=held["confirmed"])
-            self._check_bound(bound)
             self.state.put("bindings", group, {"bound_role": bound, "confirmed": False})
         return self._binding(group, role, bound, confirmed=False)
 
@@ -529,9 +530,15 @@ class AccessService:
 
     def _outdated(self):
         installed = self.adapter.access_version()
-        if installed < ACCESS_VERSION:
+        required = getattr(self.adapter, "required_access_version", ACCESS_VERSION)
+        if installed < required:
             fix = OUTDATED_FIX if installed < GRANTS_VERSION else LISTING_FIX
-            return {"installed": installed, "required": ACCESS_VERSION, "fix": fix}
+            if installed >= ACCESS_VERSION:
+                fix = (
+                    "An administrator reruns `vecten mcp provisioner-script --env <env>` and "
+                    "confirms it with --confirm-run so shared-account bindings can be checked."
+                )
+            return {"installed": installed, "required": required, "fix": fix}
         return None
 
     def _apply(self, grant, source, allowed, done=None, missing=None, confirmed=None):
@@ -784,6 +791,24 @@ class AccessService:
                 continue
             binding = bindings.get(group) or {}
             bound = binding.get("bound_role") if binding.get("confirmed") else None
+            if binding and getattr(self.adapter, "recheck_bindings", False):
+                target = binding["bound_role"]
+                try:
+                    self._check_bound(target)
+                except Exception as exc:
+                    error = describe_error(exc)
+                    failures.append(
+                        dict(
+                            group=group,
+                            kind="binding",
+                            target=target,
+                            operation="verify",
+                            error=error,
+                        )
+                    )
+                    logger.warning(
+                        "Checking the bound role %s of %s failed: %s", target, group, error
+                    )
             try:
                 nested = self.adapter.granted_roles(role)
                 held = self.adapter.holds_role(role, bound) if bound else True
@@ -967,7 +992,7 @@ class AccessService:
         build did not make, each with the statement that drops it, and the listing's error.
         Without a current record any relation could be one a later build made, so none is
         listed; the server never drops one."""
-        if self.built is None or outdated:
+        if self.built is None or (outdated and outdated["installed"] < ACCESS_VERSION):
             return [], None
         try:
             record = self.built()

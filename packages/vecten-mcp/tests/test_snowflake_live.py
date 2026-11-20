@@ -308,3 +308,39 @@ def test_a_rotation_keeps_person_sessions_working(account):
         assert cursor.fetchone() == (PERSON.upper(),)
     finally:
         connection.close()
+
+
+def test_shared_binding_verifies_nested_grants_as_the_provisioner(account):
+    """The dedicated CI database serves as shared environment VECTEN_CI for this check."""
+    from contextlib import ExitStack
+    from dataclasses import replace
+    from uuid import uuid4
+
+    from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
+    from vecten_shared.identity_setup import snowflake_access_helper
+
+    token = uuid4().hex.upper()
+    candidate, nested = f"CI_READER_{token}", f"CI_CHILD_{token}"
+    sibling = f"VECTEN_TEST{token}"
+    names = replace(account.adapter.names, suffix=f"_{DATABASE}")
+    adapter = SnowflakeAdapter(account.adapter.provisioner_connect, None, None, names=names)
+    execute = account.cursor.execute
+    with ExitStack() as cleanup:
+        for statement in _statements(snowflake_access_helper(names)):
+            if ".CHECK_BINDING(" in statement:
+                execute(statement)
+                if statement.startswith("CREATE"):
+                    cleanup.callback(
+                        execute, f"DROP PROCEDURE {DATABASE}.VECTEN_ACCESS.CHECK_BINDING(VARCHAR)"
+                    )
+        for role in (candidate, nested):
+            execute(f"CREATE ROLE {role}")
+            cleanup.callback(execute, f"DROP ROLE {role}")
+        execute(f"CREATE TRANSIENT DATABASE {sibling}")
+        cleanup.callback(execute, f"DROP DATABASE {sibling}")
+        execute(f"GRANT ROLE {nested} TO ROLE {candidate}")
+        assert adapter.bound_role_problem(candidate, set()) is None
+        execute(f"GRANT USAGE ON DATABASE {sibling} TO ROLE {nested}")
+        assert sibling in adapter.bound_role_problem(candidate, set())
+        execute(f"REVOKE USAGE ON DATABASE {sibling} FROM ROLE {nested}")
+        assert adapter.bound_role_problem(candidate, set()) is None

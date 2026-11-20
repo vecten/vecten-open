@@ -181,21 +181,25 @@ def test_postgres_scope_takes_the_bound_flag():
     assert "bound" in inspect.signature(PostgresAdapter.check_scope).parameters
 
 
-def _header(review):
-    return "\n".join(line for line in review.splitlines() if line.startswith("--"))
-
-
-def test_a_shared_account_review_names_what_else_makes_the_role_unsafe():
+def test_a_shared_account_review_queries_current_and_future_inherited_grants():
     adapter, _ = snowflake([], shared_account=True)
-    review = adapter.review_statement("finance_analyst")
-    header = " ".join(line.removeprefix("--").strip() for line in _header(review).splitlines())
-    # The provisioner cannot read the bound role's grants, so the administrator refuses these.
-    assert "on ACCOUNT" in header and "ACCOUNTADMIN" in header
-    assert "USAGE on a role named *_ACME_<ENV>" in header
-    assert "a database named ACME_<ENV> other than ACME_DEV" in header
-    assert "TABLE_CATALOG" in header and "g.table_catalog" in review
-    # ACCOUNT_USAGE lags; SHOW GRANTS reads the grants made since, one role at a time.
-    assert review.rstrip().endswith('SHOW GRANTS TO ROLE "FINANCE_ANALYST";')
+    queries = adapter.review_statement("finance_analyst").splitlines()[1:]
+    assert queries == [
+        'SHOW GRANTS TO ROLE "FINANCE_ANALYST" INCLUDE HIERARCHY;',
+        'SHOW FUTURE GRANTS TO ROLE "FINANCE_ANALYST" INCLUDE HIERARCHY;',
+    ]
+
+
+@pytest.mark.parametrize("answer", [[], [(None,)], [("",)]])
+def test_shared_binding_requires_an_explicit_procedure_verdict(answer):
+    adapter, cursor = snowflake(answer, shared_account=True)
+    assert (
+        adapter.bound_role_problem("finance_analyst", set())
+        == "the binding check returned no verdict"
+    )
+    assert cursor.statements == [
+        ('CALL "ACME_DEV"."VECTEN_ACCESS".CHECK_BINDING(%s)', ("FINANCE_ANALYST",))
+    ]
 
 
 def test_the_fixed_layout_review_names_no_other_environment():
