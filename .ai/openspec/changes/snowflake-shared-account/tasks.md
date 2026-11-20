@@ -69,6 +69,7 @@
 - [x] 9.5 An existing fixed-name sandbox environment plans empty after `vecten update`
   - Live, 0.1.1rc1: the fixed-name sandbox planned `0 to add, 0 to change, 0 to destroy` on Snowflake after `vecten update`.
 - [ ] 9.6 Two environments in one account: `dev`'s loader key, provisioner key and MCP signing key each fail to read `prod`'s marts; `destroy --env dev --delete-data dev` leaves every `prod` object in place
+  - Live, 2026-11-20 (#122): the integration drop failed while the MCP policy referenced it. The generated teardown SQL removed the target objects in order. After dropping the target database, the sibling's user, integration, policy and test table remained intact. The full Terraform destroy and cross-environment credential checks remain open.
   - Not run live for 0.1.1: it needs a destroy of the sandbox, which is kept.
 - [x] 9.7 External OAuth is refused for a `TYPE = SERVICE` user carrying a key-pair-only authentication policy (`AUTHENTICATION_METHODS = ('KEYPAIR')`), so another environment's integration cannot sign in as `PROVISIONER_<BASE>_<ENV>` or `LOADER_<BASE>_<ENV>`
   - Live, 0.1.1rc2 on AWS: External OAuth was refused for a `TYPE = SERVICE` user with a key-pair-only policy.

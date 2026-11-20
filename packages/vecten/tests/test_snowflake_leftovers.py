@@ -140,6 +140,7 @@ def test_the_statements_drop_every_owned_object_then_the_provisioner_and_its_int
         # Its key-pair-only policy lives in the database `--delete-data` drops.
         "ALTER USER IF EXISTS PROVISIONER_ACME_DEV UNSET AUTHENTICATION POLICY;",
         "DROP USER IF EXISTS PROVISIONER_ACME_DEV;",
+        'DROP AUTHENTICATION POLICY IF EXISTS "ACME_DEV"."VECTEN_ACCESS"."MCP_SIGN_IN";',
         "DROP SECURITY INTEGRATION IF EXISTS EXTERNAL_OAUTH_ACME_DEV;",
     ]
     assert found.blocks_data_deletion
