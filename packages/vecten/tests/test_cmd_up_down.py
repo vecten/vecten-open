@@ -399,9 +399,13 @@ def test_up_on_snowflake_leaves_the_mcp_out(invoke, workdir, fake, monkeypatch):
     assert doc["profiles"] == ["platform", "local"]
     assert doc["urls"] == {"airflow": "https://airflow.localhost:8443"}
     assert doc["left_out"] == ["mcp"]
+    stack_dir = workdir / "p" / ".vecten" / "stack"
+    services = yaml.safe_load((stack_dir / "docker-compose.yml").read_text())["services"]
+    assert "mcp-server" not in services
+    assert set(services["nginx"]["depends_on"]) == {"airflow-api-server"}
     record = json.loads((workdir / "p" / ".vecten" / "records" / "up.json").read_text())
     assert record["profiles"] == ["platform", "local"]
-    nginx = (workdir / "p" / ".vecten" / "stack" / "nginx" / "conf.d" / "default.conf").read_text()
+    nginx = (stack_dir / "nginx" / "conf.d" / "default.conf").read_text()
     assert "mcp.localhost" not in nginx
     human = invoke("up")
     assert "the MCP runs only deployed" in human.stdout

@@ -32,6 +32,17 @@ def test_complete_intake_renders_with_deploy_layer(invoke, workdir):
     assert (proj / ".copier-answers.yml").is_file()
 
 
+@pytest.mark.parametrize("answer", ["yes", "no"])
+def test_init_renders_the_snowflake_layout_from_the_recorded_answer(invoke, workdir, answer):
+    recorded = invoke("answer", "snowflake_shared_account", answer)
+    assert recorded.exit_code == 0, recorded.stdout
+    result = invoke("init", "p", *LOCAL, *DEPLOY, "--warehouse", "snowflake")
+    assert result.exit_code == 0, result.stdout
+    runbook = (workdir / "p" / "docs" / "runbook.md").read_text()
+    assert ("This project's Snowflake account is shared" in runbook) == (answer == "yes")
+    assert ("One environment per Snowflake account" in runbook) == (answer == "no")
+
+
 def test_size_from_users(invoke, workdir):
     invoke("init", "p", "--name", "acme", "--users", "30", "--source", "hubspot", "--json")
     assert load_config(workdir / "p").size == "medium"

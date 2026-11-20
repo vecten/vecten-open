@@ -209,7 +209,7 @@ class ScaffoldParams(BaseModel):
             "dns_zone": merged.get("dns_zone"),
             "github_repository": merged.get("github_repository"),
             "snowflake_account": merged.get("snowflake_account"),
-            "snowflake_shared_account": bool(merged.get("snowflake_shared_account", False)),
+            "snowflake_shared_account": merged.get("snowflake_shared_account", False),
         }
         try:
             return cls.model_validate(data)

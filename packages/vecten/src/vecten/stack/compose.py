@@ -9,6 +9,7 @@ from typing import Literal
 
 import yaml
 
+from vecten.stack import local_components
 from vecten.stack.images import BUILD_DIR, SOURCES_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
 from vecten_shared.apps import APP_CREDENTIAL, credential_names
@@ -755,7 +756,7 @@ def write_compose(project_root: Path, config: VectenConfig) -> Path:
     for source, empty, _ in PROJECT_MOUNTS:
         if not (stack_dir / source).is_dir():
             (stack_dir / "empty" / empty).mkdir(parents=True, exist_ok=True)
-    doc = generate_compose(config, "local", list(config.components), stack_dir)
+    doc = generate_compose(config, "local", local_components(config), stack_dir)
     path = stack_dir / "docker-compose.yml"
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
     override = project_root / "orchestration" / "docker-compose.override.yml"
