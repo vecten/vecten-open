@@ -573,8 +573,9 @@ credential home (the allow list, the secret values it redacts and looks for, a
 `--stdin-file`), and mints the GitHub token, which `github_app.py` signs with the system's
 `/usr/bin/openssl`. The token command reads and writes only the credential home's `cache/`,
 which no command the wrapper starts may write, and neither reads nor writes through a link
-there. For the secret check the wrapper also reads the files it looks into, without running
-anything. Every tool it runs on files the agent can write runs inside the profile:
+there. For the secret check the wrapper also reads the files and git objects it looks into,
+without running anything. Every tool it runs on files the agent can write runs inside the
+profile:
 every identity probe, every wrapped command, the `git` of the secret check and of `doctor`, and
 the subcommands that need no credential.
 
@@ -586,9 +587,15 @@ the tools' configurations, the App token, the git credential helper or `VECTEN_L
 whatever path they are given (`live combos --ledger` and `--map`, `live cost --created`), and
 `live cost` prices with the `vecten` of the tools copy. `live project check-public` runs both of
 its checks: the wrapper runs the secret check first and hands its findings to the script, which
-cannot start a sandbox inside its own. `doctor` checks every identity as below, and `show` reads
-only the credential home. A wrapped command refuses (exit 3) to run inside the tools copy, as
-the current directory or as its `--cwd`: the copy is not a place to work in.
+cannot start a sandbox inside its own. Both checks, for credential values and for forbidden file
+names, cover everything a push of the project can publish: every version of every file in every
+commit a branch, tag or HEAD reaches, the staged content of every index entry, and the
+working-tree content of every file `git add --all` would stage (tracked files and untracked ones
+that are not ignored). `secrets-check` looks at the same three for credential values. A git
+command that fails makes either check refuse, never pass. `doctor` checks every identity as
+below, and `show` reads only the credential home. A wrapped command refuses (exit 3) to run
+inside the tools copy, as the current directory or as its `--cwd`: the copy is not a place to
+work in.
 
 What bounds a wrapped command is the identity guard, the command's own home and environment,
 and the OS sandbox, all below. Together they keep tools, and slips, away from your own
@@ -627,9 +634,10 @@ The command then runs with:
   (`sandbox-exec`) that allows everything by default and denies only what it names. The
   processes the command starts inherit it, but a process can have another started outside it
   (see [Limits](#limits)). Each path below is denied both as written and where a symlink
-  resolves to, and for each path whose writing it denies, renaming any directory above it is
-  denied too, so no directory can be moved aside, written beneath and moved back. The profile
-  denies:
+  resolves to. For each path it names whose writing it denies, renaming any directory above it
+  is denied too, so no directory can be moved aside, written beneath and moved back; the
+  `.claude` rule below needs no such rule, since it matches by name wherever the path lies.
+  The profile denies:
   - reading and writing, under your real home, the directories `~/.aws`, `~/.config/scw`,
     `~/.snowflake`, `~/.config/snowflake`, `~/.ssh`, `~/.config/gh`, `~/.gnupg`, `~/.kube`,
     `~/.config/gcloud`, `~/.terraform.d`, `~/Library/Keychains`,
@@ -644,10 +652,11 @@ The command then runs with:
     list, or the token cache `cache/`;
   - writing anything under `~/.claude`, the agent's own settings, hooks, plugins, skills and
     memory: a wrapped command has its own home and no business there;
-  - writing, in any checkout or directory under your real home, the `.claude` directory itself,
-    its `settings.json` and `settings.local.json`, and its `hooks/`, `skills/`, `commands/` and
-    `agents/` trees, whose scripts and prompts the agent runs, whatever directory the wrapper
-    was started in or given as `--cwd`;
+  - writing any directory named `.claude`, wherever on the disk it lies, its `settings.json`
+    and `settings.local.json`, and its `hooks/`, `skills/`, `commands/` and `agents/` trees,
+    whose scripts and prompts the agent runs: whatever directory the wrapper was started in or
+    given as `--cwd`, and wherever a checkout is moved to (`.claude-plugin/` and the rest of a
+    `.claude` directory, such as `worktrees/`, are not matched);
   - writing the files that steer every later shell or every later `git`: `~/.zshrc`,
     `~/.zprofile`, `~/.zshenv`, `~/.bashrc`, `~/.bash_profile`, `~/.profile`, `~/.gitconfig`
     and everything under `~/.config/git/`;
@@ -690,10 +699,11 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   an agent that deliberately works around it:
   - The profile is a list of denied places. Its write denies cover the tools copy and its
     interpreter, the credential home outside `home/`, `home-plain/`, `snowflake/logs/` and
-    `github/gh/`, all of `~/.claude`, the `.claude` settings and hook, skill, command and agent
-    trees of any checkout under your home, and the shell and git startup files, with the
-    renaming of every directory above them; a command it holds can still write the rest of
-    your home directory, and read any credential file it does not name.
+    `github/gh/`, all of `~/.claude`, and the shell and git startup files, with the renaming of
+    every directory above each; and, wherever a checkout lies, its `.claude` directory, settings
+    files and hook, skill, command and agent trees, matched by name. A command it holds can
+    still write the rest of your home directory, and read any credential file it does not
+    name.
   - A process inside the profile can have another started outside it, through
     LaunchServices, Apple Events or launchd.
   - A wrapped `uv run …`, such as the release commit's `uv run vecten dev bump-version` or the
@@ -708,11 +718,11 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   and work in public repositories.
 - **A list of denied places cannot be completed.** Each successive review of this wrapper
   found another way around its list: through the working checkout, git's own configuration,
-  the interpreter, a renamed directory, a link in the token cache, a checkout's agent files.
-  Each was closed by naming one more place. Such a list can be extended but not completed, so
-  expect the next way around rather than rule it out. The dependable forms of containment, a
-  profile that allows writing only to named places, or a separate macOS user for the agent,
-  are not built.
+  the interpreter, a renamed directory, a link in the token cache, a checkout's agent files,
+  the same checkout moved out of the home and back. Each was closed by naming one more place.
+  Such a list can be extended but not completed, so expect the next way around rather than
+  rule it out. The dependable forms of containment, a profile that allows writing only to
+  named places, or a separate macOS user for the agent, are not built.
 - **A candidate's images are pushed without an approval.** Setup item 7 gives this
   repository's Actions the Write role on the two images, for any version of any workflow, and
   an earlier version of `publish.yml` whose `images` job runs tree code is part of this
@@ -737,6 +747,12 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   `live combos record` writes the ledger of the checkout it runs in, or the one `--ledger`
   names; `live project candidate` and `release` rewrite the workflows of the project named,
   skip a workflow that is a link within the project, and refuse one that leads outside it.
+- The public check (`live project check-public`, and `secrets-check` for its credential half)
+  finds only what it looks for: the values of the credential home and the file names `.env`,
+  `.env.*`, `*.pem` and `*.key`. It looks wherever a push can publish them: every commit a
+  branch, tag or HEAD reaches, what is staged, and what `git add --all` would stage. A hit in a
+  commit is not fixed by removing the file: the history has to be rewritten, or the project
+  rendered afresh.
 - **Sandbox repositories are public.** While one exists, it publishes the project's domain
   (in `vecten.toml` and `deploy/envs/prod.tfvars`), on a Snowflake combination the Snowflake
   account identifier (in the tfvars), the sign-in address of `google/admin.toml` (in
@@ -1147,11 +1163,17 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    ~/vecten-live-tools/scripts/live/live project check-public <project>
    ```
 
-   Exit 0, printing nothing, is a pass. Exit 1 lists each file that holds a secret, by name or
-   by value: take it out of the index and out of the project, and never push it. Exit 3 names
-   why the check could not run. The repository is public from step 6 on, so run the last two
-   commands again before every later `vecten github push` (steps 9, 10, 12 and 15), and push
-   only after exit 0.
+   The check looks at everything a push could publish: every commit a branch, tag or HEAD
+   reaches, what is staged, and what `git add --all` would stage, including untracked files
+   that are not ignored. Exit 0, printing nothing, is a pass. Exit 1 lists each path that holds
+   a secret, by name or by value, once, with where it was found (in the working tree, staged,
+   in a commit), and never the value. One found in the working tree or staged: take it out of
+   the index and out of the project, and never push it. One found in a commit: removing the
+   file is not enough, since the push would publish the commit too; the history has to be
+   rewritten, or the project rendered afresh in a new directory, before anything is pushed.
+   Exit 3 names why the check could not run, a git command that failed included. The
+   repository is public from step 6 on, so run the last two commands again before every later
+   `vecten github push` (steps 9, 10, 12 and 15), and push only after exit 0.
 5. **Record the environment.** Before the first thing that leaves the laptop, add an entry to
    `environments` in `<created>`:
 
@@ -1187,7 +1209,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    exists to find. `<NAME>` is `<name>` in upper case with its hyphens as underscores.
    1. A key pair, inside the project's `.vecten/`, which the project's `.gitignore` keeps out
       of git; the private key's `.key` name makes `check-public` refuse it if it is ever
-      staged:
+      staged, committed, or no longer ignored:
 
       ```sh
       mkdir -p <project>/.vecten/deploy
