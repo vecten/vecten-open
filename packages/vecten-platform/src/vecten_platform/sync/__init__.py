@@ -7,6 +7,9 @@ import os
 # dlt reads this before anything else runs; the product never phones home.
 os.environ.setdefault("RUNTIME__DLTHUB_TELEMETRY", "false")
 
+# Vecten supplies dlt configuration and secrets without consulting Airflow Variables.
+os.environ.setdefault("PROVIDERS__ENABLE_AIRFLOW_SECRETS", "false")
+
 from vecten_platform.sync.context import RuntimeContext, runtime, secret, set_runtime  # noqa: E402
 
 __all__ = ["RuntimeContext", "runtime", "secret", "set_runtime"]

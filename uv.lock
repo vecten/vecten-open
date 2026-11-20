@@ -3145,6 +3145,7 @@ dependencies = [
     { name = "fakesnow" },
     { name = "httpx" },
     { name = "pyyaml" },
+    { name = "snowflake-connector-python" },
     { name = "vecten-shared" },
 ]
 
@@ -3157,6 +3158,7 @@ requires-dist = [
     { name = "fakesnow", specifier = ">=0.11,<0.12" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
+    { name = "snowflake-connector-python", specifier = ">=4.8,<4.9" },
     { name = "vecten-shared", editable = "packages/vecten-shared" },
 ]
 
