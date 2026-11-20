@@ -65,37 +65,18 @@ jobs:
           uv publish --trusted-publishing always --publish-url "$INDEX_URL"
           --check-url "$CHECK_URL" dist/*
 
-  # A tag already pushed is never pushed over: buildx output is not byte-reproducible, so a
-  # rebuild would change a published digest. This job holds no write permission, so the tree's
-  # script may run here; the images are public, so inspecting them needs no login.
-  published:
-    needs: target
-    if: contains(fromJSON('["candidate", "release"]'), needs.target.outputs.target)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      build: ${{ steps.published.outputs.build }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - id: published
-        env:
-          VERSION: ${{ needs.target.outputs.version }}
-        run: python3 scripts/published_images.py ghcr.io/vecten "$VERSION"
-
   # This job can write to the registry, so no step of it executes a script, build backend or CLI
   # from the tagged tree: only pinned actions and its own shell, and the image tag comes from the
   # pushed ref, which the App can name only as a candidate. The tree's Dockerfiles (their RUN
   # steps, and the frontend a `# syntax=` line names) still run, inside BuildKit's container,
   # which is not handed the registry credential: reaching it takes an escape from that container.
-  # The job names no environment, so a release takes one approval: it starts only once the
-  # approved packages job has succeeded.
+  # A tag already pushed is never pushed over, since buildx output is not byte-reproducible and a
+  # rebuild would change a published digest: before each push the job asks the registry, on
+  # every attempt, a rerun of the failed jobs included. The job names no environment, so a
+  # release takes one approval: it starts only once the approved packages job has succeeded.
   images:
-    needs: [target, packages, published]
-    if: >-
-      contains(fromJSON('["candidate", "release"]'), needs.target.outputs.target)
-      && needs.published.outputs.build == 'true'
+    needs: [target, packages]
+    if: contains(fromJSON('["candidate", "release"]'), needs.target.outputs.target)
     runs-on: ubuntu-24.04
     # The linux/arm64 builds run under QEMU emulation.
     timeout-minutes: 180
@@ -128,11 +109,30 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Exit 0 means the tag exists; only a failure that names this ref as not found means it does
+      # not, and any other failure stops the job, so a registry that cannot answer is never read
+      # as absent. Both checks share this text and differ only in REF.
+      - id: airflow_exists
+        shell: bash
+        env:
+          REF: ghcr.io/vecten/vecten-airflow:${{ steps.version.outputs.version }}
+        run: |
+          if output=$(docker buildx imagetools inspect "$REF" 2>&1); then
+            echo "$REF exists; it is not pushed again"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif [[ $output == *"$REF: not found"* ]]; then
+            echo "$REF does not exist; building and pushing it"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "refused: inspecting $REF failed: $output" >&2
+            exit 1
+          fi
       # One build per image puts both platforms in one index, so a tag never exists with one
-      # platform only; the mcp image is built only once the airflow image is pushed. The context
+      # platform only; a failed airflow build stops the job before the mcp check. The context
       # is the checkout's path: the action's default git context would pass the job's token to
       # the build as a secret.
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - if: steps.airflow_exists.outputs.exists == 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: images/airflow/Dockerfile
@@ -143,7 +143,23 @@ jobs:
             AIRFLOW_IMAGE=${{ needs.target.outputs.airflow_image }}
             AIRFLOW_VERSION=${{ needs.target.outputs.airflow_version }}
             VECTEN_VERSION=${{ steps.version.outputs.version }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: mcp_exists
+        shell: bash
+        env:
+          REF: ghcr.io/vecten/vecten-mcp:${{ steps.version.outputs.version }}
+        run: |
+          if output=$(docker buildx imagetools inspect "$REF" 2>&1); then
+            echo "$REF exists; it is not pushed again"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif [[ $output == *"$REF: not found"* ]]; then
+            echo "$REF does not exist; building and pushing it"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "refused: inspecting $REF failed: $output" >&2
+            exit 1
+          fi
+      - if: steps.mcp_exists.outputs.exists == 'false'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: images/mcp/Dockerfile
@@ -154,15 +170,8 @@ jobs:
             BASE_IMAGE=${{ needs.target.outputs.mcp_base_image }}
             VECTEN_VERSION=${{ steps.version.outputs.version }}
 
-  # Runs when the images were built, or skipped because both already existed; a job that needs a
-  # skipped job is skipped too unless its condition names the results it accepts.
   verify:
-    needs: [target, packages, published, images]
-    if: >-
-      !cancelled() && needs.packages.result == 'success'
-      && needs.published.result == 'success'
-      && (needs.images.result == 'success'
-      || (needs.images.result == 'skipped' && needs.published.outputs.build == 'false'))
+    needs: [target, packages, images]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

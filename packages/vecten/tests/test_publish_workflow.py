@@ -212,8 +212,8 @@ def test_every_job_after_target_waits_for_it():
     for name, job in JOBS.items():
         if name != "target":
             assert "target" in job["needs"], name
-    assert {"packages", "published", "images"} <= set(JOBS["verify"]["needs"])
-    assert {"packages", "published"} <= set(JOBS["images"]["needs"])
+    assert {"packages", "images"} <= set(JOBS["verify"]["needs"])
+    assert "packages" in JOBS["images"]["needs"]
 
 
 def test_the_target_job_refuses_through_the_script():
@@ -254,7 +254,7 @@ def test_the_target_scripts_image_arguments_are_the_versions_tables():
 
 def test_only_the_packages_run_in_the_target_environment():
     assert JOBS["packages"]["environment"] == "${{ needs.target.outputs.target }}"
-    for name in PUBLISHING | {"published"}:
+    for name in PUBLISHING:
         job = JOBS[name]
         assert "candidate" in job["if"] and "release" in job["if"], name
     # One approval of a release: the images run once the approved packages job has succeeded.
@@ -295,7 +295,6 @@ def test_only_the_publishing_jobs_hold_write_permissions():
     assert WORKFLOW["permissions"] == {"contents": "read"}
     assert JOBS["packages"]["permissions"] == {"contents": "read", "id-token": "write"}
     assert JOBS["images"]["permissions"] == {"contents": "read", "packages": "write"}
-    assert JOBS["published"]["permissions"] == {"contents": "read"}
     for name in JOBS.keys() - PUBLISHING:
         assert "write" not in str(JOBS[name].get("permissions", {})), name
     writers = [n for n, j in JOBS.items() if j.get("permissions", {}).get("packages") == "write"]
@@ -355,7 +354,7 @@ def test_the_build_arguments_are_those_build_images_passes(invoke):
 
 
 # The job that can push images runs these actions, by these commits, and no other step but the
-# one shell step below; a change to either is a change to what holds the registry credential.
+# shell steps below; a change to either is a change to what holds the registry credential.
 IMAGE_JOB_ACTIONS = [
     "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
@@ -363,7 +362,9 @@ IMAGE_JOB_ACTIONS = [
     "docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1",
     "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
     "docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550",
+    None,
     "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+    None,
     "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
 ]
 IMAGE_JOB_SHELL = """\
@@ -374,30 +375,141 @@ if ! [[ $REF_NAME =~ $pattern ]]; then
 fi
 echo "version=${REF_NAME#v}" >> "$GITHUB_OUTPUT"
 """
+EXISTS_SHELL = """\
+if output=$(docker buildx imagetools inspect "$REF" 2>&1); then
+  echo "$REF exists; it is not pushed again"
+  echo "exists=true" >> "$GITHUB_OUTPUT"
+elif [[ $output == *"$REF: not found"* ]]; then
+  echo "$REF does not exist; building and pushing it"
+  echo "exists=false" >> "$GITHUB_OUTPUT"
+else
+  echo "refused: inspecting $REF failed: $output" >&2
+  exit 1
+fi
+"""
+
+
+def image_ref(name):
+    from vecten.stack.up import PUBLISHED_REGISTRY
+
+    return f"{PUBLISHED_REGISTRY}/{name}:{REF_VERSION}"
 
 
 def test_the_image_job_runs_only_its_pinned_actions_and_its_own_shell():
     steps = JOBS["images"]["steps"]
     assert [s.get("uses") for s in steps] == IMAGE_JOB_ACTIONS
-    (shell,) = [s for s in steps if "uses" not in s]
-    assert shell == {
-        "id": "version",
-        "shell": "bash",
-        "env": {"REF_NAME": "${{ github.ref_name }}"},
-        "run": IMAGE_JOB_SHELL,
-    }
+    assert [s for s in steps if "uses" not in s] == [
+        {
+            "id": "version",
+            "shell": "bash",
+            "env": {"REF_NAME": "${{ github.ref_name }}"},
+            "run": IMAGE_JOB_SHELL,
+        },
+        {
+            "id": "airflow_exists",
+            "shell": "bash",
+            "env": {"REF": image_ref("vecten-airflow")},
+            "run": EXISTS_SHELL,
+        },
+        {
+            "id": "mcp_exists",
+            "shell": "bash",
+            "env": {"REF": image_ref("vecten-mcp")},
+            "run": EXISTS_SHELL,
+        },
+    ]
     for step in steps:
         if "uses" in step:
             assert "run" not in step
 
 
-def test_no_step_of_the_image_job_runs_after_a_failure():
-    airflow, mcp = build_pushes()
+def test_each_image_is_pushed_only_when_its_own_check_found_no_tag():
     steps = JOBS["images"]["steps"]
+    airflow, mcp = build_pushes()
+    for push, check in ((airflow, "airflow_exists"), (mcp, "mcp_exists")):
+        assert push["if"] == f"steps.{check}.outputs.exists == 'false'"
+        (step,) = [s for s in steps if s.get("id") == check]
+        assert steps.index(step) == steps.index(push) - 1
+        assert step["env"]["REF"] == push["with"]["tags"]
     assert steps.index(airflow) < steps.index(mcp)
     assert airflow["with"]["file"] == "images/airflow/Dockerfile"
+    # Every other step runs under the implicit success(): a failed airflow build stops the job.
     for step in steps:
-        assert "if" not in step and "continue-on-error" not in step, step
+        assert "continue-on-error" not in step, step
+        assert "if" not in step or step in (airflow, mcp), step
+
+
+FAKE_DOCKER = """\
+#!/bin/sh
+printf '%s\\n' "$*" > "$FAKE_ARGS"
+printf '%s\\n' "$FAKE_OUTPUT" >&2
+exit "$FAKE_STATUS"
+"""
+AIRFLOW_REF = "ghcr.io/vecten/vecten-airflow:0.1.2"
+
+
+def run_exists_step(tmp_path, status, message):
+    (step,) = [s for s in JOBS["images"]["steps"] if s.get("id") == "airflow_exists"]
+    script = tmp_path / "exists.sh"
+    script.write_text(step["run"])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(FAKE_DOCKER)
+    docker.chmod(0o755)
+    output = tmp_path / "github_output"
+    output.write_text("")
+    args = tmp_path / "args"
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GITHUB_OUTPUT": str(output),
+        "REF": AIRFLOW_REF,
+        "FAKE_ARGS": str(args),
+        "FAKE_OUTPUT": message,
+        "FAKE_STATUS": str(status),
+    }
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert args.read_text() == f"buildx imagetools inspect {AIRFLOW_REF}\n"
+    return result, output.read_text()
+
+
+def test_an_existing_tag_is_not_pushed_again(tmp_path):
+    result, output = run_exists_step(tmp_path, 0, "Name: " + AIRFLOW_REF)
+    assert result.returncode == 0, result.stderr
+    assert output == "exists=true\n"
+
+
+def test_a_tag_the_registry_does_not_hold_is_pushed(tmp_path):
+    result, output = run_exists_step(tmp_path, 1, f"ERROR: {AIRFLOW_REF}: not found")
+    assert result.returncode == 0, result.stderr
+    assert output == "exists=false\n"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ERROR: failed to authorize: 401 Unauthorized",
+        "ERROR: dial tcp: lookup ghcr.io: no such host",
+        "ERROR: ghcr.io/vecten/vecten-mcp:0.1.2: not found",  # another ref than the one asked
+        "ERROR: MANIFEST_UNKNOWN: manifest unknown",  # not tied to the ref asked
+    ],
+)
+def test_a_registry_that_cannot_answer_is_never_read_as_absent(tmp_path, message):
+    result, output = run_exists_step(tmp_path, 1, message)
+    assert result.returncode != 0
+    assert output == ""
+    assert "refused" in result.stderr and message in result.stderr
+
+
+def test_no_job_or_step_runs_the_tree_s_image_guard():
+    assert "published" not in JOBS
+    assert "published_images.py" not in WORKFLOW_TEXT
+    assert not (REPO / "scripts/published_images.py").exists()
 
 
 def test_the_image_job_leaves_no_token_in_the_build_context():
@@ -473,15 +585,10 @@ def test_verify_checks_both_images_with_the_published_cli():
     assert steps.index(install) < steps.index(check)
 
 
-def test_verify_runs_after_a_skipped_image_build_and_never_after_a_failed_one():
+def test_verify_runs_only_after_the_images_job_succeeded():
     verify = JOBS["verify"]
-    assert set(verify["needs"]) == {"target", "packages", "published", "images"}
-    assert " ".join(verify["if"].split()) == (
-        "!cancelled() && needs.packages.result == 'success'"
-        " && needs.published.result == 'success'"
-        " && (needs.images.result == 'success'"
-        " || (needs.images.result == 'skipped' && needs.published.outputs.build == 'false'))"
-    )
+    assert set(verify["needs"]) == {"target", "packages", "images"}
+    assert "if" not in verify
 
 
 def test_verify_installs_every_package_at_the_version():
@@ -500,87 +607,9 @@ def test_publishing_jobs_restore_no_cache():
             assert "actions/cache" not in step.get("uses", ""), name
 
 
-IMAGES_SCRIPT = REPO / "scripts/published_images.py"
-NOT_FOUND = "ERROR: {ref}: not found\n"
-
-
-def published_images():
-    spec = importlib.util.spec_from_file_location("published_images", IMAGES_SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def registry(existing, failing=None):
-    def inspect(ref):
-        if ref == failing:
-            return 1, "ERROR: failed to authorize: 401 Unauthorized\n"
-        return (0, "") if ref in existing else (1, NOT_FOUND.format(ref=ref))
-
-    return inspect
-
-
-AIRFLOW = "ghcr.io/vecten/vecten-airflow:0.1.2"
-MCP = "ghcr.io/vecten/vecten-mcp:0.1.2"
-
-
-@pytest.fixture
-def run_guard(tmp_path, monkeypatch):
-    output = tmp_path / "github_output"
-    output.write_text("")
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-
-    def run(inspect):
-        return published_images().main(["ghcr.io/vecten", "0.1.2"], inspect), output.read_text()
-
-    return run
-
-
-def test_the_guard_names_the_refs_check_images_inspects():
-    from vecten.stack.images import base_image
-
-    expected = [base_image(kind, "ghcr.io/vecten", "0.1.2") for kind in ("airflow", "mcp")]
-    assert published_images().refs("ghcr.io/vecten", "0.1.2") == expected == [AIRFLOW, MCP]
-
-
-def test_a_version_with_no_images_is_built(run_guard):
-    assert run_guard(registry(set())) == (0, "build=true\n")
-
-
-def test_a_version_with_both_images_is_only_checked(run_guard, capsys):
-    assert run_guard(registry({AIRFLOW, MCP})) == (0, "build=false\n")
-    assert "skipping the build" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("existing, absent", [(AIRFLOW, MCP), (MCP, AIRFLOW)])
-def test_a_version_with_one_image_is_left_to_a_maintainer(run_guard, capsys, existing, absent):
-    assert run_guard(registry({existing})) == (1, "")
-    message = capsys.readouterr().err
-    assert f"{existing} exists but {absent} does not" in message
-    assert "maintainer" in message
-
-
-def test_a_registry_that_cannot_answer_is_not_read_as_missing(run_guard, capsys):
-    assert run_guard(registry(set(), failing=MCP)) == (1, "")
-    assert "401 Unauthorized" in capsys.readouterr().err
-
-
-def test_the_registry_error_code_for_a_missing_tag_reads_as_missing():
-    assert published_images().missing(MCP, 1, "ERROR: MANIFEST_UNKNOWN: manifest unknown")
-
-
-def test_the_build_runs_only_when_the_guard_says_so():
-    published = JOBS["published"]
-    assert published["needs"] == "target"
-    assert published["if"] == JOBS["packages"]["if"]
-    (guard,) = [s for s in published["steps"] if "published_images.py" in s.get("run", "")]
-    assert guard["id"] == "published"
-    assert guard["env"]["VERSION"] == "${{ needs.target.outputs.version }}"
-    assert guard["run"] == 'python3 scripts/published_images.py ghcr.io/vecten "$VERSION"'
-    assert published["outputs"] == {"build": "${{ steps.published.outputs.build }}"}
-    assert JOBS["images"]["if"] == (
-        f"{JOBS['packages']['if']} && needs.published.outputs.build == 'true'"
-    )
+def test_the_images_job_runs_for_a_candidate_or_a_release():
+    assert JOBS["images"]["needs"] == ["target", "packages"]
+    assert JOBS["images"]["if"] == JOBS["packages"]["if"]
 
 
 def test_verify_waits_for_each_published_hash():
