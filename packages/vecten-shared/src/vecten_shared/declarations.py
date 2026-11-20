@@ -33,7 +33,27 @@ LOCAL = "local"
 ENV_KEY = "env"
 MANIFEST_KEYS = ("secrets", "settings")
 SETTING_TYPES = ("string", "integer", "number", "boolean", "array", "object")
-PROPERTY_KEYS = frozenset({"type", "default", "description", "enum", "minimum", "maximum", "items"})
+PROPERTY_KEYS = frozenset(
+    {
+        "type",
+        "default",
+        "description",
+        "enum",
+        "const",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "items",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+    }
+)
 SCHEMA_KEYS = frozenset({"type", "properties", "required", "additionalProperties"})
 _UNREADABLE_SCOPES = ("deploy", "admin", "setup")
 
@@ -75,8 +95,14 @@ def _manifest_failure(extension: str, key: str, problem: str) -> Failure:
 def _check_property(fail, name: str, spec: object) -> None:
     if not isinstance(spec, dict) or spec.get("type") not in SETTING_TYPES:
         raise fail(f"{name}: type must be one of {', '.join(SETTING_TYPES)}")
-    if set(spec) - PROPERTY_KEYS:
-        raise fail(f"{name}: unsupported keywords {', '.join(sorted(set(spec) - PROPERTY_KEYS))}")
+    allowed = PROPERTY_KEYS | SCHEMA_KEYS if spec["type"] == "object" else PROPERTY_KEYS
+    if unknown := set(spec) - allowed:
+        raise fail(f"{name}: unsupported keywords {', '.join(sorted(unknown))}")
+    for field, child in spec.get("properties", {}).items():
+        _check_property(fail, f"{name}.{field}", child)
+    additional = spec.get("additionalProperties")
+    if isinstance(additional, dict):
+        _check_property(fail, f"{name}.additionalProperties", additional)
     if "items" in spec:
         _check_property(fail, f"{name}.items", spec["items"])
 
@@ -108,14 +134,15 @@ def check_schema(extension: str, schema: object) -> dict[str, Any]:
     properties = schema.get("properties", {})
     if not isinstance(properties, dict):
         raise fail("properties must be a mapping")
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        path = ".".join(map(str, exc.absolute_path))
+        raise fail(f"{path}: {exc.message}" if path else exc.message) from None
     for name, spec in properties.items():
         if name == ENV_KEY:
             raise fail("a setting may not be named env, which holds per-environment overrides")
         _check_property(fail, name, spec)
-    try:
-        Draft202012Validator.check_schema(schema)
-    except SchemaError as exc:
-        raise fail(exc.message) from None
     required = schema.get("required", [])
     if not set(required) <= set(properties):
         raise fail("required must list declared properties")
@@ -224,5 +251,5 @@ def check_settings(config: VectenConfig, record: dict[str, Extension], env: str)
             if key not in values:
                 raise _settings_failure(namespace, key, env, "required and not set")
         for error in sorted(Draft202012Validator(schema).iter_errors(values), key=str):
-            key = str(error.path[0]) if error.path else "?"
+            key = ".".join(map(str, error.path)) or "?"
             raise _settings_failure(namespace, key, env, error.message)
