@@ -335,6 +335,12 @@ manifest's default. An override replaces the whole value, with no merge of neste
 `[settings.project]` holds the project's own values the same way, without a schema: they are
 checked only for having a JSON type. TOML dates and times are refused; use strings.
 
+After editing a local extension, run `vecten lock --check` to compare its settings schema,
+secret names, service and app declarations with `extensions.lock.json`. Install the extension
+editable in the CLI environment first so the command reads code from this checkout. Project
+CI does this automatically. If the check reports a change, run `vecten lock` and commit the
+updated records.
+
 **Checks.** Values are checked against the manifest's schema, which may use `properties` typed
 `string`, `integer`, `number`, `boolean`, `array` or `object`, with `default`, `description`,
 `enum`, `minimum`, `maximum` and `items`, plus `required`; unknown settings are always refused,

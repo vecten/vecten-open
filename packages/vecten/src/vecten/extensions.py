@@ -719,10 +719,14 @@ def _secrets_report(root: Path, config: VectenConfig, record: dict) -> dict:
     }
 
 
-def load_manifests(config: VectenConfig, candidates=None) -> dict[str, Manifest]:
+def load_manifests(
+    config: VectenConfig, candidates=None, only: set[str] | None = None
+) -> dict[str, Manifest]:
     """Each listed extension's manifest, read from the environment running the CLI."""
     found: dict[str, Manifest] = {}
     listed = {normalize_name(requirement(r).name) for r in config.extensions}
+    if only is not None:
+        listed &= only
     # A manifest's entry name carries no meaning, so two extensions may share it; one
     # distribution may still declare only one manifest.
     points = metadata.entry_points(group="vecten.manifest") if candidates is None else candidates
@@ -824,6 +828,10 @@ def refuse_stale_services(
         for name, entry in record.items()
         if entry.source_path and installed_from(name, root / entry.source_path)
     }
+    _check_service_declarations(config, record, local)
+
+
+def _check_service_declarations(config, record, local: set[str]) -> None:
     if not local:
         return
     declared = load_services(config, only=local)
@@ -846,6 +854,40 @@ def refuse_stale_services(
                     f"extension {name}: {kind} {', '.join(changed)} differs from "
                     f"{locking.RECORD_FILE}; run `vecten lock`",
                 )
+
+
+def check_declarations(root: Path) -> list[str]:
+    config = load_config(root)
+    record = locking.read_record(root) or {}
+    registered = {normalize_name(requirement(r).name) for r in config.extensions}
+    local = {name for name, entry in record.items() if entry.source_path}
+    local.update(name for name in registered if in_repo.has_folder(root, name))
+    if not local:
+        return []
+    stale = locking.lock_problems(root, config)
+    if stale or not local <= registered:
+        raise Failure(ExitCode.CONFIG, "stale extension records; run `vecten lock`")
+    for name in sorted(local):
+        entry = record.get(name)
+        if not entry or entry.source_path != f"extensions/{name}":
+            raise Failure(
+                ExitCode.CONFIG, f"extension {name}: missing local record; run `vecten lock`"
+            )
+        if not installed_from(name, root / entry.source_path):
+            raise Failure(
+                ExitCode.PREREQUISITE,
+                f"install {entry.source_path} editable in Vecten's environment before checking",
+            )
+    manifests = load_manifests(config, only=local)
+    for name in sorted(local):
+        manifest = manifests.get(name, Manifest((), None, ()))
+        if (manifest.secrets, manifest.settings) != (record[name].secrets, record[name].settings):
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {name}: manifest differs from {locking.RECORD_FILE}; run `vecten lock`",
+            )
+    _check_service_declarations(config, record, local)
+    return sorted(local)
 
 
 def _unsupported(

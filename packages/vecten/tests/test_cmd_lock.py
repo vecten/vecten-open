@@ -1002,3 +1002,59 @@ def test_a_snowflake_app_takes_no_hostname_label():
     }
     data = {"apps": {"acme-demo": {"finance": {"groups": ["f"]}, "overview": {"groups": ["d"]}}}}
     assert _taken_labels(data, record) == {"overview"}
+
+
+@pytest.mark.parametrize(
+    "group,setting",
+    [
+        ("vecten.manifest", {"secrets": ["MCP_API_KEY"]}),
+        ("vecten.services", {"port": 8123}),
+        ("vecten.apps", {"title": "Updated dashboard"}),
+    ],
+)
+def test_check_detects_changed_local_declarations_without_resolving(
+    invoke, project, fakes, monkeypatch, group, setting
+):
+    from .services_fixtures import OVERVIEW
+
+    _register(project)
+    value = {"vecten.manifest": {}, "vecten.services": BOT, "vecten.apps": OVERVIEW}[group]
+    path = project / "extensions/acme-portal/declaration.json"
+    path.write_text(json.dumps(value))
+    point = SimpleNamespace(
+        dist=SimpleNamespace(name="acme-portal"),
+        name="example",
+        load=lambda: json.loads(path.read_text()),
+    )
+    original = extensions.metadata.entry_points
+
+    def points(**kwargs):
+        if kwargs.get("group") == group:
+            return [point]
+        return original(**kwargs)
+
+    monkeypatch.setattr(extensions.metadata, "entry_points", points)
+    monkeypatch.setattr(
+        extensions, "installed_from", lambda name, directory: directory == path.parent
+    )
+    assert invoke("lock").exit_code == 0
+    assert invoke("lock", "--check").exit_code == 0
+    path.write_text(json.dumps({**value, **setting}))
+    records = [
+        project / name
+        for name in (
+            "vecten.toml",
+            locking.PINS_FILE,
+            locking.RECORD_FILE,
+            *locking.LOCK_FILES.values(),
+        )
+    ]
+    before = [file.read_bytes() for file in records]
+    with monkeypatch.context() as m:
+        m.setattr(extensions, "lock_project", lambda *a, **kw: pytest.fail("resolved locks"))
+        r = invoke("lock", "--check")
+        assert r.exit_code == ExitCode.CONFIG, r.output
+        assert "acme-portal" in r.output and "run `vecten lock`" in r.output
+        assert [file.read_bytes() for file in records] == before
+    assert invoke("lock").exit_code == 0
+    assert invoke("lock", "--check").exit_code == 0

@@ -757,3 +757,25 @@ def test_every_needs_output_reference_names_a_declared_output(render, raw, param
             r"needs\.([\w-]+)\.outputs\.([\w-]+)", raw(params, name)
         ):
             assert output in declared.get(job_name, set()), (name, job_name, output)
+
+
+def test_project_ci_checks_local_declarations_without_fetching_git(renders, tmp_path):
+    doc = yaml.safe_load((renders(MATRIX[0]) / "ci.yml").read_text())
+    job = doc["jobs"]["check"]
+    step = next(s for s in steps(job) if s.get("name") == "Check in-repo extension declarations")
+    assert steps(job)[0]["with"]["persist-credentials"] is False
+    private = "private @ git+https://example.test/private@" + "a" * 40
+    (tmp_path / "requirements.txt").write_text(f"./extensions/demo\n{private}\n")
+    (tmp_path / "requirements.lock").write_text(f"example==1.2\n{private}\n")
+    for name in ("uv", "vecten"):
+        script = tmp_path / name
+        script.write_text('#!/bin/sh\necho "$0 $*" >> calls\n')
+        script.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path)}
+    subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", step["run"]], cwd=tmp_path, env=env, check=True
+    )
+    calls = (tmp_path / "calls").read_text()
+    assert "--no-deps -r " in calls and "--no-deps -e ./extensions/demo" in calls
+    assert calls.rstrip().endswith("vecten lock --check")
+    assert (tmp_path / "vecten-index.lock").read_text() == "example==1.2\n"
