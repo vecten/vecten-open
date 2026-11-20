@@ -300,3 +300,56 @@ def test_input_recording_respects_fixture_redaction(invoke, project):
     result = invoke("connector", "run", "demo", "--record", "--record-inputs", "--json")
     assert result.exit_code == 4 and "redact_fixture" in result.stdout
     assert not list((directory / "fixtures").iterdir())
+
+
+def test_paged_input_budget_preserves_trimmed_pages(invoke, project, tmp_path, monkeypatch):
+    from vecten_platform.sync.testing import replay_connector_test
+
+    directory = project / "connectors/demo"
+    module = INPUT_CONNECTOR.replace(
+        'yield {"userId": 7}',
+        """
+    for start in (0, 125, 250):
+        if start == 250:
+            raise AssertionError("requested another page")
+        yield [{"userId": n} for n in range(start, start + 125)]
+""",
+    ).replace("for row in inputs(fetch):", "for page in inputs(fetch):\n          for row in page:")
+    (directory / "connector.py").write_text(module)
+    r = invoke("connector", "run", "demo", "--record", "--record-inputs", "--json")
+    assert r.exit_code == 0, r.stdout
+    fixture = directory / "fixtures/inputs/people.json"
+    assert [len(page) for page in json.loads(fixture.read_text())["inputs"]] == [125, 75]
+    assert replay_connector_test(directory, "demo", tmp_path / "work", monkeypatch) == {
+        "people": 200
+    }
+
+
+def test_input_reader_shared_by_parent_and_child_reports_supported_scope(invoke, project):
+    module = INPUT_CONNECTOR.replace(
+        'return dlt.source(lambda: [people], name="demo")()',
+        """@dlt.transformer(data_from=people)
+    def child(parent):
+        yield from inputs(fetch)
+    return dlt.source(lambda: [people, child], name="demo")()""",
+    )
+    directory = project / "connectors/demo"
+    (directory / "connector.py").write_text(module)
+    result = invoke("connector", "run", "demo", "--object", "child", "--record", "--record-inputs")
+    assert result.exit_code == 5 and "parent and child cannot both call inputs" in result.output
+    assert not (directory / "fixtures/inputs/child.json").exists()
+
+
+def test_ci_connector_requirements_use_declarations_and_available_pins(project):
+    from vecten.connectors.ci_requirements import connector_requirements
+    from vecten_shared.output import Failure
+
+    config = load_config(project)
+    config.connector("demo").dependencies = ["sample-sdk[http]>=1.0", "another>=2"]
+    save_config(project, config)
+    (project / "requirements.lock").write_text("sample-sdk==1.2\nunrelated==1.0\n")
+    assert connector_requirements(project) == ["another>=2", "sample-sdk[http]==1.2"]
+    config.connector("demo").dependencies = ["--invalid"]
+    save_config(project, config)
+    with pytest.raises(Failure):
+        connector_requirements(project)

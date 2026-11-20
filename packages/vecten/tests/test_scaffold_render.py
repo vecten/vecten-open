@@ -716,7 +716,12 @@ def test_ci_validates_the_semantic_model_and_checks_the_build(tmp_path, params):
     ci = (root / ".github" / "workflows" / "ci.yml").read_text()
     pin = f'uvx --with "vecten=={params.vecten_version}"'
     assert f"{pin} vecten mcp validate" in ci
-    assert (f"{pin} vecten dbt-build-local --check" in ci) == ("platform" in params.components)
+    replay = (
+        'uvx --with-requirements "$RUNNER_TEMP/connector-requirements.txt" '
+        f'--with "vecten=={params.vecten_version}"'
+    )
+    assert (f"{replay} pytest connectors" in ci) == ("platform" in params.components)
+    assert (f"{replay} vecten dbt-build-local --check" in ci) == ("platform" in params.components)
     assert ("docker info" in ci) == ("platform" in params.components)
     # An unpinned ruff takes each new release's default rules into the project's CI.
     assert f"- run: uvx ruff@{VERSIONS.ruff} check ." in ci

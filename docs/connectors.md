@@ -62,19 +62,25 @@ def source(*, inputs=live_inputs):
     return dlt.source(lambda: [people], name="demo")()
 ```
 
-Call `inputs(fetch_people)` once for each dlt resource you want to test. Here the resource
-named `people` is the object selected on the command line. The callback yields JSON values.
-Keep the parsing you want to test after that call. During a regular sync, `live_inputs`
-calls the callback. During replay, Vecten supplies the saved values and skips the live read.
+The example selects `people` with `--object people`. Put pagination inside `fetch_people`
+and call `inputs(fetch_people)` once. The callback can yield individual records or lists of
+records, one page at a time. Keep the parsing you want to test after that call. During a
+regular sync, `live_inputs` calls the callback. During replay, Vecten supplies the saved values.
+
+Each selected object can replay one upstream read. For example, a `deals` resource may
+first read a parent `companies` resource to get company IDs, then fetch deals for each ID.
+If both resources call `inputs(...)`, record the transformed deal rows with
+`vecten connector run demo --object deals --record` instead.
 
 1. Run `vecten connector run demo --object people --record --record-inputs` against a
-   source whose original payloads are safe to save. This samples up to 200 input values
-   and writes `connectors/demo/fixtures/inputs/people.json`. The input file
+   source whose original payloads are safe to save. A sample holds up to 200 records. A list page contributes its row count, and Vecten
+   trims the final page to fit. An empty page uses one slot. Vecten writes `connectors/demo/fixtures/inputs/people.json`. The input file
    contains the original fields, including fields your transformation drops. Inspect it
    before committing it. Vecten refuses input recording when the connector defines
    `redact_fixture`, because that hook operates on transformed output.
 2. From the project root, run `pytest connectors/demo/test_demo.py` (the test generated
-   by `vecten connector add`) or `vecten dbt-build-local`. Both pass the
+   by `vecten connector add`) or `vecten dbt-build-local`. Generated CI installs the connector
+   dependencies declared in `vecten.toml` for pytest and the local dbt build. Both pass the
    inputs through the current connector with Python network access blocked. Changed row
    values, counts or order fail the check. In the example, reading the wrong key fails even
    though the saved output still contains a valid `user_id`.

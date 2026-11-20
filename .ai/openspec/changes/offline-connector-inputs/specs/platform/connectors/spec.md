@@ -24,3 +24,9 @@ both entry points SHALL continue replaying the stored rows without importing the
 
 - **WHEN** the user records ordinary fixtures
 - **THEN** Vecten does not persist the upstream payloads
+
+Input sampling SHALL count records within list pages and preserve the page boundary when
+trimming the final page. Each selected object supports a single upstream reader. If its
+parent and child both request live inputs, recording SHALL identify this limitation and
+preserve earlier fixtures. Generated CI SHALL make declared connector dependencies
+available to both commands that replay input samples.

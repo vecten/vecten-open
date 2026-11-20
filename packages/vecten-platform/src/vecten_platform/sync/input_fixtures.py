@@ -10,7 +10,6 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack
 from functools import partial
 from inspect import signature
-from itertools import islice
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,12 +40,22 @@ class InputSample:
 
     def inputs(self, fetch: Callable[[], Iterable]) -> Iterator:
         if self.used:
-            raise ValueError("use inputs(fetch) once per object; paginate inside fetch")
+            raise ValueError(
+                "input recording supports one upstream reader per selected object; "
+                "parent and child cannot both call inputs(fetch). Use --record for output fixtures."
+            ) from None
         self.used = True
         if self.saved_rows is not None:
             yield from self.saved_rows
             return
-        for row in islice(fetch(), RECORD_LIMIT):
+        remaining = RECORD_LIMIT
+        for row in fetch():
+            if isinstance(row, list):
+                row = row[:remaining]
+                # Empty pages also take a slot so an empty-page stream remains bounded.
+                remaining -= max(1, len(row))
+            else:
+                remaining -= 1
             # Snapshot before the connector can mutate the row in place.
             try:
                 copy = json.loads(json.dumps(row, allow_nan=False))
@@ -56,6 +65,8 @@ class InputSample:
                 raise ValueError("input fixtures require JSON values with string object keys")
             self.rows.append(copy)
             yield row
+            if not remaining:
+                break
 
     def observe(self, row):
         self.output.update(dlt_json.typed_dumps(row, sort_keys=True).encode("utf-8") + b"\n")
