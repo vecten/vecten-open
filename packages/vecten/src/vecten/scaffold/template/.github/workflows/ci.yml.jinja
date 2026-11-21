@@ -8,8 +8,17 @@ jobs:
     runs-on: [[ github_runner ]]
     steps:
       - uses: [[ action_checkout ]]
+        with:
+          persist-credentials: false
       - uses: [[ action_setup_uv ]]
       - run: uv tool install "vecten==[[ vecten_version ]]"
+      - name: Check in-repo extension declarations
+        if: hashFiles('extensions/*/pyproject.toml', 'extensions.lock.json', 'requirements*.lock', 'requirements.txt') != ''
+        shell: bash
+        run: |
+          python="$(uv tool dir)/vecten/bin/python"
+          "$python" -c 'from pathlib import Path; from vecten.extensions import prepare_declaration_check; prepare_declaration_check(Path.cwd())'
+          vecten lock --check
       - run: python -c "import tomllib; tomllib.load(open('vecten.toml','rb'))"
       - run: uvx ruff@[[ ruff_version ]] check .
 [% if 'platform' in components %]      # pytest exits 5 when it collects no test, which is every project before its first connector.
