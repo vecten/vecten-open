@@ -356,6 +356,11 @@ starts it with an empty volume there. Keep in a volume only what the service can
 as a bot's conversation references, which it gets back when people message it again. Data that
 must last belongs in a store outside the VM.
 
+Before approving a deployment, run `vecten deploy --env <env> --plan-only` with the target
+environment's name. If the plan removes a host, its warning lists the Docker volumes
+for services currently bound to that host. Back up any data you need before applying.
+Check the old host separately for volumes from services you have moved or removed.
+
 Removing a service's binding stops its container but keeps its volume, and the next ship, and
 every ship after it, names the volume:
 

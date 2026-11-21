@@ -5,6 +5,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
+- Deployment plans name the bound service volumes that will be lost when an AWS or Scaleway
+  host is removed or replaced. The apply workflow also prints the warning before applying (#129).
+
 ## [0.1.1] - 2026-11-18
 
 ### Added
