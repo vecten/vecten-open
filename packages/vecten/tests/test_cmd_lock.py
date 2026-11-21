@@ -1058,3 +1058,27 @@ def test_check_detects_changed_local_declarations_without_resolving(
         assert [file.read_bytes() for file in records] == before
     assert invoke("lock").exit_code == 0
     assert invoke("lock", "--check").exit_code == 0
+
+
+def test_check_without_local_extensions_reports_stale_locks(invoke, project, fakes):
+    assert invoke("lock").exit_code == 0
+    assert invoke("lock", "--check").exit_code == 0
+    _edit_config(project, lambda doc: doc.update(dependencies={"cli": {"python": ["example==1"]}}))
+    result = invoke("lock", "--check")
+    assert result.exit_code == ExitCode.CONFIG, result.output
+    assert "requirements.lock" in result.output and "run `vecten lock`" in result.output
+
+
+def test_ci_preparation_uses_local_lock_and_leaves_missing_files_to_check(invoke, project, fakes):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    fakes["installed"].clear()
+    extensions.prepare_declaration_check(project)
+    assert fakes["installed"] == [
+        ((project / "requirements.lock").read_text(), ("extensions/acme-portal",))
+    ]
+    (project / "requirements.lock").unlink()
+    extensions.prepare_declaration_check(project)
+    result = invoke("lock", "--check")
+    assert result.exit_code == ExitCode.CONFIG and "requirements.lock" in result.output
+    assert len(fakes["installed"]) == 1

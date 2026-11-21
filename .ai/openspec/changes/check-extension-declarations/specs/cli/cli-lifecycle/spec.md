@@ -9,3 +9,8 @@
 - **WHEN** CI checks an editable extension whose declared port differs from its record
 - **THEN** the check fails and names the extension and the command to refresh the lock
 - **AND** checking succeeds after the new declaration is locked
+
+The check SHALL verify the freshness of each component lock even when there are zero local
+extensions, naming missing or stale records. Project CI SHALL check projects with committed
+lock records. CI declaration preparation SHALL use the CLI's lock installer and SHALL
+leave a missing lock to the check's normal diagnostic.

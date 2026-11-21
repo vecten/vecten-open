@@ -16,7 +16,7 @@ def lock(
         bool,
         typer.Option(
             "--check",
-            help="Compare local extension declarations without writing or resolving locks.",
+            help="Check locks and local extension declarations without changing them.",
         ),
     ] = False,
     json_output: bool = JsonFlag,

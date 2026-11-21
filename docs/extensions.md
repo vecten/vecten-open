@@ -506,7 +506,9 @@ extension's manifest does not declare.
 example `extension acme-bot: service bot: routes.webhook.path: /_vecten/ is reserved for Vecten`;
 a key this release does not know is reported and ignored.
 
-For an [in-repo extension](#extensions-in-the-project), run `vecten lock --check` after
+Run `vecten lock --check` to verify the committed component locks, including projects
+with no local extensions. It names each stale or missing file. For an
+[in-repo extension](#extensions-in-the-project), run `vecten lock --check` after
 editing its manifest, services or apps. On a fresh laptop checkout, run `vecten extension sync`
 first to install the local packages in the CLI environment. The check compares their current
 secret names, settings schemas, service and app declarations with `extensions.lock.json`.

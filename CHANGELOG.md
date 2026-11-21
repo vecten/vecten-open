@@ -5,6 +5,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
 - Project CI runs `vecten lock --check` to catch changed in-repo manifests, services, and apps ([#113](https://github.com/vecten/vecten-open/issues/113)).
 
 ## [0.1.1] - 2026-11-18

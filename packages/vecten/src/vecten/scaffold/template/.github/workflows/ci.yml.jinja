@@ -13,19 +13,11 @@ jobs:
       - uses: [[ action_setup_uv ]]
       - run: uv tool install "vecten==[[ vecten_version ]]"
       - name: Check in-repo extension declarations
-        if: hashFiles('extensions/*/pyproject.toml', 'extensions.lock.json') != ''
+        if: hashFiles('extensions/*/pyproject.toml', 'extensions.lock.json', 'requirements*.lock', 'requirements.txt') != ''
         shell: bash
         run: |
           python="$(uv tool dir)/vecten/bin/python"
-          if test -f requirements.txt && grep -q '^\./extensions/' requirements.txt; then
-            # The CLI lock also records Git URLs. Only index pins and editable local packages
-            # are needed to read this checkout's declarations.
-            awk '!/ @ /' requirements.lock > "$RUNNER_TEMP/vecten-index.lock"
-            uv pip install --python "$python" --no-deps -r "$RUNNER_TEMP/vecten-index.lock"
-            while IFS= read -r path; do
-              uv pip install --python "$python" --no-deps -e "$path"
-            done < <(grep '^\./extensions/' requirements.txt)
-          fi
+          "$python" -c 'from pathlib import Path; from vecten.extensions import prepare_declaration_check; prepare_declaration_check(Path.cwd())'
           vecten lock --check
       - run: python -c "import tomllib; tomllib.load(open('vecten.toml','rb'))"
       - run: uvx ruff@[[ ruff_version ]] check .
