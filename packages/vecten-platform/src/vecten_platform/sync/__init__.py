@@ -9,4 +9,9 @@ os.environ.setdefault("RUNTIME__DLTHUB_TELEMETRY", "false")
 
 from vecten_platform.sync.context import RuntimeContext, runtime, secret, set_runtime  # noqa: E402
 
-__all__ = ["RuntimeContext", "runtime", "secret", "set_runtime"]
+
+class TerminalConnectorError(Exception):
+    """Raise during an object load when another attempt cannot succeed."""
+
+
+__all__ = ["RuntimeContext", "TerminalConnectorError", "runtime", "secret", "set_runtime"]
