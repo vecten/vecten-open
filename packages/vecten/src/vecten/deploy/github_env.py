@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -656,15 +655,13 @@ def dispatch_and_follow(
     git: ToolRunner,
     *,
     commit: str | None = None,
-    on_dispatched: Callable[[], None] | None = None,
 ) -> dict:
     """Run `workflow` on the default branch for `env` and wait for its conclusion.
 
     The workflow always runs the default branch as GitHub holds it. With `commit` it ships
     that commit, which the result names as `commit`; the run's `head_sha` stays the default
     branch's. The result's `matches_local_head` says whether the run's head is this
-    checkout's HEAD. `on_dispatched` runs once GitHub accepted the dispatch, so a run exists,
-    before the run is looked up or followed.
+    checkout's HEAD.
     """
     config = load_config(project_root)
     if config.deploy is None:
@@ -689,8 +686,6 @@ def dispatch_and_follow(
         "--repo",
         repository,
     )
-    if on_dispatched is not None:
-        on_dispatched()
     run = _dispatched_run(gh, project_root, repository, workflow, env, since)
     run_id = run["databaseId"]
     url, head_sha, conclusion = _follow(
