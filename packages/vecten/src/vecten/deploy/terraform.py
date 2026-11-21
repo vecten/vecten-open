@@ -367,6 +367,7 @@ class PlannedRoot:
     root: TerraformRoot
     plan_file: Path
     text: str
+    warnings: tuple[str, ...] = ()
 
 
 def plan_root(

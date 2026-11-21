@@ -11,6 +11,7 @@ import importlib
 import json
 import os
 import re
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
@@ -432,6 +433,50 @@ def environment_roots(
     ]
 
 
+def _host_volume_warnings(
+    plane: ControlPlane, env: str, terraform: TerraformRunner, planned: PlannedRoot
+) -> tuple[str, ...]:
+    from vecten.deploy.bundle import compose_project
+    from vecten_shared.extension_record import read_record
+    from vecten_shared.services import bound_services
+
+    config = plane.config()
+    services = [
+        service
+        for service in bound_services(config, read_record(plane.project_root) or {})
+        if service.service.volume
+    ]
+    if not services:
+        return ()
+    root = planned.root
+    changes = terraform_plan_changes(
+        terraform, root.root_dir, planned.plan_file, env=root.env, secrets=root.secrets
+    )
+    addresses = changed_addresses(changes, {"delete"}, ("aws_instance", "scaleway_instance_server"))
+    warnings = []
+    for address in addresses:
+        match = re.fullmatch(
+            r'module\.environment\.module\.host\["(main|platform|mcp)"\]\.'
+            r"(?:aws_instance|scaleway_instance_server)\.this",
+            address,
+        )
+        if not match:
+            continue
+        host = match[1]
+        volumes = [
+            f"{compose_project(config, env)}_{service.compose_name}-data"
+            for service in services
+            if host == "main" or service.host == host
+        ]
+        if volumes:
+            warnings.append(
+                f"Removing the {host} host in {env} destroys its local service volumes: "
+                f"{', '.join(volumes)}. Back up any data you need before applying this plan. "
+                "Check the old host for volumes from previously removed or moved services."
+            )
+    return tuple(warnings)
+
+
 def plan_environment(
     plane: ControlPlane,
     env: str,
@@ -450,7 +495,7 @@ def plan_environment(
     refresh = plane.cloud_only_plans_refresh or not cloud_only
     if refresh:
         plane.check_refresh_safe()
-    return [
+    plans = [
         plan_root(
             terraform,
             root,
@@ -459,6 +504,12 @@ def plan_environment(
             refresh=refresh,
         )
         for root in roots
+    ]
+    return [
+        replace(plan, warnings=_host_volume_warnings(plane, env, terraform, plan))
+        if plan.root.name == plane.cloud
+        else plan
+        for plan in plans
     ]
 
 
@@ -538,8 +589,15 @@ def provision_environment(plane: ControlPlane, env: str, terraform: TerraformRun
     plane.before_cloud_apply()
     with tempfile.TemporaryDirectory(prefix="vecten-plan-") as tmp:
         plans = plan_environment(plane, env, terraform, Path(tmp))
+        warnings = [warning for plan in plans for warning in plan.warnings]
+        for warning in warnings:
+            print(f"warning: {warning}", file=sys.stderr, flush=True)
         outputs = apply_environment(plane, env, terraform, plans)
-    return {"roots": [p.root.name for p in plans], "outputs": outputs.model_dump()}
+    return {
+        "roots": [p.root.name for p in plans],
+        "outputs": outputs.model_dump(),
+        **({"warnings": warnings} if warnings else {}),
+    }
 
 
 def held_state_lock(plane: ControlPlane, env: str, roots: Sequence[TerraformRoot]) -> None:
