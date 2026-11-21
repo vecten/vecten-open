@@ -116,6 +116,40 @@ def test_up_generates_stack_and_prints_urls(invoke, workdir, fake, monkeypatch):
     assert not (stack / "nginx" / "htpasswd").exists()
 
 
+@pytest.mark.parametrize(
+    "available, override, prefix, source",
+    [
+        (True, None, "", "local"),
+        (False, None, "ghcr.io/vecten/", "registry"),
+        (True, "mirror.example/team/", "mirror.example/team/", "registry"),
+    ],
+)
+def test_up_names_the_images_used_in_the_project_dockerfiles(
+    invoke, workdir, fake, monkeypatch, available, override, prefix, source
+):
+    from vecten_shared.versions import VERSIONS
+
+    monkeypatch.setattr(fake, "image_exists", lambda tag: available)
+    if override:
+        monkeypatch.setenv("VECTEN_IMAGE_REGISTRY", override)
+    else:
+        monkeypatch.delenv("VECTEN_IMAGE_REGISTRY", raising=False)
+    invoke("init", "p", *LOCAL)
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    data = json.loads(invoke("up", "--json").stdout)
+    human = invoke("up").stdout
+    for component, kind in (("platform", "airflow"), ("mcp", "mcp")):
+        image = f"{prefix}vecten-{kind}:{VERSIONS.vecten}"
+        assert data["base_images"][component] == {"image": image, "source": source}
+        assert f"{component} base image: {image} ({source})" in human
+        dockerfile = root / ".vecten/stack/build" / f"{kind}.Dockerfile"
+        assert dockerfile.read_text().splitlines()[0] == f"FROM {image}"
+    override_hint = "VECTEN_IMAGE_REGISTRY=ghcr.io/vecten"
+    assert (override_hint in human) == (source == "local")
+    assert (override_hint in data.get("base_image_hint", "")) == (source == "local")
+
+
 def test_up_mcp_only(invoke, workdir, fake, monkeypatch):
     invoke(
         "init",
@@ -136,6 +170,7 @@ def test_up_mcp_only(invoke, workdir, fake, monkeypatch):
         "mcp",
         "local",
     ]
+    assert set(doc["base_images"]) == {"mcp"}
     assert fake.profiles[0] == ["mcp", "local"]
     assert "airflow_api" not in doc and "airflow_user" not in doc
 
@@ -399,6 +434,7 @@ def test_up_on_snowflake_leaves_the_mcp_out(invoke, workdir, fake, monkeypatch):
     assert doc["profiles"] == ["platform", "local"]
     assert doc["urls"] == {"airflow": "https://airflow.localhost:8443"}
     assert doc["left_out"] == ["mcp"]
+    assert set(doc["base_images"]) == {"platform"}
     record = json.loads((workdir / "p" / ".vecten" / "records" / "up.json").read_text())
     assert record["profiles"] == ["platform", "local"]
     nginx = (workdir / "p" / ".vecten" / "stack" / "nginx" / "conf.d" / "default.conf").read_text()

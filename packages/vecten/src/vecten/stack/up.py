@@ -25,7 +25,7 @@ from vecten.stack.compose import (
 )
 from vecten.stack.docker import DockerRunner, SubprocessDocker
 from vecten.stack.env import ensure_local_env
-from vecten.stack.images import SOURCES_DIR, base_image, write_project_layer
+from vecten.stack.images import RUNTIME, SOURCES_DIR, base_image, write_project_layer
 from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, HOST_KEYS, service_site, write_nginx
 from vecten_shared.config import load_config
 from vecten_shared.declarations import check_settings
@@ -59,6 +59,7 @@ class UpResult:
     services: dict[str, str]
     # What the started services reserve together on this machine.
     limits: dict[str, float]
+    base_images: dict[str, dict[str, str]]
     # Each bound route of a started service, by `<extension>.<service>.<route>`, at its URL.
     routes: dict[str, str] = field(default_factory=dict)
 
@@ -257,6 +258,14 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
         services=states,
         limits=limits,
         routes=routes,
+        base_images={
+            component: {
+                "image": base_image(kind, registry),
+                "source": "registry" if registry else "local",
+            }
+            for component, kind in RUNTIME
+            if component in components
+        },
     )
 
 
