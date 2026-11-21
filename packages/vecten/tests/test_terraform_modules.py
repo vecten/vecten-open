@@ -872,3 +872,30 @@ def test_project_ci_validates_extra_snowflake_files(tmp_path):
     invalid = check()
     assert invalid.returncode != 0
     assert "undeclared" in invalid.stderr and "extra.tf" in invalid.stderr
+
+
+@pytest.mark.terraform
+def test_project_ci_reports_each_broken_root_in_one_run(tmp_path):
+    if shutil.which("terraform") is None:
+        pytest.skip("terraform is not installed")
+    cloud = _render(tmp_path, "snowflake")
+    script = _ci_terraform_steps(cloud.parents[2])[-1]["run"]
+    # These two roots exercise the generated job with real Terraform and no providers.
+    project = tmp_path / "checks"
+    roots = project / "deploy" / "terraform"
+    for name in ("aws", "snowflake"):
+        (roots / name).mkdir(parents=True)
+    (roots / "aws" / "main.tf").write_text("locals {\n  value=1\n}\n")
+    (roots / "snowflake" / "main.tf").write_text('output "example" { value = local.undeclared }\n')
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", script],
+        cwd=project,
+        env={**_terraform_env(), "TF_CLI_ARGS": "-no-color"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "Checking Terraform root deploy/terraform/aws" in result.stdout
+    assert "-  value=1" in result.stdout and "+  value = 1" in result.stdout
+    assert "Checking Terraform root deploy/terraform/snowflake" in result.stdout
+    assert "undeclared" in result.stderr
