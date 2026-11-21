@@ -391,7 +391,7 @@ query($owner: String!, $name: String!, $branch: String!, $context: String!, $fir
         ... on Commit {
           history(first: $first, after: $cursor) {
             pageInfo { hasNextPage endCursor }
-            nodes { oid status { context(name: $context) { state createdAt } } }
+            nodes { oid status { context(name: $context) { state createdAt description } } }
           }
         }
       }
@@ -414,6 +414,7 @@ def set_ship_status(
     state: str,
     *,
     target_url: str | None = None,
+    receipt: str | None = None,
 ) -> None:
     """Set `vecten/ship/<env>` on `commit`; the job's token needs `statuses: write`."""
     if state not in SHIP_STATES:
@@ -429,7 +430,7 @@ def set_ship_status(
         "-f",
         f"context={ship_context(env)}",
         "-f",
-        f"description={SHIP_STATUS_DESCRIPTIONS[state]}",
+        f"description={receipt or SHIP_STATUS_DESCRIPTIONS[state]}",
     ]
     if target_url:
         args += ["-f", f"target_url={target_url}"]
@@ -496,10 +497,18 @@ def last_shipped(
 def shipped_at(
     gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
 ) -> tuple[str, str] | None:
-    """`last_shipped`'s commit with the time its `success` status was set."""
+    """The last shipped commit and its timestamp."""
+    found = latest_ship(gh, project_root, repository, branch, env)
+    return found[:2] if found else None
+
+
+def latest_ship(
+    gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
+) -> tuple[str, str, str] | None:
+    """The most recent successful ship, including the settings its hosts acknowledged."""
     owner, name = repository.split("/", 1)
     cursor: str | None = None
-    newest: tuple[str, str] | None = None
+    newest: tuple[str, str, str] | None = None
     for start in range(0, SHIPPED_SEARCH_LIMIT, _HISTORY_PAGE):
         args = [
             "api",
@@ -535,7 +544,7 @@ def shipped_at(
             if str(context.get("state")).lower() == "success" and created:
                 # GitHub's ISO 8601 UTC times sort as text.
                 if newest is None or created > newest[1]:
-                    newest = (str(node["oid"]), created)
+                    newest = (str(node["oid"]), created, str(context.get("description") or ""))
         if not page.get("hasNextPage"):
             break
         cursor = page.get("endCursor")

@@ -327,6 +327,7 @@ class FakeGh:
                 (entry[0], entry[1], entry[2] if len(entry) > 2 else _stamp(rank * 100 + i))
                 for i, entry in enumerate(found)
             ]
+        self.descriptions = {}
         self._posted = 0
         # How many times a status write (`statuses`) or a commit's status read (`status`)
         # fails with HTTP 502 before it answers.
@@ -391,7 +392,13 @@ class FakeGh:
             status = (
                 None
                 if found is None
-                else {"context": {"state": found[1].upper(), "createdAt": found[2]}}
+                else {
+                    "context": {
+                        "state": found[1].upper(),
+                        "createdAt": found[2],
+                        "description": self.descriptions.get((sha, fields["context"])),
+                    }
+                }
             )
             nodes.append({"oid": sha, "status": status})
         more = start + size < len(self.history)
@@ -442,6 +449,7 @@ class FakeGh:
                 return self._fail(args, 502, "Bad Gateway")
             fields = gh_fields(args)
             sha = path.rsplit("/", 1)[-1]
+            self.descriptions[sha, fields["context"]] = fields.get("description")
             self._posted += 1
             created = _stamp(10**6 + self._posted)
             self.statuses.setdefault(sha, []).append((fields["context"], fields["state"], created))
