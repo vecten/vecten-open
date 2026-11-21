@@ -70,6 +70,22 @@ def service(adapter, *, seeded=True, areas=()):
     return access
 
 
+def test_existing_area_grant_expands_and_contracts_with_opt_in():
+    adapter = Adapter()
+    access = service(adapter, areas=["finance"])
+    access.grant("default", "area", "finance")
+    with pytest.raises(ValueError, match="restricted_source_layers"):
+        access.grant("default", "schema", "staging_finance")
+    for opted, expected in ((True, True), (False, False)):
+        access = AccessService(
+            access.state, adapter, areas=["finance"], source_areas=["finance"] if opted else []
+        )
+        assert access.reconcile()["complete"]
+        for layer in ("staging", "snapshots"):
+            assert (("analyst", "usage", f"{layer}_finance", None) in adapter.held) == expected
+        assert ("analyst", "usage", "core_finance", None) in adapter.held
+
+
 def test_a_revoked_default_schema_restored_by_an_older_deploy_is_revoked_again():
     adapter = Adapter()
     access = service(adapter)

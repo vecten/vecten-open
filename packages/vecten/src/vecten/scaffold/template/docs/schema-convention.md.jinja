@@ -8,7 +8,7 @@ This project runs only the MCP over an existing warehouse; the dbt parts apply t
 [% endif %]
 ## Schemas
 
-`raw_<source>`, `staging`, `snapshots`, `core`, `marts`, and `core_<area>` and `marts_<area>`
+`raw_<source>`, `staging`, `snapshots`, `core`, `marts`, and the area schemas listed under **Restricted areas**
 for each restricted area `vecten.toml` declares as `[areas.<area>]`; `<area>` is lowercase
 letters and digits, starting with a letter. The names are the same on Postgres and Snowflake and
 never take the profile's target schema as a prefix. dlt writes `raw_<source>`; dbt writes the
@@ -44,13 +44,16 @@ wrong.
 
 ## Restricted areas
 
-An area is a pair of schemas that no role reads until an admin grants the area to a group, which
-then reads both. Its models live in `dbt/models/core_<area>/` and `dbt/models/marts_<area>/`,
-each folder configured in `dbt/dbt_project.yml` with `+schema` set to its schema. A model in
-`core_<area>` follows every core rule and one in `marts_<area>` every marts rule, so each mart
-there is a dataset too. A core model whose rows the default group must not read goes to
-`core_<area>`; one that unrestricted marts also read stays in `core`. A model in a `core_<name>`
-or `marts_<name>` schema whose area `vecten.toml` does not declare fails `convention_model_naming`.
+Granting an area to a group gives its members read access to `core_<area>` and `marts_<area>`.
+Place private core and mart models in matching folders under `dbt/models/` with matching `+schema` values in
+`dbt/dbt_project.yml`. The layer rules above still apply. Keep core models needed by unrestricted marts in shared
+`core`. Declare the area in `vecten.toml` so the naming test can recognize it.
+
+To extend the finance grant to staging rows and snapshot history, set `restricted_source_layers = true` under
+`[areas.finance]`. Set `+schema: staging_finance` on sensitive staging models and `+schema: snapshots_finance` on their snapshots.
+Copy existing snapshot history and compare every row, including validity dates, before retiring the shared copies. Anyone granted shared staging or snapshots can read copies left there.
+On Snowflake, use the environment name from `deploy/envs/<env>.tfvars`: run `vecten mcp provisioner-script --env <env>`, have an ACCOUNTADMIN execute its SQL, then repeat the command with `--confirm-run`.
+Direct dbt builds and tests also need `--vars` listing all declared areas in `vecten_areas` and opted-in areas in `vecten_source_layer_areas`.
 
 ## Descriptions and keys
 

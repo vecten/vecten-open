@@ -12,7 +12,13 @@ import yaml
 from vecten.stack.images import BUILD_DIR, SOURCES_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
 from vecten_shared.apps import APP_CREDENTIAL, credential_names
-from vecten_shared.config import APEX, VectenConfig, service_hostname, stack_project_name
+from vecten_shared.config import (
+    APEX,
+    VectenConfig,
+    service_hostname,
+    source_layer_areas,
+    stack_project_name,
+)
 from vecten_shared.declarations import component_for, secret_problem
 from vecten_shared.extension_record import RECORD_FILE, Extension, read_record
 from vecten_shared.names import SECRET_NAME, SECRET_RULE
@@ -483,6 +489,8 @@ def _postgres(config: VectenConfig) -> dict:
     }
     if config.areas:
         environment["VECTEN_AREAS"] = ",".join(sorted(config.areas))
+    if restricted := source_layer_areas(config.areas):
+        environment["VECTEN_SOURCE_LAYER_AREAS"] = ",".join(restricted)
     if with_mcp:
         environment |= {
             "MCP_STATE_DB_PASSWORD": "${MCP_STATE_DB_PASSWORD}",

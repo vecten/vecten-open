@@ -33,6 +33,13 @@ WHERE value NOT IN ('true', 'false') \gexec
 SELECT format('DO $check$ BEGIN RAISE EXCEPTION %L; END $check$',
               'areas must be comma-separated names matching [a-z][a-z0-9]*, got: ' || :'areas')
 WHERE :'areas' !~ '^([a-z][a-z0-9]{0,56}(,[a-z][a-z0-9]{0,56})*)?$' \gexec
+\if :{?source_layer_areas}
+\else
+\set source_layer_areas ''
+\endif
+SELECT format('DO $err$ BEGIN RAISE EXCEPTION %L; END $err$', 'invalid source_layer_areas')
+WHERE :'source_layer_areas' !~ '^([a-z][a-z0-9]{0,52}(,[a-z][a-z0-9]{0,52})*)?$'
+   OR NOT string_to_array(:'source_layer_areas', ',') <@ string_to_array(:'areas', ',') \gexec
 
 -- RDS's master is CREATEROLE without superuser: from Postgres 16 it holds ADMIN OPTION on the
 -- roles it creates but no SET, which CREATE DATABASE ... OWNER and SET ROLE need. Each owner
@@ -225,6 +232,9 @@ CREATE SCHEMA IF NOT EXISTS staging AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS snapshots AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS core AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS marts AUTHORIZATION loader;
+SELECT format('CREATE SCHEMA IF NOT EXISTS %I AUTHORIZATION loader', layer || '_' || area)
+FROM unnest(string_to_array(:'source_layer_areas', ',')) AS area
+CROSS JOIN unnest(ARRAY['staging', 'snapshots']) AS layer \gexec
 -- An area's schemas exist before the helpers are installed below, so the first area grant
 -- finds a helper; no role is granted anything in them here.
 SELECT format('CREATE SCHEMA IF NOT EXISTS %I AUTHORIZATION loader', layer || '_' || area)
@@ -247,6 +257,7 @@ RESET ROLE;
 SELECT 'GRANT analyst TO provisioner WITH ADMIN TRUE, INHERIT FALSE, SET FALSE' WHERE :'with_mcp' = 'true' \gexec
 \if :with_mcp
 SET ROLE loader;
+SELECT set_config('vecten.source_layer_areas', :'source_layer_areas', false);
 -- BEGIN VECTEN ACCESS HELPERS
 CREATE SCHEMA IF NOT EXISTS vecten_access;
 REVOKE ALL ON SCHEMA vecten_access FROM PUBLIC;
@@ -273,7 +284,10 @@ BEGIN
         FROM pg_catalog.pg_namespace n CROSS JOIN pg_catalog.pg_roles r
         WHERE (n.nspname IN ('core','marts','staging','snapshots')
                OR n.nspname ~ '^raw_[a-zA-Z0-9_]+$'
-               OR n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$')
+               OR n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$'
+               OR (n.nspname ~ '^(staging|snapshots)_[a-z][a-z0-9]*$'
+                   AND split_part(n.nspname, '_', 2) = ANY(string_to_array(
+                       current_setting('vecten.source_layer_areas', true), ','))))
         AND (r.oid=n.nspowner
              OR EXISTS (SELECT FROM pg_catalog.pg_class c
                         WHERE c.relnamespace=n.oid AND c.relowner=r.oid)

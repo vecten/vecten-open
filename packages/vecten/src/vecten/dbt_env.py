@@ -18,7 +18,7 @@ from vecten.deploy.snowflake import LOADER_PRIVATE_KEY, environment_names
 from vecten.secrets import cloud_store
 from vecten_platform.dbt.deps import CONVENTION_PACKAGE, write_packages_yml
 from vecten_platform.dbt.profile import profile_env
-from vecten_platform.dbt.runner import AREAS_VAR, base_env, output_tail, run_dbt
+from vecten_platform.dbt.runner import base_env, convention_vars, output_tail, run_dbt
 from vecten_shared.config import VectenConfig
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
@@ -139,8 +139,8 @@ def with_area_vars(args: list[str], areas) -> list[str]:
     A `--vars` the person gave keeps its own variables and gains the areas, unless it names
     them itself or is not a mapping, in which case it is passed on as given.
     """
-    names = sorted(areas)
-    if not names or not _takes_vars(dbt_command(args)):
+    declared = convention_vars(areas)
+    if not declared or not _takes_vars(dbt_command(args)):
         return list(args)
     import yaml
 
@@ -156,13 +156,15 @@ def with_area_vars(args: list[str], areas) -> list[str]:
             values = yaml.safe_load(given)
         except yaml.YAMLError:
             return list(args)
-        if not isinstance(values, dict) or AREAS_VAR in values:
+        if not isinstance(values, dict) or declared.keys() <= values.keys():
             return list(args)
-        merged = json.dumps({**values, AREAS_VAR: names})
+        for key, value in declared.items():
+            values.setdefault(key, value)
+        merged = json.dumps(values)
         if arg == "--vars":
             return [*head[: i + 1], merged, *head[i + 2 :], *tail]
         return [*head[:i], f"--vars={merged}", *head[i + 1 :], *tail]
-    return [*head, "--vars", json.dumps({AREAS_VAR: names}), *tail]
+    return [*head, "--vars", json.dumps(declared), *tail]
 
 
 def dbt_command(args: list[str]) -> tuple[str, ...]:
