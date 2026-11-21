@@ -462,7 +462,10 @@ def plan_environment(
     ]
 
 
-def _layout_recovery(changes: list[dict], env: str) -> str:
+def _layout_recovery(changes: list[dict], config: VectenConfig, env: str) -> str:
+    from vecten_shared.provider import snowflake_names
+
+    fixed = snowflake_names(config, env, shared_account=False).loader_role
     table = f"[environments.{env}] in vecten.toml"
     # The fixed database and warehouse names may also look suffixed. Only the
     # managed loader has an unambiguous fixed name and shared suffix.
@@ -470,14 +473,14 @@ def _layout_recovery(changes: list[dict], env: str) -> str:
     for resource in changes:
         address = resource.get("address", "")
         if not address.endswith(
-            ('snowflake_account_role.this["LOADER"]', "snowflake_service_user.loader")
+            (f'snowflake_account_role.this["{fixed}"]', "snowflake_service_user.loader")
         ):
             continue
         name = (resource["change"].get("before") or {}).get("name", "")
-        if name == "LOADER":
+        if name == fixed:
             return f"Record snowflake_shared_account = false under {table} and push."
-        if name.startswith("LOADER_") and name.endswith(suffix):
-            base = name[len("LOADER_") : -len(suffix)]
+        if name.startswith(f"{fixed}_") and name.endswith(suffix):
+            base = name[len(fixed) + 1 : -len(suffix)]
             if base:
                 return (
                     f"To keep these shared names, set snowflake_shared_account = true and "
@@ -524,7 +527,7 @@ def apply_environment(
                         ExitCode.REFUSED,
                         f"{resource['address']} would rename an existing Snowflake object "
                         f"from {before['name']} to {after.get('name')}. "
-                        f"{_layout_recovery(changes, env)} "
+                        f"{_layout_recovery(changes, plane.config(), env)} "
                         "To change layouts, migrate as a new deployment. Nothing was applied.",
                     )
     outputs: EnvironmentOutputs | None = None
