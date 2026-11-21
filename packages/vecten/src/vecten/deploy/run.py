@@ -33,6 +33,7 @@ from vecten.deploy.github_env import (
     default_branch,
     dispatch_and_follow,
     ensure_environment,
+    latest_ship,
     oidc_subject_prefixes,
     repository_facts,
     repository_ids,
@@ -43,7 +44,6 @@ from vecten.deploy.github_env import (
     set_ship_status,
     ship_context,
     ship_status,
-    shipped_at,
 )
 from vecten.deploy.guards import (
     in_actions,
@@ -68,7 +68,9 @@ from vecten.deploy.promotion import (
     promotion_order,
     read_commit_files,
     read_fetched_facts,
+    remember_mcp_ship,
     require_shipped_by,
+    ship_evidence_record,
 )
 from vecten.deploy.shipping import service_report
 from vecten.deploy.snowflake import (
@@ -83,7 +85,7 @@ from vecten.deploy.snowflake import (
 from vecten.deploy.snowflake_leftovers import read_leftovers
 from vecten.deploy.terraform import PlannedRoot, TerraformRunner, require_terraform
 from vecten.deploy.tfvars import check_tfvars
-from vecten.github.gh import ToolRunner, require_gh
+from vecten.github.gh import ToolRunner, get_git, require_gh
 from vecten_shared.config import DeploySection, VectenConfig, load_config, save_config
 from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
@@ -956,6 +958,12 @@ def promote_env(
     # it, the run may have finished green with no host shipped.
     if fetched:
         remove_record(project_root, owed_ship_record(env))
+        if config.has("mcp"):
+            try:
+                recent = latest_ship(gh, project_root, repository, branch, env)
+                remember_mcp_ship(project_root, load_config(project_root), env, recent, git)
+            except Failure, OSError:
+                warnings.append("Run vecten promote --status to verify the MCP settings shipped.")
     result = {"env": env, "promotes_from": previous, "dispatched": True, **followed}
     return {**result, "warnings": warnings} if warnings else result
 
@@ -968,11 +976,12 @@ def promotion_status(project_root: Path, *, gh: ToolRunner) -> dict:
     order = promotion_order(project_root, config)
     require_gh(gh, project_root)
     branch = default_branch(gh, project_root, repository)
-    found = {env: shipped_at(gh, project_root, repository, branch, env) for env in order}
+    found = {env: latest_ship(gh, project_root, repository, branch, env) for env in order}
     listed = []
     for env in order:
         previous = config.promoted_from(env)
         mine, theirs = found[env], found.get(previous) if previous else None
+        remember_mcp_ship(project_root, config, env, mine, get_git())
         # Behind: the environment before it runs a commit this one has not been given.
         behind = theirs is not None and (mine is None or theirs[0] != mine[0])
         listed.append(
@@ -1090,6 +1099,7 @@ def destroy_env(
         # and the people still owed a password link.
         remove_record(project_root, login_record(env))
         remove_record(project_root, record_name(env))
+        remove_record(project_root, ship_evidence_record(env))
         # A new deploy ships no host until the identity is confirmed again.
         remove_record(project_root, owed_ship_record(env))
     return {

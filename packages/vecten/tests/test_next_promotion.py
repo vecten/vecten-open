@@ -390,10 +390,10 @@ def _post_deploy(root, env):
 
 
 def test_another_checkout_waits_for_the_ship_with_its_mcp_settings(tmp_path, monkeypatch):
-    from shutil import copyfile
+    from shutil import copyfile, copytree, ignore_patterns
 
     from vecten.deploy.promotion import mcp_ship_receipt
-    from vecten.deploy.run import recorded_ship
+    from vecten.deploy.run import promotion_status, recorded_ship
     from vecten.github import gh
     from vecten.intake.facts import set_mcp_fact
     from vecten.mcp_onboarding import setup_script
@@ -404,8 +404,7 @@ def test_another_checkout_waits_for_the_ship_with_its_mcp_settings(tmp_path, mon
     data = setup_script(root, "prod", confirm=True)
     assert data["commands"] == ["vecten github push", "vecten promote --env prod"]
     other = tmp_path / "second-checkout"
-    other.mkdir()
-    copyfile(root / "vecten.toml", other / "vecten.toml")
+    copytree(root, other, ignore=ignore_patterns(".vecten"))
     github = FakeGh(history=[COMMIT])
     monkeypatch.setattr(gh, "get_gh", lambda: github)
 
@@ -425,35 +424,68 @@ def test_another_checkout_waits_for_the_ship_with_its_mcp_settings(tmp_path, mon
             receipt=receipt,
         )
 
+    assert commands() == ["vecten promote --status"]
+    promotion_status(other, gh=github)
     assert commands() == ["vecten promote --env prod"]
     ship()
+    promotion_status(other, gh=github)
     assert any(cmd.startswith("vecten user add") for cmd in commands())
     set_mcp_fact(other, "mcp.admins", "other@example.com")
     assert commands() == ["vecten promote --env prod"]
     ship()  # The old promoted commit still carries the previous admins.
+    promotion_status(other, gh=github)
     assert commands() == ["vecten promote --env prod"]
     copyfile(other / "vecten.toml", root / "vecten.toml")
     ship()
+    promotion_status(other, gh=github)
     assert any(cmd.startswith("vecten user add") for cmd in commands())
     github.failing = ("api",)
-    assert commands() == ["vecten promote --status"]
+    assert any(cmd.startswith("vecten user add") for cmd in commands())
+    github.failing = ()
+    github.history = [f"{i:040x}" for i in range(201)] + [COMMIT]
+    promotion_status(other, gh=github)
+    assert any(cmd.startswith("vecten user add") for cmd in commands())
+    github.history = [COMMIT]
+    copyfile(other / "vecten.toml", root / "vecten.toml")
+    set_mcp_fact(root, "mcp.admins", "old@example.com")
+    ship()
+    promotion_status(other, gh=github)
+    assert commands() == ["vecten promote --env prod"]
 
 
 def test_existing_confirmation_without_a_checkout_record_uses_legacy_ship_evidence(
     tmp_path, monkeypatch
 ):
-    from vecten.github import gh
+    from vecten.deploy import run
 
     from .deploy_fixtures import COMMIT, FakeGh, FakeGit
 
     root = _snowflake_dev_prod(tmp_path)
     facts(root, "prod", provisioner_script_run=True)
     github = FakeGh(history=[COMMIT])
-    monkeypatch.setattr(gh, "get_gh", lambda: github)
+    assert [i.resolution for i in _post_deploy(root, "prod")] == ["vecten promote --status"]
+    run.promotion_status(root, gh=github)
     assert [i.resolution for i in _post_deploy(root, "prod")] == ["vecten promote --env prod"]
     github.statuses[COMMIT] = [("vecten/ship/prod", "success", "2026-01-01T00:00:00Z")]
-    monkeypatch.setattr(gh, "get_git", lambda: FakeGit(shown=root))
+    monkeypatch.setattr(run, "get_git", lambda: FakeGit(shown=root))
+    run.promotion_status(root, gh=github)
+    github.failing = ("api",)
     assert any(i.resolution.startswith("vecten user add") for i in _post_deploy(root, "prod"))
+
+
+def test_completed_legacy_onboarding_outside_recent_history_keeps_offline_guidance(tmp_path):
+    from vecten.deploy.run import promotion_status
+
+    from .deploy_fixtures import COMMIT, FakeGh
+
+    root = _snowflake_dev_prod(tmp_path)
+    facts(root, "prod", provisioner_script_run=True, first_user_added=True)
+    github = FakeGh(history=[f"{i:040x}" for i in range(201)] + [COMMIT])
+    github.statuses[COMMIT] = [("vecten/ship/prod", "success", "2026-01-01T00:00:00Z")]
+    promotion_status(root, gh=github)
+    resolutions = [item.resolution for item in _post_deploy(root, "prod")]
+    assert "vecten mcp connection --env prod" in resolutions
+    assert not any("promote" in cmd for cmd in resolutions)
 
 
 def test_the_first_environment_is_shipped_by_the_push_that_carries_its_identity(tmp_path):

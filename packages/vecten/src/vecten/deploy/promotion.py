@@ -28,12 +28,14 @@ from vecten.deploy.github_env import (
     ship_status,
 )
 from vecten.deploy.guards import _git, branch_ref
+from vecten.deploy.snowflake import has_snowflake_root, owed_ship_record
 from vecten.deploy.tfvars import env_tfvars_path
 from vecten.github.gh import ToolRunner
 from vecten_shared.config import (
     CONFIG_FILE,
     DEFAULT_PROMOTION,
     EnvironmentFacts,
+    McpSection,
     ProjectSection,
     VectenConfig,
     WarehouseKind,
@@ -46,6 +48,7 @@ from vecten_shared.config import (
 from vecten_shared.extension_record import RECORD_FILE, Extension, parse_record
 from vecten_shared.names import env_name_problem
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.records import read_record, write_record
 
 __all__ = [
     "FETCHED",
@@ -266,6 +269,54 @@ def mcp_ship_receipt(config: VectenConfig, env: str) -> str | None:
     ]
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return f"Shipped MCP settings {digest}"
+
+
+def ship_evidence_record(env: str) -> str:
+    return f"mcp-ship-{env}"
+
+
+def remember_mcp_ship(
+    root: Path,
+    config: VectenConfig,
+    env: str,
+    shipped: tuple[str, str, str] | None,
+    git: ToolRunner,
+) -> None:
+    facts = config.environments.get(env)
+    if not (config.promoted_from(env) and facts and config.has("mcp")):
+        return
+    if not (
+        facts.mcp_ship_generation
+        or (facts.provisioner_script_run and has_snowflake_root(config))
+        or read_record(root, owed_ship_record(env)) is not None
+    ):
+        return
+    name = ship_evidence_record(env)
+    repository = config.deploy.github_repository
+    prior = read_record(root, name) or {}
+    if not shipped:
+        # Absence from bounded history cannot invalidate a verified ship, or imply
+        # that an established pre-generation environment has a promotion pending.
+        if prior.get("repository") == repository or (
+            facts.first_user_added and not facts.mcp_ship_generation
+        ):
+            return
+        receipt, timestamp = None, ""
+    else:
+        commit, timestamp, receipt = shipped
+        if prior.get("repository") == repository and timestamp < prior.get("timestamp", ""):
+            return
+        if not facts.mcp_ship_generation and not receipt.startswith("Shipped MCP settings "):
+            try:
+                content = show_commit_file(git, root, commit, CONFIG_FILE)
+                deployed = McpSection.model_validate(tomllib.loads(content).get("mcp", {}))
+            except Failure, OSError, tomllib.TOMLDecodeError, ValidationError:
+                # A newly observed successful ship supersedes the old settings, even if
+                # this checkout lacks its objects. A fetch and status can verify it later.
+                receipt = None
+            else:
+                receipt = mcp_ship_receipt(config.model_copy(update={"mcp": deployed}), env)
+    write_record(root, name, {"repository": repository, "shipped": receipt, "timestamp": timestamp})
 
 
 @dataclass
