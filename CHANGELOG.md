@@ -5,6 +5,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Fixed
+
+- After confirming an identity or changing MCP onboarding answers, a fresh checkout checks the target environment’s last successful ship before offering user administration (#100).
+
 ## [0.1.1] - 2026-11-18
 
 ### Added

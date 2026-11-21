@@ -61,6 +61,7 @@ from vecten.deploy.promotion import (
     fetch_default_branch,
     fetched_commit,
     given_commit,
+    mcp_ship_receipt,
     newest_shipped,
     previous_in,
     promoted_tree,
@@ -581,6 +582,7 @@ def _deploy_in_actions(
                 view.commit,
                 lambda: plane.ship_hosts(tree, config, env, outputs, view.commit, sources=sources),
                 required=env in view.order[:-1],
+                receipt=mcp_ship_receipt(config, env) if env in view.order[1:] else None,
             )
             warnings += recorded
             data = {**data, "hosts": hosts, **_services_after_ship(plane, tree, config, outputs)}
@@ -614,6 +616,7 @@ def recorded_ship[Shipped](
     ship: Callable[[], Shipped],
     *,
     required: bool,
+    receipt: str | None = None,
 ) -> tuple[Shipped, list[str]]:
     """Run `ship` between a `pending` and a final `vecten/ship/<env>` status on `commit`;
     what `ship` returned, and a warning for every status that could not be read or set.
@@ -637,7 +640,16 @@ def recorded_ship[Shipped](
 
     def record(state: str) -> None:
         try:
-            set_ship_status(gh, project_root, repository, commit, env, state, target_url=url)
+            set_ship_status(
+                gh,
+                project_root,
+                repository,
+                commit,
+                env,
+                state,
+                target_url=url,
+                receipt=receipt if state == "success" else None,
+            )
         except Failure as exc:
             if required:
                 raise
@@ -849,6 +861,7 @@ def _ship_in_actions(
                 view.commit,
                 lambda: plane.ship_hosts(tree, config, env, outputs, view.commit),
                 required=env in view.order[:-1],
+                receipt=mcp_ship_receipt(config, env) if env in view.order[1:] else None,
             )
             warnings += recorded
             data = {**data, "hosts": hosts, **_services_after_ship(plane, tree, config, outputs)}
@@ -1070,6 +1083,7 @@ def destroy_env(
             # unrecorded environment would read as never deployed and take the setting.
             record_layout(recorded, env, shared_layout(recorded, env), shared_base(recorded))
         facts.deployed_commit = None
+        facts.mcp_ship_generation = None
         cleared = _clear_state_facts(recorded, env)
         save_config(project_root, recorded)
         # Both records name what the destroyed `state` database held: the session it issued

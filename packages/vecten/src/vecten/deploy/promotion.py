@@ -8,6 +8,8 @@ checkout, so the commands that act on the order check them here.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import tempfile
 import tomllib
@@ -249,6 +251,21 @@ def promoted_tree(
         finally:
             git.run(["worktree", "remove", "--force", str(tree)], project_root)
             git.run(["worktree", "prune"], project_root)
+
+
+def mcp_ship_receipt(config: VectenConfig, env: str) -> str | None:
+    facts = config.environments.get(env)
+    if not facts or not config.has("mcp"):
+        return None
+    # Promotion takes MCP settings from the selected commit and identity facts from the
+    # default branch. A rollback or a ship of an older commit must describe those inputs.
+    payload = [
+        facts.mcp_ship_generation,
+        facts.provisioner_script_run,
+        config.mcp.model_dump(mode="json"),
+    ]
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    return f"Shipped MCP settings {digest}"
 
 
 @dataclass

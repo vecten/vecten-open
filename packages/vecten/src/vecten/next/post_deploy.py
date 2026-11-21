@@ -176,6 +176,51 @@ def app_connect_items(root: Path, config: VectenConfig, env: str) -> list[Item]:
     return items
 
 
+def _promotion_item(root, config, env):
+    import tomllib
+
+    from pydantic import ValidationError
+
+    from vecten.deploy.github_env import default_branch, latest_ship
+    from vecten.deploy.promotion import mcp_ship_receipt, show_commit_file
+    from vecten.deploy.snowflake import has_snowflake_root
+    from vecten.github.gh import get_gh, get_git
+    from vecten_shared.config import CONFIG_FILE, McpSection
+
+    if not config.promoted_from(env):
+        return None
+    facts = config.environments[env]
+    legacy_identity = has_snowflake_root(config) and facts.provisioner_script_run
+    if not (
+        facts.mcp_ship_generation or legacy_identity or read_record(root, owed_ship_record(env))
+    ):
+        return None
+    gh = get_gh()
+    repository = config.deploy.github_repository
+    try:
+        branch = default_branch(gh, root, repository)
+        shipped = latest_ship(gh, root, repository, branch, env)
+    except Failure, OSError:
+        return Item("command", f"Verify which commit shipped to {env}", "vecten promote --status")
+    if shipped:
+        if shipped[2] == mcp_ship_receipt(config, env):
+            return None
+        # Earlier releases wrote a success only after shipping hosts. Compare the shipped
+        # commit's settings for identities that predate onboarding generations.
+        if not facts.mcp_ship_generation and not shipped[2].startswith("Shipped MCP settings "):
+            try:
+                content = show_commit_file(get_git(), root, shipped[0], CONFIG_FILE)
+                deployed = McpSection.model_validate(tomllib.loads(content).get("mcp", {}))
+            except Failure, OSError, tomllib.TOMLDecodeError, ValidationError:
+                pass  # A new successful promotion supplies the missing settings evidence.
+            else:
+                if deployed == config.mcp:
+                    return None
+    return Item(
+        "command", f"Ship the confirmed MCP settings to {env}", f"vecten promote --env {env}"
+    )
+
+
 def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState) -> list[Item]:
     facts = config.environments.get(env) or EnvironmentFacts()
     if not facts.deployed_commit:
@@ -194,11 +239,9 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
         return [*items, Item("command", title, f"vecten mcp provisioner-script --env {env}")]
     # The push carrying the confirmation ships the order's first environment alone, and the
     # items below reach hosts of this one that its deploy left unshipped.
-    if config.promoted_from(env) and read_record(root, owed_ship_record(env)) is not None:
-        title = (
-            f"Ship {env} now that its MCP has its Snowflake identity; its deploy shipped no host"
-        )
-        return [*items, Item("command", title, f"vecten promote --env {env}")]
+    promotion = _promotion_item(root, config, env)
+    if promotion is not None:
+        return [*items, promotion]
     # The MCP serves with older procedures and refuses only what needs the newer ones.
     rerun = access_rerun_item(root, config, env)
     if rerun is not None:

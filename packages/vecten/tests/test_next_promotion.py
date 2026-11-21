@@ -389,28 +389,71 @@ def _post_deploy(root, env):
     return post_deploy_items(root, load_config(root), env, clean)
 
 
-PROMOTE_PROD = Item(
-    "command",
-    "Ship prod now that its MCP has its Snowflake identity; its deploy shipped no host",
-    "vecten promote --env prod",
-)
+def test_another_checkout_waits_for_the_ship_with_its_mcp_settings(tmp_path, monkeypatch):
+    from shutil import copyfile
 
-
-def test_a_later_environment_waits_for_its_promotion_after_the_identity(tmp_path):
-    from vecten.deploy.snowflake import owed_ship_record
+    from vecten.deploy.promotion import mcp_ship_receipt
+    from vecten.deploy.run import recorded_ship
+    from vecten.github import gh
+    from vecten.intake.facts import set_mcp_fact
     from vecten.mcp_onboarding import setup_script
-    from vecten_shared.records import read_record, remove_record
+
+    from .deploy_fixtures import COMMIT, FakeGh
 
     root = _snowflake_dev_prod(tmp_path)
     data = setup_script(root, "prod", confirm=True)
     assert data["commands"] == ["vecten github push", "vecten promote --env prod"]
-    assert read_record(root, owed_ship_record("prod"))
-    items = _post_deploy(root, "prod")
-    assert items == [PROMOTE_PROD]
-    remove_record(root, owed_ship_record("prod"))
-    resolutions = [i.resolution for i in _post_deploy(root, "prod")]
-    assert "vecten promote --env prod" not in resolutions
-    assert any(r.startswith("vecten user add") for r in resolutions)
+    other = tmp_path / "second-checkout"
+    other.mkdir()
+    copyfile(root / "vecten.toml", other / "vecten.toml")
+    github = FakeGh(history=[COMMIT])
+    monkeypatch.setattr(gh, "get_gh", lambda: github)
+
+    def commands():
+        return [item.resolution for item in _post_deploy(other, "prod")]
+
+    def ship():
+        receipt = mcp_ship_receipt(load_config(root), "prod")
+        recorded_ship(
+            github,
+            root,
+            "acme/data",
+            "prod",
+            COMMIT,
+            lambda: ["mcp"],
+            required=True,
+            receipt=receipt,
+        )
+
+    assert commands() == ["vecten promote --env prod"]
+    ship()
+    assert any(cmd.startswith("vecten user add") for cmd in commands())
+    set_mcp_fact(other, "mcp.admins", "other@example.com")
+    assert commands() == ["vecten promote --env prod"]
+    ship()  # The old promoted commit still carries the previous admins.
+    assert commands() == ["vecten promote --env prod"]
+    copyfile(other / "vecten.toml", root / "vecten.toml")
+    ship()
+    assert any(cmd.startswith("vecten user add") for cmd in commands())
+    github.failing = ("api",)
+    assert commands() == ["vecten promote --status"]
+
+
+def test_existing_confirmation_without_a_checkout_record_uses_legacy_ship_evidence(
+    tmp_path, monkeypatch
+):
+    from vecten.github import gh
+
+    from .deploy_fixtures import COMMIT, FakeGh, FakeGit
+
+    root = _snowflake_dev_prod(tmp_path)
+    facts(root, "prod", provisioner_script_run=True)
+    github = FakeGh(history=[COMMIT])
+    monkeypatch.setattr(gh, "get_gh", lambda: github)
+    assert [i.resolution for i in _post_deploy(root, "prod")] == ["vecten promote --env prod"]
+    github.statuses[COMMIT] = [("vecten/ship/prod", "success", "2026-01-01T00:00:00Z")]
+    monkeypatch.setattr(gh, "get_git", lambda: FakeGit(shown=root))
+    assert any(i.resolution.startswith("vecten user add") for i in _post_deploy(root, "prod"))
 
 
 def test_the_first_environment_is_shipped_by_the_push_that_carries_its_identity(tmp_path):
