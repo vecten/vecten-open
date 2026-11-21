@@ -267,6 +267,11 @@ ACCESS_VERSION = 7
 GRANTS_VERSION = 5
 
 
+def required_access_version(source_areas):
+    """Version 6 already serves all reads used without restricted source layers."""
+    return ACCESS_VERSION if source_areas else 6
+
+
 def snowflake_access_helper(names, source_areas=()):
     database = names.database.upper()
     provisioner = _name(names.provisioner_role)

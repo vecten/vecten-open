@@ -99,6 +99,9 @@ def setup_script(root, env, confirm=False, public_key=None):
         # Only Snowflake's script installs access procedures that report a version.
         installed = ACCESS_VERSION if config.warehouse.kind == "snowflake" else None
         record = {"confirmed": True} | ({"access_version": installed} if installed else {})
+        areas = source_layer_areas(config.areas) if installed else None
+        if installed:
+            record["access_source_areas"] = areas
         write_record(root, f"provisioner-{env}", record)
         # A deploy of a later environment of the order while its identity was pending shipped
         # no host, and `next` walks only the order's environments.
@@ -114,6 +117,7 @@ def setup_script(root, env, confirm=False, public_key=None):
             facts = config.environments.setdefault(env, EnvironmentFacts())
             facts.provisioner_script_run = True
             facts.access_version = installed
+            facts.access_source_areas = areas
             save_config(root, config)
         return {"env": env, "confirmed": True, "commands": commands}
     if platform:

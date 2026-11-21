@@ -856,9 +856,18 @@ def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version
     assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
     dirty = GitState(has_repo=True, has_origin=True, dirty=True, ahead=False)
     assert post_deploy_items(root, config, "prod", dirty)[:2] == [PUSH, rerun_item()]
-    facts.access_version = ACCESS_VERSION - 1
+    facts.access_version = 6
+    assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
+    from vecten_shared.config import AreaDecl
+
+    config.areas["finance"] = AreaDecl(restricted_source_layers=True)
     assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
     facts.access_version = ACCESS_VERSION
+    facts.access_source_areas = ["finance"]
+    config.areas["hr"] = AreaDecl(restricted_source_layers=True)
+    assert "restricted source areas" in post_deploy_items(root, config, "prod", CLEAN)[0].title
+    facts.access_source_areas.append("hr")
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == OIDC
     assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
 
 

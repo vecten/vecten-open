@@ -15,7 +15,7 @@ from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
 from vecten_mcp.warehouse.base import Absent, RoleExists
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, required_access_version
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
@@ -555,7 +555,7 @@ class AccessService:
 
     def _outdated(self):
         installed = self.adapter.access_version()
-        if installed < ACCESS_VERSION and (installed < 6 or self.source_areas):
+        if installed < required_access_version(self.source_areas):
             fix = OUTDATED_FIX if installed < GRANTS_VERSION else LISTING_FIX
             if installed >= GRANTS_VERSION and self.source_areas:
                 fix = "Rerun the provisioner script and confirm it to grant staging or snapshots."
@@ -748,7 +748,12 @@ class AccessService:
                     del desired[key]
                     logger.info("Forgot %s: its area is not declared", row)
             for key, old in applied.items():
-                if self._source_of(desired.get(key)) != old["source"]:
+                source = self._source_of(desired.get(key))
+                # Expanding the same area keeps the existing grants, including when the
+                # new layers must wait for the administrator to update the procedure.
+                if old["kind"] == "area" and source and set(self._held(old)) <= set(source):
+                    continue
+                if source != old["source"] or (old["kind"] == "area" and source):
                     try:
                         self._apply(old, self._held(old), False)
                         self.state.remove("applied_grants", key)

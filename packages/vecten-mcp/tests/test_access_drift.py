@@ -80,10 +80,31 @@ def test_existing_area_grant_expands_and_contracts_with_opt_in():
         access = AccessService(
             access.state, adapter, areas=["finance"], source_areas=["finance"] if opted else []
         )
+        adapter.ops.clear()
         assert access.reconcile()["complete"]
+        if opted:
+            assert ("schema", "analyst", "core_finance", False) not in adapter.ops
         for layer in ("staging", "snapshots"):
             assert (("analyst", "usage", f"{layer}_finance", None) in adapter.held) == expected
         assert ("analyst", "usage", "core_finance", None) in adapter.held
+
+
+def test_a_failed_source_layer_expansion_preserves_existing_reads():
+    class InstalledFinanceOnly(Adapter):
+        def schema_grant(self, role, schema, grant=True):
+            if grant and schema == "staging_hr":
+                raise ValueError("outside the installed source area list")
+            return super().schema_grant(role, schema, grant)
+
+    adapter = InstalledFinanceOnly()
+    access = service(adapter, areas=["finance", "hr"])
+    access.grant("default", "area", "hr")
+    expanded = AccessService(access.state, adapter, areas=["finance", "hr"], source_areas=["hr"])
+    adapter.ops.clear()
+    assert not expanded.reconcile()["complete"]
+    for schema in ("core_hr", "marts_hr"):
+        assert ("schema", "analyst", schema, False) not in adapter.ops
+        assert ("analyst", "usage", schema, None) in adapter.held
 
 
 def test_a_revoked_default_schema_restored_by_an_older_deploy_is_revoked_again():

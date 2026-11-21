@@ -44,16 +44,18 @@ wrong.
 
 ## Restricted areas
 
-Granting an area to a group gives its members read access to `core_<area>` and `marts_<area>`.
-Place private core and mart models in matching folders under `dbt/models/` with matching `+schema` values in
-`dbt/dbt_project.yml`. The layer rules above still apply. Keep core models needed by unrestricted marts in shared
-`core`. Declare the area in `vecten.toml` so the naming test can recognize it.
+Declare the area in `vecten.toml`. Admins can use `vecten group list` and grant a group
+`core_<area>` and `marts_<area>` with `vecten grant --area <area> --group <group>`.
+Place private models in matching folders under `dbt/models/` and set their `+schema` in
+`dbt/dbt_project.yml`. Keep core models needed by unrestricted marts in shared `core`.
 
-To extend the finance grant to staging rows and snapshot history, set `restricted_source_layers = true` under
-`[areas.finance]`. Set `+schema: staging_finance` on sensitive staging models and `+schema: snapshots_finance` on their snapshots.
-Copy existing snapshot history and compare every row, including validity dates, before retiring the shared copies. Anyone granted shared staging or snapshots can read copies left there.
-On Snowflake, use the environment name from `deploy/envs/<env>.tfvars`: run `vecten mcp provisioner-script --env <env>`, have an ACCOUNTADMIN execute its SQL, then repeat the command with `--confirm-run`.
-Direct dbt builds and tests also need `--vars` listing all declared areas in `vecten_areas` and opted-in areas in `vecten_source_layer_areas`.
+To protect finance staging and history, set `restricted_source_layers = true` under
+`[areas.finance]`. In `dbt/dbt_project.yml`, set `+schema: staging_finance` on sensitive
+staging models and `+schema: snapshots_finance` on their snapshots. Copy snapshot history
+and compare rows and validity dates before retiring shared copies. Shared readers can still
+read copies left there. On Snowflake, run `vecten mcp provisioner-script --env <env>` for
+the environment named in `deploy/envs/<env>.tfvars`. Have an ACCOUNTADMIN execute the SQL,
+then repeat the command with `--confirm-run` to record which areas the SQL permits.
 
 ## Descriptions and keys
 
@@ -71,9 +73,9 @@ run as a second step after the build:
     dbt test  --select  package:vecten_convention,test_type:singular
 
 `vecten dbt-build-local` and the `dbt_build` DAG run both; `vecten dbt build` runs what you pass.
-Each of them passes the areas `vecten.toml` declares as the dbt var `vecten_areas`, which plain
-`dbt` needs as `--vars '{"vecten_areas": ["finance"]}'`, or the naming test reports every area
-model undeclared. A violation of
+Each passes declared areas as `vecten_areas` and opted-in areas as `vecten_source_layer_areas`.
+With plain dbt, pass both lists explicitly, for example
+`--vars '{"vecten_areas": ["finance"], "vecten_source_layer_areas": ["finance"]}'`. A violation of
 `convention_model_naming`, `convention_descriptions`, `convention_core_primary_key`,
 `convention_staging_load_metadata` or `convention_no_grants` reads `model <name>: <reason>`
 (`snapshot` or `seed` in place of `model` for those).

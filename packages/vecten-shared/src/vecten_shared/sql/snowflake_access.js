@@ -65,7 +65,7 @@ function readGrant() {
     // Revocation remains possible after removing an area from the installed list.
     if (enabled && /^(STAGING|SNAPSHOTS)_/.test(SCHEMA_NAME) &&
         sourceAreas.indexOf(SCHEMA_NAME.split('_')[1]) === -1) {
-        throw new Error('enable restricted_source_layers and rerun the provisioner script');
+        throw new Error('schema is outside the installed source area list; rerun the provisioner script');
     }
     owned(TARGET);
     try {

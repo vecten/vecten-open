@@ -72,7 +72,8 @@ Copy the secret immediately: it is never stored in readable form and cannot be s
 
 A grant gives a group read access to one dataset, translated to `GRANT SELECT` on its source,
 or to one convention schema (`core`, `marts`, `staging`, `snapshots` or `raw_<source>`), or to
-a restricted area `vecten.toml` declares, which covers both `core_<area>` and `marts_<area>`.
+a restricted area `vecten.toml` declares, which covers `core_<area>` and `marts_<area>`. An area with
+`restricted_source_layers = true` also includes its staging rows and snapshot history.
 Grants are desired state. The server reconciles them every fifteen minutes and whenever the
 model changes, and **Reconcile now** runs a reconciliation immediately.
 

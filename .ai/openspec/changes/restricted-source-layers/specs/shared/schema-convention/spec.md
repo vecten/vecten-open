@@ -8,3 +8,10 @@ An area with `restricted_source_layers = true` SHALL also own `staging_<area>` a
 
 - **WHEN** a group holds a grant on shared staging and another holds the opted-in finance area
 - **THEN** the area group alone can read ledger rows placed in the finance staging and snapshots schemas
+
+#### Scenario: Confirm the installed Snowflake source areas
+
+- **WHEN** an environment has version 6 procedures and no opted-in areas
+- **THEN** next requires no administrator rerun
+- **WHEN** the configured area list differs from the list last confirmed for version 7
+- **THEN** next names the provisioner command until the new list is confirmed, and expanding an area preserves the group's existing core and mart reads
