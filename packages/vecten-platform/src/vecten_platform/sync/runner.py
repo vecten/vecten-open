@@ -85,12 +85,6 @@ def _chain(exc: BaseException) -> list[BaseException]:
     return chain
 
 
-def _describe(exc: BaseException) -> str:
-    """One line naming the innermost exception, beneath dlt's pipeline-step wrappers."""
-    inner = _chain(exc)[-1]
-    return " ".join(f"{type(inner).__name__}: {inner}".split())
-
-
 def run_object(
     connector: str,
     make_source: Callable[[], object],
@@ -134,13 +128,10 @@ def run_object(
         failure = next((e for e in chain if isinstance(e, Failure)), None)
         if failure is not None:
             raise failure from None
-        return ObjectOutcome(
-            object_name,
-            False,
-            0,
-            _describe(exc),
-            terminal=any(isinstance(e, TerminalConnectorError) for e in chain),
-        )
+        terminal = next((e for e in chain if isinstance(e, TerminalConnectorError)), None)
+        reason = terminal if terminal is not None else chain[-1]
+        message = " ".join(f"{type(reason).__name__}: {reason}".split())
+        return ObjectOutcome(object_name, False, 0, message, terminal=terminal is not None)
     except BaseException:
         if recording is not None:
             recording.discard()

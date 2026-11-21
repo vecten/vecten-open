@@ -7,7 +7,7 @@ import pytest
 from vecten_platform.sync import context
 from vecten_platform.sync.loader import load_connector
 from vecten_platform.sync.runner import (
-    _describe,
+    _chain,
     dataset_name,
     ensure_datasets,
     list_objects,
@@ -86,6 +86,12 @@ def test_wrapped_metered_failure(demo, duckdb_dest, tmp_path, credits, terminal)
     )
     assert not outcome.ok
     assert outcome.terminal is terminal
+    expected = (
+        "TerminalConnectorError: metered source is out of credits"
+        if terminal
+        else "HTTPError: 503 Service Unavailable"
+    )
+    assert outcome.error == expected
 
 
 def test_checkpoint_survives_a_fresh_dlt_dir(demo, duckdb_dest, tmp_path):
@@ -278,14 +284,14 @@ def test_a_failed_object_lists_no_tables(demo, duckdb_dest, tmp_path):
     assert not outcome.ok and outcome.tables == ()
 
 
-def test_describe_honours_from_none():
+def test_exception_chain_honours_from_none():
     try:
         try:
             raise KeyError("hidden")
         except KeyError:
             raise ValueError("bad config") from None
     except ValueError as exc:
-        assert _describe(exc) == "ValueError: bad config"
+        assert _chain(exc) == [exc]
 
 
 def _schemas(dest_path: Path) -> set[str]:

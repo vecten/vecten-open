@@ -1,6 +1,7 @@
 """Test-only connector: two healthy objects and one that always fails."""
 
 import dlt
+from requests.exceptions import HTTPError
 
 from vecten_platform.sync import TerminalConnectorError, secret
 
@@ -12,8 +13,13 @@ def good_a(limit=None, cursor=dlt.sources.incremental("id", initial_value=0)):  
 
 @dlt.resource(name="bad")
 def bad(credits=None):
-    if credits == 0:
-        raise TerminalConnectorError("metered source is out of credits")
+    if credits is not None:
+        try:
+            raise HTTPError("402 Payment Required" if credits == 0 else "503 Service Unavailable")
+        except HTTPError as exc:
+            if credits == 0:
+                raise TerminalConnectorError("metered source is out of credits") from exc
+            raise
     raise RuntimeError("upstream returned 500")
     yield
 

@@ -1,3 +1,7 @@
-# Explicitly terminal object failures
+## Why
 
-A connector SHALL be able to mark an object failure as terminal. The sync task SHALL fail on that attempt and run its configured failure callback. Other extraction failures SHALL keep their configured retries.
+Retrying an exhausted metered source can bill for the same records again. Operators need to distinguish a failure that requires action from a temporary upstream error.
+
+## What Changes
+
+Connectors can signal a terminal failure. The generated object task stops after one attempt and reports the connector’s reason through the usual alert.

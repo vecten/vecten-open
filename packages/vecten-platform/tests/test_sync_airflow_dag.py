@@ -302,6 +302,20 @@ def test_metered_object_attempts(tmp_path, monkeypatch, credits, attempts):
     assert sync.state == "failed"
     assert sync.try_number == attempts
 
+    from airflow.sdk.exceptions import AirflowFailException
+
+    from vecten_platform.sync.airflow_dag import ObjectSyncError, sync_one
+    from vecten_platform.sync.alerts import alert_payload
+    from vecten_shared.issues import airflow_issue_id, sync_task_key
+
+    wrapper = AirflowFailException if credits == 0 else ObjectSyncError
+    with pytest.raises(wrapper) as failure:
+        sync_one("demo", "bad", {"credits": credits})
+    payload = alert_payload({"dag": run, "task": sync, "exception": failure.value})
+    reason = "TerminalConnectorError" if credits == 0 else "HTTPError"
+    assert payload["error_class"] == reason
+    assert payload["issue_id"] == airflow_issue_id(run.dag_id, sync_task_key("bad"), reason)
+
 
 def warehouse_count(tmp_path, table: str) -> int | None:
     import duckdb
