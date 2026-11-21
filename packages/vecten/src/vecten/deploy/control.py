@@ -472,10 +472,31 @@ def apply_environment(
     follows at once, so what the cloud root left undone is done in the same run.
     """
     require_bootstrapped(plane.config(), env)
-    if plane.guarded_resources:
-        for planned in plans:
-            if planned.root.name == plane.cloud:
-                refuse_guarded_changes(plane, terraform, planned)
+    for planned in plans:
+        root = planned.root
+        if root.name == plane.cloud and plane.guarded_resources:
+            refuse_guarded_changes(plane, terraform, planned)
+        if root.name == "snowflake":
+            changes = terraform_plan_changes(
+                terraform, root.root_dir, planned.plan_file, env=root.env, secrets=root.secrets
+            )
+            for resource in changes:
+                if resource.get("type") not in {
+                    "snowflake_database",
+                    "snowflake_warehouse",
+                    "snowflake_account_role",
+                    "snowflake_service_user",
+                }:
+                    continue
+                change = resource["change"]
+                before, after = change.get("before"), change.get("after")
+                if before and after and before["name"] != after.get("name"):
+                    raise Failure(
+                        ExitCode.REFUSED,
+                        f"{resource['address']} would rename an existing Snowflake object "
+                        f"from {before['name']} to {after.get('name')}. Restore this environment's "
+                        "layout and base, or migrate it as a new deployment. Nothing was applied.",
+                    )
     outputs: EnvironmentOutputs | None = None
     for planned in plans:
         apply_root(terraform, planned)
