@@ -387,9 +387,16 @@ def test_snowflake_project_plans_both_roots_then_applies_cloud_first(
     ]
 
 
-@pytest.mark.parametrize("after", ["LOADER", "LOADER_NEW_PROD"])
+@pytest.mark.parametrize(
+    ("before", "after", "settings"),
+    [
+        ("LOADER_ACME_PROD", "LOADER", 'snowflake_base = "ACME"'),
+        ("LOADER_ACME_PROD", "LOADER_NEW_PROD", "snowflake_shared_account = true"),
+        ("LOADER", "LOADER_ACME_PROD", "snowflake_shared_account = false"),
+    ],
+)
 def test_ci_refuses_a_layout_rename_from_terraform_state(
-    invoke, deploy_secrets, snowflake, monkeypatch, after
+    invoke, deploy_secrets, snowflake, monkeypatch, before, after, settings
 ):
     monkeypatch.setattr(
         FakeTerraform,
@@ -400,7 +407,7 @@ def test_ci_refuses_a_layout_rename_from_terraform_state(
                 "type": "snowflake_account_role",
                 "change": {
                     "actions": ["update"],
-                    "before": {"name": "LOADER_ACME_PROD"},
+                    "before": {"name": before},
                     "after": {"name": after},
                 },
             }
@@ -408,7 +415,9 @@ def test_ci_refuses_a_layout_rename_from_terraform_state(
     )
     result = invoke("deploy", "--env", "prod", "--json")
     assert result.exit_code == 4, result.stdout
-    assert "LOADER_ACME_PROD" in doc(result)["error"]
+    assert before in doc(result)["error"]
+    assert settings in doc(result)["error"]
+    assert "[environments.prod]" in doc(result)["error"] and "push" in doc(result)["error"]
     assert "apply" not in FakeTerraform.commands()
 
 

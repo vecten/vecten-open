@@ -462,6 +462,35 @@ def plan_environment(
     ]
 
 
+def _layout_recovery(changes: list[dict], env: str) -> str:
+    table = f"[environments.{env}] in vecten.toml"
+    # The fixed database and warehouse names may also look suffixed. Only the
+    # managed loader has an unambiguous fixed name and shared suffix.
+    suffix = "_" + env.upper()
+    for resource in changes:
+        address = resource.get("address", "")
+        if not address.endswith(
+            ('snowflake_account_role.this["LOADER"]', "snowflake_service_user.loader")
+        ):
+            continue
+        name = (resource["change"].get("before") or {}).get("name", "")
+        if name == "LOADER":
+            return f"Record snowflake_shared_account = false under {table} and push."
+        if name.startswith("LOADER_") and name.endswith(suffix):
+            base = name[len("LOADER_") : -len(suffix)]
+            if base:
+                return (
+                    f"To keep these shared names, set snowflake_shared_account = true and "
+                    f'snowflake_base = "{base}" under {table}, restore the warehouse base to '
+                    f"{base}, and push."
+                )
+    return (
+        f"Check the environment's existing loader role in Terraform state. Record its layout "
+        f"under {table} using snowflake_shared_account and, for shared names, snowflake_base. "
+        "Push the recorded layout."
+    )
+
+
 def apply_environment(
     plane: ControlPlane, env: str, terraform: TerraformRunner, plans: list[PlannedRoot]
 ) -> EnvironmentOutputs:
@@ -494,8 +523,9 @@ def apply_environment(
                     raise Failure(
                         ExitCode.REFUSED,
                         f"{resource['address']} would rename an existing Snowflake object "
-                        f"from {before['name']} to {after.get('name')}. Restore this environment's "
-                        "layout and base, or migrate it as a new deployment. Nothing was applied.",
+                        f"from {before['name']} to {after.get('name')}. "
+                        f"{_layout_recovery(changes, env)} "
+                        "To change layouts, migrate as a new deployment. Nothing was applied.",
                     )
     outputs: EnvironmentOutputs | None = None
     for planned in plans:
