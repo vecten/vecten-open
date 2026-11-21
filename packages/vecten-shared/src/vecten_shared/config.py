@@ -394,6 +394,12 @@ class AreaDecl(Strict):
     until an admin grants the area to a group."""
 
     access: AccessDecl | None = None
+    restricted_source_layers: bool = False
+
+
+def source_layer_areas(areas):
+    """Areas whose readers may see staging rows and snapshot history."""
+    return sorted(name for name, area in areas.items() if area.restricted_source_layers)
 
 
 # Cloud identifiers land in tfvars, workflow variables and API paths.
@@ -427,6 +433,7 @@ class EnvironmentFacts(Strict):
     # The Snowflake access procedures' version the confirmed provisioner script installed; a
     # run confirmed without one installed an older version.
     access_version: int | None = Field(default=None, ge=1)
+    access_source_areas: list[str] | None = None
     provisioner_secrets_set: bool = False
     connection_shown: bool = False
     alert_webhook_asked: bool = False
@@ -568,6 +575,8 @@ class VectenConfig(Strict):
     def _area_names(cls, value: dict[str, AreaDecl]) -> dict[str, AreaDecl]:
         for name in value:
             _checked(area_name_problem(name), name)
+            if value[name].restricted_source_layers and len(name) > 53:
+                raise ValueError(f"area {name}: snapshots_<area> exceeds 63 characters")
         return value
 
     @model_validator(mode="after")

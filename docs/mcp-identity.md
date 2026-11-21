@@ -38,7 +38,8 @@ plus the provisioner's table SELECT grant options on core/marts. It installs an 
 procedure in the configured database's `VECTEN_ACCESS` schema. The procedure accepts only
 `ANALYST` or provisioner-owned reader roles, and the convention schemas, `RAW_<SOURCE>`
 schemas and schemas matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$` (restricted areas, matched by
-pattern, so declaring an area needs no rerun), and can grant/revoke only read privileges.
+pattern). For restricted staging and snapshots, it permits new grants only for the areas enabled
+when the administrator generated the script. Regenerate and rerun it when that list changes.
 
 A schema or area grant covers tables, views, materialized views, dynamic tables, external
 tables and Iceberg tables, each with its current and future grants. On a grant, a kind the
@@ -305,9 +306,9 @@ a schema grant covers an entire schema. This implementation accepts only the lit
 `raw_hubspot`, and the schemas of an area `vecten.toml` declares; it rejects arbitrary other
 schema names.
 
-An area grant (`vecten grant --area finance --group finance`) is a schema grant on both
-`core_finance` and `marts_finance`, applied and revoked together; one that fails on the second
-schema is rolled back on the first. dbt creates a schema only when a model lands in it, so an
+An area grant (`vecten grant --area finance --group finance`) grants `core_finance` and `marts_finance`. With
+`restricted_source_layers = true` under `[areas.finance]`, it also grants `staging_finance` and
+`snapshots_finance`. The MCP applies or revokes these together and rolls back a partial failure. dbt creates a schema only when a model lands in it, so an
 area with marts only has no `core_<area>`: the grant covers the schemas the warehouse finds,
 its result names the others as waiting, and the first reconciliation after dbt creates one
 grants it. The MCP's state records which of the area's schemas were granted, and revoking or

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from vecten.next.items import Item
 from vecten.secrets import provisioner_secret_names
-from vecten_shared.config import EnvironmentFacts, VectenConfig
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.config import EnvironmentFacts, VectenConfig, source_layer_areas
+from vecten_shared.identity_setup import ACCESS_VERSION, required_access_version
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import read_record
 
@@ -35,7 +35,7 @@ def existing_warehouse_items(root: Path, config: VectenConfig, env: str) -> list
     return [*items, rerun] if rerun else items
 
 
-def script_runs(root: Path, config: VectenConfig, env: str) -> list[int]:
+def script_runs(root: Path, config: VectenConfig, env: str) -> list[tuple[int, list[str]]]:
     """The access version each confirmed run of the provisioner script that counts for `env`
     installed, 1 where the run recorded none."""
     # Postgres grants on the one existing warehouse whichever environment the script was run
@@ -48,9 +48,16 @@ def script_runs(root: Path, config: VectenConfig, env: str) -> list[int]:
     for name in dict.fromkeys([env, *names]):
         facts = config.environments.get(name) or EnvironmentFacts()
         record = read_record(root, f"provisioner-{name}") or {}
-        if facts.provisioner_script_run or record.get("confirmed"):
-            versions = [facts.access_version, record.get("access_version")]
-            runs.append(max((v for v in versions if isinstance(v, int)), default=1))
+        if facts.provisioner_script_run:
+            runs.append((facts.access_version or 1, facts.access_source_areas or []))
+        if record.get("confirmed"):
+            version = record.get("access_version")
+            runs.append(
+                (
+                    version if isinstance(version, int) else 1,
+                    record.get("access_source_areas") or [],
+                )
+            )
     return runs
 
 
@@ -60,8 +67,18 @@ def access_rerun_item(root: Path, config: VectenConfig, env: str) -> Item | None
     if config.warehouse.kind != "snowflake" or not config.has("mcp"):
         return None
     runs = script_runs(root, config, env)
-    if not runs or max(runs) >= ACCESS_VERSION:
+    if not runs:
         return None
+    areas = source_layer_areas(config.areas)
+    version, installed = max(runs, key=lambda run: run[0])
+    if version >= required_access_version(areas):
+        if version < ACCESS_VERSION or installed == areas:
+            return None
+        return Item(
+            "command",
+            f"Update the restricted source areas in {env}'s Snowflake procedures",
+            f"vecten mcp provisioner-script --env {env}",
+        )
     title = (
         f"Rerun the provisioner script for {env}: the access procedures it installed are "
         "older than this release's"

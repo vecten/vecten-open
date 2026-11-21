@@ -145,7 +145,7 @@ def test_render_layout(tmp_path, params):
         assert "-backend-config=encrypt=true" in runbook
     convention = (target / "docs" / "schema-convention.md").read_text()
     assert convention.startswith(f"# Schema convention, version {VERSIONS.schema_convention}\n")
-    assert VERSIONS.schema_convention == 2
+    assert VERSIONS.schema_convention == 3
     assert f"Apache Ossie {VERSIONS.ossie_spec}" in convention
     assert len(convention.splitlines()) < 150
     headings = re.findall(r"^## (.+)$", convention, re.M)

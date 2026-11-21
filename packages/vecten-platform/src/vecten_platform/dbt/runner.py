@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vecten_platform.dbt.deps import CONVENTION_PACKAGE, write_packages_yml
-from vecten_shared.config import VectenConfig
+from vecten_shared.config import VectenConfig, source_layer_areas
 from vecten_shared.output import ExitCode, Failure
 
 log = logging.getLogger(__name__)
@@ -160,14 +160,21 @@ def dbt_step(
     return run_dbt(args, project_dir=project_dir, env=env)
 
 
+def convention_vars(areas):
+    values = {AREAS_VAR: sorted(areas)} if areas else {}
+    if isinstance(areas, dict) and (restricted := source_layer_areas(areas)):
+        values["vecten_source_layer_areas"] = restricted
+    return values
+
+
 def area_vars(areas: Iterable[str]) -> tuple[str, ...]:
     """The `--vars` that pass the declared areas to dbt; none for a project without areas.
 
     Every dbt step vecten runs for a project passes the same vars, since dbt re-parses the
     whole project when they change.
     """
-    names = sorted(areas)
-    return ("--vars", json.dumps({AREAS_VAR: names})) if names else ()
+    values = convention_vars(areas)
+    return ("--vars", json.dumps(values)) if values else ()
 
 
 def run_build(

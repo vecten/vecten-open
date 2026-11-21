@@ -20,6 +20,7 @@ from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.pool import PrincipalPools
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
+from vecten_shared.config import source_layer_areas
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import get_provider, shipped_account, snowflake_names
 from vecten_shared.provider.runtime import RUNTIME_WRITABLE
@@ -305,6 +306,7 @@ def configured_runtime(root, config, extensions):
         adapter,
         invalidate=pools.disable_principal,
         areas=config.areas,
+        source_areas=source_layer_areas(config.areas),
         built=built_reader(config, os.environ),
     )
     access.seed_defaults()

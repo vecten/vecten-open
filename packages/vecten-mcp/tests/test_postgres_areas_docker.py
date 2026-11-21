@@ -56,11 +56,15 @@ def stack(tmp_path_factory):
             "users": 5,
             "components": ["platform", "mcp"],
             "mcp": {"admins": ["ada@example.com"]},
-            "areas": {"finance": {"access": {"groups": ["finance"]}}},
+            "areas": {
+                "finance": {"access": {"groups": ["finance"]}, "restricted_source_layers": True}
+            },
         }
     )
     with (
-        served.laptop_postgres(root, {"VECTEN_AREAS": "finance"}) as pg,
+        served.laptop_postgres(
+            root, {"VECTEN_AREAS": "finance", "VECTEN_SOURCE_LAYER_AREAS": "finance"}
+        ) as pg,
         pytest.MonkeyPatch.context() as monkeypatch,
     ):
         pg.sql(SEED, user="loader")
@@ -103,6 +107,21 @@ def test_an_area_grant_opens_both_schemas_to_the_group_only(stack):
     assert granted["ok"], granted
     assert reads(stack, "finance") == (["core_finance", "marts_finance"], list(RELATIONS))
     assert reads(stack, "analyst") == ([], [])
+
+
+def test_shared_staging_grant_does_not_reach_restricted_inputs_or_history(stack):
+    stack.admin(stack.ada, "grant", {"group": "default", "kind": "schema", "target": "staging"})
+    for schema in ("staging", "staging_finance", "snapshots_finance"):
+        stack.pg.sql(f"CREATE TABLE {schema}.ledger (amount int)", user="loader")
+        for role in ("analyst", "finance"):
+            expected = (schema == "staging") == (role == "analyst")
+            granted = stack.pg.sql(
+                "SELECT has_schema_privilege(%s, %s, 'USAGE') AND "
+                "has_table_privilege(%s, %s, 'SELECT')",
+                params=(role, schema, role, f"{schema}.ledger"),
+            )[0][0]
+            assert granted is expected, (role, schema)
+    stack.admin(stack.ada, "revoke", {"group": "default", "kind": "schema", "target": "staging"})
 
 
 def test_a_rebuilt_mart_is_readable_by_the_group_and_refused_for_default_before_reconciling(

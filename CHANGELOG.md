@@ -5,6 +5,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
+- An area can opt into restricted staging and snapshot schemas. Existing area grants cover those layers once enabled and models are explicitly placed there (#135). Snowflake projects running version 6 of the access procedures only need to rerun the provisioner script if they opt in. Run it again when the opted-in areas change.
+
 ## [0.1.1] - 2026-11-18
 
 ### Added
