@@ -36,3 +36,10 @@ available to both commands that replay input samples.
 - **WHEN** input recording succeeds with zero output rows and there is no prior output fixture
 - **THEN** the input fixture verifies that transformation offline with zero expected rows
 - **AND** an empty refresh of an existing output fixture preserves its rows and companion files
+
+#### Scenario: A connector dependency is a registered extension
+
+- **WHEN** generated CI resolves a dependency for input replay
+- **THEN** direct, transitive and build dependencies on registered local packages resolve from the checkout
+- **AND** a registered Git package or a private index requirement cannot fall back to a public index
+- **AND** connectors with only output fixtures do not need connector dependency installation

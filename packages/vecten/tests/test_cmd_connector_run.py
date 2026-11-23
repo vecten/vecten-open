@@ -341,18 +341,22 @@ def test_input_reader_shared_by_parent_and_child_reports_supported_scope(invoke,
 
 
 def test_ci_connector_requirements_use_declarations_and_available_pins(project):
-    from vecten.connectors.ci_requirements import connector_requirements
+    from vecten.connectors.ci_requirements import connector_environment
     from vecten_shared.output import Failure
 
     config = load_config(project)
     config.connector("demo").dependencies = ["sample-sdk[http]>=1.0", "another>=2"]
     save_config(project, config)
     (project / "requirements.lock").write_text("sample-sdk==1.2\nunrelated==1.0\n")
-    assert connector_requirements(project) == ["another>=2", "sample-sdk[http]==1.2"]
+    assert connector_environment(project) == ([], [])
+    inputs = project / "connectors/demo/fixtures/inputs"
+    inputs.mkdir()
+    (inputs / "people.json").touch()
+    assert connector_environment(project) == (["another>=2", "sample-sdk[http]==1.2"], [])
     config.connector("demo").dependencies = ["--invalid"]
     save_config(project, config)
     with pytest.raises(Failure):
-        connector_requirements(project)
+        connector_environment(project)
 
 
 def test_empty_input_recording_preserves_paired_fixtures(invoke, project, tmp_path, monkeypatch):
@@ -381,3 +385,87 @@ def test_empty_input_recording_preserves_paired_fixtures(invoke, project, tmp_pa
     result = invoke(*command)
     assert result.exit_code == 0, result.stdout
     assert {path: path.read_bytes() for path in fixtures.rglob("*") if path.is_file()} == previous
+
+
+def test_input_replay_keeps_local_and_git_package_sources(project, tmp_path):
+    import subprocess
+    from zipfile import ZipFile
+
+    from vecten import git_extensions, in_repo, locking
+    from vecten.connectors.ci_requirements import connector_environment
+    from vecten_shared.extension_record import GitOrigin
+    from vecten_shared.output import Failure
+
+    inputs = project / "connectors/demo/fixtures/inputs"
+    inputs.mkdir()
+    (inputs / "people.json").touch()
+    config = load_config(project)
+    config.extensions = ["acme-core", "acme-sdk"]
+    config.connector("demo").dependencies = ["Acme.SDK>=1"]
+    save_config(project, config)
+    local = project / "extensions/acme-sdk"
+    local.mkdir(parents=True)
+    (local / "pyproject.toml").write_text(
+        '[project]\nname="acme-sdk"\nversion="1.0"\ndependencies=["acme-core==1"]\n'
+        '[build-system]\nrequires=[]\nbuild-backend="test_backend"\n'
+    )
+    git = GitOrigin("https://example.invalid/acme/core.git", "a" * 40, None, None, False)
+    pin = git_extensions.line_for("acme-core", (), git) + "\n"
+    record = {
+        "acme-core": locking.Extension("1", (), git=git, source_sha256="a" * 64),
+        "acme-sdk": locking.Extension(
+            "1",
+            (),
+            source_path="extensions/acme-sdk",
+            metadata_sha256=in_repo.check(project, str(local)).metadata_sha256,
+        ),
+    }
+    (project / locking.RECORD_FILE).write_text(locking.record_text(record))
+    (project / locking.PINS_FILE).write_text(pin + "./extensions/acme-sdk\n")
+    for name in locking.components(config):
+        (project / locking.LOCK_FILES[name]).write_text(pin)
+    requirements, sources = connector_environment(project)
+    assert sources == ["acme-core<0,>=0", f"acme-sdk @ {local.as_uri()}"]
+    # A same-named wheel is available. Only the constrained run must refuse the local
+    # package's transitive dependency on the unavailable Git source.
+    wheel = tmp_path / "acme_core-1-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "acme_core-1.dist-info/METADATA",
+            "Metadata-Version: 2.3\nName: acme-core\nVersion: 1\n",
+        )
+        archive.writestr("acme_core-1.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
+        archive.writestr("acme_core-1.dist-info/RECORD", "")
+    req_file = tmp_path / "requirements.txt"
+    constraints = tmp_path / "constraints.txt"
+    req_file.write_text("\n".join(requirements) + "\n")
+    command = [
+        "uv",
+        "pip",
+        "compile",
+        "--offline",
+        "--no-index",
+        "--find-links",
+        str(tmp_path),
+        "--cache-dir",
+        str(tmp_path / "cache"),
+        "--constraints",
+        str(constraints),
+        str(req_file),
+    ]
+    constraints.write_text(sources[1] + "\n")
+    control = subprocess.run(command, capture_output=True, text=True)
+    assert control.returncode == 0, control.stderr
+    assert "acme-core==1" in control.stdout
+    constraints.write_text("\n".join(sources) + "\n")
+    blocked = subprocess.run(command, capture_output=True, text=True)
+    assert blocked.returncode != 0 and "acme-core" in blocked.stderr, blocked.stderr
+
+    config.connector("demo").dependencies = ["Acme_Core"]
+    save_config(project, config)
+    with pytest.raises(Failure, match="registered Git extension"):
+        connector_environment(project)
+    config.packages.private_index = True
+    save_config(project, config)
+    with pytest.raises(Failure, match="private package index"):
+        connector_environment(project)

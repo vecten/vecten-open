@@ -70,7 +70,9 @@ regular sync, `live_inputs` calls the callback. During replay, Vecten supplies t
 Each selected object can replay one call to `inputs(...)`, including all pages from that call. For example, a `deals` resource may
 first read a parent `companies` resource to get company IDs, then fetch deals for each ID.
 If both resources call `inputs(...)`, record the transformed deal rows with
-`vecten connector run demo --object deals --record` instead.
+`vecten connector run demo --object deals --record`. The generated connector test checks
+that the saved rows load. Keep using `--record` alone to refresh deals. The input replay
+steps below apply to a single reader.
 
 1. Run `vecten connector run demo --object people --record --record-inputs` against a
    source whose original payloads are safe to save. A sample holds up to 200 records. A list page contributes its row count, and Vecten
@@ -80,8 +82,12 @@ If both resources call `inputs(...)`, record the transformed deal rows with
    `redact_fixture`, because that hook operates on transformed output.
 2. From the project root, run `pytest connectors/demo/test_demo.py` (the test generated
    by `vecten connector add`) or `vecten dbt-build-local`. Generated CI installs the connector
-   dependencies declared in `vecten.toml` for pytest and the local dbt build. Both pass the
-   inputs through the current connector with Python network access blocked. Changed row
+   dependencies declared in `vecten.toml` for connectors with input fixtures. It resolves
+   registered in-project packages from their checked-in paths. If replay needs a registered
+   Git package, directly or through another dependency, or needs the project's private index,
+   run input replay locally in the project environment. Generated CI has no credentials for
+   those sources. Output-only fixtures work without installing connector dependencies.
+   For input fixtures, both pytest and the local dbt build pass the inputs through the current connector with Python network access blocked. Changed row
    values, counts or order fail the check. Derive timestamps and IDs from the saved input
    if the transformation needs to reproduce them during replay. In the example, reading the wrong key fails even
    though the saved output still contains a valid `user_id`.

@@ -13,10 +13,10 @@ jobs:
       - run: python -c "import tomllib; tomllib.load(open('vecten.toml','rb'))"
       - run: uvx ruff@[[ ruff_version ]] check .
 [% if 'platform' in components %]      - name: Read connector dependencies for offline replay
-        run: uv run --no-project --with "vecten==[[ vecten_version ]]" python -m vecten.connectors.ci_requirements > "$RUNNER_TEMP/connector-requirements.txt"
+        run: uv run --no-project --with "vecten==[[ vecten_version ]]" python -m vecten.connectors.ci_requirements "$RUNNER_TEMP"
       # pytest exits 5 when it collects no test, which is every project before its first connector.
-      - run: uvx --with "vecten==[[ vecten_version ]]" --with-requirements "$RUNNER_TEMP/connector-requirements.txt" pytest connectors -q -p no:cacheprovider || test $? -eq 5
+      - run: uvx --with "vecten==[[ vecten_version ]]" --with-requirements "$RUNNER_TEMP/connector-requirements.txt" --constraints "$RUNNER_TEMP/connector-sources.txt" --build-constraints "$RUNNER_TEMP/connector-sources.txt" pytest connectors -q -p no:cacheprovider || test $? -eq 5
 [% endif %]      - run: uvx --with "vecten==[[ vecten_version ]]" vecten mcp validate
 [% if 'platform' in components %]      - run: docker info
-      - run: uvx --with "vecten==[[ vecten_version ]]" --with-requirements "$RUNNER_TEMP/connector-requirements.txt" vecten dbt-build-local --check
+      - run: uvx --with "vecten==[[ vecten_version ]]" --with-requirements "$RUNNER_TEMP/connector-requirements.txt" --constraints "$RUNNER_TEMP/connector-sources.txt" --build-constraints "$RUNNER_TEMP/connector-sources.txt" vecten dbt-build-local --check
 [% endif %]
