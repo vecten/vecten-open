@@ -230,7 +230,7 @@ volumes:
     driver: local
     driver_opts:
       device: tmpfs
-      o: uid=50000,mode=0700
+      o: uid=50000,mode=0700,size=64k
       type: tmpfs
   airflow-logs: {}
   mcp-secrets: {}

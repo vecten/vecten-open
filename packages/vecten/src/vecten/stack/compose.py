@@ -560,7 +560,7 @@ def generate_compose(
                 "driver_opts": {
                     "type": "tmpfs",
                     "device": "tmpfs",
-                    "o": f"uid={os.getuid()},mode=0700",
+                    "o": f"uid={os.getuid()},mode=0700,size=64k",
                 },
             }
             services["airflow-auth"] = {
