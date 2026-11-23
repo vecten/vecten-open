@@ -55,7 +55,7 @@ class Leftovers:
         assert names.authentication_policy is not None  # Only shared layouts have leftovers.
         policy = ".".join(
             _quoted(part)
-            for part in (names.database, names.access_schema, names.authentication_policy)
+            for part in (names.database.upper(), names.access_schema, names.authentication_policy)
         )
         return [
             *(f"DROP {kind} {_quoted(name)};" for kind, name in self.owned),

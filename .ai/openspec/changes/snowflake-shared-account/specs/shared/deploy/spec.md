@@ -131,3 +131,4 @@ When the warehouse is Snowflake, `deploy` SHALL also apply a Snowflake module th
 
 - **WHEN** `destroy --env dev --confirm dev --delete-data dev` runs with a shared account while `PROVISIONER_ACME_DEV` owns the user `JANE_DOE_ACME_DEV`
 - **THEN** it exits non-zero before any Terraform runs, and prints a `DROP USER "JANE_DOE_ACME_DEV"` and the statements that drop `dev`'s provisioner user, its database-qualified MCP sign-in policy and then its integration, for an administrator to run in order
+- **AND** it explains that an ACCOUNTADMIN who confirms the environment database was already dropped skips only the policy drop and continues with the integration

@@ -1113,7 +1113,9 @@ def _shared_leftovers(
             f"users or roles {names.provisioner_role} owns, its user or the integration "
             f"{names.integration} stay in Snowflake, and the users' sign-in policies live in "
             "the database --delete-data drops. The MCP sign-in policy references the integration "
-            "and must be dropped before it. Nothing was destroyed. "
+            "and must be dropped before it. If an ACCOUNTADMIN has confirmed that the "
+            f"database {names.database} was already dropped, skip only the DROP AUTHENTICATION "
+            "POLICY statement. Nothing was destroyed. "
             "Have an ACCOUNTADMIN run, in order:\n" + "\n".join(statements),
             details={"statements": statements},
         )

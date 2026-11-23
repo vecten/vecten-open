@@ -726,6 +726,7 @@ def test_data_deletion_is_refused_while_the_provisioner_owns_a_user(invoke, snow
         'DROP AUTHENTICATION POLICY IF EXISTS "ACME_PROD"."VECTEN_ACCESS"."MCP_SIGN_IN";',
         "DROP SECURITY INTEGRATION IF EXISTS EXTERNAL_OAUTH_ACME_PROD;",
     ]
+    assert "skip only the DROP AUTHENTICATION POLICY statement" in data["error"]
     assert data["error"].endswith("\n".join(statements))
     assert load_config(snowflake).environments["prod"].deployed_commit == COMMIT
 
