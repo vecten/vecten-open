@@ -35,6 +35,7 @@ from vecten_shared.records import read_record, remove_record, write_record, writ
 from vecten_shared.services import check_bindings
 
 PUBLISHED_REGISTRY = "ghcr.io/vecten"
+PUBLISHED_IMAGES_HINT = f"Use VECTEN_IMAGE_REGISTRY={PUBLISHED_REGISTRY} for published images."
 NO_LOCAL_IMAGES_HINT = (
     "no local base images found; build them with `vecten dev build-images` "
     "from a vecten-open checkout"
@@ -196,6 +197,14 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
         passwords = {_env(env, "AIRFLOW_ADMIN_USER"): _env(env, "AIRFLOW_ADMIN_PASSWORD")}
         write_text_atomic(stack_dir / "airflow_passwords.json", json.dumps(passwords), mode=0o600)
     registry = _registry(runner, components)
+    base_images = {
+        component: {
+            "image": base_image(kind, registry),
+            "source": "registry" if registry else "local",
+        }
+        for component, kind in RUNTIME
+        if component in components
+    }
     from vecten import git_extensions
 
     # Kept under the stack directory between runs, re-fetched once its hash stops matching.
@@ -211,7 +220,11 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
     result = runner.compose(project_root, _compose_files(project_root), profiles, args)
     if result.returncode != 0:
         message = f"docker compose up failed: {result.stderr[-2000:]}"
-        if registry == PUBLISHED_REGISTRY and not os.environ.get("VECTEN_IMAGE_REGISTRY"):
+        references = ", ".join(base["image"] for base in base_images.values())
+        message += f" (selected base images: {references})"
+        if not registry:
+            message += f"; {PUBLISHED_IMAGES_HINT}"
+        elif registry == PUBLISHED_REGISTRY and not os.environ.get("VECTEN_IMAGE_REGISTRY"):
             message += f"; {NO_LOCAL_IMAGES_HINT}"
         raise Failure(ExitCode.TOOL_FAILED, message)
     states: dict[str, str] = {}
@@ -258,14 +271,7 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
         services=states,
         limits=limits,
         routes=routes,
-        base_images={
-            component: {
-                "image": base_image(kind, registry),
-                "source": "registry" if registry else "local",
-            }
-            for component, kind in RUNTIME
-            if component in components
-        },
+        base_images=base_images,
     )
 
 

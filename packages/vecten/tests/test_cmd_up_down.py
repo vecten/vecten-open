@@ -184,11 +184,16 @@ def test_up_docker_daemon_down(invoke, workdir, monkeypatch):
 
 
 def test_up_compose_failure_is_tool_failed(invoke, workdir, monkeypatch):
+    monkeypatch.delenv("VECTEN_IMAGE_REGISTRY", raising=False)
     invoke("init", "p", *LOCAL, "--json")
     monkeypatch.chdir(workdir / "p")
     monkeypatch.setattr(up_mod, "get_runner", lambda: FakeDocker(fail_up=True))
     r = invoke("up", "--json")
-    assert r.exit_code == 5 and "nginx" in json.loads(r.stdout)["error"]
+    assert r.exit_code == 5
+    error = json.loads(r.stdout)["error"]
+    assert "nginx" in error
+    assert "vecten-airflow:" in error and "vecten-mcp:" in error
+    assert "VECTEN_IMAGE_REGISTRY=ghcr.io/vecten" in error
 
 
 def test_down_stops_running_stack(invoke, workdir, fake, monkeypatch):

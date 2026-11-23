@@ -5,7 +5,7 @@ import typer
 from vecten.cli.context import CliContext
 from vecten.cli.runner import JsonFlag, run_command
 from vecten.stack import up as up_mod
-from vecten.stack.up import PUBLISHED_REGISTRY
+from vecten.stack.up import PUBLISHED_IMAGES_HINT
 from vecten_shared.output import Result
 
 
@@ -21,7 +21,7 @@ def register(app: typer.Typer) -> None:
             ]
             hint = None
             if any(base["source"] == "local" for base in res.base_images.values()):
-                hint = f"Use VECTEN_IMAGE_REGISTRY={PUBLISHED_REGISTRY} for published images."
+                hint = PUBLISHED_IMAGES_HINT
                 lines.append(hint)
             lines += [f"{key}: {value}" for key, value in res.airflow_api.items()]
             if res.airflow_api:

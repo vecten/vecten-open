@@ -13,3 +13,8 @@ A successful `vecten up` SHALL report the base image reference and source (local
 
 - **WHEN** the stack uses the published or an explicitly configured registry
 - **THEN** the output contains the exact registry references and lists only locally active components
+
+#### Scenario: Compose fails to start the stack
+
+- **WHEN** Docker Compose reports a startup failure
+- **THEN** the error includes its diagnostic and the selected base references, with the published registry override if local builds were selected
