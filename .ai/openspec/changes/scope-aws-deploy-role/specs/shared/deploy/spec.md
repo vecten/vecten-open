@@ -25,4 +25,14 @@ AWS bootstrap SHALL grant only the non-IAM permissions needed for this environme
 
 - **WHEN** an authorized environment undergoes a host replacement, adopts an operator-restored database and is later destroyed through the operator runbook
 - **THEN** the scoped deploy session can reconcile and ship after each infrastructure change using its existing conditioned IAM actions to update the host policy for the restored database, with no increase in the deploy role’s own permissions
+- **AND** if the boundary uses exact master secret ARNs, the ship waits for the operator to verify the new ARN at bootstrap and remove the retired ARN
 - **AND** teardown preserves the state bucket and retained snapshots, and the sibling environment remains intact
+
+### Requirement: A host remains confined to its environment when CI updates its IAM policy
+
+The operator-managed host permissions boundary SHALL limit master-secret reads to this environment’s managed databases and prevent writes to unrelated log groups. Only operator-verified ownership or secret ARNs SHALL authorize master reads.
+
+#### Scenario: Broad host inline policy
+
+- **WHEN** CI updates an environment host's inline policy to request access to both its own and a sibling environment's resources
+- **THEN** the effective host session remains unable to read the sibling's database master or write its log group

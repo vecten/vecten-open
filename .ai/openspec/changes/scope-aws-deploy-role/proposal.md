@@ -4,7 +4,7 @@ The GitHub Actions deploy role for one Vecten environment currently has AWS's `P
 
 ## What Changes
 
-This design proposes replacing that managed-policy attachment at operator bootstrap. It preserves the existing GitHub trust, IAM rules for host roles, and separate plan role. A fresh install and a rerun on an existing role must converge on the same scoped permissions. The current dedicated-account guidance applies while the implementation and live verification are pending.
+This design proposes replacing that managed-policy attachment at operator bootstrap. It also narrows the operator-owned permissions boundary on host roles, which limits the privileges Terraform can grant those roles. It preserves the GitHub trust, conditioned IAM rules for editing host roles, and separate plan role. A fresh install and a rerun on an existing role must converge on the same scoped permissions. The current dedicated-account guidance applies while the implementation and live verification are pending.
 
 ## Impact
 
