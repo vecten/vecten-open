@@ -299,6 +299,19 @@ def test_reconcile_reports_a_binding_that_gained_unsafe_grants_until_corrected()
     assert not access.health()["failures"]
 
 
+def test_reconciliation_waits_for_binding_procedure_upgrade():
+    adapter = Adapter()
+    adapter.recheck_bindings = True
+    adapter.required_access_version = ACCESS_VERSION + 1
+    access = service(adapter)
+    access.create_group("finance")
+    access.bind("finance", "client_reader")
+    adapter.ops.clear()
+    assert access.reconcile()["complete"]
+    assert access.health()["outdated"]["installed"] == ACCESS_VERSION
+    assert all(op[0] != "check" for op in adapter.ops)
+
+
 def test_a_role_nested_under_a_group_role_other_than_its_binding_is_listed():
     adapter = Adapter()
     access = service(adapter)

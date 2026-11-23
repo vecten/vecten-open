@@ -6,6 +6,12 @@ In a shared Snowflake account the server SHALL verify a candidate's current and 
 through its role hierarchy before binding or confirming it. It SHALL refuse a binding that reaches
 a project environment role or a sibling environment's database, or whose grants it cannot verify.
 
+#### Scenario: A role inherits the account-wide PUBLIC baseline
+
+- **WHEN** every protected grant in the listing comes exclusively through the PUBLIC role
+- **THEN** the binding check accepts the role
+- **AND** the same grant reached through an explicit candidate membership is checked
+
 #### Scenario: An inherited role can read another environment
 
 - **WHEN** a candidate role for a dev group inherits a grant on the project's production database

@@ -1105,6 +1105,7 @@ def test_shared_binding_inspects_inherited_grants(privilege, kind, name, future,
         "grant_on" if future else "granted_on": kind,
         "name": name,
         "grantee_name": "NESTED_READER",
+        "grant_to" if future else "granted_to": "ROLE",
     }
     output = _run(
         handler, ["TARGET"], ["FINANCE"], visible=True, **{"future" if future else "grants": [row]}
@@ -1114,6 +1115,39 @@ def test_shared_binding_inspects_inherited_grants(privilege, kind, name, future,
     assert 'SHOW GRANTS TO ROLE "FINANCE" INCLUDE HIERARCHY' in output["statements"]
     if future or expected == "ok":
         assert 'SHOW FUTURE GRANTS TO ROLE "FINANCE" INCLUDE HIERARCHY' in output["statements"]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_binding_check_excludes_grants_reached_only_through_public(explicit):
+    sql = shared_script()
+    handler = read_grant_body(sql[sql.index("CHECK_BINDING(TARGET VARCHAR)") :])
+    membership = dict(privilege="USAGE", granted_on="ROLE", name="CLIENT_BASE", granted_to="ROLE")
+    grants = [
+        dict(
+            privilege="BIND SERVICE ENDPOINT",
+            granted_on="ACCOUNT",
+            name="ACCOUNT",
+            granted_to="ROLE",
+            grantee_name="PUBLIC",
+        ),
+        dict(membership, grantee_name="PUBLIC"),
+    ]
+    if explicit:
+        grants.append(dict(membership, grantee_name="FINANCE"))
+    future = [
+        dict(
+            privilege="SELECT",
+            grant_on="TABLE",
+            name="ACME_PROD.MARTS.<TABLE>",
+            grant_to="ROLE",
+            grantee_name="CLIENT_BASE",
+        )
+    ]
+    output = _run(handler, ["TARGET"], ["FINANCE"], visible=True, grants=grants, future=future)
+    assert output["error"] is None
+    assert output["value"] == (
+        "the role hierarchy reaches another environment database ACME_PROD" if explicit else "ok"
+    )
 
 
 def test_binding_check_refuses_partial_visibility_and_is_only_installed_in_shared_accounts():

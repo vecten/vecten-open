@@ -769,7 +769,7 @@ class AccessService:
                         else:
                             record = dict(row, source=done, granted=done, confirmed=kept)
                         self.state.put("applied_grants", key, record)
-            report["missing_bindings"], report["unbound_roles"] = self._bindings(failures)
+            report["missing_bindings"], report["unbound_roles"] = self._bindings(failures, outdated)
         report["unbuilt"], unlisted = self._unbuilt(outdated)
         health = {"checked_at": time.time(), "failures": failures, **report}
         if unlisted:
@@ -780,7 +780,7 @@ class AccessService:
         self.admit()
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
-    def _bindings(self, failures):
+    def _bindings(self, failures, outdated):
         """Confirmed bindings whose grant a group's role no longer holds, and every role
         nested under a group's role other than its confirmed binding."""
         missing, unbound = [], []
@@ -791,7 +791,7 @@ class AccessService:
                 continue
             binding = bindings.get(group) or {}
             bound = binding.get("bound_role") if binding.get("confirmed") else None
-            if binding and getattr(self.adapter, "recheck_bindings", False):
+            if binding and getattr(self.adapter, "recheck_bindings", False) and not outdated:
                 target = binding["bound_role"]
                 try:
                     self._check_bound(target)
