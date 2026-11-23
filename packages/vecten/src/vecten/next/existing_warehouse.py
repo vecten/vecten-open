@@ -48,8 +48,9 @@ def script_runs(root: Path, config: VectenConfig, env: str) -> list[tuple[int, l
     for name in dict.fromkeys([env, *names]):
         facts = config.environments.get(name) or EnvironmentFacts()
         record = read_record(root, f"provisioner-{name}") or {}
-        if facts.provisioner_script_run:
+        if facts.provisioner_script_run and (facts.access_version or not record.get("confirmed")):
             runs.append((facts.access_version or 1, facts.access_source_areas or []))
+            continue
         if record.get("confirmed"):
             version = record.get("access_version")
             runs.append(
@@ -70,7 +71,9 @@ def access_rerun_item(root: Path, config: VectenConfig, env: str) -> Item | None
     if not runs:
         return None
     areas = source_layer_areas(config.areas)
-    version, installed = max(runs, key=lambda run: run[0])
+    # The confirmed facts for this environment travel with the project. A stale laptop
+    # record can describe an earlier installation from another checkout.
+    version, installed = runs[0]
     if version >= required_access_version(areas):
         if version < ACCESS_VERSION or installed == areas:
             return None

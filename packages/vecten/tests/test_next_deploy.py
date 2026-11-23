@@ -871,6 +871,25 @@ def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version
     assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
 
 
+def test_a_previous_local_confirmation_cannot_override_shipped_area_facts(snowflake_deploy_layer):
+    from vecten_shared.identity_setup import ACCESS_VERSION
+
+    root, config = snowflake_deploy_layer
+    facts = deployed(config).environments["prod"]
+    facts.provisioner_script_run = True
+    facts.access_version = 6
+    write_record(
+        root,
+        "provisioner-prod",
+        {
+            "confirmed": True,
+            "access_version": ACCESS_VERSION,
+            "access_source_areas": ["hr"],
+        },
+    )
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == OIDC
+
+
 def test_the_rerun_does_not_hold_back_the_other_post_deploy_items(snowflake_deploy_layer):
     root, config = snowflake_deploy_layer
     deployed(config).environments["prod"].provisioner_script_run = True
