@@ -131,3 +131,17 @@ def test_row_write_failure_restores_previous_schema(tmp_path, monkeypatch):
     assert path.read_text() == '{"old": true}\n'
     assert schema_path.read_text() == '{"old_schema": true}\n'
     assert set(tmp_path.iterdir()) == {path, schema_path}
+
+
+def test_schema_recording_error_identifies_the_object_and_preserves_rows(tmp_path):
+    import pytest
+    from dlt.common.schema import Schema
+
+    path = tmp_path / "orders.jsonl"
+    path.write_text('{"old": true}\n')
+    tee = record_to(path, table_name="missing_table")
+    tee({"id": 1})
+    with pytest.raises(ValueError, match=r"recording schema for .*orders.jsonl"):
+        tee.commit(Schema("demo"))
+    assert path.read_text() == '{"old": true}\n'
+    assert set(tmp_path.iterdir()) == {path}

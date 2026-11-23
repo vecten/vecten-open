@@ -72,7 +72,10 @@ class Recording:
             if schema is None:
                 write_text_atomic(self.path, rows)
                 return True
-            hints = recorded_schema(schema, self.row_tables, source_nesting)
+            try:
+                hints = recorded_schema(schema, self.row_tables, source_nesting)
+            except (DltException, ValueError, KeyError, TypeError) as exc:
+                raise ValueError(f"recording schema for {self.path}: {exc}") from exc
             hints_path = self.path.with_suffix(".schema.json")
             previous = hints_path.read_text(encoding="utf-8") if hints_path.exists() else None
             write_text_atomic(hints_path, json.dumps(hints, indent=2, default=str) + "\n")

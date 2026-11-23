@@ -19,12 +19,13 @@ where `vecten` runs as well, for example `uv tool install vecten --with <package
 <id>` prints its redacted log excerpt, and `skills/operate/SKILL.md` works through the list.
 
 `--record` reloads the object from the start so the fixture is complete; run it on the first sync or
-whenever the fixture should be refreshed. For each object that successfully loads records, it writes two files under
-`connectors/<source>/fixtures/`. The first 200 records at most are in `<object>.jsonl`.
+whenever the fixture should be refreshed. For each nonempty recording it writes two files
+under `connectors/<source>/fixtures/`. The first 200 records at most are in `<object>.jsonl`.
 The companion `<object>.schema.json` tells dlt how to load them, including which columns hold
 JSON, how deeply to expand nested records and which keys to use for merges. Commit both files
 together. A `.jsonl` file without a companion schema still loads with dlt's default type
-inference. Run `vecten connector run <source> --record` to capture its schema.
+inference. If replay reports an incompatible schema, run
+`vecten connector run <source> --object <object> --record` to refresh both files.
 
 The test `connectors/<source>/test_<source>.py` replays fixtures into DuckDB with the network
 blocked and is skipped until fixtures exist. That test and
