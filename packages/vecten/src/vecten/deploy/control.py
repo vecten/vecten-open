@@ -484,7 +484,7 @@ def _layout_recovery(changes: list[dict], config: VectenConfig, env: str) -> str
             if base:
                 return (
                     f"To keep these shared names, set snowflake_shared_account = true and "
-                    f'snowflake_base = "{base}" under {table}, restore the warehouse base to '
+                    f'snowflake_base = "{base}" under {table}, set the [warehouse] database to '
                     f"{base}, and push."
                 )
     return (
