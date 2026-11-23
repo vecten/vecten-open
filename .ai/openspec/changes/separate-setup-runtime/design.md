@@ -4,7 +4,7 @@
 
 ## Release baseline
 
-Traced at `90a4c33` on `release/0.1.2`. On November 20, the eight preceding review PRs (#140, #141 and #143–148) were all open against that head. In particular, test the metadata guard against the network layout that actually lands from the [service bridge isolation PR](https://github.com/vecten/vecten-open/pull/145). Neither the Airflow changes in #147 nor the Snowflake changes in #148 are prerequisites. [Release commit](https://github.com/vecten/vecten-open/commit/90a4c33f69dcc4e63f0d9f75d5bb123f3b2ff1eb)
+Traced at `90a4c33` on `release/0.1.2`. Test the metadata guard against the network layout that actually lands from the [service bridge isolation PR](https://github.com/vecten/vecten-open/pull/145). Neither the Airflow changes in #147 nor the Snowflake changes in #148 are prerequisites. [Release commit](https://github.com/vecten/vecten-open/commit/90a4c33f69dcc4e63f0d9f75d5bb123f3b2ff1eb)
 
 | Phase | AWS today | Scaleway today |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ The CLI ships the setup host first. Here, the platform component runs Airflow an
 
 ### AWS credential delivery
 
-Keep the host profile for SSM and agent work. Only the selected setup host gets the exact master ARNs and initialization grants. Create a separate runtime role for each active host layout, with a runtime permissions ceiling excluding RDS masters, initialization, SSM, IAM and role assumption. Have **operator bootstrap** own those runtime roles and ceilings. A runtime role trusts its environment's exact host role (account principal conditioned on its exact role ARN, so bootstrap can precede instance creation). Add `sts:AssumeRole` for that runtime role alone to both the host's inline policy and its bootstrap-managed boundary. Runtime roles sit outside the deploy role's enumerated manageable/passable host role names. [Current role and boundary rules](../../../../packages/vecten/src/vecten/deploy/aws/bootstrap.py)
+Keep the host profile for SSM and agent work. Only the selected setup host gets the exact master ARNs and initialization grants. Its operator-managed permissions boundary must also cap master reads to that environment even if CI changes the host's inline policy. Verify this ceiling together with the [deploy-role design](https://github.com/vecten/vecten-open/pull/150). Create a separate runtime role for each active host layout, with a runtime permissions ceiling excluding RDS masters, initialization, SSM, IAM and role assumption. Have **operator bootstrap** own those runtime roles and ceilings. A runtime role trusts its environment's exact host role (account principal conditioned on its exact role ARN, so bootstrap can precede instance creation). Add `sts:AssumeRole` for that runtime role alone to both the host's inline policy and its bootstrap-managed boundary. Runtime roles sit outside the deploy role's enumerated manageable/passable host role names. [Current role and boundary rules](../../../../packages/vecten/src/vecten/deploy/aws/bootstrap.py)
 
 The agent also uses runtime authority when resolving secret names requested by a project or extension. A root-owned host service uses the AWS Security Token Service (STS) to renew a short-lived runtime session before expiry. It atomically replaces a file in a dedicated directory on tmpfs. Mount that **directory** read-only into the Airflow and MCP consumers so replacement is visible to long-lived clients. A read-only SDK profile uses `credential_process` to read the versioned JSON response containing the access key, secret, session token and expiration. Restrict the directory to the intended container users and host root. Do not pass static credentials in Compose or send the session to proxy, build or extension containers. On boot, populate tmpfs before starting consumers. Retry renewal with a bounded delay, report the expiration without values and fail closed at expiry. Test the actual cached boto3 clients and Airflow log handler across renewal. [AWS process credential format](https://docs.aws.amazon.com/sdkref/latest/guide/feature-process-credentials.html) · [STS sessions](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
 
@@ -43,6 +43,34 @@ Bootstrap creates one additional setup IAM application and expiring key for the 
 Keep the new key in a separate deploy-scope secret. Deliver it only to the selected setup VM via a second entry, `vecten-setup-key`, outside Terraform. Install a root-only metadata reader and block container metadata **before** delivery, including on existing servers where cloud-init no longer runs. Persist the setup key separately with mode 0600 in a root-only directory outside every build context, mount and release. Only initialization and setup select this backend. Resolve all Compose, connector and extension secret requests through the runtime backend, including on the setup host. Keep the watcher, boot, rollback, S3 signing and Airflow connection on the runtime key. Keep both copies of the stdlib Python 3.9 agent identical.
 
 Deliver and acknowledge each key independently, binding the receipt to purpose, server ID, key ID and a fresh delivery nonce. Have the watcher authenticate the setup receipt with the newly persisted setup key (HMAC over those fields) and transport it with the runtime key. Deploy verifies it using the deploy-scope copy. This prevents another writer of the component bucket prefix from confirming setup-key receipt. Persist the verified receipt in deploy-only storage. Bootstrap matches its purpose, server ID and successor key ID against the current deployment before retiring the predecessor. Reuse the existing 30-day rotation window, retain a prior key until its own successor is confirmed, and force recreation of containers that hold the old runtime key. Delete **both** entries on success and handled failure. After cancellation, remove leftovers before apply, refresh or destroy, and refuse refresh while either entry is present. Redact both pairs from errors. [Current placement and cleanup](../../../../packages/vecten/src/vecten/deploy/scaleway/ship.py)
+
+## Why keep setup authority on one host between ships?
+
+The host runs database setup on each content ship. On Scaleway the watcher can receive a
+ship after a delay, retry it, or receive a pointer back to an older release. On AWS the
+deploy job sends a command through SSM. The proposed design lets both paths use the same
+setup procedure without giving an ordinary ship permission to change IAM policies or
+deliver an administrator credential. A normal boot does not require database setup.
+Persisting authority is a trade-off for independent ship retries, not a boot requirement.
+Host root on the selected setup VM can read this environment's master between ships.
+Workload isolation and limiting the host to its own environment's master secrets are
+therefore both acceptance requirements.
+
+The following alternatives change who must participate in a ship:
+
+- **Deliver setup authority per ship.** The job would need a separate authorized handoff
+  and expiry on every attempt. Detaching a policy or deleting a key after success alone
+  leaves interrupted attempts exposed. Reconsider this design if the ship protocol gains
+  single-use, expiring setup authorization that survives a retry without granting CI
+  general policy-editing rights.
+- **Run setup off the VM.** A one-shot job with a private route to each database could
+  own setup. It would need orchestration on both clouds, a completion signal before
+  starting the workload and a recovery path for a failed setup. This remains an option
+  if the selected host cannot isolate credentials from its workloads.
+- **Expose runtime credentials over HTTP on AWS.** The SDK could renew credentials
+  from a host endpoint. That endpoint would need to authenticate the intended container
+  and refuse requests from builds and other bridges. A read-only directory mounted only
+  into authorized containers uses the same delivery boundary before and after renewal.
 
 ## Existing environments and rollback
 
