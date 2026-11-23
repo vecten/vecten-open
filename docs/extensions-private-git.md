@@ -71,7 +71,13 @@ source. Other dependencies come from PyPI or the project's private index. Use th
 Suppose `acme-crm` imports `acme_core`. In `acme-crm/pyproject.toml`, put
 `dependencies = ["acme-core==1.2.0"]` under `[project]`. From the Vecten project, add
 the dependency first. Each `extension add` resolves the project immediately, so the recorded
-source for `acme-core` must already be present when you add `acme-crm`. For example:
+source for `acme-core` must already be present when you add `acme-crm`. If you reverse
+the order, the resolver looks for `acme-core==1.2.0` on the configured package index.
+A matching name and version there can install an unrelated package. Removing the Git
+source from `vecten.toml` while a consumer still depends on it has the same effect on
+the next lock. Keep the source registered for as long as any consumer needs it.
+
+Add the two extensions in this order:
 
 ```sh
 vecten extension add 'acme-core @ git+https://github.com/acme/extensions.git@v1.2.0#subdirectory=extensions/acme-core'
