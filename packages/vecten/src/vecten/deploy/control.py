@@ -512,14 +512,20 @@ def apply_environment(
             changes = terraform_plan_changes(
                 terraform, root.root_dir, planned.plan_file, env=root.env, secrets=root.secrets
             )
-            for resource in changes:
-                if resource.get("type") not in {
-                    "snowflake_database",
-                    "snowflake_warehouse",
-                    "snowflake_account_role",
-                    "snowflake_service_user",
-                }:
-                    continue
+            # Projects can add their own resources and modules to this root. Only the
+            # generated module's addresses carry Vecten's fixed or environment-specific names.
+            layout_changes = [
+                resource
+                for resource in changes
+                if resource["address"].partition("[")[0]
+                in {
+                    "module.snowflake.snowflake_database.this",
+                    "module.snowflake.snowflake_warehouse.this",
+                    "module.snowflake.snowflake_account_role.this",
+                    "module.snowflake.snowflake_service_user.loader",
+                }
+            ]
+            for resource in layout_changes:
                 change = resource["change"]
                 before, after = change.get("before"), change.get("after")
                 if before and after and before["name"] != after.get("name"):
@@ -527,7 +533,7 @@ def apply_environment(
                         ExitCode.REFUSED,
                         f"{resource['address']} would rename an existing Snowflake object "
                         f"from {before['name']} to {after.get('name')}. "
-                        f"{_layout_recovery(changes, plane.config(), env)} "
+                        f"{_layout_recovery(layout_changes, plane.config(), env)} "
                         "To change layouts, migrate as a new deployment. Nothing was applied.",
                     )
     outputs: EnvironmentOutputs | None = None

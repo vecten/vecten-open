@@ -403,14 +403,23 @@ def test_ci_refuses_a_layout_rename_from_terraform_state(
         "changes",
         [
             {
-                "address": 'module.warehouse.snowflake_account_role.this["LOADER"]',
+                "address": 'module.reporting.snowflake_account_role.this["LOADER"]',
+                "type": "snowflake_account_role",
+                "change": {
+                    "actions": ["no-op"],
+                    "before": {"name": "LOADER_WRONG_PROD"},
+                    "after": {"name": "LOADER_WRONG_PROD"},
+                },
+            },
+            {
+                "address": 'module.snowflake.snowflake_account_role.this["LOADER"]',
                 "type": "snowflake_account_role",
                 "change": {
                     "actions": ["update"],
                     "before": {"name": before},
                     "after": {"name": after},
                 },
-            }
+            },
         ],
     )
     result = invoke("deploy", "--env", "prod", "--json")
@@ -419,6 +428,31 @@ def test_ci_refuses_a_layout_rename_from_terraform_state(
     assert settings in doc(result)["error"]
     assert "[environments.prod]" in doc(result)["error"] and "push" in doc(result)["error"]
     assert "apply" not in FakeTerraform.commands()
+
+
+def test_ci_applies_project_snowflake_renames_alongside_first_deploy(
+    invoke, deploy_secrets, snowflake, monkeypatch
+):
+    changes = [
+        {
+            "address": "module.snowflake.snowflake_database.this",
+            "type": "snowflake_database",
+            "change": {"actions": ["create"], "before": None, "after": {"name": "ACME"}},
+        },
+        {
+            "address": "module.reporting.snowflake_database.this",
+            "type": "snowflake_database",
+            "change": {
+                "actions": ["update"],
+                "before": {"name": "REPORT"},
+                "after": {"name": "BI"},
+            },
+        },
+    ]
+    monkeypatch.setattr(FakeTerraform, "changes", changes)
+    result = invoke("deploy", "--env", "prod", "--json")
+    assert result.exit_code == 0, result.stdout
+    assert "apply" in FakeTerraform.commands()
 
 
 def test_snowflake_terraform_authenticates_from_the_deploy_secrets(

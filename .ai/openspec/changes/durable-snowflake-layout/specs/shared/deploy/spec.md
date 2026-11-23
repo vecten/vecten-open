@@ -4,7 +4,7 @@
 
 A Snowflake project SHALL choose, through `[warehouse] shared_account` in `vecten.toml`, whether its environments' Snowflake accounts may hold anything besides one environment; it SHALL default to `false`. `deploy` SHALL record the value an environment was first deployed with under `[environments.<env>]` as `snowflake_shared_account`, after the deploy workflow succeeds, leaving it unset on dispatch or workflow failure, read an environment with no record as deployed with `false`, and refuse in `deploy` and `ship`, naming the recorded value and the migration, an environment whose record differs from the setting, unless the setting is `true` and the recorded fixed environment's account holds no other environment of the project. `shared_account` SHALL be refused on a project without the `platform` component.
 
-Before applying any root, deploy SHALL refuse a saved plan that would rename existing Snowflake objects and explain how to record their existing layout.
+Before applying any root, deploy SHALL refuse a saved plan that would rename an existing database, warehouse, role, or loader user managed by the scaffolded Snowflake module and explain how to record its existing layout. Project-owned resources in the same root do not establish the Vecten layout.
 
 #### Scenario: Default
 
