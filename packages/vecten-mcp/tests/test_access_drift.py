@@ -8,7 +8,7 @@ import pytest
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.base import Absent
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, SOURCE_AREAS_VERSION
 
 
 def full(grant):
@@ -23,7 +23,7 @@ class Adapter:
     """Holds read grants and applies grants to them; a schema-level revoke, like READ_GRANT's,
     reaches only tables and views."""
 
-    def __init__(self, held=(), version=ACCESS_VERSION):
+    def __init__(self, held=(), version=SOURCE_AREAS_VERSION):
         self.held, self.version = set(held), version
         self.ops, self.reads = [], []
 

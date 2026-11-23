@@ -15,7 +15,7 @@ from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
 from vecten_mcp.warehouse.base import Absent, RoleExists
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, required_access_version
+from vecten_shared.identity_setup import GRANTS_VERSION, required_access_version
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
@@ -555,11 +555,12 @@ class AccessService:
 
     def _outdated(self):
         installed = self.adapter.access_version()
-        if installed < required_access_version(self.source_areas):
+        required = required_access_version(self.source_areas)
+        if installed < required:
             fix = OUTDATED_FIX if installed < GRANTS_VERSION else LISTING_FIX
             if installed >= GRANTS_VERSION and self.source_areas:
                 fix = "Rerun the provisioner script and confirm it to grant staging or snapshots."
-            return {"installed": installed, "required": ACCESS_VERSION, "fix": fix}
+            return {"installed": installed, "required": required, "fix": fix}
         return None
 
     def _apply(self, grant, source, allowed, done=None, missing=None, confirmed=None):

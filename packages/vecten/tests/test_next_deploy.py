@@ -847,7 +847,7 @@ def rerun_item(env="prod"):
 def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version_is_current(
     snowflake_deploy_layer,
 ):
-    from vecten_shared.identity_setup import ACCESS_VERSION
+    from vecten_shared.identity_setup import SOURCE_AREAS_VERSION
 
     root, config = snowflake_deploy_layer
     facts = deployed(config).environments["prod"]
@@ -862,7 +862,7 @@ def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version
 
     config.areas["finance"] = AreaDecl(restricted_source_layers=True)
     assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
-    facts.access_version = ACCESS_VERSION
+    facts.access_version = SOURCE_AREAS_VERSION
     facts.access_source_areas = ["finance"]
     config.areas["hr"] = AreaDecl(restricted_source_layers=True)
     assert "restricted source areas" in post_deploy_items(root, config, "prod", CLEAN)[0].title
@@ -872,7 +872,7 @@ def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version
 
 
 def test_a_previous_local_confirmation_cannot_override_shipped_area_facts(snowflake_deploy_layer):
-    from vecten_shared.identity_setup import ACCESS_VERSION
+    from vecten_shared.identity_setup import SOURCE_AREAS_VERSION
 
     root, config = snowflake_deploy_layer
     facts = deployed(config).environments["prod"]
@@ -883,7 +883,7 @@ def test_a_previous_local_confirmation_cannot_override_shipped_area_facts(snowfl
         "provisioner-prod",
         {
             "confirmed": True,
-            "access_version": ACCESS_VERSION,
+            "access_version": SOURCE_AREAS_VERSION,
             "access_source_areas": ["hr"],
         },
     )

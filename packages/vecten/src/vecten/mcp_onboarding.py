@@ -8,9 +8,9 @@ from vecten.mcp_url import mcp_url
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, load_config, save_config, source_layer_areas
 from vecten_shared.identity_setup import (
-    ACCESS_VERSION,
     introspection_document,
     provisioner_script,
+    required_access_version,
 )
 from vecten_shared.keypair import generate_one_line, load_private_key, public_body
 from vecten_shared.output import ExitCode, Failure
@@ -97,9 +97,9 @@ def setup_script(root, env, confirm=False, public_key=None):
         commands = [f"vecten secret set {name}{flag}" for name in provisioner_secret_names(config)]
     if confirm:
         # Only Snowflake's script installs access procedures that report a version.
-        installed = ACCESS_VERSION if config.warehouse.kind == "snowflake" else None
+        areas = source_layer_areas(config.areas) if config.warehouse.kind == "snowflake" else None
+        installed = required_access_version(areas) if areas is not None else None
         record = {"confirmed": True} | ({"access_version": installed} if installed else {})
-        areas = source_layer_areas(config.areas) if installed else None
         if installed:
             record["access_source_areas"] = areas
         write_record(root, f"provisioner-{env}", record)

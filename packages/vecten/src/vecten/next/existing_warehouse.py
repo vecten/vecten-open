@@ -7,7 +7,7 @@ from pathlib import Path
 from vecten.next.items import Item
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, VectenConfig, source_layer_areas
-from vecten_shared.identity_setup import ACCESS_VERSION, required_access_version
+from vecten_shared.identity_setup import required_access_version
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import read_record
 
@@ -75,7 +75,7 @@ def access_rerun_item(root: Path, config: VectenConfig, env: str) -> Item | None
     # record can describe an earlier installation from another checkout.
     version, installed = runs[0]
     if version >= required_access_version(areas):
-        if version < ACCESS_VERSION or installed == areas:
+        if installed == areas:
             return None
         return Item(
             "command",

@@ -261,7 +261,8 @@ ALTER USER {user} SET AUTHENTICATION POLICY {service};
 
 # The version the installed procedures must report for every feature this server uses; it
 # changes with their text, and an install that reports none is version 1.
-ACCESS_VERSION = 7
+ACCESS_VERSION = 6
+SOURCE_AREAS_VERSION = 9
 # The oldest version whose READ_GRANT and READ_GRANTS serve area grants and drift; one from
 # here to ACCESS_VERSION lacks only the listing of the modelled relations.
 GRANTS_VERSION = 5
@@ -269,7 +270,7 @@ GRANTS_VERSION = 5
 
 def required_access_version(source_areas):
     """Version 6 already serves all reads used without restricted source layers."""
-    return ACCESS_VERSION if source_areas else 6
+    return SOURCE_AREAS_VERSION if source_areas else ACCESS_VERSION
 
 
 def snowflake_access_helper(names, source_areas=()):
@@ -287,7 +288,7 @@ def snowflake_access_helper(names, source_areas=()):
         f"var loaderRole = {_baked(_name(names.loader_role))};\n"
         f"var suffix = {_baked(names.suffix)};\n"
         f"var sourceAreas = {_baked([area.upper() for area in source_areas])};\n"
-        f"var version = {ACCESS_VERSION};\n"
+        f"var version = {required_access_version(source_areas)};\n"
     )
     metadata_query = _baked(
         f"SELECT COUNT(*) FROM {_ident(database)}.INFORMATION_SCHEMA.TABLES "
