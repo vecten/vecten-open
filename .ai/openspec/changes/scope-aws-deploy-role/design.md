@@ -14,7 +14,8 @@ Have the operator's `vecten bootstrap --env <env>` derive policy documents from 
 
 ## Limit what CI can grant a host
 
-CI can update its own host's inline IAM policy and send commands to the host. Its
+The GitHub deploy role can update the inline policy of its environment’s EC2 host role
+and send commands to that host. Its
 effective reach therefore includes anything the operator-managed host permissions
 boundary allows. Change the boundary at bootstrap as part of the same migration.
 
@@ -26,10 +27,13 @@ boundary allows. Change the boundary at bootstrap as part of the same migration.
   actual authorization and ensure CI cannot change the ownership association. The
   existence of a tag in a listing does not establish that IAM enforces it.
 - **When ownership cannot be proved at request time**, bootstrap limits the boundary to
-  exact master secret ARNs. The operator verifies the instance identity and reads its
-  associated secret ARN from RDS metadata. CI-controlled Terraform outputs cannot
-  authorize a new ARN. On first creation, stop before database setup, show the operator
-  the bootstrap command, and resume the ship once the ARN is authorized. After a restore,
+  exact master secret ARNs. The operator compares the DB identifier against the project and environment’s
+  [configured state and warehouse identifiers](../../../../terraform/aws/postgres.tf)
+  in the expected AWS account and region, and reads its secret ARN from RDS metadata. CI-controlled Terraform outputs cannot
+  authorize a new ARN. On first creation, pause after provisioning RDS and before the host runs
+  database setup. Direct the operator to run `vecten bootstrap --env <env>` to
+  authorize the verified ARN, then retry `vecten deploy --env <env>` to finish setup
+  and ship. After a restore,
   bootstrap must replace the old ARN with the verified replacement before shipping.
   Leave master reads denied until authorization succeeds. Test that the retired ARN is
   denied after cutover.
