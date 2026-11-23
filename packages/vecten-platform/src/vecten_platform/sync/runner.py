@@ -122,8 +122,7 @@ def run_object(
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
             # recording truncates the object's tables, resets its state and reloads everything.
             pipeline.run(selected, refresh="drop_data")
-            if sample is not None:
-                sample.save(record_dir, object_name)
+            recording.commit(input_document=sample.document() if sample is not None else None)
         else:
             pipeline.run(selected)
     except Exception as exc:
@@ -144,8 +143,6 @@ def run_object(
         if recording is not None:
             recording.discard()
         raise
-    if recording is not None:
-        recording.commit()
     landed = _landed(pipeline)
     return ObjectOutcome(object_name, True, sum(landed.values()), tables=tuple(sorted(landed)))
 

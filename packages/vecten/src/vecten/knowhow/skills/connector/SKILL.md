@@ -197,8 +197,8 @@ the project and replayed by the connector test and by `vecten dbt-build-local`, 
 data in git. Ask which objects hold personal data they do not want there.
 
 After any later change to `connector.py`, run `vecten connector run <name> --json` again before
-calling the change done. Neither the connector test nor `vecten dbt-build-local` runs the code,
-so a green CI says nothing about it.
+calling the change done. Output fixtures load saved rows directly. An input fixture also checks the
+transformation, while a live sync exercises credentials, fetching and pagination.
 
 Every object the connector keeps needs a fixture. `vecten dbt-build-local` replays fixtures
 only, so an object synced without one leaves a table that `sources.yml` declares, `next` asks to
@@ -214,7 +214,8 @@ vecten connector run <name> --record --json
 Ask before the first run, because a table a sync has landed stays declared in
 `dbt/models/staging/sources.yml`, a file the CLI writes and you never edit. When an object the
 human now wants out was already synced or recorded, drop it from `connector.py`, delete its
-`connectors/<name>/fixtures/<object>.jsonl`, run `vecten connector run <name> --record --json`
+`connectors/<name>/fixtures/<object>.jsonl` and any `inputs/<object>.json` beside the output
+fixtures. Run `vecten connector run <name> --record --json`
 again, and tell the human that its table entry stays in `sources.yml` until they remove it by
 hand.
 

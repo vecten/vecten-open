@@ -353,3 +353,31 @@ def test_ci_connector_requirements_use_declarations_and_available_pins(project):
     save_config(project, config)
     with pytest.raises(Failure):
         connector_requirements(project)
+
+
+def test_empty_input_recording_preserves_paired_fixtures(invoke, project, tmp_path, monkeypatch):
+    from vecten_platform.sync.testing import replay_connector_test
+
+    directory = project / "connectors/demo"
+    module = directory / "connector.py"
+    empty = INPUT_CONNECTOR.replace("yield row", "if False: yield row")
+    module.write_text(empty)
+    command = ("connector", "run", "demo", "--record", "--record-inputs", "--json")
+    result = invoke(*command)
+    assert result.exit_code == 0, result.stdout
+    fixtures = directory / "fixtures"
+    assert json.loads((fixtures / "inputs/people.json").read_text())["expected"]["rows"] == 0
+    assert not (fixtures / "people.jsonl").exists()
+    with monkeypatch.context() as offline:
+        assert replay_connector_test(directory, "demo", tmp_path / "offline", offline) == {}
+
+    module.write_text(INPUT_CONNECTOR)
+    result = invoke(*command)
+    assert result.exit_code == 0, result.stdout
+    previous = {path: path.read_bytes() for path in fixtures.rglob("*") if path.is_file()}
+    assert fixtures / "people.jsonl" in previous
+
+    module.write_text(empty)
+    result = invoke(*command)
+    assert result.exit_code == 0, result.stdout
+    assert {path: path.read_bytes() for path in fixtures.rglob("*") if path.is_file()} == previous

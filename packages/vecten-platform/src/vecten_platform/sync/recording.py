@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -44,14 +45,30 @@ class Recording:
             self.written += 1
         return item
 
-    def commit(self) -> bool:
+    def commit(self, *, input_document: str | None = None) -> bool:
         """Replace the fixture; an object that yielded nothing leaves no fixture behind."""
         self._file.close()
         try:
-            if not self.written:
+            # A previous row fixture survives an empty load, together with its companions.
+            if not self.written and self.path.is_file():
                 return False
-            write_text_atomic(self.path, self._staging.read_text(encoding="utf-8"))
-            return True
+            updates = {}
+            if input_document is not None:
+                input_dir = self.path.parent / "inputs"
+                input_dir.mkdir(exist_ok=True)
+                updates[input_dir / f"{self.path.stem}.json"] = input_document
+            if self.written:
+                updates[self.path] = self._staging.read_text(encoding="utf-8")
+            with ExitStack() as rollback:
+                for path, contents in updates.items():
+                    previous = path.read_text(encoding="utf-8") if path.exists() else None
+                    write_text_atomic(path, contents)
+                    if previous is None:
+                        rollback.callback(path.unlink, missing_ok=True)
+                    else:
+                        rollback.callback(write_text_atomic, path, previous)
+                rollback.pop_all()
+            return bool(self.written)
         finally:
             self._staging.unlink(missing_ok=True)
 

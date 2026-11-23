@@ -6,7 +6,7 @@ In addition to recording output rows for warehouse replay, a user MAY explicitly
 JSON input rows before connector processing with `connector run --record --record-inputs`.
 A participating connector SHALL accept an injectable reader at its source boundary. An input
 sample SHALL identify the object and carry the expected transformation result from that run.
-A failed extraction or load SHALL preserve the previous input sample. The CLI SHALL refuse
+A failed extraction, load or fixture write SHALL preserve the previous input and output fixtures. The CLI SHALL refuse
 input recording for a connector that declares an output fixture redactor.
 
 The rendered connector test and local dbt build SHALL run the current source against each
@@ -30,3 +30,9 @@ trimming the final page. Each selected object supports a single upstream reader.
 parent and child both request live inputs, recording SHALL identify this limitation and
 preserve earlier fixtures. Generated CI SHALL make declared connector dependencies
 available to both commands that replay input samples.
+
+#### Scenario: All captured inputs are filtered out
+
+- **WHEN** input recording succeeds with zero output rows and there is no prior output fixture
+- **THEN** the input fixture verifies that transformation offline with zero expected rows
+- **AND** an empty refresh of an existing output fixture preserves its rows and companion files

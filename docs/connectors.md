@@ -82,11 +82,16 @@ If both resources call `inputs(...)`, record the transformed deal rows with
    by `vecten connector add`) or `vecten dbt-build-local`. Generated CI installs the connector
    dependencies declared in `vecten.toml` for pytest and the local dbt build. Both pass the
    inputs through the current connector with Python network access blocked. Changed row
-   values, counts or order fail the check. In the example, reading the wrong key fails even
+   values, counts or order fail the check. Derive timestamps and IDs from the saved input
+   if the transformation needs to reproduce them during replay. In the example, reading the wrong key fails even
    though the saved output still contains a valid `user_id`.
 3. After an intentional change to the output, re-record with both flags. Review the diff
    in `connectors/demo/fixtures/` before accepting the new expectation. Projects with only output fixtures keep loading
    those rows directly into the local warehouse.
+
+If a refresh produces no output rows, an existing output fixture and its companion files stay
+together. When there is no previous output fixture, input recording can still capture a case
+where the transformation filters out every input. Replay then expects zero output rows.
 
 ## Extensions
 

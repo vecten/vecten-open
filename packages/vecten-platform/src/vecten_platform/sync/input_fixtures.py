@@ -22,7 +22,6 @@ from vecten_platform.sync import context
 from vecten_platform.sync.loader import load_connector
 from vecten_platform.sync.recording import RECORD_LIMIT
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.records import write_text_atomic
 
 
 def live_inputs(fetch: Callable[[], Iterable]) -> Iterable:
@@ -92,11 +91,9 @@ class InputSample:
             raise ValueError("the selected object did not read its rows through inputs(fetch)")
         return {"rows": self.count, "sha256": self.output.hexdigest()}
 
-    def save(self, fixtures: Path, name: str) -> None:
+    def document(self) -> str:
         document = {"version": 1, "inputs": self.rows, "expected": self.result()}
-        directory = fixtures / "inputs"
-        directory.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(directory / f"{name}.json", json.dumps(document, indent=2) + "\n")
+        return json.dumps(document, indent=2) + "\n"
 
 
 def _offline(*args, **kwargs):
