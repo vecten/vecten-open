@@ -399,17 +399,23 @@ and the other files of the credential home, which live only on your laptop:
    same for each of the four with environment `release`. The `publish` workflow signs in to
    each index as itself.
 
-   Confirm: each project's Publishing page on both indexes lists exactly that publisher. The
-   first candidate tests publishing to TestPyPI. A release tag on `main` tests PyPI.
+   Confirm each project's Publishing page on both indexes lists the expected publisher and
+   each Collaborators page lists only the intended owners and maintainers. A candidate
+   tests publishing to TestPyPI. A release tag on `main` tests PyPI.
 
-   The account-wide PyPI API token used to publish 0.1.0 by hand can still upload packages
-   until its owner revokes it. After confirming the four PyPI publisher registrations and
-   that the GitHub `release` environment requires maintainer approval, the person who
-   published 0.1.0 should open their [PyPI account settings](https://pypi.org/manage/account/#api-tokens)
-   and remove the token they used for that release. If they cannot identify it among
-   several account-wide tokens, leave those tokens in place and record the open question
-   in [#22](https://github.com/vecten/vecten-open/issues/22). Once the publisher confirms
-   the old token is gone from their account, record the revocation date there if known.
+   Registering a trusted publisher leaves existing API tokens active. Once these
+   registrations and the required reviewers for the GitHub `release` environment are in
+   place, each owner and maintainer should check the API tokens in their own account on
+   each index. Review both account-wide tokens and tokens scoped to any of the four projects. If another
+   project still uses an account-wide token, move that project to its own publishing
+   credential before revoking the old token. Each token owner should confirm that no
+   remaining token can upload these projects. See the account settings on
+   [PyPI](https://pypi.org/manage/account/#api-tokens) and
+   [TestPyPI](https://test.pypi.org/manage/account/#api-tokens).
+
+   Track confirmation from the owner of the token used for the manual 0.1.0 upload in
+   [issue #22](https://github.com/vecten/vecten-open/issues/22). Record any outstanding
+   confirmation there without including a token value.
 
 10. **Google sign-in.** Each combination deploys under a fixed domain, so its callback address
     is registered once, not per run.
