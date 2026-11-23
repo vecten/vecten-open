@@ -513,8 +513,11 @@ editing its manifest, services or apps. On a fresh laptop checkout, run `vecten 
 first to install the local packages in the CLI environment. The check compares their current
 secret names, settings schemas, service and app declarations with `extensions.lock.json`.
 If they differ, run `vecten lock` and commit the updated record with the code. Project CI
-runs the same check on pull requests. On the laptop, `vecten up` also checks services and
-apps before starting containers.
+runs the same check on pull requests. Its declaration check installs the in-repo
+extensions and their locked index dependencies. It does not fetch registered Git
+extensions. Keep imports of those packages inside the runtime code that uses them so CI
+can load your manifest, service and app declarations. On the laptop, `vecten up` also
+checks services and apps before starting containers.
 
 **Binding a service.** A declared service runs only while `vecten.toml` binds it, and a route
 is served only while its own table is there:
