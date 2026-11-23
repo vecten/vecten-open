@@ -242,7 +242,8 @@ class SnowflakeAdapter:
             except ProgrammingError as exc:
                 raise ValueError(
                     "Could not verify the binding. Check that the administrator has run the "
-                    f"current `vecten mcp provisioner-script --env <env>` and the role exists: {exc.msg}"
+                    "current `vecten mcp provisioner-script --env <env>` and the role exists. "
+                    f"Snowflake reported: {exc.msg}"
                 ) from exc
         if row and row[0] == "ok":
             return None
