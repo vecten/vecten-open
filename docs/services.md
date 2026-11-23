@@ -357,7 +357,9 @@ as a bot's conversation references, which it gets back when people message it ag
 must last belongs in a store outside the VM.
 
 Before approving a deployment, run `vecten deploy --env <env> --plan-only` with the target
-environment's name. If the plan removes a host, its warning lists the Docker volumes
+environment's name. The generated pull-request workflow posts the plan for `prod`.
+For other environments, use the plan-only command to see the warning before apply.
+If the plan removes a host, its warning lists the Docker volumes
 for services currently bound to that host. Back up any data you need before applying.
 Check the old host separately for volumes from services you have moved or removed.
 
