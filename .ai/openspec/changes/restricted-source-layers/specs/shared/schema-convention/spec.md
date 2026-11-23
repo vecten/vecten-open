@@ -18,3 +18,8 @@ An area with `restricted_source_layers = true` SHALL also own `staging_<area>` a
 
 - **WHEN** an area opts out and a source-layer revoke fails
 - **THEN** the failed revoke is retried and the group retains its core and mart reads
+
+#### Scenario: Reinstall PostgreSQL helpers after opting out
+
+- **WHEN** the administrator reinstalls helpers after removing an area from the opted-in list
+- **THEN** existing helpers for that area’s staging and snapshot schemas can revoke outstanding reads and refuse new grants

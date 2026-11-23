@@ -276,19 +276,28 @@ DECLARE
     fn text;
     body text;
     installer text := current_user;
+    source_areas text[] := string_to_array(coalesce(current_setting('vecten.source_layer_areas', true), ''), ',');
     had_create boolean;
     had_usage boolean;
 BEGIN
     FOR scope IN
-        SELECT n.oid AS schema_oid, n.nspname, r.oid AS owner_oid, r.rolname
+        SELECT n.oid AS schema_oid, n.nspname, r.oid AS owner_oid, r.rolname,
+               n.nspname !~ '^(staging|snapshots)_' OR
+                   split_part(n.nspname, '_', 2) = ANY(source_areas) AS allow_grants
         FROM pg_catalog.pg_namespace n CROSS JOIN pg_catalog.pg_roles r
         WHERE (n.nspname IN ('core','marts','staging','snapshots')
                OR n.nspname ~ '^raw_[a-zA-Z0-9_]+$'
                OR n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$'
                OR (n.nspname ~ '^(staging|snapshots)_[a-z][a-z0-9]*$'
-                   AND split_part(n.nspname, '_', 2) = ANY(string_to_array(
-                       current_setting('vecten.source_layer_areas', true), ','))))
+                   AND (split_part(n.nspname, '_', 2) = ANY(source_areas)
+                        OR EXISTS (SELECT FROM vecten_access.helpers h
+                                   WHERE h.schema_name=n.nspname))))
         AND (r.oid=n.nspowner
+             -- Old source-layer helpers must become revoke-only after an opt-out,
+             -- including helpers for roles that no longer own objects in the schema.
+             OR (n.nspname ~ '^(staging|snapshots)_' AND EXISTS (
+                 SELECT FROM vecten_access.helpers h
+                 WHERE h.schema_name=n.nspname AND h.owner_oid=r.oid))
              OR EXISTS (SELECT FROM pg_catalog.pg_class c
                         WHERE c.relnamespace=n.oid AND c.relowner=r.oid)
              OR EXISTS (SELECT FROM pg_catalog.pg_default_acl d
@@ -325,6 +334,9 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'target is not a bounded reader role' USING ERRCODE='42501';
     END IF;
+    IF enabled AND NOT %L::boolean THEN
+        RAISE EXCEPTION 'schema is outside the installed source area list' USING ERRCODE='42501';
+    END IF;
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_namespace
                    WHERE oid=schema_id AND nspname=%L) THEN
         RAISE EXCEPTION 'schema changed; administrator must reinstall access helpers';
@@ -349,7 +361,7 @@ BEGIN
                        current_user,%L,action,direction,target);
     END IF;
 END
-$body$, scope.schema_oid, scope.nspname, scope.nspname, scope.nspname, scope.nspname);
+$body$, scope.schema_oid, scope.allow_grants, scope.nspname, scope.nspname, scope.nspname, scope.nspname);
         had_create := pg_catalog.has_schema_privilege(scope.owner_oid,'vecten_access','CREATE');
         IF NOT had_create THEN
             EXECUTE format('GRANT CREATE ON SCHEMA vecten_access TO %I', scope.rolname);
