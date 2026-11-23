@@ -260,7 +260,8 @@ credentials and copies the login gate's percent-encoded `X-Vecten-User` value in
 `X-Vecten-On-Behalf-Of`. The MCP records the decoded, lower-cased email as `on_behalf_of`.
 The header must appear once, hold at most 762 ASCII characters and decode to one visible
 `local@domain` of at most 254 characters. If it is missing or invalid, the audit row identifies
-the app alone. The app's permissions govern the call. [Service login headers](services.md#identity-headers-which-to-trust-and-why)
+the app alone. The app's permissions govern the call. See
+[service login headers](services.md#identity-headers-which-to-trust-and-why).
 
 No per-address rate limit applies to an app's tool calls. Only its token request is limited,
 like everyone's, to 60 per minute from one address.
