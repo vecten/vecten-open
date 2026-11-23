@@ -15,3 +15,6 @@ An area with `restricted_source_layers = true` SHALL also own `staging_<area>` a
 - **THEN** next requires no administrator rerun
 - **WHEN** the configured area list differs from the list last confirmed for version 7
 - **THEN** next names the provisioner command until the new list is confirmed, and expanding an area preserves the group's existing core and mart reads
+
+- **WHEN** an area opts out and a source-layer revoke fails
+- **THEN** the failed revoke is retried and the group retains its core and mart reads

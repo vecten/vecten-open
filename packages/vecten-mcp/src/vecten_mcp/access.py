@@ -749,16 +749,29 @@ class AccessService:
                     logger.info("Forgot %s: its area is not declared", row)
             for key, old in applied.items():
                 source = self._source_of(desired.get(key))
-                # Expanding the same area keeps the existing grants, including when the
-                # new layers must wait for the administrator to update the procedure.
-                if old["kind"] == "area" and source and set(self._held(old)) <= set(source):
+                held_source = self._held(old)
+                kept = []
+                if old["kind"] == "area" and source:
+                    # Revoke only removed layers so a refused revoke cannot interrupt
+                    # reads on retained layers. Keep previously unconfirmed grants revocable.
+                    kept = [schema for schema in held_source if schema in source]
+                    removed = [schema for schema in held_source if schema not in source]
+                    if not removed:
+                        continue
+                elif source != old["source"]:
+                    removed = held_source
+                else:
                     continue
-                if source != old["source"] or (old["kind"] == "area" and source):
-                    try:
-                        self._apply(old, self._held(old), False)
+                try:
+                    self._apply(old, removed, False)
+                    if kept:
+                        confirmed = [s for s in old.get("confirmed", ()) if s in kept]
+                        record = self._record(desired[key], source, kept, confirmed=confirmed)
+                        self.state.put("applied_grants", key, record)
+                    else:
                         self.state.remove("applied_grants", key)
-                    except Exception as exc:
-                        failed(key, old, "revoke", exc)
+                except Exception as exc:
+                    failed(key, old, "revoke", exc)
             held, outdated = self._converge(desired, report, failures)
             for key, row in desired.items():
                 source = self._source_of(row)

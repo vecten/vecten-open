@@ -82,11 +82,37 @@ def test_existing_area_grant_expands_and_contracts_with_opt_in():
         )
         adapter.ops.clear()
         assert access.reconcile()["complete"]
-        if opted:
-            assert ("schema", "analyst", "core_finance", False) not in adapter.ops
+        for schema in ("core_finance", "marts_finance"):
+            assert ("schema", "analyst", schema, False) not in adapter.ops
         for layer in ("staging", "snapshots"):
             assert (("analyst", "usage", f"{layer}_finance", None) in adapter.held) == expected
         assert ("analyst", "usage", "core_finance", None) in adapter.held
+
+
+def test_a_refused_source_layer_revoke_preserves_retained_reads_until_retry():
+    class RestrictedAdapter(Adapter):
+        refuse = True
+
+        def schema_grant(self, role, schema, grant=True):
+            if self.refuse and not grant and schema == "staging_hr":
+                raise ValueError("cannot revoke staging_hr")
+            return super().schema_grant(role, schema, grant)
+
+    adapter = RestrictedAdapter()
+    state = StateStore("sqlite://")
+    expanded = AccessService(state, adapter, areas=["hr"], source_areas=["hr"])
+    expanded.seed_defaults()
+    expanded.grant("default", "area", "hr")
+    contracted = AccessService(state, adapter, areas=["hr"])
+    adapter.ops.clear()
+    assert not contracted.reconcile()["complete"]
+    for schema in ("core_hr", "marts_hr"):
+        assert ("schema", "analyst", schema, False) not in adapter.ops
+        assert ("analyst", "usage", schema, None) in adapter.held
+    adapter.refuse = False
+    assert contracted.reconcile()["complete"]
+    for schema in ("staging_hr", "snapshots_hr"):
+        assert ("analyst", "usage", schema, None) not in adapter.held
 
 
 def test_a_failed_source_layer_expansion_preserves_existing_reads():
