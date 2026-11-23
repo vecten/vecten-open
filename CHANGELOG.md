@@ -5,6 +5,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Security
+
 - The local Airflow stack reads its admin password file from tmpfs and removes the old on-disk copy during `up` or `down` ([#33](https://github.com/vecten/vecten-open/issues/33)).
 
 ## [0.1.1] - 2026-11-18
