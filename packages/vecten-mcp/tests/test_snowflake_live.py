@@ -3,13 +3,14 @@
 Runs only with VECTEN_SF_CI_ACCOUNT and VECTEN_SF_CI_PRIVATE_KEY set (the snowflake-live
 workflow, started by hand before a release), as the service user VECTEN_CI with the role
 VECTEN_CI_ADMIN. The provisioner script's role, user and integration names are account-wide,
-so a run refuses an account holding an install it did not make, and drops everything it made.
+so the fixture uses CI-specific names and verifies ownership before each cleanup.
 """
 
 import io
 import json
 import os
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
@@ -28,13 +29,13 @@ pytestmark = [
 ADMIN_USER, ADMIN_ROLE, WAREHOUSE = "VECTEN_CI", "VECTEN_CI_ADMIN", "VECTEN_CI_WH"
 DATABASE = "VECTEN_CI"
 # Snowflake never fetches this issuer: the integration holds the signing keys inline.
-ISSUER = "https://mcp.ci.vecten.invalid"
+ISSUER = "https://mcp.ci.vecten.invalid/snowflake-live"
 PERSON = "vecten_ci_person"
 TPCDS = Path(__file__).parents[2] / "vecten-shared" / "tests" / "fixtures" / "tpcds"
 SAMPLE = "SNOWFLAKE_SAMPLE_DATA.TPCDS_SF10TCL"
 # One day of two stores: the slice the fixture model's descriptions name.
 FIXTURE_SQL = f"""
-CREATE OR REPLACE DATABASE {DATABASE};
+CREATE DATABASE {DATABASE};
 CREATE SCHEMA {DATABASE}.CORE;
 CREATE SCHEMA {DATABASE}.MARTS;
 CREATE TABLE {DATABASE}.CORE.DATE_DIM AS SELECT * FROM {SAMPLE}.DATE_DIM WHERE D_YEAR = 2002;
@@ -81,40 +82,48 @@ def _statements(sql):
 
 
 def _owner(cursor, kind, name):
-    found = _rows(cursor, f"SHOW {kind} LIKE '{name}'")
-    return found[0]["owner"] if found else None
+    rows = _rows(cursor, f"SHOW {kind} LIKE '{name}'")
+    # Underscores are wildcards in LIKE, even in unquoted Snowflake object names.
+    for row in rows:
+        if row["name"] != name:
+            continue
+        if kind == "INTEGRATIONS":
+            grants = _rows(cursor, f"SHOW GRANTS ON INTEGRATION {name}")
+            for grant in grants:
+                if grant["privilege"] == "OWNERSHIP" and grant["granted_to"] == "ROLE":
+                    return grant["grantee_name"]
+        elif row.get("owner"):
+            return row["owner"]
+        pytest.fail(f"could not establish ownership of {name}")
+    return None
 
 
-def _teardown(cursor):
-    """Drops what a run makes, the users PROVISIONER created first, by inheriting its ownership."""
-    if _owner(cursor, "ROLES", "PROVISIONER") == ADMIN_ROLE:
-        cursor.execute(f"GRANT ROLE PROVISIONER TO ROLE {ADMIN_ROLE}")
-        owned = _rows(cursor, "SHOW GRANTS TO ROLE PROVISIONER")
-        for grant in owned:
-            if grant["privilege"] == "OWNERSHIP" and grant["granted_on"] in ("USER", "ROLE"):
-                kind = grant["granted_on"]
-                if grant["name"] != "ANALYST":
-                    cursor.execute(f'DROP {kind} IF EXISTS "{grant["name"]}"')
-    for statement in (
-        "DROP SECURITY INTEGRATION IF EXISTS VECTEN_EXTERNAL_OAUTH",
-        "DROP USER IF EXISTS VECTEN_PROVISIONER",
-        "DROP ROLE IF EXISTS PROVISIONER",
-        "DROP ROLE IF EXISTS ANALYST",
-        f"DROP DATABASE IF EXISTS {DATABASE}",
-    ):
-        cursor.execute(statement)
+def _teardown(cursor, names):
+    # Check the entire set before the first write, including after a partial setup.
+    objects = (
+        ("USERS", "USER", PERSON.upper(), names.provisioner_role),
+        ("INTEGRATIONS", "SECURITY INTEGRATION", names.integration, ADMIN_ROLE),
+        ("USERS", "USER", names.provisioner_user, ADMIN_ROLE),
+        ("ROLES", "ROLE", names.analyst_role, ADMIN_ROLE),
+        ("DATABASES", "DATABASE", names.database, ADMIN_ROLE),
+        ("ROLES", "ROLE", names.provisioner_role, ADMIN_ROLE),
+    )
+    drops = []
+    for listing, kind, name, expected in objects:
+        owner = _owner(cursor, listing, name)
+        if owner is None:
+            continue
+        if owner != expected:
+            pytest.fail(f"{name} belongs to {owner}, expected {expected}; refusing fixture cleanup")
+        drops.append((kind, name))
 
-
-def _refuse_a_foreign_install(cursor):
-    for kind, name in (
-        ("ROLES", "PROVISIONER"),
-        ("ROLES", "ANALYST"),
-        ("USERS", "VECTEN_PROVISIONER"),
-        ("INTEGRATIONS", "VECTEN_EXTERNAL_OAUTH"),
-    ):
-        owner = _owner(cursor, kind, name)
-        if owner not in (None, ADMIN_ROLE):
-            pytest.fail(f"{name} belongs to {owner}: another vecten install uses this account")
+    if ("USER", PERSON.upper()) in drops:
+        if ("ROLE", names.provisioner_role) not in drops:
+            pytest.fail(f"could not verify the role owning {PERSON}")
+        cursor.execute(f"GRANT ROLE {names.provisioner_role} TO ROLE {ADMIN_ROLE}")
+    # The provisioner role must still exist while its fixture user is being dropped.
+    for kind, name in drops:
+        cursor.execute(f"DROP {kind} IF EXISTS {name}")
 
 
 def _public_body(pem):
@@ -138,7 +147,14 @@ def _names():
         }
     )
     return replace(
-        snowflake_names(config, "ci"), account=ACCOUNT, database=DATABASE, warehouse=WAREHOUSE
+        snowflake_names(config, "ci"),
+        account=ACCOUNT,
+        database=DATABASE,
+        warehouse=WAREHOUSE,
+        provisioner_role="VECTEN_CI_PROVISIONER",
+        provisioner_user="VECTEN_CI_PROVISIONER_USER",
+        analyst_role="VECTEN_CI_ANALYST",
+        integration="VECTEN_CI_EXTERNAL_OAUTH",
     )
 
 
@@ -164,16 +180,18 @@ def account():
     from vecten_shared.identity_setup import provisioner_script
     from vecten_shared.keypair import generate_one_line, load_private_key, public_body
 
-    admin = _admin()
-    cursor = admin.cursor()
-    try:
-        _refuse_a_foreign_install(cursor)
-        _teardown(cursor)
+    names = _names()
+    with ExitStack() as cleanup:
+        admin = _admin()
+        cleanup.callback(admin.close)
+        cursor = admin.cursor()
+        cleanup.callback(cursor.close)
+        _teardown(cursor, names)
+        cleanup.callback(_teardown, cursor, names)
         for statement in _statements(FIXTURE_SQL):
             cursor.execute(statement)
         provisioner_key = load_private_key(generate_one_line(), "provisioner")
         keys = SigningKeys(Secrets(), ISSUER)
-        names = _names()
         audience = names.audience
         script = provisioner_script(
             "snowflake", issuer=ISSUER, public_key=public_body(provisioner_key), names=names
@@ -205,12 +223,6 @@ def account():
         for schema in ("core", "marts"):
             adapter.schema_grant("analyst", schema)
         yield type("Account", (), {"cursor": cursor, "adapter": adapter, "keys": keys})
-    finally:
-        try:
-            _teardown(cursor)
-        finally:
-            cursor.close()
-            admin.close()
 
 
 def test_the_provisioner_holds_exactly_its_scope(account):
@@ -229,7 +241,7 @@ def test_a_person_is_created_without_a_credential(account):
 
 def _session(account):
     return account.adapter.connect_principal(
-        {"warehouse_name": PERSON}, {"ANALYST"}, time.time() + 600
+        {"warehouse_name": PERSON}, {"analyst"}, time.time() + 600
     )
 
 
@@ -238,7 +250,7 @@ def test_an_external_oauth_session_runs_as_the_person(account):
     try:
         cursor = connection.cursor()
         cursor.execute("SELECT CURRENT_USER(), CURRENT_ROLE(), CURRENT_DATABASE()")
-        assert cursor.fetchone() == (PERSON.upper(), "ANALYST", DATABASE)
+        assert cursor.fetchone() == (PERSON.upper(), account.adapter.names.analyst_role, DATABASE)
     finally:
         connection.close()
 
@@ -295,7 +307,7 @@ def test_a_rotation_keeps_person_sessions_working(account):
     upcoming = keys.ring["next"]
     assert keys.ring["kid"] == current
     account.cursor.execute(
-        "ALTER SECURITY INTEGRATION VECTEN_EXTERNAL_OAUTH SET "
+        f"ALTER SECURITY INTEGRATION {account.adapter.names.integration} SET "
         f"EXTERNAL_OAUTH_RSA_PUBLIC_KEY_2 = '{_public_body(upcoming['private'])}'"
     )
     upcoming["published_at"] -= PUBLISH_AHEAD
@@ -312,7 +324,6 @@ def test_a_rotation_keeps_person_sessions_working(account):
 
 def test_shared_binding_verifies_nested_grants_as_the_provisioner(account):
     """The dedicated CI database serves as shared environment VECTEN_CI for this check."""
-    from contextlib import ExitStack
     from dataclasses import replace
     from uuid import uuid4
 
