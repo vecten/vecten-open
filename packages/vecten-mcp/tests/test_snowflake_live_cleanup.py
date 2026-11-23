@@ -83,3 +83,13 @@ def test_partial_setup_removes_the_database_created_by_this_fixture(monkeypatch)
     assert not database_exists
     cursor.close.assert_called_once()
     admin.close.assert_called_once()
+
+
+def test_shared_binding_fixture_generates_an_installable_procedure(monkeypatch):
+    from dataclasses import replace
+
+    from vecten_shared.identity_setup import snowflake_access_helper
+
+    monkeypatch.setattr(live, "ACCOUNT", "test-account")
+    names = replace(live._names(), suffix=f"_{live.DATABASE}")
+    assert ".CHECK_BINDING(TARGET VARCHAR)" in snowflake_access_helper(names)

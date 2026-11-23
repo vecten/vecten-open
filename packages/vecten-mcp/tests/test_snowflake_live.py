@@ -147,8 +147,7 @@ def _names():
         }
     )
     return replace(
-        snowflake_names(config, "ci"),
-        account=ACCOUNT,
+        snowflake_names(config, "ci", account=ACCOUNT),
         database=DATABASE,
         warehouse=WAREHOUSE,
         provisioner_role="VECTEN_CI_PROVISIONER",
