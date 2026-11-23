@@ -44,9 +44,9 @@ def _load_git_http():
 
 
 def _token() -> str:
-    # Letters that are no hex digit and no letter of the words a failure prints, so a
-    # four-character window of the token cannot appear in a message by chance.
-    return "".join(secrets.choice("GHJKMNPQRSTUVWXYZ") for _ in range(32))
+    # Each four-character probe includes two URL-safe delimiters, so ordinary runner
+    # environment names such as SYSTEM cannot match a fragment of this test credential.
+    return "".join("~" + secrets.choice("GHJKMNPQRSTUVWXYZ") for _ in range(16))
 
 
 def _leaks(token: str, text: str) -> list[str]:
