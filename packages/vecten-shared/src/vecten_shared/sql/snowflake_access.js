@@ -157,13 +157,13 @@ function change(enabled, relation) {
             catch (e) { refused.push({kind: shape + ' ' + kind, error: String(e.message || e)}); }
         });
     });
-    // A grant reports another refused kind and keeps the rest; a revoke fails while the
-    // target still reads anything in the schema.
+    // A grant may be partial. A refused revoke stays pending even when the owner
+    // cannot see the remaining grant, so try every optional kind before reporting it.
     if (enabled) return refused.length ? 'refused: ' + JSON.stringify(refused) : 'ok';
     execute('REVOKE USAGE ON SCHEMA ' + schema + ' FROM' + target);
-    if (refused.length && holdsRead(null)) {
-        throw new Error('the target still holds SELECT in ' + database + '.' + SCHEMA_NAME +
-            ' after refusals: ' + refused.map(function(r) {
+    if (refused.length) {
+        throw new Error('could not revoke every relation kind in ' + database + '.' + SCHEMA_NAME +
+            ': ' + refused.map(function(r) {
                 return r.kind + ': ' + r.error;
             }).join('; '));
     }

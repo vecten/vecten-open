@@ -152,6 +152,11 @@ A schema, area or dataset grant SHALL cover every relation kind that can hold a 
 - **WHEN** a group is granted `marts` and dbt builds a mart as a dynamic table
 - **THEN** the group's role can read it without a further grant
 
+#### Scenario: An optional relation kind refuses revocation
+
+- **WHEN** the procedure cannot revoke a current or future relation-kind grant and the owner sees no remaining grant
+- **THEN** the area or schema revoke remains pending and reports the refused statement
+
 #### Scenario: Dataset grant on a materialized view
 - **WHEN** an admin grants a dataset whose source is a materialized view
 - **THEN** the group's role holds `SELECT` on that materialized view

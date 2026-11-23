@@ -788,14 +788,16 @@ def test_a_revoke_a_kind_refuses_fails_while_the_role_still_holds_a_read_in_the_
     output = _kinds(enabled=False, refuse=["DYNAMIC TABLES"], future=[DYNAMIC_FUTURE])
     assert output["error"] is not None, output
     assert "DYNAMIC TABLES is not supported" in output["error"]
-    assert "still holds" in output["error"]
+    assert "no remaining grant is visible" not in output["error"]
     assert 'REVOKE USAGE ON SCHEMA "D"."MARTS" FROM ROLE "FINANCE"' in output["statements"]
 
 
-def test_a_revoke_a_kind_refuses_succeeds_once_nothing_is_held_in_the_schema():
+def test_a_refused_relation_kind_keeps_the_revoke_pending_when_no_grant_is_visible():
     elsewhere = {"privilege": "SELECT", "granted_on": "TABLE", "name": "D.CORE.ORDERS"}
     output = _kinds(enabled=False, refuse=["ICEBERG TABLES"], held=[elsewhere])
-    assert output["error"] is None and output["value"] == "ok", output
+    assert output["value"] is None, output
+    assert "ICEBERG TABLES is not supported" in output["error"]
+    assert "no remaining grant is visible" in output["error"]
 
 
 def test_a_refused_table_grant_fails_the_whole_call():
