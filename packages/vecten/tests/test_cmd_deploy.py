@@ -207,6 +207,32 @@ def _remove_line(root: Path, key: str) -> None:
 # Inside GitHub Actions
 
 
+@pytest.mark.parametrize("fail_at", ["lookup", "missing_branch", "fetch"])
+def test_actions_deploy_stops_before_using_an_unverified_head(
+    invoke, no_cloud, bootstrapped, monkeypatch, fail_at
+):
+    actions_without_cloud(monkeypatch)
+    gh = FakeGh(
+        failing=("repo",) if fail_at == "lookup" else (),
+        default_branch=None if fail_at == "missing_branch" else "trunk",
+    )
+    fetch = ["fetch", "origin", "refs/heads/trunk"]
+    git = FakeGit(answers={tuple(fetch): (128, "")})
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: git)
+    result = invoke("deploy", "--env", "prod", "--json")
+    assert result.exit_code == (3 if fail_at == "lookup" else 5), result.stdout
+    assert gh.named("repo", "view") == [
+        ["repo", "view", "acme/data", "--json", "nameWithOwner,defaultBranchRef"]
+    ]
+    assert git.named("fetch") == ([fetch] if fail_at == "fetch" else [])
+    assert ("git fetch origin refs/heads/trunk" if fail_at == "fetch" else "gh repo view") in doc(
+        result
+    )["error"]
+    assert git.named("rev-parse", "FETCH_HEAD") == []
+    assert FakeTerraform.calls == []
+
+
 def test_actions_deploy_applies_the_saved_plan_then_ships_every_host(invoke, actions, project):
     before = (project / "vecten.toml").read_text()
     r = invoke("deploy", "--env", "prod", "--json")
