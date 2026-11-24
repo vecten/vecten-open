@@ -116,8 +116,9 @@ def test_gate_uses_only_state_and_runs_on_its_own_guarded_network(tmp_path):
         "VECTEN_ENV",
         "VECTEN_PROJECT_ROOT",
         "VECTEN_ENVIRONMENT_FILE",
-        "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
     }
+    assert "MCP_GATE_DB_PASSWORD" not in doc["services"]["mcp-server"]["environment"]
     assert not any("secret" in item for item in gate["volumes"])
     assert doc["networks"]["login-gate"]["driver_opts"][
         "com.docker.network.bridge.name"

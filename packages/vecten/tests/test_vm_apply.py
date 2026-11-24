@@ -274,6 +274,7 @@ def seeded(out, extra=()):
         "AIRFLOW_DB_PASSWORD",
         "LOADER_PASSWORD",
         "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
         "MCP_PROVISIONER_PASSWORD",
         "MCP_IMPERSONATOR_PASSWORD",
         "AIRFLOW_FERNET_KEY",
@@ -329,6 +330,7 @@ def test_agent_scope_rule_matches_the_provider():
         "AIRFLOW_DB_PASSWORD",
         "LOADER_PASSWORD",
         "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
         "MCP_PROVISIONER_PASSWORD",
         "MCP_IMPERSONATOR_PASSWORD",
         "AIRFLOW_FERNET_KEY",
@@ -375,7 +377,7 @@ def test_secret_values_never_in_argv(agent, tmp_path):
     run.store[f"{PREFIX}platform/HUBSPOT_API_KEY"] = "hubspot-secret-value"
     ship(agent, release, run, tmp_path)
     values = [v for v in run.store.values()] + ["master-state-pw"]
-    assert len(run.created()) == 10
+    assert len(run.created()) == 11
     for call in run.calls:
         for arg in call["args"]:
             for value in values:
@@ -392,6 +394,7 @@ def test_generated_once(agent, tmp_path):
             f"{PREFIX}platform/AIRFLOW_DB_PASSWORD",
             f"{PREFIX}platform/LOADER_PASSWORD",
             f"{PREFIX}mcp/MCP_STATE_DB_PASSWORD",
+            f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD",
             f"{PREFIX}mcp/MCP_PROVISIONER_PASSWORD",
             f"{PREFIX}mcp/MCP_IMPERSONATOR_PASSWORD",
         ]
@@ -411,10 +414,10 @@ def test_generated_names_follow_the_configuration(agent):
         "AIRFLOW_DB_PASSWORD",
         "LOADER_PASSWORD",
     ]
-    assert gen(outputs("mcp_only")) == ["MCP_STATE_DB_PASSWORD"]
+    assert gen(outputs("mcp_only")) == ["MCP_STATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"]
     assert (
         set(gen(outputs("minimal"))) == set(gen(outputs("standard")))
-        and len(gen(outputs("minimal"))) == 5
+        and len(gen(outputs("minimal"))) == 6
     )
 
 
@@ -431,9 +434,10 @@ def test_existing_secret_without_a_value_gets_put_not_created_twice(agent, tmp_p
 
     agent.ensure_generated(host, out, answer)
     puts = run.argv("aws", "--region", "eu-central-1", "secretsmanager", "put-secret-value")
-    assert len(puts) == 1 and puts[0][puts[0].index("--secret-id") + 1].endswith(
-        "mcp/MCP_STATE_DB_PASSWORD"
-    )
+    assert {args[args.index("--secret-id") + 1] for args in puts} == {
+        f"{PREFIX}mcp/MCP_STATE_DB_PASSWORD",
+        f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD",
+    }
 
 
 def test_an_airflow_app_secret_without_a_value_is_named_never_put(agent, tmp_path):
@@ -503,6 +507,7 @@ def test_secret_env_for_the_platform_host(agent, tmp_path):
     # An absent connector secret or webhook is left out; the run names it.
     assert "STRIPE_KEY" not in env and "ALERT_WEBHOOK_URL" not in env
     assert "MCP_STATE_DB_PASSWORD" not in env
+    assert "MCP_GATE_DB_PASSWORD" not in env
     for n in ("AIRFLOW_FERNET_KEY", "AIRFLOW_API_SECRET_KEY", "AIRFLOW_JWT_SECRET"):
         assert env[n] == f"value-of-{n}"
 
@@ -582,6 +587,7 @@ def test_setup_runs_once_per_instance_with_standard_flags(agent, tmp_path):
     state = runs["state.rds"]["env"]
     assert verifies(state["AIRFLOW_DB_PASSWORD"], "value-of-AIRFLOW_DB_PASSWORD")
     assert verifies(state["MCP_STATE_DB_PASSWORD"], "value-of-MCP_STATE_DB_PASSWORD")
+    assert verifies(state["MCP_GATE_DB_PASSWORD"], "value-of-MCP_GATE_DB_PASSWORD")
 
 
 SCRAM = re.compile(r"SCRAM-SHA-256\$4096:([A-Za-z0-9+/=]+)\$([A-Za-z0-9+/=]+):([A-Za-z0-9+/=]+)")
@@ -876,6 +882,7 @@ def test_minimal_host_starts_both_profiles(agent, tmp_path):
     args = up["args"]
     assert [args[i + 1] for i, a in enumerate(args) if a == "--profile"] == ["platform", "mcp"]
     assert up["env"]["MCP_STATE_DB_PASSWORD"] == "value-of-MCP_STATE_DB_PASSWORD"
+    assert up["env"]["MCP_GATE_DB_PASSWORD"] == "value-of-MCP_GATE_DB_PASSWORD"
 
 
 def test_ship_order_setup_before_compose(agent, tmp_path):
@@ -1672,6 +1679,7 @@ def test_setup_with_agent_verifiers_admits_the_plaintext_passwords(agent, tmp_pa
     passwords = {
         "AIRFLOW_DB_PASSWORD": "a1-plain",
         "MCP_STATE_DB_PASSWORD": "m1-plain",
+        "MCP_GATE_DB_PASSWORD": "g1-plain",
         "LOADER_PASSWORD": "l1-plain",
         "PROVISIONER_PASSWORD": "p1-plain",
         "IMPERSONATOR_PASSWORD": "i1-plain",
@@ -1695,6 +1703,7 @@ def test_setup_with_agent_verifiers_admits_the_plaintext_passwords(agent, tmp_pa
         for role, key, database in (
             ("airflow", "AIRFLOW_DB_PASSWORD", "airflow"),
             ("mcp_state", "MCP_STATE_DB_PASSWORD", "mcp_state"),
+            ("mcp_gate", "MCP_GATE_DB_PASSWORD", "mcp_state"),
             ("loader", "LOADER_PASSWORD", "warehouse"),
             ("provisioner", "PROVISIONER_PASSWORD", "warehouse"),
             ("impersonator", "IMPERSONATOR_PASSWORD", "warehouse"),
@@ -1728,6 +1737,7 @@ def test_setup_runs_again_after_an_admin_login_on_scaleway(agent, tmp_path):
     passwords = {
         "AIRFLOW_DB_PASSWORD": "a1-plain",
         "MCP_STATE_DB_PASSWORD": "m1-plain",
+        "MCP_GATE_DB_PASSWORD": "g1-plain",
         "LOADER_PASSWORD": "l1-plain",
         "PROVISIONER_PASSWORD": "p1-plain",
         "IMPERSONATOR_PASSWORD": "i1-plain",

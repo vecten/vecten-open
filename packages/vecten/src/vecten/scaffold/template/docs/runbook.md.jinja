@@ -217,6 +217,10 @@ stored under in AWS Secrets Manager, as `vecten/[[ project_name ]]/<env>/<scope>
 | `ADMIN_*` | `admin` | none: passwords from `vecten user add-admin` |
 | any other name | `platform` | the platform VM |
 
+When upgrading an existing MCP environment to the standalone login gate, apply the updated
+AWS Terraform configuration with `vecten deploy --env <env>` before shipping. It lets the
+setup host generate the gate’s database password. The ship then creates the database login.
+
 Under `minimal` the one VM reads both `platform` and `mcp`. The deploy role reads and writes
 all four scopes, as does an administrator's own AWS login. `vecten secret set <NAME> --env
 <env>` stores a secret from a hidden prompt or standard input, `--from-local` copies it from
@@ -226,7 +230,7 @@ The setup host is the one VM that reads the RDS master credentials: the MCP VM w
 has the `mcp` component, else the platform VM, and `main` under `minimal`. On every ship it runs
 the setup SQL on each instance, which creates the databases, their owner roles and the service
 roles and is safe to repeat, and it generates the database passwords the stack uses:
-`AIRFLOW_DB_PASSWORD` and `LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`,
+`AIRFLOW_DB_PASSWORD` and `LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`, `MCP_GATE_DB_PASSWORD`,
 `MCP_PROVISIONER_PASSWORD` and `MCP_IMPERSONATOR_PASSWORD` in the `mcp` scope, each only when the
 project has what it serves. Its role may create, write and read back exactly those names, so
 that a replaced instance gets the same passwords again. The platform VM generates the Airflow
@@ -563,6 +567,11 @@ to Domains and DNS there, and records it as `cloud_ids["dns_project"]`, which `v
 hands to Terraform. When no project of the organization holds the zone, bootstrap creates
 nothing and exits naming the zone.
 
+When upgrading an existing MCP environment to the standalone login gate, run
+`vecten bootstrap --env <env>` to refresh the key’s permissions, then `vecten deploy --env <env>`
+to create the entry for the gate’s password in Secret Manager. The ship then creates the
+database login.
+
 Run `vecten bootstrap --env <env>` again after changing `components` or `profile`, then
 `vecten deploy --env <env>` straight after. Bootstrap gives a new host its application and key
 and deletes those of a host the configuration no longer has; that host's VM keeps running until
@@ -677,7 +686,7 @@ instance and in its secret together. The admin password in Secret Manager is the
 is overwritten on the next deploy. On every ship the setup host runs the setup SQL on each
 instance, which creates the databases, their owner roles and the service roles and is safe to
 repeat, and it generates the database passwords the stack uses: `AIRFLOW_DB_PASSWORD` and
-`LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`, `MCP_PROVISIONER_PASSWORD`
+`LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`, `MCP_GATE_DB_PASSWORD`, `MCP_PROVISIONER_PASSWORD`
 and `MCP_IMPERSONATOR_PASSWORD` in the `mcp` scope, each only when the project has what it
 serves. Terraform creates each of those secrets empty, so a VM key only ever adds a version to a
 secret that exists; the setup host's key may add versions to and read back exactly those names,
@@ -882,6 +891,7 @@ below.
        ALTER ROLE airflow PASSWORD '<value of AIRFLOW_DB_PASSWORD>';
 [%- if 'mcp' in components %]
        ALTER ROLE mcp_state PASSWORD '<value of MCP_STATE_DB_PASSWORD>';
+       ALTER ROLE mcp_gate PASSWORD '<value of MCP_GATE_DB_PASSWORD>';
 [%- endif %]
 [%- elif 'mcp' in components %]
 
@@ -889,6 +899,7 @@ below.
 
        ALTER ROLE airflow PASSWORD '<value of AIRFLOW_DB_PASSWORD>';
        ALTER ROLE mcp_state PASSWORD '<value of MCP_STATE_DB_PASSWORD>';
+       ALTER ROLE mcp_gate PASSWORD '<value of MCP_GATE_DB_PASSWORD>';
 [%- endif %]
 
    Then run `vecten deploy --env <env>` again: it ships with the passwords the roles now have

@@ -172,6 +172,7 @@ def test_the_setup_host_policy_adds_setup_and_the_exact_generated_names():
         f'resource.name == "{ROOT}/platform/AIRFLOW_DB_PASSWORD" || '
         f'resource.name == "{ROOT}/platform/LOADER_PASSWORD" || '
         f'resource.name == "{ROOT}/mcp/MCP_STATE_DB_PASSWORD" || '
+        f'resource.name == "{ROOT}/mcp/MCP_GATE_DB_PASSWORD" || '
         f'resource.name == "{ROOT}/mcp/MCP_PROVISIONER_PASSWORD" || '
         f'resource.name == "{ROOT}/mcp/MCP_IMPERSONATOR_PASSWORD" || '
         f'resource.name == "{ROOT}/mcp/MCP_SIGNING_KEY"'

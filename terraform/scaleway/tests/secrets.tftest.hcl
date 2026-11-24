@@ -43,6 +43,7 @@ run "shells_for_every_generated_and_airflow_secret" {
       "platform/AIRFLOW_DB_PASSWORD",
       "platform/LOADER_PASSWORD",
       "mcp/MCP_STATE_DB_PASSWORD",
+      "mcp/MCP_GATE_DB_PASSWORD",
       "mcp/MCP_SIGNING_KEY",
       "mcp/MCP_PROVISIONER_PASSWORD",
       "mcp/MCP_IMPERSONATOR_PASSWORD",
@@ -118,8 +119,8 @@ run "mcp_only_writes_the_state_credential_alone" {
   }
 
   assert {
-    condition     = keys(scaleway_secret.shell) == ["mcp/MCP_SIGNING_KEY", "mcp/MCP_STATE_DB_PASSWORD"]
-    error_message = "MCP only generates the state credential; the provisioner credential is stored by hand"
+    condition     = keys(scaleway_secret.shell) == ["mcp/MCP_GATE_DB_PASSWORD", "mcp/MCP_SIGNING_KEY", "mcp/MCP_STATE_DB_PASSWORD"]
+    error_message = "MCP generates the state and gate credentials; the provisioner credential is stored by hand"
   }
   assert {
     condition     = keys(scaleway_secret.admin) == ["state"]

@@ -153,7 +153,7 @@ class Layout:
         if managed:
             names.append("LOADER_PASSWORD")
         if "mcp" in self.components:
-            names.append("MCP_STATE_DB_PASSWORD")
+            names += ["MCP_STATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"]
             if managed:
                 names += ["MCP_PROVISIONER_PASSWORD", "MCP_IMPERSONATOR_PASSWORD"]
         return names

@@ -513,6 +513,7 @@ def _postgres(config: VectenConfig) -> dict:
     if with_mcp:
         environment |= {
             "MCP_STATE_DB_PASSWORD": "${MCP_STATE_DB_PASSWORD}",
+            "MCP_GATE_DB_PASSWORD": "${MCP_GATE_DB_PASSWORD}",
             "PROVISIONER_PASSWORD": "${PROVISIONER_PASSWORD}",
             "IMPERSONATOR_PASSWORD": "${IMPERSONATOR_PASSWORD}",
         }
@@ -743,9 +744,9 @@ def generate_compose(
                     "VECTEN_PROVIDER",
                     "VECTEN_ENV",
                     "VECTEN_PROJECT_ROOT",
-                    "MCP_STATE_DB_PASSWORD",
                 )
-            },
+            }
+            | {"MCP_GATE_DB_PASSWORD": "${MCP_GATE_DB_PASSWORD}"},
             "volumes": ["../../vecten.toml:/app/vecten.toml:ro", *_record_mount(stack_dir, "/app")],
             "networks": ["login-gate"],
             "cap_drop": ["ALL"],

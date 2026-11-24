@@ -257,9 +257,11 @@ run "mcp_only" {
   assert {
     condition = toset(one([for s in jsondecode(module.host["mcp"].scope_policy).Statement : s.Resource if s.Sid == "WriteGeneratedSecrets"])) == toset([
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_STATE_DB_PASSWORD",
+      "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_GATE_DB_PASSWORD",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_STATE_DB_PASSWORD-??????",
+      "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_GATE_DB_PASSWORD-??????",
     ])
-    error_message = "MCP only generates the state credential; the provisioner credential is stored by hand"
+    error_message = "MCP generates the state and gate credentials; the provisioner credential is stored by hand"
   }
 }
 

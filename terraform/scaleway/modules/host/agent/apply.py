@@ -188,7 +188,10 @@ NGINX_UID, NGINX_GID = 101, 101
 # The setup SQL reads these names through \getenv; the store holds the cloud names.
 SETUP_PASSWORDS = {
     "with_airflow": (("AIRFLOW_DB_PASSWORD", "AIRFLOW_DB_PASSWORD"),),
-    "with_mcp_state": (("MCP_STATE_DB_PASSWORD", "MCP_STATE_DB_PASSWORD"),),
+    "with_mcp_state": (
+        ("MCP_STATE_DB_PASSWORD", "MCP_STATE_DB_PASSWORD"),
+        ("MCP_GATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"),
+    ),
     "with_warehouse": (("LOADER_PASSWORD", "LOADER_PASSWORD"),),
     "with_mcp": (
         ("PROVISIONER_PASSWORD", "MCP_PROVISIONER_PASSWORD"),
@@ -483,7 +486,7 @@ def generated_names(outputs: dict) -> list[str]:
     if warehouse:
         names.append("LOADER_PASSWORD")
     if "mcp" in components:
-        names.append("MCP_STATE_DB_PASSWORD")
+        names += ["MCP_STATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"]
         if warehouse:
             names += ["MCP_PROVISIONER_PASSWORD", "MCP_IMPERSONATOR_PASSWORD"]
     return names
@@ -855,6 +858,7 @@ def secret_env(
         )
     if "mcp" in components:
         env["MCP_STATE_DB_PASSWORD"] = _required(backend, "MCP_STATE_DB_PASSWORD")
+        env["MCP_GATE_DB_PASSWORD"] = _required(backend, "MCP_GATE_DB_PASSWORD")
     requested = set(env) | set(host["connector_secrets"] if "platform" in components else ())
     # Optional like connector secrets: an unset name reaches its service empty.
     for name in host["service_secrets"]:
