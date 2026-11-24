@@ -8,6 +8,10 @@ from vecten_shared.names import group_name_problem
 from vecten_shared.output import ExitCode, Failure
 
 
+class SignInHookUnavailable(Exception):
+    """A verified sign-in cannot be completed because an installed access hook failed."""
+
+
 @dataclass
 class McpExtensions:
     tools: dict

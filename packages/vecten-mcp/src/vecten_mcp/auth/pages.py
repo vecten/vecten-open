@@ -76,6 +76,7 @@ def consent_page(flow, csrf, client):
 
 
 FAILURES = {
+    "sign_in_hook_unavailable": "Sign-in access checks are unavailable. Try again later.",
     "access_denied": "The sign-in was declined, so nothing was shared with the client.",
     "temporarily_unavailable": "There were too many attempts from here. Wait a minute.",
     "not_provisioned": "Your account has no access yet. Ask an admin to add you, then try again.",

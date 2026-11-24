@@ -8,6 +8,7 @@ from urllib.parse import urlencode, urlparse
 
 from vecten_mcp.auth.identity import challenge, digest
 from vecten_mcp.auth.limits import RateLimiter
+from vecten_mcp.extensions import SignInHookUnavailable
 
 
 @dataclass
@@ -163,8 +164,12 @@ class OAuthService:
         principal = self.state.bind_identity(identity)
         if first_login and identity.email in self.admins:
             principal = self.state.update_principal(principal["id"], admin=True)
-        if self.on_sign_in:
-            self.on_sign_in(identity, principal)
+        if self.on_sign_in and principal["provisioned"]:
+            try:
+                self.on_sign_in(identity, principal)
+            except SignInHookUnavailable:
+                self.event(principal["id"], "login", identity.email, "denied")
+                raise
         self.event(principal["id"], "login", identity.email, "allowed")
         return principal
 

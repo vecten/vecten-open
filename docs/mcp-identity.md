@@ -160,17 +160,25 @@ receives `config` by keyword and returns a dictionary containing a list of local
 under `groups` and a callable under `handler`. Only one extension can own a group's human
 memberships. The default group always stays local.
 
-After the server verifies a person's identity and binds it to a local account, it calls the
-handler with keyword arguments `identity`, `verified_claims` and `set_membership`. The claims
-come from the verified identity token. Password sign-in supplies an empty dictionary.
-Calling `set_membership(group, grant)` updates the signed-in person's membership in one
-owned group. This requires a provisioned account. Access health lists the managing entry
-point. Local administrators can still delete the group and manage service accounts.
+The server calls the handler after verifying the identity of a person with a provisioned
+warehouse account. People awaiting provisioning, including the first administrator, can sign
+in without invoking hooks. The handler receives `identity`, `verified_claims` and
+`set_membership` by keyword. Password sign-in supplies an empty claims dictionary.
 
-The hook runs at sign-in. Disable a departing person locally to end access when they can no
+Calling `set_membership(group, grant)` updates this person's membership in an owned group.
+Create the group first. A write to a missing owned group has no effect. Access health lists
+the managing entry point. Local administrators can delete groups and manage service accounts.
+Removing the extension returns its memberships to local management. Existing members keep
+their warehouse roles until an administrator revokes them.
+
+Hooks run in a worker thread. The sign-in waits for them, so set timeouts on external calls.
+If a hook raises, the server refuses that sign-in with HTTP 503 and records a denied login.
+Earlier successful membership writes remain in effect. The next sign-in runs the hooks
+again, so handlers should tolerate retries.
+
+Disable a departing person locally to end access when they can no
 longer sign in. Directory synchronization, provider group mapping and SCIM provisioning
 belong to the Enterprise SSO extension.
-
 
 ## People, services, and warehouse roles
 

@@ -12,6 +12,7 @@ from threading import RLock
 from sqlalchemy import delete, insert, select
 
 from vecten_mcp.apps import APP_PRINCIPALS
+from vecten_mcp.extensions import SignInHookUnavailable
 from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships, principals
@@ -462,11 +463,16 @@ class AccessService:
 
     def on_sign_in(self, identity, principal):
         for owner, hook in self.sign_in_hooks.items():
-            hook["handler"](
-                identity=identity,
-                verified_claims=dict(identity.verified_claims),
-                set_membership=partial(self._owned_membership, owner, principal),
-            )
+            try:
+                hook["handler"](
+                    identity=identity,
+                    verified_claims=dict(identity.verified_claims),
+                    set_membership=partial(self._owned_membership, owner, principal),
+                )
+            except Exception as exc:
+                # Hook exceptions can contain verified claims or upstream credentials.
+                logger.error("Sign-in hook %s failed (%s)", owner, type(exc).__name__)
+                raise SignInHookUnavailable() from None
 
     def _owned_membership(self, owner, principal, group, grant):
         if self.membership_owners.get(group) != owner:
@@ -476,6 +482,9 @@ class AccessService:
         if type(grant) is not bool:
             raise ValueError("grant must be a boolean")
         with self.lock:
+            # The extension cannot create a warehouse group on behalf of a signing-in user.
+            if self.state.group(group) is None:
+                return
             if (group in self.state.groups_for(principal["id"])) != grant:
                 self._membership(group, principal, grant)
 

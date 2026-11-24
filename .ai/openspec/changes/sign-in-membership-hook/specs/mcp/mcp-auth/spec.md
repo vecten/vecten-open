@@ -16,3 +16,14 @@ The server SHALL resolve a person's identity through an identity backend selecte
 
 - **WHEN** a configured sign-in hook receives the verified identity and its token claims
 - **THEN** it may write human memberships only for its own declared groups through the access service. Manual changes to those human memberships are refused, access health identifies the owner, and deleting a group still removes its members.
+
+
+#### Scenario: A person awaits provisioning
+
+- **WHEN** an invited person or first administrator signs in before their warehouse account is provisioned
+- **THEN** the server skips membership hooks and continues sign-in
+
+#### Scenario: A hook cannot complete the sign-in check
+
+- **WHEN** a hook for a provisioned person raises an exception
+- **THEN** the server refuses that sign-in, returns 503 and records a denied login without disclosing the exception text

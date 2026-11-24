@@ -242,6 +242,7 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.skills` | Installed directory containing `SKILL.md` and any supporting files. The entry name becomes the project/plugin skill link; built-in skill names (`connector`, `model`, `semantic`, `operate`, `guide`) are reserved. |
 | `vecten.mcp.tools` | Dictionary with callable `handler` and `groups: list[str]`. The server's tool registry returns it only when the caller's groups intersect the declaration. An empty list exposes it to nobody. |
 | `vecten.mcp.auth` | Callable identity backend. Selected by `auth = "company_login"` in the `[mcp]` section of `vecten.toml`; the registry refuses a missing backend at startup. Extensions cannot replace the reserved `password`/`oidc` names. |
+| `vecten.mcp.sign_in` | Factory called with `config` that returns the local groups an extension owns and its verified sign-in handler. See [sign-in extension hooks](mcp-identity.md#sign-in-extension-hooks). |
 | `vecten.mcp.provisioning` | Callable provisioning hook. The registry invokes the named hook with the owning service's arguments. |
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
 | `vecten.services` | A dictionary, or zero-argument factory returning one, declaring one long-running process and its HTTP routes. The entry name is the service's name. `vecten lock` records it; it runs once `vecten.toml` binds it (see [services](#services)). |

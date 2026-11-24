@@ -6,6 +6,7 @@ import secrets
 from html import escape
 from urllib.parse import urlencode
 
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
@@ -27,6 +28,7 @@ from vecten_mcp.auth.pages import (
     redirect_page,
 )
 from vecten_mcp.auth.service import SESSION_SECONDS, RegistrationError
+from vecten_mcp.extensions import SignInHookUnavailable
 from vecten_mcp.failures import describe_error
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -185,7 +187,7 @@ def auth_routes(service, gate=None):
             identity = service.backend.authenticate(
                 str(form.get("email", "")), str(form.get("password", "")), address(request)
             )
-            principal = service.authenticate(form["flow"], identity)
+            principal = await run_in_threadpool(service.authenticate, form["flow"], identity)
         except ValueError:
             service.event(None, "login", None, "denied")
             return login_page(
@@ -256,7 +258,7 @@ def auth_routes(service, gate=None):
         )
         csrf = held(request, "vecten_csrf")
         csrf_check(request, {"flow": flow, "csrf": csrf})
-        principal = service.authenticate(flow, identity)
+        principal = await run_in_threadpool(service.authenticate, flow, identity)
         pending = state.get("flows", digest(flow), now=service.clock())
         if pending and pending.get("gate"):
             # The provider's redirect is a GET, so no form-action rule covers this one.
@@ -510,6 +512,8 @@ def auth_routes(service, gate=None):
                 if int(request.headers.get("content-length", "0")) > 16384:
                     return JSONResponse({"error": "invalid_request"}, status_code=413)
                 response = await handler(request)
+            except SignInHookUnavailable:
+                response = failure_page("sign_in_hook_unavailable", 503)
             except RegistrationError as exc:
                 response = JSONResponse(
                     {"error": exc.error, "error_description": exc.description}, status_code=400

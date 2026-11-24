@@ -454,3 +454,67 @@ def test_a_newer_set_password_link_voids_the_older_one(auth):
         assert _set_password_through_the_page(http, newer).status_code == 200
         assert _set_password_through_the_page(http, older).status_code == 400
     assert service.backend.authenticate(p["email"], "another-long-password", "ip")
+
+
+def test_failing_sign_in_hook_refuses_browser_login_without_exposing_error(auth):
+    import asyncio
+
+    from sqlalchemy import select
+
+    from vecten_mcp.access import AccessService
+    from vecten_mcp.state import access_events
+
+    service, _, p = auth
+
+    def failing(**kwargs):
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        raise RuntimeError("test private detail")
+
+    access = AccessService(
+        service.state, None, sign_in_hooks={"fixture": {"groups": [], "handler": failing}}
+    )
+    service.on_sign_in = access.on_sign_in
+    app = Starlette(routes=auth_routes(service))
+
+    with TestClient(app, base_url="https://mcp.example") as browser:
+        registration = browser.post(
+            "/register",
+            json={"client_name": "Fixture", "redirect_uris": ["http://127.0.0.1/callback"]},
+        ).json()
+        page = browser.get(
+            "/authorize",
+            params={
+                "client_id": registration["client_id"],
+                "redirect_uri": "http://127.0.0.1/callback",
+                "code_challenge": challenge("a" * 43),
+                "code_challenge_method": "S256",
+                "response_type": "code",
+                "resource": service.resource,
+            },
+        )
+        flow = re.search(r'name="flow" value="([^"]+)"', page.text)[1]
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text)[1]
+        response = browser.post(
+            "/login",
+            data={
+                "flow": flow,
+                "csrf": csrf,
+                "email": p["email"],
+                "password": "long-fixture-password",
+            },
+        )
+        assert response.status_code == 503
+        assert "test private detail" not in response.text
+        assert "access checks are unavailable" in response.text
+        assert "principal_id" not in service.state.get("flows", digest(flow))
+        assert not list(service.state.scan("browser_sessions"))
+        with service.state.transaction() as conn:
+            outcomes = (
+                conn.execute(
+                    select(access_events.c.outcome).where(access_events.c.operation == "login")
+                )
+                .scalars()
+                .all()
+            )
+        assert outcomes == ["denied"]
