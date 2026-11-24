@@ -2,18 +2,20 @@
 
 import json
 import re
+from uuid import uuid4
 
 from vecten.deploy.snowflake import environment_names, identity_ship_command, owed_ship_record
 from vecten.mcp_url import mcp_url
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, load_config, save_config
 from vecten_shared.identity_setup import (
-    ACCESS_VERSION,
     introspection_document,
     provisioner_script,
+    snowflake_access_version,
 )
 from vecten_shared.keypair import generate_one_line, load_private_key, public_body
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.provider import shared_layout
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import write_record, write_text_atomic
 
@@ -97,7 +99,11 @@ def setup_script(root, env, confirm=False, public_key=None):
         commands = [f"vecten secret set {name}{flag}" for name in provisioner_secret_names(config)]
     if confirm:
         # Only Snowflake's script installs access procedures that report a version.
-        installed = ACCESS_VERSION if config.warehouse.kind == "snowflake" else None
+        installed = (
+            snowflake_access_version(shared_layout(config, env))
+            if config.warehouse.kind == "snowflake"
+            else None
+        )
         record = {"confirmed": True} | ({"access_version": installed} if installed else {})
         write_record(root, f"provisioner-{env}", record)
         # A deploy of a later environment of the order while its identity was pending shipped
@@ -109,6 +115,7 @@ def setup_script(root, env, confirm=False, public_key=None):
             and before.deployed_commit
             and not before.provisioner_script_run
         ):
+            before.mcp_ship_generation = uuid4().hex
             write_record(root, owed_ship_record(env), {"command": then})
         if env != "local":
             facts = config.environments.setdefault(env, EnvironmentFacts())

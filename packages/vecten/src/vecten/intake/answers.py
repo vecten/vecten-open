@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +26,10 @@ from vecten_shared.output import ExitCode, Failure
 from vecten_shared.records import write_text_atomic
 
 ANSWERS_FILE = "vecten-answers.yml"
+PROJECT_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
+PROJECT_NAME_RULE = (
+    "Use up to 63 lowercase letters, digits, hyphens or underscores, starting with a letter."
+)
 EMPTY_SOURCES = ("none", "start empty")
 DECLINED = "none"
 DECLINABLE = ("domain", "github_repository")
@@ -72,7 +77,9 @@ ANSWER_KEYS: dict[str, AnswerKey] = {
             "warehouse_url", "url", "What is the locator of the existing warehouse?", "local"
         ),
         AnswerKey("users", "int", "How many people and agents will use the warehouse?", "local"),
-        AnswerKey("name", "text", "What should the project be called?", "local"),
+        AnswerKey(
+            "name", "text", f"What should the project be called? {PROJECT_NAME_RULE}", "local"
+        ),
         AnswerKey(
             "cloud",
             "choice",
@@ -103,6 +110,11 @@ ANSWER_KEYS: dict[str, AnswerKey] = {
         ),
     )
 }
+
+
+def check_project_name(value: str) -> None:
+    if not PROJECT_NAME.fullmatch(value):
+        raise Failure(ExitCode.USAGE, f"Invalid project name. {PROJECT_NAME_RULE}")
 
 
 def source_names(items: list[Any]) -> list[str]:
@@ -171,6 +183,8 @@ def validate_answer(key: str, raw: str) -> Any:
         parse_warehouse_locator(locator)
         return locator
     value = raw.strip()
+    if key == "name":
+        check_project_name(value)
     if not value:
         raise Failure(ExitCode.USAGE, f"{key} must not be empty")
     if key in DECLINABLE and value.lower() == DECLINED:

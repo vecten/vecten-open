@@ -123,11 +123,14 @@ def test_every_location_of_a_service_hostname_sets_the_identity_headers_itself(c
         ServiceRoute("/api", "public", allow=("10.0.0.0/8",)),
         ServiceRoute("/settings", "login", groups=("finance",), key="acme-bot.bot.settings"),
     ]
-    block = tls(conf(site(routes=routes), components=components), "bot.data.acme.com")
-    found = locations(block)
+    text = conf(site(routes=routes), components=components)
+    found = locations(tls(text, "bot.data.acme.com"))
+    if "mcp" in components:
+        assert "X-Vecten-On-Behalf-Of" not in tls(text, "mcp.data.acme.com")
     assert len(found) >= 13
     assert len(IDENTITY_HEADERS) == 5
     for key, body in found.items():
+        assert 'proxy_set_header X-Vecten-On-Behalf-Of "";' in body, key
         login = key in ("= /settings", "/settings/")
         for header in IDENTITY_HEADERS:
             variable = "$vecten_gate_" + header.removeprefix("X-Vecten-").lower()

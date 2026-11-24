@@ -396,11 +396,26 @@ and the other files of the credential home, which live only on your laptop:
 9. **Package indexes.** On TestPyPI, add a trusted publisher to each of the four projects
    (`vecten`, `vecten-shared`, `vecten-platform`, `vecten-mcp`): GitHub, owner `vecten`,
    repository `vecten-open`, workflow `publish.yml`, environment `candidate`. On PyPI, the
-   same for each of the four with environment `release`. No index token is stored anywhere:
-   the `publish` workflow signs in to the index as itself.
+   same for each of the four with environment `release`. The `publish` workflow signs in to
+   each index as itself.
 
-   Confirm: each project's Publishing page on both indexes lists exactly that publisher. The
-   first candidate the agent cuts is the first real test.
+   Confirm each project's Publishing page on both indexes lists the expected publisher and
+   each Collaborators page lists only the intended owners and maintainers. A candidate
+   tests publishing to TestPyPI. A release tag on `main` tests PyPI.
+
+   Registering a trusted publisher leaves existing API tokens active. Once these
+   registrations and the required reviewers for the GitHub `release` environment are in
+   place, each owner and maintainer should check the API tokens in their own account on
+   each index. Review both account-wide tokens and tokens scoped to any of the four projects. If another
+   project still uses an account-wide token, move that project to its own publishing
+   credential before revoking the old token. Each token owner should confirm that no
+   remaining token can upload these projects. See the account settings on
+   [PyPI](https://pypi.org/manage/account/#api-tokens) and
+   [TestPyPI](https://test.pypi.org/manage/account/#api-tokens).
+
+   Track confirmation from the owner of the token used for the manual 0.1.0 upload in
+   [issue #22](https://github.com/vecten/vecten-open/issues/22). Record any outstanding
+   confirmation there without including a token value.
 
 10. **Google sign-in.** Each combination deploys under a fixed domain, so its callback address
     is registered once, not per run.

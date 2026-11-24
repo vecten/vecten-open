@@ -421,6 +421,8 @@ class EnvironmentFacts(Strict):
     # Non-secret identifiers `bootstrap` creates, such as the Scaleway project IDs.
     cloud_ids: dict[str, str] = Field(default_factory=dict)
     deployed_commit: str | None = None
+    # A new onboarding cycle must be acknowledged by a ship to this environment.
+    mcp_ship_generation: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     first_user_added: bool = False
     connector_access_applied: list[str] = Field(default_factory=list)
     area_access_applied: list[str] = Field(default_factory=list)

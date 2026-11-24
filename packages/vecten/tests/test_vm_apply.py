@@ -1784,7 +1784,7 @@ def test_private_package_index_read_is_component_scoped(agent, tmp_path, compone
     assert other not in env
 
 
-BRIDGE = "vecten-services"
+BRIDGE = "vecten-+"
 AWS_DROP = ("DOCKER-USER", "-i", BRIDGE, "-d", "169.254.169.254", "-j", "DROP")
 
 
@@ -1831,6 +1831,14 @@ def test_on_scaleway_the_rule_drops_its_metadata_address(agent):
     assert run.rules == {("DOCKER-USER", "-i", BRIDGE, "-d", "169.254.42.42", "-j", "DROP")}
 
 
+def test_an_older_release_keeps_its_exact_bridge_rule(agent):
+    run = FakeRun()
+    agent.isolate_services({"cloud": "aws", "service_network": "vecten-services"}, run)
+    assert run.rules == {
+        ("DOCKER-USER", "-i", "vecten-services", "-d", "169.254.169.254", "-j", "DROP")
+    }
+
+
 def test_a_host_without_services_runs_no_iptables(agent, tmp_path):
     out = outputs("standard")
     release = stage(tmp_path / "releases", out, "platform")
@@ -1839,7 +1847,9 @@ def test_a_host_without_services_runs_no_iptables(agent, tmp_path):
     assert run.argv("iptables") == []
 
 
-@pytest.mark.parametrize("bridge", ["-j", "vecten services", "a" * 16, "x/y"])
+@pytest.mark.parametrize(
+    "bridge", ["-j", "vecten services", "a" * 16, "x/y", "+", "br+", "vecten-++"]
+)
 def test_a_bridge_name_that_is_no_interface_name_is_refused(agent, bridge):
     run = FakeRun()
     with pytest.raises(agent.AgentError, match="interface name"):

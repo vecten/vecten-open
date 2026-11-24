@@ -254,12 +254,14 @@ different rows or masks of the same table, the app shows each viewer the union, 
 group admitted them. Bind such groups to separate apps. A viewer mode, where the app reads as
 the viewing person, is a later change.
 
-**The viewer is audited.** An app may pass the viewing person's email in an
-`X-Vecten-On-Behalf-Of` header. It reads it from the `X-Vecten-User` header the gate sends,
-which is already percent-encoded, and passes it on unchanged. The MCP records it, lower-cased,
-as `on_behalf_of` in the audit row, and only for an app principal. The header must appear once, hold at most 762 ASCII
-characters, and percent-decode to one visible `local@domain` of at most 254 characters.
-Otherwise nothing is recorded. The MCP never uses it to decide anything.
+**Viewer attribution in the audit log.** NGINX clears `X-Vecten-On-Behalf-Of` on incoming
+app requests. To identify the viewer on an MCP call, the app signs in with its own client
+credentials and copies the login gate's percent-encoded `X-Vecten-User` value into
+`X-Vecten-On-Behalf-Of`. The MCP records the decoded, lower-cased email as `on_behalf_of`.
+The header must appear once, hold at most 762 ASCII characters and decode to one visible
+`local@domain` of at most 254 characters. If it is missing or invalid, the audit row identifies
+the app alone. The app's permissions govern the call. See
+[service login headers](services.md#identity-headers-which-to-trust-and-why).
 
 No per-address rate limit applies to an app's tool calls. Only its token request is limited,
 like everyone's, to 60 per minute from one address.

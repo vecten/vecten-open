@@ -209,3 +209,87 @@ def test_init_up_check_down_twice(tmp_path, init_args, expect_airflow):
             assert cleanup.returncode == 0, cleanup.stdout + cleanup.stderr
             assert json.loads(cleanup.stdout)["volumes_removed"] is True
             assert left == []
+
+
+@pytest.mark.skipif(not docker_ok(), reason="no docker daemon")
+def test_airflow_password_rotation(tmp_path):
+    import secrets
+
+    from vecten_shared.provider.local import LocalProvider
+
+    assert (
+        vecten(
+            "init",
+            "p",
+            "--name",
+            "rotation",
+            "--users",
+            "2",
+            "--source",
+            "demo",
+            "--components",
+            "platform",
+            cwd=tmp_path,
+        ).returncode
+        == 0
+    )
+    proj = tmp_path / "p"
+    provider = LocalProvider(proj, inside_compose=False)
+    project = compose_project_name(proj, load_config(proj))
+    legacy = proj / ".vecten/stack/airflow_passwords.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("{}")
+    previous = None
+    try:
+        for _ in range(2):
+            password = secrets.token_urlsafe(32)
+            provider.put_secret("AIRFLOW_ADMIN_PASSWORD", password)
+            up = vecten("up", "--json", cwd=proj)
+            assert up.returncode == 0, up.stderr + up.stdout
+            assert not legacy.exists()
+            assert not any(
+                password.encode() in file.read_bytes()
+                for file in proj.rglob("*")
+                if file.is_file() and file != proj / ".env"
+            )
+            container = service_container(project, "airflow-api-server")
+            metadata = subprocess.check_output(["docker", "inspect", container])
+            assert password.encode() not in metadata
+            fs = subprocess.check_output(
+                ["docker", "exec", container, "stat", "-f", "-c", "%T", "/run/vecten-airflow-auth"]
+            )
+            assert fs.strip() == b"tmpfs"
+            with httpx.Client(verify=False) as client:
+                for url, options in [
+                    ("http://127.0.0.1:8482", {}),
+                    (
+                        "https://127.0.0.1:8443",
+                        {
+                            "headers": {"Host": "airflow.localhost:8443"},
+                            "extensions": {"sni_hostname": "airflow.localhost"},
+                        },
+                    ),
+                ]:
+                    _check_login(client, url, options, password, previous)
+            assert vecten("down", cwd=proj).returncode == 0
+            previous = password
+    finally:
+        vecten("down", "--volumes", cwd=proj)
+        remove_stack_images(project)
+
+
+def _check_login(client, url, options, password, previous):
+    def login(value):
+        return client.post(
+            url + "/auth/token", json={"username": "admin", "password": value}, **options
+        )
+
+    if previous:
+        assert login(previous).status_code == 401
+    response = login(password)
+    assert response.status_code == 201
+    headers = {
+        **options.get("headers", {}),
+        "Authorization": "Bearer " + response.json()["access_token"],
+    }
+    assert client.get(url + "/api/v2/dags", **{**options, "headers": headers}).status_code == 200

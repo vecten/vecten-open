@@ -128,7 +128,7 @@ def mcp_issue_id(*parts: str) -> str:
 def failure_class(exc_type: str, exc_value: str) -> str:
     """The class an Airflow failure is grouped by. The sync task wraps the source's exception
     to name the object, so for that wrapper the class is the one its message names."""
-    if exc_type == SYNC_WRAPPER:
+    if exc_type in (SYNC_WRAPPER, "AirflowFailException"):
         match = _WRAPPED.match(exc_value)
         if match:
             return match.group(1)

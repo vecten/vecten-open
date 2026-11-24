@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from starlette.applications import Starlette
+from starlette.requests import Request
 
 with warnings.catch_warnings():
     warnings.filterwarnings(
@@ -22,7 +23,7 @@ with warnings.catch_warnings():
     from starlette.testclient import TestClient
 
 from vecten_mcp.auth.gate import GateRoute, GateService
-from vecten_mcp.auth.identity import OIDCBackend, PasswordBackend, challenge, digest
+from vecten_mcp.auth.identity import OIDCBackend, PasswordBackend, challenge, cookie_value, digest
 from vecten_mcp.auth.keys import SigningKeys
 from vecten_mcp.auth.routes import auth_routes
 from vecten_mcp.auth.service import OAuthService
@@ -301,3 +302,38 @@ def test_plain_http_signs_in_with_unprefixed_cookies(issuer, base_url):
     sent = set_cookies(page) | set_cookies(signed)
     assert set(sent) == {"vecten_csrf", "vecten_browser"}
     assert all("; secure" not in line for line in sent.values())
+
+
+@pytest.mark.parametrize(
+    "origin,forwarded",
+    [
+        ("http://mcp.example", {}),
+        (
+            "http://mcp.example",
+            {
+                "Forwarded": "host=localhost;proto=http",
+                "X-Forwarded-Host": "127.0.0.1",
+                "X-Forwarded-Proto": "http",
+            },
+        ),
+        ("https://127.0.0.1", {}),
+    ],
+)
+def test_https_issuer_selects_host_cookie_outside_a_plain_loopback_tunnel(https, origin, forwarded):
+    with https.browser(origin) as http:
+        http.headers.update(forwarded)
+        sent = set_cookies(https.authorize(http))
+    assert set(sent) == {"__Host-vecten_csrf"}
+    assert "; secure" in sent["__Host-vecten_csrf"]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [(b"cookie", b"__Host-vecten_csrf=first; __Host-vecten_csrf=second")],
+        [(b"cookie", b"__Host-vecten_csrf=first"), (b"cookie", b"__Host-vecten_csrf=second")],
+    ],
+)
+def test_ambiguous_prefixed_cookie_has_no_value(headers):
+    request = Request({"type": "http", "headers": headers})
+    assert cookie_value(request, "__Host-vecten_csrf") == ""
