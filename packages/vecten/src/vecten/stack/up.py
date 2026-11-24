@@ -31,7 +31,7 @@ from vecten_shared.config import load_config
 from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
 from vecten_shared.output import ExitCode, Failure
-from vecten_shared.records import read_record, remove_record, write_record, write_text_atomic
+from vecten_shared.records import read_record, remove_record, write_record
 from vecten_shared.services import check_bindings
 
 PUBLISHED_REGISTRY = "ghcr.io/vecten"
@@ -191,9 +191,7 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
     )
     served = {HOST_KEYS[c]: hosts[HOST_KEYS[c]] for c in components}
     ensure_self_signed(stack_dir, [*served.values(), *(site.host for site in sites)])
-    if "platform" in components:
-        passwords = {_env(env, "AIRFLOW_ADMIN_USER"): _env(env, "AIRFLOW_ADMIN_PASSWORD")}
-        write_text_atomic(stack_dir / "airflow_passwords.json", json.dumps(passwords), mode=0o600)
+    (stack_dir / "airflow_passwords.json").unlink(missing_ok=True)
     registry = _registry(runner, components)
     from vecten import git_extensions
 
@@ -261,6 +259,7 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
 
 
 def down(project_root: Path, runner: DockerRunner, volumes: bool = False) -> DownResult:
+    (project_root / STACK_DIR / "airflow_passwords.json").unlink(missing_ok=True)
     if not runner.available():
         if volumes:
             raise Failure(
