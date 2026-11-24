@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from vecten_shared.config import VectenConfig
 from vecten_shared.consumer_skills import skill_packages
 from vecten_shared.extensions import load_group, selected_entry_points
+from vecten_shared.names import group_name_problem
 from vecten_shared.output import ExitCode, Failure
 
 
@@ -22,6 +23,8 @@ class McpExtensions:
     audit_sinks: dict
     tool_plugins: dict = field(default_factory=dict)
     consumer_skills: dict[str, SkillDownload] = field(default_factory=dict)
+
+    sign_in_hooks: dict = field(default_factory=dict)
 
     @classmethod
     def from_config(cls, config: VectenConfig) -> McpExtensions:
@@ -55,6 +58,23 @@ class McpExtensions:
             for name, hook in entries.items():
                 if not callable(hook):
                     raise Failure(ExitCode.CONFIG, f"{label} extension {name} must be callable")
+        owned = {"default"}
+        for name, factory in load_group(config, "vecten.mcp.sign_in").items():
+            hook = factory(config=config) if callable(factory) else None
+            if not isinstance(hook, dict) or not callable(hook.get("handler")):
+                raise Failure(ExitCode.CONFIG, f"sign-in extension {name} needs a handler")
+            names = hook.get("groups")
+            if not isinstance(names, list) or any(
+                not isinstance(group, str) or group_name_problem(group) for group in names
+            ):
+                raise Failure(ExitCode.CONFIG, f"sign-in extension {name} needs a group list")
+            if name == "local" or owned.intersection(names):
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"sign-in extension {name} claims a reserved name or an owned group",
+                )
+            owned.update(names)
+            instance.sign_in_hooks[name] = hook
         if set(instance.auth) & {"password", "oidc"}:
             raise Failure(ExitCode.CONFIG, "extension cannot replace a built-in identity backend")
         if config.mcp.auth not in {"password", "oidc"}:
@@ -87,3 +107,7 @@ class McpExtensions:
     def emit_audit(self, row: dict) -> None:
         for sink in self.audit_sinks.values():
             sink(dict(row))
+
+
+class SignInHookUnavailable(Exception):
+    """A verified sign-in cannot be completed because an installed access hook failed."""

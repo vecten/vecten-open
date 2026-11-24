@@ -267,7 +267,11 @@ class OIDCBackend:
             ):
                 raise ValueError("OIDC identity is unverified, expired or misbound")
             return Identity(
-                self.issuer, claims["sub"], claims["email"], claims.get("name") or claims["email"]
+                self.issuer,
+                claims["sub"],
+                claims["email"],
+                claims.get("name") or claims["email"],
+                verified_claims=claims,
             ), pending["flow"]
         except (httpx.HTTPError, jwt.PyJWTError, KeyError, StopIteration, TypeError) as exc:
             raise ValueError("OIDC authentication failed") from exc

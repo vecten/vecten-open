@@ -6,14 +6,16 @@ import logging
 import re
 import time
 from collections import defaultdict
+from functools import partial
 from threading import RLock
 
 from sqlalchemy import delete, insert, select
 
 from vecten_mcp.apps import APP_PRINCIPALS
+from vecten_mcp.extensions import SignInHookUnavailable
 from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
-from vecten_mcp.state import groups, memberships
+from vecten_mcp.state import groups, memberships, principals
 from vecten_mcp.warehouse.base import Absent, RoleExists
 from vecten_shared.identity_setup import (
     ACCESS_VERSION,
@@ -97,10 +99,24 @@ class Undeclared(ValueError):
 
 
 class AccessService:
-    def __init__(self, state, adapter, *, invalidate=None, areas=(), source_areas=(), built=None):
+    def __init__(
+        self,
+        state,
+        adapter,
+        *,
+        invalidate=None,
+        areas=(),
+        source_areas=(),
+        built=None,
+        sign_in_hooks=None,
+    ):
         self.state, self.adapter = state, adapter
         self.invalidate = invalidate or (lambda pid: None)
         self.datasets = {}
+        self.sign_in_hooks = sign_in_hooks or {}
+        self.membership_owners = {
+            group: name for name, hook in self.sign_in_hooks.items() for group in hook["groups"]
+        }
         self.areas = frozenset(areas)
         self.source_areas = frozenset(source_areas)
         # What the dbt DAG's last full build made, or None without a current record; None
@@ -425,7 +441,7 @@ class AccessService:
                     ).scalars()
                 )
             for pid in ids:
-                self.membership(name, pid, False)
+                self._membership(name, self.state.principal(pid), False)
             self.adapter.drop_group(group["warehouse_role"])
             with self.state.transaction() as conn:
                 # Dropping the role took every grant it held, revokes refused above included.
@@ -445,11 +461,65 @@ class AccessService:
             raise ValueError("unknown group")
         return group
 
+    def on_sign_in(self, identity, principal) -> bool:
+        """Return False when an admin keeps their prior memberships after a handler fails."""
+        # An admin can continue on a handler failure only if none of the handlers' writes landed.
+        pending = {} if principal["admin"] else None
+        for owner, hook in self.sign_in_hooks.items():
+            try:
+                hook["handler"](
+                    identity=identity,
+                    verified_claims=dict(identity.verified_claims),
+                    set_membership=partial(self._owned_membership, owner, principal, pending),
+                )
+            except Exception as exc:
+                # Hook exceptions can contain verified claims or upstream credentials.
+                logger.error("Sign-in hook %s failed (%s)", owner, type(exc).__name__)
+                if pending is not None:
+                    return False
+                raise SignInHookUnavailable() from None
+        if pending:
+            try:
+                with self.lock:
+                    for group, grant in pending.items():
+                        self._apply_owned_membership(principal, group, grant)
+            except Exception as exc:
+                # A storage failure can follow a successful write. The admin fallback is unsafe.
+                logger.error("Sign-in membership update failed (%s)", type(exc).__name__)
+                raise SignInHookUnavailable() from None
+        return True
+
+    def _owned_membership(self, owner, principal, pending, group, grant):
+        if self.membership_owners.get(group) != owner:
+            raise ValueError(f"{owner} does not manage membership of {group}")
+        if principal["kind"] != "human" or not principal["provisioned"]:
+            raise ValueError("managed memberships require a provisioned person")
+        if type(grant) is not bool:
+            raise ValueError("grant must be a boolean")
+        if pending is None:
+            self._apply_owned_membership(principal, group, grant)
+        else:
+            pending[group] = grant
+
+    def _apply_owned_membership(self, principal, group, grant):
+        with self.lock:
+            # The extension cannot create a warehouse group on behalf of a signing-in user.
+            if self.state.group(group) is None:
+                return
+            if (group in self.state.groups_for(principal["id"])) != grant:
+                self._membership(group, principal, grant)
+
     def membership(self, group, principal_id, grant=True):
-        role = self.require_group(group)["warehouse_role"]
         principal = self.state.principal(principal_id)
         if not principal or not principal["provisioned"]:
             raise ValueError("principal is not provisioned")
+        if principal["kind"] == "human" and group in self.membership_owners:
+            raise ValueError(f"{self.membership_owners[group]} manages human membership of {group}")
+        return self._membership(group, principal, grant)
+
+    def _membership(self, group, principal, grant):
+        role = self.require_group(group)["warehouse_role"]
+        principal_id = principal["id"]
         marked, app = self.apps.app_of(principal_id) if self.apps else (False, None)
         if marked:
             if grant and (app is None or group not in app.groups):
@@ -1129,6 +1199,23 @@ class AccessService:
             "unbound_roles": [],
             "unbuilt": [],
         }
+        if self.membership_owners:
+            with self.state.transaction() as conn:
+                rows = conn.execute(
+                    select(memberships.c.principal_id, memberships.c.group_name, principals.c.kind)
+                    .join(principals, principals.c.id == memberships.c.principal_id)
+                    .order_by(memberships.c.principal_id, memberships.c.group_name)
+                )
+                health["membership_sources"] = [
+                    {
+                        "principal_id": pid,
+                        "group": name,
+                        "source": self.membership_owners.get(name, "local")
+                        if kind == "human"
+                        else "local",
+                    }
+                    for pid, name, kind in rows
+                ]
         if self.apps is not None and self.apps.apps:
             health = {**health, "apps": self.apps.health() + self.app_role_health()}
         return health

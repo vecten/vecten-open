@@ -36,6 +36,7 @@ def test_supported_groups():
         "vecten.mcp.auth",
         "vecten.mcp.provisioning",
         "vecten.mcp.audit_sinks",
+        "vecten.mcp.sign_in",
         "vecten.skills",
         "vecten.consumer_skills",
         "vecten.services",

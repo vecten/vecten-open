@@ -1,4 +1,4 @@
-"""Check release wheels, including actual installed metadata for a ten-group fixture."""
+"""Check release wheels, including actual installed metadata for the extension fixture."""
 
 import argparse
 import ast
@@ -89,6 +89,7 @@ with tempfile.TemporaryDirectory() as project:
             "monthly-orders/SKILL.md", "monthly-orders/references/orders.md",
         ]
     assert registry.tools_for({"analyst"})["fixture"]() == "fixture"
+    assert registry.sign_in_hooks["fixture"]["groups"] == []
     assert registry.identity_backend("fixture")({})["subject"] == "fixture"
     assert registry.provision("fixture", "alice") == "alice"
     registry.emit_audit({"receipt": "one"})

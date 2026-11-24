@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from vecten_mcp.auth.client_metadata import metadata_redirect_matches, redirect_allowed
 from vecten_mcp.auth.identity import challenge, digest
 from vecten_mcp.auth.limits import RateLimiter
+from vecten_mcp.extensions import SignInHookUnavailable
 
 
 @dataclass
@@ -41,12 +42,22 @@ def is_admin(caller):
 
 class OAuthService:
     def __init__(
-        self, state, keys, issuer, backend, *, admins=(), clock=time.time, revoke_session=None
+        self,
+        state,
+        keys,
+        issuer,
+        backend,
+        *,
+        admins=(),
+        clock=time.time,
+        revoke_session=None,
+        on_sign_in=None,
     ):
         self.state, self.keys, self.backend = state, keys, backend
         self.issuer, self.clock = issuer.rstrip("/"), clock
         self.resource = self.issuer + "/mcp"
         self.admins = {email.lower() for email in admins}
+        self.on_sign_in = on_sign_in
         self.revoke_session = revoke_session or (lambda sid: None)
         self.registration_limit = RateLimiter(limit=10, window=60, clock=clock)
         self.token_limit = RateLimiter(limit=60, window=60, clock=clock)
@@ -165,6 +176,18 @@ class OAuthService:
         principal = self.state.bind_identity(identity)
         if first_login and identity.email in self.admins:
             principal = self.state.update_principal(principal["id"], admin=True)
+        if self.on_sign_in and principal["provisioned"]:
+            try:
+                if self.on_sign_in(identity, principal) is False:
+                    # An administrator can be demoted or disabled while an external hook is waiting.
+                    current = self.state.principal(principal["id"])
+                    if not current or not current["enabled"] or not current["admin"]:
+                        raise SignInHookUnavailable()
+                    principal = current
+                    self.event(principal["id"], "login", identity.email, "hook_failed")
+            except SignInHookUnavailable:
+                self.event(principal["id"], "login", identity.email, "denied")
+                raise
         self.event(principal["id"], "login", identity.email, "allowed")
         return principal
 

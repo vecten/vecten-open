@@ -472,3 +472,220 @@ def test_a_newer_set_password_link_voids_the_older_one(auth):
         assert _set_password_through_the_page(http, newer).status_code == 200
         assert _set_password_through_the_page(http, older).status_code == 400
     assert service.backend.authenticate(p["email"], "another-long-password", "ip")
+
+
+def browser_password_login(service, person):
+    app = Starlette(routes=auth_routes(service))
+    with TestClient(app, base_url="https://mcp.example") as browser:
+        registration = browser.post(
+            "/register",
+            json={"client_name": "Fixture", "redirect_uris": ["http://127.0.0.1/callback"]},
+        ).json()
+        page = browser.get(
+            "/authorize",
+            params={
+                "client_id": registration["client_id"],
+                "redirect_uri": "http://127.0.0.1/callback",
+                "code_challenge": challenge("a" * 43),
+                "code_challenge_method": "S256",
+                "response_type": "code",
+                "resource": service.resource,
+            },
+        )
+        flow = re.search(r'name="flow" value="([^"]+)"', page.text)[1]
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text)[1]
+        response = browser.post(
+            "/login",
+            data={
+                "flow": flow,
+                "csrf": csrf,
+                "email": person["email"],
+                "password": "long-fixture-password",
+            },
+        )
+        return response, flow
+
+
+def login_audit_outcomes(service, principal_id):
+    from sqlalchemy import select
+
+    from vecten_mcp.state import access_events
+
+    with service.state.transaction() as conn:
+        query = select(access_events.c.outcome).where(
+            access_events.c.operation == "login", access_events.c.principal_id == principal_id
+        )
+        return sorted(conn.execute(query).scalars())
+
+
+def assert_hook_login_refused(service, person, response, flow):
+    assert response.status_code == 503
+    assert "access checks are unavailable" in response.text
+    assert "private diagnostic" not in response.text
+    assert "principal_id" not in service.state.get("flows", digest(flow))
+    assert not list(service.state.scan("browser_sessions"))
+    assert login_audit_outcomes(service, person["id"]) == ["denied"]
+
+
+def test_failing_sign_in_hook_refuses_nonadmin_without_exposing_error(auth, caplog):
+    import asyncio
+
+    from vecten_mcp.access import AccessService
+
+    service, _, person = auth
+    # This is a returning non-admin. A bootstrap email in configuration cannot override that flag.
+    service.state.bind_identity(
+        Identity("password", person["email"], person["email"], person["name"])
+    )
+    assert person["email"] in service.admins
+    assert not service.state.principal(person["id"])["admin"]
+
+    def failing(**kwargs):
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        raise RuntimeError("private diagnostic")
+
+    access = AccessService(
+        service.state, None, sign_in_hooks={"fixture": {"groups": [], "handler": failing}}
+    )
+    service.on_sign_in = access.on_sign_in
+    response, flow = browser_password_login(service, person)
+    assert_hook_login_refused(service, person, response, flow)
+    assert "RuntimeError" in caplog.text
+    assert "private diagnostic" not in caplog.text
+
+
+@pytest.fixture
+def admin_hook_login(auth):
+    from unittest.mock import Mock
+
+    from vecten_mcp.access import AccessService
+
+    service, _, person = auth
+    service.admins.clear()
+    service.state.update_principal(person["id"], admin=True)
+    warehouse = Mock(spec=["create_group", "membership"])
+    existing = AccessService(service.state, warehouse)
+    existing.create_group("original")
+    existing.create_group("requested")
+    existing.membership("original", person["id"])
+    warehouse.membership.reset_mock()
+    return service, person, warehouse
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["handler-fails", "handlers-succeed"])
+def test_provisioned_admin_signs_in_with_staged_memberships(admin_hook_login, caplog, fail):
+    from unittest.mock import call
+
+    from vecten_mcp.access import AccessService
+
+    service, person, warehouse = admin_hook_login
+    ran = []
+
+    def remove_original(*, set_membership, **kwargs):
+        set_membership("original", False)
+        ran.append("first")
+
+    def add_requested(*, set_membership, **kwargs):
+        set_membership("requested", True)
+        ran.append("second")
+        if fail:
+            raise RuntimeError("private diagnostic")
+
+    access = AccessService(
+        service.state,
+        warehouse,
+        sign_in_hooks={
+            "first": {"groups": ["original"], "handler": remove_original},
+            "second": {"groups": ["requested"], "handler": add_requested},
+        },
+    )
+    service.on_sign_in = access.on_sign_in
+    response, flow = browser_password_login(service, person)
+    assert response.status_code == 200
+    assert "Approve" in response.text
+    assert service.state.get("flows", digest(flow))["principal_id"] == person["id"]
+    assert any(
+        row["principal_id"] == person["id"] for _, row in service.state.scan("browser_sessions")
+    )
+    assert service.state.principal(person["id"])["admin"]
+    assert ran == ["first", "second"]
+    if fail:
+        warehouse.membership.assert_not_called()
+        assert service.state.groups_for(person["id"]) == {"default", "original"}
+        assert login_audit_outcomes(service, person["id"]) == ["allowed", "hook_failed"]
+        assert "RuntimeError" in caplog.text
+        assert "private diagnostic" not in caplog.text
+        assert "private diagnostic" not in response.text
+    else:
+        warehouse.membership.assert_has_calls(
+            [
+                call("original", person["warehouse_name"], False),
+                call("requested", person["warehouse_name"], True),
+            ],
+            any_order=True,
+        )
+        assert warehouse.membership.call_count == 2
+        assert service.state.groups_for(person["id"]) == {"default", "requested"}
+        assert login_audit_outcomes(service, person["id"]) == ["allowed"]
+
+
+def test_admin_login_is_refused_when_applying_memberships_fails(admin_hook_login, caplog):
+    from vecten_mcp.access import AccessService
+
+    service, person, warehouse = admin_hook_login
+    warehouse.membership.side_effect = [None, RuntimeError("private diagnostic")]
+
+    def handler(*, set_membership, **kwargs):
+        set_membership("original", False)
+        set_membership("requested", True)
+
+    access = AccessService(
+        service.state,
+        warehouse,
+        sign_in_hooks={
+            "fixture": {"groups": ["original", "requested"], "handler": handler},
+        },
+    )
+    service.on_sign_in = access.on_sign_in
+    response, flow = browser_password_login(service, person)
+    assert warehouse.membership.call_count == 2
+    assert_hook_login_refused(service, person, response, flow)
+    assert "RuntimeError" in caplog.text
+    assert "private diagnostic" not in caplog.text
+
+
+def test_admin_demoted_while_hook_is_running_is_denied(admin_hook_login):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from vecten_mcp.access import AccessService
+
+    service, person, warehouse = admin_hook_login
+    waiting, resume = Event(), Event()
+
+    def slow_hook(*, set_membership, **kwargs):
+        set_membership("original", False)
+        waiting.set()
+        assert resume.wait(timeout=10)
+        raise RuntimeError("private diagnostic")
+
+    access = AccessService(
+        service.state,
+        warehouse,
+        sign_in_hooks={
+            "fixture": {"groups": ["original"], "handler": slow_hook},
+        },
+    )
+    service.on_sign_in = access.on_sign_in
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        login = pool.submit(browser_password_login, service, person)
+        try:
+            assert waiting.wait(timeout=10)
+            service.state.update_principal(person["id"], admin=False)
+        finally:
+            resume.set()
+        response, flow = login.result(timeout=10)
+    assert_hook_login_refused(service, person, response, flow)
+    assert service.state.groups_for(person["id"]) == {"default", "original"}
+    warehouse.membership.assert_not_called()

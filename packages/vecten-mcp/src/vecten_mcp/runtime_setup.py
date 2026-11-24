@@ -296,11 +296,6 @@ def configured_runtime(root, config, extensions):
     else:
         adapter = snowflake_adapter(config, env, secrets, keys)
     pools = PrincipalPools(adapter, max_connections=int(os.environ.get("VECTEN_MCP_POOL_CAP", "2")))
-    oauth = OAuthService(
-        state, keys, issuer, backend, admins=config.mcp.admins, revoke_session=pools.revoke_session
-    )
-
-    pools.validate = session_validator(state, oauth.clock)
     access = AccessService(
         state,
         adapter,
@@ -308,7 +303,19 @@ def configured_runtime(root, config, extensions):
         areas=config.areas,
         source_areas=source_layer_areas(config.areas),
         built=built_reader(config, os.environ),
+        sign_in_hooks=extensions.sign_in_hooks,
     )
+    oauth = OAuthService(
+        state,
+        keys,
+        issuer,
+        backend,
+        admins=config.mcp.admins,
+        revoke_session=pools.revoke_session,
+        on_sign_in=access.on_sign_in if extensions.sign_in_hooks else None,
+    )
+
+    pools.validate = session_validator(state, oauth.clock)
     access.seed_defaults()
     idle_setting = state.get("settings", "session_idle_seconds")
     if idle_setting:

@@ -158,6 +158,38 @@ issuer with an `http://` URL and to the loopback tunnel to `http://127.0.0.1:800
 same cookies go by their names without `__Host-` and without `Secure`, and the panel's and
 `/apps` page's are scoped to `/admin` and `/apps`. Browsers do not separate cookies by port, so
 on a loopback address any other local server could set them.
+## Sign-in extension hooks
+
+An installed project extension can register a `vecten.mcp.sign_in` entry point. Its factory
+receives `config` by keyword and returns a dictionary containing a list of local group names
+under `groups` and a callable under `handler`. Only one extension can own a group's human
+memberships. The default group always stays local.
+
+The server calls the handler after verifying the identity of a person with a provisioned
+warehouse account. People awaiting provisioning, including the first administrator, can sign
+in without invoking hooks. The handler receives `identity`, `verified_claims` and
+`set_membership` by keyword. Password sign-in supplies an empty claims dictionary.
+
+Call `set_membership(group, True)` to add the person to a group the extension owns, or
+`set_membership(group, False)` to remove them.
+Create the group first. A write to a missing owned group has no effect. Access health lists
+the managing entry point. Local administrators can delete groups and manage service accounts.
+Removing the extension returns its memberships to local management. Existing members keep
+their warehouse roles until an administrator revokes them.
+
+Hooks run in a worker thread. The sign-in waits for them, so set timeouts on external calls.
+For a provisioned administrator, membership changes take effect after every hook returns
+successfully. If any hook raises an exception, the administrator can still open the admin panel
+to investigate. They keep their existing memberships, and the access log records a `hook_failed`
+login event followed by the usual `allowed` event.
+For other provisioned people, the same exception returns HTTP 503 and the access log records
+`denied`. Membership changes completed before the exception stay in effect for those people.
+The server log identifies the failing hook and the exception type. The next sign-in runs
+the hooks again, so handlers should tolerate retries.
+
+Disable a departing person locally to end access when they can no
+longer sign in. Directory synchronization, provider group mapping and SCIM provisioning
+belong to the Enterprise SSO extension.
 
 ## People, services, and warehouse roles
 
