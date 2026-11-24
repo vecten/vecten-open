@@ -374,6 +374,14 @@ def test_guide_dispatches_to_the_vendored_skill_paths():
         assert f"skills/{name}/SKILL.md" in body, name
 
 
+def test_secret_handoff_uses_the_verified_cli_even_outside_the_persons_path():
+    guide = " ".join(skill_body("guide").split())
+    assert (
+        "`vecten secret set` command for their terminal, give them the same absolute "
+        "executable path, shell-quoted" in guide
+    )
+
+
 def test_guide_names_every_post_deploy_answer_key():
     body = skill_body("guide")
     keys = [*OIDC.answer_keys, *ADMIN.answer_keys, "mcp.auth", "alert_webhook.prod"]

@@ -107,7 +107,9 @@ and resume once uv is available. Run `uv tool install --upgrade --python 3.14 'v
 If uv offers only a Python prerelease, update uv using its original installation method
 and retry with stable Python 3.14. Run `uv tool dir --bin` and append `/vecten` to the
 printed directory. Use that absolute path for `version --json` and every subsequent
-Vecten command, including `next --json`, even in a fresh shell. Check the version again
+Vecten command, including `next --json`, even in a fresh shell. When handing the person
+a `vecten secret set` command for their terminal, give them the same absolute executable
+path, shell-quoted so a space in the path is preserved. They type the secret at the prompt. Check the version again
 before intake. If installation fails or the version is incompatible, report the error and stop.
 The local stack also needs a running Docker daemon when the guide reaches `vecten up`.
 
