@@ -3,9 +3,10 @@ every request, so the person's current groups decide each one.
 
 NGINX on a service hostname forwards /_vecten/gate/start, /callback and /logout here as
 /gate/start, /gate/callback and /gate/logout, and each `login` request's check as /gate/verify,
-naming the hostname in X-Vecten-Gate-Host. None of these trusts that header for anything a
-secret does not also prove: a code needs the verifier from the starting browser's state cookie,
-and verify answers only for the session id in the gate cookie.
+naming the hostname in X-Vecten-Gate-Host. A forward-auth proxy can instead supply
+X-Forwarded-Host and use /gate/verify?forwarded=1 to check the declared host, path and method.
+The forwarded host must match a configured hostname and port. A host header alone cannot
+redeem a code without the starting browser's verifier or verify a session without its cookie.
 """
 
 import hmac
@@ -74,17 +75,17 @@ class GateService:
             # Service hostnames sit beside mcp.<domain>; without that name none can be known.
             return cls(oauth, {}, apps=apps)
         domain = name.removeprefix("mcp.")
-        if record is None:
-            record = getattr(oauth, "record", {})
         routes = {}
         paths = {}
         for extension, bindings in config.services.items():
             for service, binding in bindings.items():
+                entry = (record or {}).get(extension)
+                declared = entry.services.get(service) if entry else None
+                if record is not None and declared is None:
+                    continue
                 if binding.hostname is None:
                     continue
                 host = service_hostname(binding.hostname, domain)
-                entry = (record or {}).get(extension)
-                declared = entry.services.get(service) if entry else None
                 if declared and (domain != "localhost" or binding.local):
                     paths[host] = {
                         route_prefix(route.path): f"{extension}.{service}.{name}"

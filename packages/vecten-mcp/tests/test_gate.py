@@ -84,7 +84,9 @@ class Browser:
 
     def service(self, host, path, *, method="GET", headers=None, cookies=None, data=None):
         jar = self.jars.setdefault(host, {}) if cookies is None else cookies
-        sent = {"X-Vecten-Gate-Host": host, **(headers or {})}
+        sent = (headers or {}).copy()
+        if "X-Forwarded-Host" not in sent:
+            sent["X-Vecten-Gate-Host"] = host
         # NGINX sends the gate the two cookies it reads by exact name, and no other.
         forwarded = {k: v for k, v in jar.items() if k in (GATE, STATE)}
         if forwarded:
@@ -195,6 +197,27 @@ def test_first_visit_signs_in_on_the_server_and_lands_on_the_path(gate):
     assert answer.headers["x-vecten-name"] == "Ada Lovelace"
     assert answer.headers["x-vecten-groups"] == "default"
     assert answer.headers["x-vecten-admin"] == "false"
+
+
+def test_forwarded_host_with_https_port_signs_in_and_redeems_the_code(gate):
+    _, browser, _ = gate
+    headers = {"X-Forwarded-Host": f"{PORTAL}:443"}
+    start = browser.service(PORTAL, "/gate/start?rd=/docs", headers=headers)
+    page = browser.mcp.get(start.headers["location"])
+    done = browser.mcp.post(
+        "/login",
+        data={
+            "flow": hidden(page, "flow"),
+            "csrf": hidden(page, "csrf"),
+            "email": "ada@acme.com",
+            "password": PASSWORD,
+        },
+    )
+    callback = urlsplit(unescape(re.search(r'<a href="([^"]+)"', done.text)[1]))
+    assert callback.hostname == PORTAL
+    landed = browser.service(PORTAL, "/gate/callback?" + callback.query, headers=headers)
+    assert landed.status_code == 303 and landed.headers["location"] == "/docs"
+    assert browser.verify(PORTAL, HOME).status_code == 200
 
 
 def test_the_session_id_is_stored_only_as_a_hash(gate):
@@ -692,9 +715,7 @@ def test_forwarded_route_uses_the_longest_declared_prefix_and_the_live_session(g
         }
     )
     record = {"acme-portal": Extension("1.0", (), services={"web": declaration})}
-    original.oauth.record = record
-    service = GateService.from_config(original.oauth, config_doc)
-    assert GateService.from_config(original.oauth, config_doc, record=record).paths == service.paths
+    service = GateService.from_config(original.oauth, config_doc, record=record)
     browser = Browser(Starlette(routes=auth_routes(original.oauth, service)))
 
     def verify(uri="/", method="GET", host=PORTAL, **options):
