@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,36 @@ def in_image(image: str, script: str, *docker_args: str) -> subprocess.Completed
     )
 
 
+def reporting_settings(settings):
+    return [
+        f"{section}.{option}"
+        for section, options in settings.items()
+        for option in options
+        if any(
+            word in f"{section}.{option}".lower()
+            for word in ("usage", "telemetry", "analytics", "scarf", "anonymous", "tracking")
+        )
+    ]
+
+
+def test_new_usage_reporting_section_or_option_requires_review():
+    settings = {
+        "core": ["executor", "telemetry_enabled", "send_anonymous_usage_stats", "scarf_endpoint"],
+        "usage_data_collection": ["enabled"],
+        "analytics_tool": ["enabled"],
+        "web": ["anonymous_events", "tracking_url", "otel_host", "statsd_host"],
+    }
+    assert reporting_settings(settings) == [
+        "core.telemetry_enabled",
+        "core.send_anonymous_usage_stats",
+        "core.scarf_endpoint",
+        "usage_data_collection.enabled",
+        "analytics_tool.enabled",
+        "web.anonymous_events",
+        "web.tracking_url",
+    ]
+
+
 @pytest.mark.skipif(not docker_ok(), reason="no docker daemon")
 def test_dbt_dag_tests_pass_inside_the_airflow_image():
     build = subprocess.run(
@@ -47,6 +78,29 @@ def test_dbt_dag_tests_pass_inside_the_airflow_image():
     from vecten.stack.images import base_image
 
     image = base_image("airflow", None)
+
+    config = in_image(
+        image,
+        'python -c "import json; from airflow.configuration import conf; '
+        "print(json.dumps({s: list(options) for s, options in "
+        'conf.as_dict(display_sensitive=False).items()}))"',
+        "--network",
+        "none",
+    )
+    assert config.returncode == 0, config.stderr[-4000:]
+    settings = json.loads(config.stdout.strip().splitlines()[-1])
+    assert "core" in settings, "Airflow returned no core configuration"
+    review = reporting_settings(settings)
+    assert not review, f"Review Airflow usage reporting against PRIVACY.md: {review}"
+
+    endpoint = in_image(
+        image,
+        """package=$(python -c 'import airflow; print(airflow.__path__[0])') || exit 2
+        grep -rIlF 'scarf.sh' "$package" """,
+        "--network",
+        "none",
+    )
+    assert endpoint.returncode == 1, endpoint.stdout + endpoint.stderr
 
     imports = in_image(image, 'python -c "import dbt.cli.main, vecten_platform.dbt.airflow_dag"')
     assert imports.returncode == 0, imports.stdout[-4000:] + imports.stderr[-4000:]

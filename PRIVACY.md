@@ -5,7 +5,8 @@ from it.
 
 - **No usage data.** The `vecten` CLI, the four Python packages and the two container images send
   no usage data or telemetry to Vecten or anyone else. They switch off dlt's and dbt's anonymous
-  usage reporting, and the Apache Airflow version in the image has none.
+  usage reporting, and the Apache Airflow version in the image has none. The Airflow image
+  test checks the installed configuration for reporting settings when the image changes.
 - **The plugin.** The Claude Code plugin is a set of skill instructions. It contains no code of
   its own, collects nothing and calls no service.
 - **Your data stays where you put it.** The platform and the MCP run on your laptop or in the cloud
