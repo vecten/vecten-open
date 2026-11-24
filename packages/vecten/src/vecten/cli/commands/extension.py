@@ -1,3 +1,5 @@
+from typing import Annotated
+
 import typer
 
 from vecten.cli.context import CliContext
@@ -14,9 +16,18 @@ extension = typer.Typer(help="Install and register Python extensions.")
 
 
 @extension.command("add")
-def add(package: str, json_output: bool = JsonFlag) -> None:
+def add(
+    package: str,
+    settings: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--set", help="Set a base setting as key=value. Repeat for multiple settings."
+        ),
+    ] = None,
+    json_output: bool = JsonFlag,
+) -> None:
     def run(ctx: CliContext) -> Result:
-        data = add_extension(ctx.require_project(), package)
+        data = add_extension(ctx.require_project(), package, settings=settings)
         message = f"installed {data['package']}"
         if data.get("source", {}).get("tag"):
             message += f" (tag {data['source']['tag']})"

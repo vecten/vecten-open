@@ -335,11 +335,18 @@ manifest's default. An override replaces the whole value, with no merge of neste
 `[settings.project]` holds the project's own values the same way, without a schema: they are
 checked only for having a JSON type. TOML dates and times are refused; use strings.
 
+To install with required settings, run for example
+`vecten extension add ./extensions/acme-resolution --set daily_cap=10 --set dry_run=false`.
+Each option sets one base value. Spaces around a TOML literal are allowed, so
+`--set 'daily_cap = 10'` sets an integer. Quote strings that look like TOML literals.
+For example, `--set 'version="1.0"'` sets a string and `--set version=1.0` sets a float.
+Unquoted text such as `label=one=two` stays text.
+
 **Checks.** Values are checked against the manifest's schema, which may use `properties` typed
 `string`, `integer`, `number`, `boolean`, `array` or `object`, with `default`, `description`,
 `enum`, `minimum`, `maximum` and `items`, plus `required`; unknown settings are always refused,
-and no setting may be named `env`. `vecten lock` checks the laptop and every environment an
-override names, `vecten up` the laptop, `vecten ship` and `ship --check` the environment
+and no setting may be named `env`. `vecten extension add` and `vecten lock` check the laptop and every
+environment an override names, `vecten up` the laptop, `vecten ship` and `ship --check` the environment
 shipped, and the MCP server every extension's settings before it starts serving. An error
 names `settings.<namespace>.<key>` and the environment, before anything starts. On a VM a change
 takes effect at the next ship; on the laptop at the next read, because `vecten.toml` is mounted.
