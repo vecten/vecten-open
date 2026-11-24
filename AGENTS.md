@@ -8,6 +8,8 @@ contracts). Python 3.14 and uv.
 
 - Setup: `uv sync --locked --all-packages`
 - Lint: `uv run ruff check .` and `uv run ruff format --check .`
+- Comment lint: `uv run windbag check --all`. To enable the staged check in a fresh clone,
+  run `git config --local core.hooksPath .githooks`.
 - Unit tests: `uv run pytest -m "not docker and not network and not terraform and not browser and not snowflake_live" -n auto --dist loadgroup`
 - Docker, network, Terraform and browser tiers run in CI; run one locally with its marker.
 - After editing a skill under packages/vecten/src/vecten/knowhow/skills/:

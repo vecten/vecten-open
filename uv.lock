@@ -3116,6 +3116,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "windbag" },
 ]
 
 [package.metadata]
@@ -3131,6 +3132,7 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.3,<3" },
     { name = "pytest-xdist", specifier = ">=3.8,<4" },
     { name = "ruff", specifier = ">=0.17,<0.18" },
+    { name = "windbag", specifier = ">=0.2,<0.3" },
 ]
 
 [[package]]
@@ -3241,6 +3243,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a4/34/4dd12fc8bb7d61c91467ec3efe415ffa7d5456f799954b40c5bbaeae470e/werkzeug-3.1.9.tar.gz", hash = "sha256:55ca7c70a75689be937aa27f8ff4b018f06ff4838fc73045560bf0f5a1291060", size = 940188, upload-time = "2026-09-27T18:33:41.637Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/38/df03f564f43cec2684823f3cccae1a652ee7face1cbaa76fb223096e64d7/werkzeug-3.1.9-py3-none-any.whl", hash = "sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab", size = 228700, upload-time = "2026-09-27T18:33:39.685Z" },
+]
+
+[[package]]
+name = "windbag"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/36/fbedc91c22c9fb602fe2794ba654eb565ed6aa4691c62c6572ccfe119662/windbag-0.2.0.tar.gz", hash = "sha256:548a634fbc32ddd9d296ae0af1b716979d59024a9991ca896fa57b55c920effe", size = 91949, upload-time = "2026-09-18T15:22:08.593Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/10/60/08ca2d6450bda8e5544e4ba868ea10b9ae0fbb05fb3f458944a1defcf5fa/windbag-0.2.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:40c0ecad1f73dac94d1d659963251d44c12790899d4c849018be7c82579c3442", size = 1868919, upload-time = "2026-09-18T15:21:59.582Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/5c/a3fe6671f9b32d96f63f1dcf1bfcd5c59c9bc1aeaec7bbf4f0f44e5f37a7/windbag-0.2.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:14ae048a3bfdd1155b3c42fa582d708dcab5ae1d8b380564fd3d57f185c51347", size = 1827635, upload-time = "2026-09-18T15:22:01.468Z" },
+    { url = "https://files.pythonhosted.org/packages/02/19/a91b6a7bbb2357ce1ce212bf62eedc1cd21caf3b2a8caa01485936bb7f35/windbag-0.2.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8661118e6003643ecbedb7ad15d907bee1158341e82e6a5d5695ba718c78bdc1", size = 1862421, upload-time = "2026-09-18T15:22:03.335Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/14/ec9a44179022f61b9eabe482fc065f07452b39aa779063ebe67692a5667b/windbag-0.2.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c306b581f8edfe68366cc303437fc37d0f1dfdbf58dd46d5df17462479bbd559", size = 1962160, upload-time = "2026-09-18T15:22:05.27Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/01/5e9481669145ce81864847577b3e4f823d84406f11c415f75c400d962ef4/windbag-0.2.0-py3-none-win_amd64.whl", hash = "sha256:229698d6763e00dfb1557718f3a6214c275238d4252e9c2590c20a369bc01533", size = 1827953, upload-time = "2026-09-18T15:22:06.98Z" },
 ]
 
 [[package]]
