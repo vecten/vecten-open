@@ -244,6 +244,7 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.mcp.auth` | Callable identity backend. Selected by `auth = "company_login"` in the `[mcp]` section of `vecten.toml`; the registry refuses a missing backend at startup. Extensions cannot replace the reserved `password`/`oidc` names. |
 | `vecten.mcp.provisioning` | Callable provisioning hook. The registry invokes the named hook with the owning service's arguments. |
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
+| `vecten.consumer_skills` | A skill directory and an explicit list of supporting files. A project grants download access by group. See [skills for data users](#skills-for-data-users). |
 | `vecten.services` | A dictionary, or zero-argument factory returning one, declaring one long-running process and its HTTP routes. The entry name is the service's name. `vecten lock` records it; it runs once `vecten.toml` binds it (see [services](#services)). |
 | `vecten.apps` | A dictionary, or zero-argument factory returning one, declaring one analytics app: `title`, `description`, `kind` (`container` or `snowflake`), the Ossie `datasets` it reads and suggested `groups`; a `container` app gives `runtime = "streamlit"` with `entry`, or `command` and `port`. `vecten lock` records it; `extension add` binds it in `[apps.<extension>.<app>]`. See [analytics apps](analytics-apps.md). |
 | `vecten.manifest` | A dictionary, or zero-argument factory returning one, declaring its `secrets`, `settings` and `airflow` resources (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
@@ -565,8 +566,8 @@ editing its manifest, services or apps. On a fresh laptop checkout, run `vecten 
 first to install the local packages in the CLI environment. The check compares their current
 secret names, settings schemas, service and app declarations with `extensions.lock.json`.
 If they differ, run `vecten lock` and commit the updated record with the code. Project CI
-runs the same check on pull requests. Its declaration check installs the in-repo
-extensions and their locked index dependencies. It does not fetch registered Git
+normally runs this check by installing the in-repo extensions and their locked index dependencies.
+Projects with both a private index and a bound consumer skill use the committed record in PR CI. PR CI does not fetch registered Git
 extensions. Keep imports of those packages inside the runtime code that uses them so CI
 can load your manifest, service and app declarations. On the laptop, `vecten up` also
 checks services and apps before starting containers.
@@ -672,5 +673,63 @@ installing its extension fails startup with the backend's name. No SAML implemen
 bundled. A test in this repository's CI (`scripts/check_extension_wheels.py`) exercises a fixture declaring every group and scans
 shipped Python for prohibited licence-gating and telemetry symbols/imports. This automated
 scan is a regression guard; code review remains necessary for behavior it cannot recognize.
+
+## Skills for data users
+
+An extension can give analysts a reusable set of instructions for their own assistant. For
+example, a finance analyst can download a monthly-orders skill that uses the analyst’s MCP
+connection to summarize completed orders. `vecten mcp connection --env <env>` prints the
+warehouse server’s URL and instructions for connecting an assistant. Downloading the
+instructions grants no warehouse permissions.
+
+In the extension’s `pyproject.toml`, declare the skill by name:
+
+```toml
+[project.entry-points."vecten.consumer_skills"]
+monthly-orders = "acme_reports.skills:monthly_orders"
+```
+
+In `acme_reports/skills.py`, export the directory containing `SKILL.md` and list each
+supporting file to include. Package those files in the extension wheel.
+
+```python
+from pathlib import Path
+
+monthly_orders = {
+    "directory": Path(__file__).parent / "monthly-orders",
+    "files": ["references/orders.md"],
+}
+```
+
+Install the extension in the project using its distribution name with
+[`vecten extension add`](#install-and-update). From that project, run
+`vecten extension pack-skill monthly-orders --output monthly-orders.zip` to inspect the
+archive locally. The destination must be a new file. The ZIP contains
+`monthly-orders/SKILL.md` and the listed files under the same folder.
+
+To make the ZIP available to the finance group, add the following to the project’s
+`vecten.toml`. Use the MCP group name shown by `vecten group list`. Administrators manage
+membership through [MCP identity and access](mcp-identity.md).
+
+```toml
+[consumer_skills.monthly-orders]
+groups = ["finance"]
+```
+
+Run `vecten lock` to record which extension packaged each bound skill. Run it once on upgrade
+if the project already binds skills and its `extensions.lock.json` predates skill records.
+Commit `vecten.toml`, `extensions.lock.json` and the other [dependency files](#dependencies-and-locks)
+together, then use the project’s ship workflow for the target environment. After the new MCP container starts, open `/apps` on the host
+shown by `vecten mcp connection --env <env>`. A member signs in and chooses **monthly-orders** under
+**Skills for your assistant**. The server checks current membership on each download.
+Removing a member stops future downloads. Copies already downloaded stay with their recipients.
+The MCP access log records successful and denied download attempts by signed-in users.
+
+Pull-request CI checks bindings against the committed record. It also packages in-repo skills
+unless the project configures a private package index. With a private index and bound skills,
+run `vecten lock --check` in your authenticated development environment after changing a local
+declaration. Ship checks the recorded bindings before contacting the host. On the host and
+on the laptop, the MCP image build first installs the wheels, then packages their skill archives
+with network access disabled. A packaging error stops the build before the new MCP server starts.
 
 Back to the [docs index](README.md).

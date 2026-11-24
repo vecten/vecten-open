@@ -94,6 +94,57 @@ def test_lock_writes_every_record_with_inputs_lines(invoke, project, fakes):
     assert "acme-demo[cli]==1.2.0" in fakes["installed"][0][0]
 
 
+@pytest.mark.parametrize(
+    "components,name,problem",
+    [
+        (["platform"], "orders", "need the mcp component"),
+        (["platform", "mcp"], "bad/name", "invalid consumer skill name"),
+    ],
+)
+def test_skill_binding_requires_mcp_and_valid_name(invoke, project, components, name, problem):
+    _edit_config(
+        project,
+        lambda doc: doc.update(
+            components=components, consumer_skills={name: {"groups": ["sales"]}}
+        ),
+    )
+    result = invoke("lock", "--check")
+    assert result.exit_code == ExitCode.CONFIG and problem in result.output
+
+
+def test_lock_and_check_package_the_bound_skills(invoke, project, fakes, monkeypatch):
+    _add_extension(project)
+    _edit_config(project, lambda doc: doc.update(consumer_skills={"orders": {"groups": ["sales"]}}))
+    missing = invoke("lock")
+    assert (
+        missing.exit_code == ExitCode.CONFIG and "declares consumer skill orders" in missing.output
+    )
+    (project / "SKILL.md").write_text("Orders")
+    declaration = {"directory": project, "files": []}
+    point = SimpleNamespace(
+        name="orders", dist=SimpleNamespace(name="acme-demo"), load=lambda: declaration
+    )
+    monkeypatch.setattr(
+        "vecten_shared.consumer_skills.selected_entry_points", lambda *args: [point]
+    )
+    assert invoke("lock").exit_code == 0
+    assert invoke("lock", "--check").exit_code == 0
+    declaration["files"].append("missing.md")
+    broken = invoke("lock", "--check")
+    assert broken.exit_code == ExitCode.CONFIG and "missing.md" in broken.output
+
+
+def test_project_ci_prints_a_refusal_as_lock_check_does(invoke, project, capsys):
+    from vecten.ci_declarations import main
+
+    _edit_config(project, lambda doc: doc.update(consumer_skills={"bad/name": {"groups": ["a"]}}))
+    cli = invoke("lock", "--check")
+    capsys.readouterr()
+    assert main(project) == cli.exit_code == ExitCode.CONFIG
+    assert capsys.readouterr().err == cli.output
+    assert cli.output.startswith("error: ") and "invalid consumer skill name" in cli.output
+
+
 def test_each_lock_requests_its_components_extra(invoke, project, fakes):
     _add_extension(project)
     assert invoke("lock").exit_code == 0

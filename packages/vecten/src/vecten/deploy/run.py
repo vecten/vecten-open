@@ -540,7 +540,7 @@ def _deploy_in_actions(
         check_layout(tree, config, env)
         check_tfvars(tree, config, env)
         require_bootstrapped(config, env)
-        if tree != project_root:
+        if tree != project_root or config.consumer_skills:
             record = read_extension_record(tree) or {}
             check_settings(config, record, env)
             check_bindings(config, record)

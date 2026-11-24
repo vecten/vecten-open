@@ -323,6 +323,10 @@ def _fail(where: str, problem: str) -> Failure:
 def check_bindings(config: VectenConfig, record: dict[str, Extension]) -> None:
     """Every binding names a declared service and route, on a host its declaration allows."""
     bound_services(config, record)
+    if config.consumer_skills:
+        from vecten_shared.consumer_skills import locked_skill_owners
+
+        locked_skill_owners(config, record)
 
 
 def bound_services(config: VectenConfig, record: dict[str, Extension]) -> list[Bound]:

@@ -70,3 +70,5 @@ warehouse = {
     "datasets": ["fixture_dataset"],
     "groups": ["analyst"],
 }
+
+monthly_orders = {"directory": root / "monthly-orders", "files": ["references/orders.md"]}

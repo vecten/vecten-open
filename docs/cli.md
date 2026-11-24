@@ -84,6 +84,7 @@ commands need an explicit `--env` and the owner's approval.
 | Warehouse administration | `vecten user add-admin alex --env sandbox` creates a warehouse administrator |
 | Teardown | `vecten destroy --env sandbox --confirm sandbox` takes snapshots, then destroys infrastructure |
 | Extensions | `vecten extension new acme-portal` creates an in-repo extension under `extensions/`; `vecten extension add acme-resolution==1.2.0` installs and records an extension; `vecten lock` re-resolves the locks after a `[dependencies]` change, `vecten lock --upgrade httpx` moves one package; `vecten extension sync` installs the committed lock on another laptop or in CI; see [author contracts and private indexes](extensions.md) and [extensions from a private git repository](extensions-private-git.md) |
+| Consumer skills | `vecten extension pack-skill monthly-orders --output monthly-orders.zip` packages a listed extension’s skill for data users. See [packaging and group access](extensions.md#skills-for-data-users). |
 | Upgrade | `vecten update --json` applies the installed release to this project |
 
 ## Deploy commands in detail

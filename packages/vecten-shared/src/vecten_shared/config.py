@@ -28,6 +28,7 @@ from vecten_shared.apps import APP_CREDENTIAL, principal_name
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
 from vecten_shared.declarations import is_toml_time, secret_problem
 from vecten_shared.names import (
+    SKILL_NAME,
     area_name_problem,
     connector_name_problem,
     env_name_problem,
@@ -565,6 +566,7 @@ class VectenConfig(Strict):
     services: dict[str, dict[str, ServiceBinding]] = Field(default_factory=dict)
     # `[apps.<extension>.<app>]`: who may open each declared analytics app, and where it runs.
     apps: dict[str, dict[str, AppBinding]] = Field(default_factory=dict)
+    consumer_skills: dict[str, AccessDecl] = Field(default_factory=dict)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -701,6 +703,15 @@ class VectenConfig(Strict):
                             f"{where}.routes.{route_name}.access: a login route needs the mcp "
                             "component, whose sign-in admits people"
                         )
+        return self
+
+    @model_validator(mode="after")
+    def _consumer_skill_bindings(self) -> VectenConfig:
+        for name in self.consumer_skills:
+            if not SKILL_NAME.fullmatch(name):
+                raise ValueError(f"consumer_skills: invalid consumer skill name {name!r}")
+            if not self.has("mcp"):
+                raise ValueError(f"consumer_skills.{name}: downloads need the mcp component")
         return self
 
     @model_validator(mode="after")
@@ -846,7 +857,15 @@ def save_config(project_root: Path, config: VectenConfig) -> None:
     if problem:
         raise Failure(ExitCode.REFUSED, problem)
     data = config.model_dump(mode="json", exclude_none=True)
-    for optional in ("dependencies", "secrets", "settings", "services", "apps", "areas"):
+    for optional in (
+        "dependencies",
+        "secrets",
+        "settings",
+        "services",
+        "apps",
+        "consumer_skills",
+        "areas",
+    ):
         if not data.get(optional):
             data.pop(optional, None)
     path = project_root / CONFIG_FILE

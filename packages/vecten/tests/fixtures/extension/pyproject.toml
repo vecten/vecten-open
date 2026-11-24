@@ -31,3 +31,6 @@ dashboard = "vecten_test_extension:dashboard"
 warehouse = "vecten_test_extension:warehouse"
 [project.entry-points."vecten.manifest"]
 fixture = "vecten_test_extension:manifest"
+
+[project.entry-points."vecten.consumer_skills"]
+monthly-orders = "vecten_test_extension:monthly_orders"
