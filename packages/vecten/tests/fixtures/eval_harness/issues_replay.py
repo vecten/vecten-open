@@ -103,6 +103,9 @@ def parse(argv: list[str]) -> tuple[str | None, str | None, bool] | None:
         elif arg.startswith("-"):
             return None
         else:
+            if arg == "show" and not positional:
+                # Typer gives options on the group to its callback, never to the subcommand.
+                env, as_json = None, False
             positional.append(arg)
     if not positional:
         return None, env, as_json
@@ -167,22 +170,19 @@ def main(argv: list[str] | None = None) -> int:
         return refuse_destroy(argv)
     fixture = os.environ.get(FIXTURE_VAR)
     parsed = parse(argv) if fixture else None
-    doc = json.loads(Path(fixture).read_text()) if parsed else None
-    if parsed is None or doc is None or parsed[1] != doc["env"]:
-        if fixture and argv[:1] == ["issues"]:
-            message = "the evaluation replay does not answer this issues command or environment"
-            if "--json" in argv:
-                print(json.dumps({"ok": False, "error": message}))
-            else:
-                print(message, file=sys.stderr)
-            return 2
+    if parsed is None or parsed[1] is None or "--help" in argv:
         real = shlex.split(os.environ.get(REAL_VAR) or "") or real_vecten(os.environ["PATH"])
         os.execv(real[0], [*real, *argv])
-    from vecten_shared.output import render
+    from vecten_shared.output import ExitCode, Failure, render
 
-    issue_id, _, as_json = parsed
+    issue_id, env, as_json = parsed
+    doc = json.loads(Path(fixture).read_text())
     gh_dir = os.environ.get("EVAL_HARNESS_GH_DIR")
-    text, code = render(answer(doc, issue_id, Path(gh_dir) if gh_dir else None), as_json)
+    if env == doc["env"]:
+        outcome = answer(doc, issue_id, Path(gh_dir) if gh_dir else None)
+    else:
+        outcome = Failure(ExitCode.USAGE, f"the evaluation replay has no issues fixture for {env}")
+    text, code = render(outcome, as_json)
     print(text, file=sys.stdout if as_json or code == 0 else sys.stderr)
     return code
 

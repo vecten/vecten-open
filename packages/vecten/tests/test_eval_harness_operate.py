@@ -118,13 +118,21 @@ def test_every_other_command_reaches_the_real_vecten(shell, tmp_path):
     code, out, _ = vecten(make("revoked-key"), "version", "--json")
     assert code == 0 and "vecten" in json.loads(out)
     code, out, _ = vecten(make("revoked-key"), "issues", "--json", cwd=tmp_path)
-    assert code != 0 and "replay does not answer" in json.loads(out)["error"]
+    assert code != 0 and "replay" not in json.loads(out)["error"]
+    for args in [("issues", "--help"), ("issues", "show", "--help")]:
+        code, out, _ = vecten(make("revoked-key"), *args, cwd=tmp_path)
+        assert code == 0 and "Usage" in out
+    code, out, err = vecten(
+        make("revoked-key"), "issues", "--env", "prod", "--json", "show", "id", cwd=tmp_path
+    )
+    assert code != 0 and not out and "replay" not in err
+    code, out, _ = vecten(make("revoked-key"), "issues", "--env", "stage", "--json", cwd=tmp_path)
+    assert code == 2 and json.loads(out)["code_name"] == "USAGE" and json.loads(out)["code"] == 2
 
 
 @pytest.mark.parametrize(
     "args",
     [
-        ["--env", "prod", "--json", "show", "id"],
         ["show", "--env=prod", "--json", "id"],
         ["show", "--json", "id", "--env", "prod"],
         ["show", "id", "--env=prod", "--json"],
