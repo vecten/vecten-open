@@ -84,6 +84,18 @@ assistants to your data, and ask whether failed syncs should be posted to a webh
 Everything from here on is addressed to you, the agent. The human reads the part above;
 you act on all of it.
 
+### Before the first intake
+
+Run `command -v vecten` in the shell you will use for the project. If it finds the CLI,
+continue with `vecten next --json`. If it is missing, tell the person that you will install
+the Vecten CLI as a user tool with uv. Check for `uv` with `command -v uv`. If uv is
+missing, give the person the [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/)
+and resume when uv is available. Run `uv tool install --python 3.14 vecten`; uv can supply
+Python 3.14. If the installed executable directory is outside your PATH, add the directory
+printed by `uv tool dir --bin` to the command shell's PATH. Verify `vecten version` before
+starting intake. If installation or verification fails, report the error and stop there.
+The local stack also needs a running Docker daemon when the guide reaches `vecten up`.
+
 ### Ground rules
 
 - Work in the folder the human chose for the project. Before the first render, the folder

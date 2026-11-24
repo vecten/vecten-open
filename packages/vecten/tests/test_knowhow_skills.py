@@ -384,8 +384,9 @@ def test_guide_names_every_post_deploy_answer_key():
 def test_guide_evals_cover_both_branches_and_start_empty():
     text = _skill_dir("guide").joinpath("evals", "evals.json").read_text(encoding="utf-8")
     cases = json.loads(text)["evals"]
-    assert len(cases) == 3
-    full, existing, empty = (" ".join(case["expectations"]) for case in cases)
+    assert len(cases) == 4
+    full, existing, empty, install = (" ".join(case["expectations"]) for case in cases)
+    assert "uv installed" in install and "vecten version" in install
     assert "vecten answer has_warehouse no" in full and "vecten deploy --env prod" in full
     assert '"yes"' in full and "vecten user add" in full and "vecten mcp connection" in full
     assert "vecten answer has_warehouse yes" in existing and "vecten mcp introspect" in existing
@@ -540,7 +541,7 @@ def test_committed_renderings_are_in_sync():
 
 def test_guide_eval_wording_matches_what_the_harness_can_observe():
     root = _skill_dir("guide").joinpath("evals")
-    full, existing, empty = json.loads(root.joinpath("evals.json").read_text(encoding="utf-8"))[
+    full, existing, empty, _ = json.loads(root.joinpath("evals.json").read_text(encoding="utf-8"))[
         "evals"
     ]
     assert "https://mcp.data.acme.test/mcp" in " ".join(full["expectations"])

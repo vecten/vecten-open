@@ -7,7 +7,7 @@
       "expected_output": "Starting state: an empty folder, the vecten CLI installed, Docker running, the demo API stub answering at https://api.demo.test/v1, and the cloud provider and the GitHub API mocked as evals/files/scripted-human.md describes; the person running the evaluation plays the human from case 1 of that file and stores the secrets it lists through `vecten secret set` in their own terminal, never the agent. The agent loops on `vecten next --json` from the empty folder: it puts every ask item's title to the human word for word and records each answer with `vecten answer`, runs `vecten init` and `vecten up`, hands `Connect demo` to skills/connector/SKILL.md and the modelling items to skills/model/SKILL.md, the metric and validation items to skills/semantic/SKILL.md, answers the deploy questions (recording github_repository none first and walking the human through `vecten guide github`), runs `vecten init --deploy`, `vecten github init`, `vecten bootstrap --env prod`, the secret copies and `vecten github push`, asks the deploy question, deploys only after the human's yes, runs `vecten github push` whenever `next` reports it after the deploy, opts out of OIDC for the MCP's password sign-in and records the first admin, gives the human the first admin's link from `vecten mcp admin-link`, signs the admin in with `vecten login`, adds the first user and gives the human her link from `vecten user password-link`, shows the MCP URL, records no webhook, and stops when `next` prints an empty list. The human then speaks as Grace (grace@acme.test), the user just added: the agent connects an MCP client to that URL, Grace completes the sign-in in her browser, and the agent answers her question from the metric compiler, quoting the receipt.",
       "files": ["evals/files/scripted-human.md"],
       "expectations": [
-        "The first command the agent ran was `vecten next --json`, and it ran `vecten next --json` again after resolving each item",
+        "The first intake command the agent ran was `vecten next --json`, and it ran `vecten next --json` again after resolving each item",
         "Every ask item the agent put to the human is the item's title, word for word as `vecten next --json` printed it: no ask was rephrased, merged with another or answered by the agent itself",
         "The intake answers were recorded in this order: `vecten answer has_warehouse no`, `vecten answer sources demo`, `vecten answer warehouse postgres`, `vecten answer name acme`, `vecten answer users 5`, followed by `vecten init`",
         "`vecten up` ran after `vecten init` and before any `vecten connector` command",
@@ -62,6 +62,17 @@
         "The agent put the deploy question to the human word for word; after the human's no, `vecten deploy` never ran and no `vecten answer` was recorded for it",
         "The agent told the human that no platform resources were created, since `vecten deploy` never ran (the state bucket and roles `vecten bootstrap` created are not platform resources), and that the deploy waits for their yes, and stopped without running another command",
         "Every ask item the agent put to the human is the item's title, word for word as `vecten next --json` printed it"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "I installed the Vecten plugin. Can you start the setup and ask me just the first question?",
+      "expected_output": "The fresh project shell has uv and no vecten executable. The agent announces the installation, installs the CLI with Python 3.14, checks the installed executable and asks the first question from vecten next --json. The person stops there.",
+      "files": [],
+      "expectations": [
+        "The command log shows the agent checked for vecten before trying intake, and told the person what it was about to install before invoking uv.",
+        "uv installed the vecten tool using Python 3.14, vecten version succeeded, and then vecten next --json succeeded.",
+        "The agent asked the first item's title verbatim and stopped without recording an answer or starting the local stack."
       ]
     }
   ]

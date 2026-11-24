@@ -15,7 +15,7 @@ so a human runs them.
 |---|---|---|
 | `connector` | `packages/vecten/src/vecten/knowhow/skills/connector/evals/evals.json` (1 case) | `connector/evals/files/demo-api.md`: the documentation of a small REST API, copied into the project as `docs/demo-api.md` |
 | `model` | `packages/vecten/src/vecten/knowhow/skills/model/evals/evals.json` (1 case) | `model/evals/files/raw-schema-demo.json`: what `vecten raw schema demo --json` prints for the demo source |
-| `guide` | `packages/vecten/src/vecten/knowhow/skills/guide/evals/evals.json` (3 cases) | `guide/evals/files/scripted-human.md`: the human's replies for each case, the secrets typed at hidden prompts, and what is mocked |
+| `guide` | `packages/vecten/src/vecten/knowhow/skills/guide/evals/evals.json` (4 cases) | `guide/evals/files/scripted-human.md`: the human's replies for each case, the secrets typed at hidden prompts, and what is mocked |
 | `semantic` | `packages/vecten/src/vecten/knowhow/skills/semantic/evals/evals.json` (3 cases) | the harness builds each case's project and gaps (`semantic-1` to `semantic-3`, below) |
 | `operate` | `packages/vecten/src/vecten/knowhow/skills/operate/evals/evals.json` (3 cases) | the harness builds each case's project and replays its `vecten issues` (`operate-1` to `operate-3`, below) |
 
@@ -74,6 +74,7 @@ logs in `github/runs/`, and the mocked cloud account in `cloud/`.
 | `connector`, `model` | the demo API at `api.demo.test` | the CA bundle |
 | `guide-1` | the demo API; the MCP at `mcp.data.acme.test` | `gh` stand-in, `MockCloud`, CA bundle |
 | `guide-2` | the MCP; Postgres at `warehouse.acme.test:5432` | `gh` stand-in, `MockCloud`, CA bundle |
+| `guide-4` | nothing | isolated uv tool directory and PATH for the first-install case |
 | `guide-3` | nothing; `up` exits after writing `env.sh` | `gh` stand-in, `MockCloud`, CA bundle |
 | `semantic-<n>` | the case's project and its MCP; semantic-3 also the provisioned warehouse | `gh` stand-in, `MockCloud`, CA bundle |
 | `operate-<n>` | nothing; `up` builds the case's project and exits | the `vecten issues` replay, `gh` stand-in, `MockCloud`, CA bundle |

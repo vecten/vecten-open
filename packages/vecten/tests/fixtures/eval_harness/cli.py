@@ -117,7 +117,22 @@ def write_env(
     first, values = environment(case, paths, base)
     values.update(extra or {})
     lines = [f"# Source in every shell of the {paths.case} evaluation: . {paths.env_file}"]
-    if first:
+    if case.skill == "guide" and case.eval_id == 4:
+        # The checkout and the user's tool bin may both contain vecten. The case gets its
+        # own install location and only uv from the host's development tools.
+        tools = paths.dir / "tool-bin"
+        tools.mkdir(parents=True, exist_ok=True)
+        uv = shutil.which("uv", path=base.get("PATH"))
+        if not uv:
+            raise ValueError("guide-4 requires uv on PATH")
+        if not (tools / "uv").exists():
+            (tools / "uv").symlink_to(uv)
+        values.update(
+            PATH=os.pathsep.join([str(tools), "/usr/bin", "/bin"]),
+            UV_TOOL_BIN_DIR=str(tools),
+            UV_TOOL_DIR=str(paths.dir / "tools"),
+        )
+    elif first:
         lines.append(f'export PATH={shlex.quote(os.pathsep.join(first))}":$PATH"')
     for name, value in values.items():
         if name == "PYTHONPATH":

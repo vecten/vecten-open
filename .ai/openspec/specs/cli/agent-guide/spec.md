@@ -5,6 +5,17 @@ The agent-facing surface of the product: the intake `next` runs before a project
 
 ## Requirements
 
+### Requirement: Guide starts with an available CLI
+
+Before intake the guide SHALL check whether its shell can run the CLI. If absent the guide
+SHALL tell the person what it will install, install Vecten with uv and Python 3.14, and verify
+the installed command. When uv is missing it SHALL give the person uv installation instructions.
+
+#### Scenario: Plugin installed on a fresh machine
+
+- **WHEN** the guide starts with uv on PATH and no vecten executable
+- **THEN** its first intake command follows a successful installation and verification
+
 ### Requirement: next outside a project runs the intake
 
 Run outside a project, `next` SHALL report ask items for the local intake, starting with `has_warehouse` ("Do you already have a data warehouse?") and ending with `name` and users. Each item SHALL name the `answer` key its answer feeds. `next` SHALL read recorded answers from `vecten-answers.yml` and report the first unanswered item. The local intake asks only what a laptop run needs; cloud, domain and GitHub are deploy questions asked inside the project.
