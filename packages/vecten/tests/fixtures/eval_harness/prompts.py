@@ -97,8 +97,8 @@ def grader_brief(run: Run, case: Case) -> str:
         brief += (
             f"\nCompare outputs/semantic-evidence.json with {fixture}. An empty matching_cases "
             "fails the compiled-case check. Check any equivalent expression against the fixture. "
-            "When no matching case pins the reference value, require the recorded query_metrics "
-            "result to show that value for the specified grouping. An agent's claim alone "
+            "Always require the recorded query_metrics result to show the reference value "
+            "for the specified grouping. An unexecuted expect.value or an agent's claim alone "
             "is insufficient.\n"
         )
     return brief

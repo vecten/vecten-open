@@ -1,5 +1,7 @@
 import json
+import subprocess
 from importlib import resources
+from pathlib import Path
 
 import pytest
 import yaml
@@ -129,16 +131,56 @@ def test_semantic_worked_examples_validate_and_detect_regression(
     monkeypatch.chdir(root)
     result = invoke("mcp", "validate", "--evals", "--json")
     assert result.exit_code == 0, result.stdout
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / "fixtures"))
+    from eval_harness.semantic_grading import evidence
+
+    if scenario == "wrong-definition":
+        from eval_harness.gh_standin import Store
+        from eval_harness.projects import REPOSITORY
+
+        github = tmp_path / "github"
+        store = Store(github)
+        store.create(REPOSITORY, private=True)
+
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "-c", "user.name=Test", "-c", "user.email=test@example.org", *args],
+                cwd=root,
+                text=True,
+            ).strip()
+
+        git("init", "-q", "-b", "main")
+        (root / "evals/semantic.yaml").write_text("cases: []")
+        git("add", ".")
+        git("commit", "-qm", "Record the first deploy")
+        git("push", "-q", str(store.bare(REPOSITORY)), "main")
+        git("switch", "-qc", "fix-refunds")
+        (root / "evals/semantic.yaml").write_text(yaml.safe_dump({"cases": [case]}))
+        with (root / "osi/datasets.json").open("a") as output:
+            output.write("\n")
+        git("add", ".")
+        git("commit", "-qm", "Fix refunds")
+        git("push", "-q", str(store.bare(REPOSITORY)), "fix-refunds")
+        head = git("rev-parse", "HEAD")
+        with store.edit(REPOSITORY) as repo:
+            repo["pulls"]["1"] = {
+                "state": "open",
+                "base": "main",
+                "head": "fix-refunds",
+                "head_sha": head,
+            }
+        git("switch", "-q", "main")
+        report = evidence(root, "semantic-1", github)
+        assert report["pull_head"] == head
+        assert [c["name"] for c in report["matching_cases"]] == [case["name"]]
+        assert report["changed_datasets_or_dbt"] == ["osi/datasets.json"]
+        (root / "evals/semantic.yaml").write_text(yaml.safe_dump({"cases": [case]}))
     if scenario == "empty-model":
-        from pathlib import Path
-
-        monkeypatch.syspath_prepend(str(Path(__file__).parent / "fixtures"))
-        from eval_harness.semantic_grading import evidence
-
         case["expect"]["value"] = {"metric": "total_revenue", "equals": fixture["expected_revenue"]}
         (root / "evals/semantic.yaml").write_text(yaml.safe_dump({"cases": [case]}))
         (entry,) = evidence(root, "semantic-3")["matching_cases"]
-        assert entry["matches_reference_expression"] and entry["pins_reference_value"]
+        assert entry["matches_reference_expression"]
+        assert "pins_reference_value" not in entry
         (root / "evals/semantic.yaml").write_text("cases: []")
         assert evidence(root, "semantic-3")["matching_cases"] == []
         (root / "evals/semantic.yaml").write_text(yaml.safe_dump({"cases": [case]}))
@@ -155,6 +197,7 @@ def test_semantic_worked_examples_validate_and_detect_regression(
         assert invoke("mcp", "validate", "--evals", "--json").exit_code == 0
         (wrong,) = evidence(root, "semantic-3")["matching_cases"]
         assert not wrong["matches_reference_expression"]
+        assert "pins_reference_value" not in wrong
 
 
 def test_semantic_says_next_keeps_refine_until_described_and_keyed():

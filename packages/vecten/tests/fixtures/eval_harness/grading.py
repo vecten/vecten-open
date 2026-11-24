@@ -45,7 +45,7 @@ def bundle(run: Run, outputs: Path) -> int:
     if run.case.startswith("semantic-"):
         from eval_harness.semantic_grading import evidence
 
-        result = evidence(run.project, run.case)
+        result = evidence(run.project, run.case, run.case_dir / "github")
         (outputs / "semantic-evidence.json").write_text(json.dumps(result, indent=2) + "\n")
     return len(commands)
 
