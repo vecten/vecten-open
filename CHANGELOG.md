@@ -5,12 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Fixed
-
-- Generated semantic field names use lowercase while their SQL expressions preserve the physical
-  column. With metrics present, platform project validation applies MetricFlow’s default
-  semantic-manifest rules to the generated datasets and metrics ([#142](https://github.com/vecten/vecten-open/issues/142)).
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
