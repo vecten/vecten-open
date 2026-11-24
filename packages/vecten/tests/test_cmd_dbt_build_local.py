@@ -325,3 +325,20 @@ def test_eval_values_are_checked_against_the_built_data(invoke, tmp_path, monkey
     assert passed.exit_code == 0, passed.output
     assert _one_document(passed)["evals"] == {"checked": 1, "failed": []}
     assert read_record(root, "dbt-build-local")["evals"]["checked"] == 1
+
+
+def test_build_local_requests_synthetic_inputs_when_recording_is_disabled(
+    invoke, tmp_path, monkeypatch
+):
+    from vecten_shared.config import load_config, save_config
+
+    root = render_fixture(tmp_path, "snowflake")
+    monkeypatch.chdir(root)
+    config = load_config(root)
+    config.connector("demo").record = False
+    save_config(root, config)
+    shutil.rmtree(root / "connectors/demo/fixtures")
+    result = invoke("dbt-build-local", "--json")
+    message = _one_document(result)["error"]
+    assert result.exit_code == 3 and "vecten connector check-fixtures demo" in message
+    assert "--record" not in message

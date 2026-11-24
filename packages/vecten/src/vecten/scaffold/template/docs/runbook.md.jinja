@@ -18,9 +18,10 @@ where `vecten` runs as well, for example `uv tool install vecten --with <package
 `vecten issues --env <env>` lists every failure that has not run green since, `vecten issues show
 <id>` prints its redacted log excerpt, and `skills/operate/SKILL.md` works through the list.
 
-`--record` reloads the object from the start so the fixture is complete; run it on the first sync or
-whenever the fixture should be refreshed. For each nonempty recording it writes two files
-under `connectors/<source>/fixtures/`. The first 200 records at most are in `<object>.jsonl`.
+`--record` reloads the object from the start and replaces its local raw data with a sample; run
+it on the first sync or whenever the fixture should be refreshed. Use `--record --limit 3` for
+three rows per object. For each nonempty recording it writes two files under
+`connectors/<source>/fixtures/`. `<object>.jsonl` holds at most the limit, 200 records by default.
 The companion `<object>.schema.json` tells dlt how to load them, including which columns hold
 JSON, how deeply to expand nested records and which keys to use for merges. Commit both files
 together. A `.jsonl` file without a companion schema still loads with dlt's default type
@@ -34,7 +35,9 @@ so a code change that breaks every live sync still passes CI while the fixtures 
 changing `connector.py`, run `vecten connector run <source> --json` and check for `"ok": true` under
 each changed object's name in `objects`. Fixtures hold real records from the source (up to 200 per
 object) and are committed to the project, so check them for personal data before the repository is
-shared.
+shared. To avoid recording, set `record = false` in the connector declaration in `vecten.toml`,
+write invented JSON objects one per line under `connectors/<source>/fixtures/<object>.jsonl` and
+run `vecten connector check-fixtures <source>`.
 
 After changing which secrets a connector reads, update the `secrets` list of its declaration in
 `vecten.toml` and run `vecten up` again.

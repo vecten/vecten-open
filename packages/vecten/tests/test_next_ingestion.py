@@ -165,3 +165,11 @@ def test_access_ask_item_offers_default_and_known_groups():
     )
     item = access_ask_item(cfg, cfg.connector("a"))
     assert item.allowed == ("default", "sales") and item.kind == "ask"
+
+
+def test_recording_disabled_points_at_synthetic_fixtures(tmp_path):
+    declare(tmp_path, "shop")
+    cfg = config(connectors=[{"name": "shop", "source": "custom", "record": False}])
+    assert ingestion_items(tmp_path, cfg)[-1].resolution == "vecten connector run shop"
+    _ok_record(tmp_path, "shop")
+    assert ingestion_items(tmp_path, cfg)[-1].title == "Write synthetic fixtures for shop"

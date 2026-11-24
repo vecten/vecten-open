@@ -28,6 +28,7 @@ from vecten_platform.dbt.runner import (
     resolve_dependencies,
     run_build,
 )
+from vecten_platform.sync.fixtures import check_fixtures
 from vecten_shared.config import VectenConfig
 from vecten_shared.osi.compiler import pyformat_statement
 from vecten_shared.osi.evals import EVALS_PATH, check_values, load_cases
@@ -353,8 +354,20 @@ def build_local(
     missing = missing_fixtures(project_root / "connectors", config)
     if missing:
         names = ", ".join(missing)
-        runs = " and ".join(f"`vecten connector run {name} --record`" for name in missing)
-        raise Failure(ExitCode.PREREQUISITE, f"no fixtures for {names}; run {runs} first")
+        runs = " and ".join(
+            f"`vecten connector run {name} --record`"
+            if config.connector(name).record
+            else f"create synthetic fixtures under connectors/{name}/fixtures and "
+            f"check them with `vecten connector check-fixtures {name}`"
+            for name in missing
+        )
+        raise Failure(ExitCode.PREREQUISITE, f"no fixtures for {names}; {runs} first")
+
+    for connector in config.connectors:
+        if not connector.record:
+            check_fixtures(
+                project_root / "connectors" / connector.name / "fixtures", connector.groups
+            )
 
     workdir = project_root / WORKDIR
     shutil.rmtree(workdir, ignore_errors=True)

@@ -357,6 +357,7 @@ GENERIC_KINDS: tuple[str, ...] = ("rest", "sql", "filesystem")
 class ConnectorDecl(Strict):
     name: str
     source: SourceKind
+    record: bool = True
     access: AccessDecl | None = None
     dependencies: list[str] = Field(default_factory=list)
     secrets: list[str] = Field(default_factory=list)

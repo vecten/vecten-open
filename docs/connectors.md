@@ -28,11 +28,8 @@ package in this repository.
 Credentials never touch `connectors/` or `vecten.toml`: store each with `vecten secret set <NAME>` (value
 from the prompt or standard input) and read it in connector code with `secret("<NAME>")`. The stack
 passes every secret named in a connector's declaration into Airflow on the next `vecten up`, so run it
-again after changing that list. Run a source from the shell with `vecten connector run <source>`, record
-its fixtures with `--record` so the rendered test replays offline (it reloads the object from the start,
-so the fixture is complete), and inspect what landed with `vecten raw schema <source> --json`. Fixtures
-are yours; the product ships none. They hold real records from the source (up to 200 per object) and are
-committed to the project, so check them for personal data before the repository is shared. A verified
+again after changing that list. Run a source from the shell with `vecten connector run <source>`
+and inspect the tables with `vecten raw schema <source> --json`. A verified
 source that needs extra Python packages lists them in the declaration's `dependencies`; the Airflow image
 installs them, and on the laptop install them where the CLI runs, for example
 `uv tool install vecten --with <package>`.
@@ -44,6 +41,36 @@ Its task fails on that attempt and sends its configured failure alert. If you ra
 from an HTTP error, the alert and `vecten issues` use the terminal exception’s class and
 message, so you can distinguish exhausted credits from an HTTP error that Airflow retried.
 Raise ordinary exceptions for temporary failures so Airflow can retry.
+
+### Record a sample or supply invented rows
+
+`vecten connector run shop --object orders --record --limit 3` restarts the selected local
+object from the beginning, replaces its raw table data with the sample and saves
+`connectors/shop/fixtures/orders.jsonl`. The default and maximum row limit is 200. The fixture contains real records (up to 200 per object).
+Review it for personal data before you commit it. Once committed, the project uses it in CI.
+For incremental sources the next ordinary run uses the cursor saved by the sample load.
+
+For a paginated API, request pages lazily. The runner stops asking for rows at the limit.
+An API may already have billed a whole page or a request started in advance. To cap that work
+inside the connector, read `runtime().record_limit` from `vecten_platform.sync` and request
+at most the remaining number of rows on each call. Ordinary runs receive `None`.
+Define `redact_fixture(object_name, row)` in `connector.py` to return a replacement row, for
+example `return {**row, "email": "sample@example.test"}`. The hook runs before recording writes
+the fixture and loads the sample into the local warehouse. Keep the original values of the resource's primary key and incremental cursor. The dlt
+library uses them to identify rows and track incremental progress. Use invented fixtures
+when those values also need redaction.
+
+For a source that must never be recorded, set `record = false` in its `[[connectors]]` entry
+in `vecten.toml`. An extension author can supply `"record": False` in the
+dictionary returned by the package's `vecten.connectors` entry point.
+Write one invented JSON object per line in a file named for each resource. For example,
+`connectors/shop/fixtures/orders.jsonl` can contain `{"id": 1, "amount": 12}`.
+Run `vecten connector check-fixtures shop` to check filenames and rows without calling the
+source. With `groups = { daily = ["orders"] }` in the same connector entry,
+the only declared object is orders, so the check requires exactly `orders.jsonl`. A group
+with an empty list discovers its objects at runtime. In that case the offline check can
+detect missing explicitly named files and validate rows, but cannot reject extra filenames.
+Run `pytest connectors/shop` or `vecten dbt-build-local` to replay the files.
 
 ## Extensions
 
