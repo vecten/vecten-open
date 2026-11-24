@@ -1,4 +1,4 @@
-"""Verify identity credentials and extract explicitly configured OIDC membership claims."""
+"""Identity backends never supply groups or warehouse privileges."""
 
 import base64
 import hashlib
@@ -166,13 +166,11 @@ class OIDCBackend:
         redirect_uri,
         *,
         client_secret=None,
-        groups=None,
         client=None,
         clock=time.time,
     ):
         self.state, self.issuer, self.client_id = state, issuer, client_id
         self.redirect_uri, self.client_secret = redirect_uri, client_secret
-        self.groups = groups
         self.client = client or httpx.Client(timeout=15, follow_redirects=False)
         self.clock = clock
 
@@ -205,16 +203,7 @@ class OIDCBackend:
             response_type="code",
             client_id=self.client_id,
             redirect_uri=self.redirect_uri,
-            scope=" ".join(
-                dict.fromkeys(
-                    [
-                        "openid",
-                        "email",
-                        "profile",
-                        *([self.groups.scope] if self.groups and self.groups.scope else []),
-                    ]
-                )
-            ),
+            scope="openid email profile",
             state=state,
             nonce=nonce,
             code_challenge=challenge(verifier),
@@ -277,20 +266,12 @@ class OIDCBackend:
                 or claims.get("azp", self.client_id) != self.client_id
             ):
                 raise ValueError("OIDC identity is unverified, expired or misbound")
-            values = None
-            if self.groups is not None:
-                claim = claims.get(self.groups.claim)
-                if not isinstance(claim, list) or not all(
-                    isinstance(value, str) for value in claim
-                ):
-                    raise ValueError("OIDC group claim must be a complete list of strings")
-                values = frozenset(claim)
             return Identity(
                 self.issuer,
                 claims["sub"],
                 claims["email"],
                 claims.get("name") or claims["email"],
-                values,
+                verified_claims=claims,
             ), pending["flow"]
         except (httpx.HTTPError, jwt.PyJWTError, KeyError, StopIteration, TypeError) as exc:
             raise ValueError("OIDC authentication failed") from exc

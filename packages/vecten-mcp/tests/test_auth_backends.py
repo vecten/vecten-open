@@ -158,67 +158,51 @@ def test_password_link_cannot_cross_deleted_or_disabled_principal():
         backend.set_password(link, "long-enough-password")
 
 
-def test_signed_group_claim_changes_membership_on_each_login():
+def test_verified_sign_in_hook_owns_only_its_declared_human_memberships():
     from vecten_mcp.access import AccessService
     from vecten_mcp.auth.service import OAuthService
-    from vecten_shared.config import OidcGroups
 
     class Roles:
-        def __init__(self):
-            self.changes = []
-
         def create_group(self, role):
             pass
 
         def membership(self, role, name, grant):
-            self.changes.append((role, name, grant))
+            pass
 
-    claims = {"business_units": ["department-73", "unknown"]}
-    backend = oidc_fixture(claims)
-    groups = OidcGroups(
-        claim="business_units",
-        scope="groups",
-        bindings={"finance": "department-73", "uncreated": "unknown"},
+        def drop_group(self, role):
+            pass
+
+    seen = []
+
+    def handler(*, identity, verified_claims, set_membership):
+        seen.append((identity.email, verified_claims["sub"]))
+        with pytest.raises(ValueError, match="does not manage"):
+            set_membership("manual", True)
+        set_membership("finance", True)
+
+    backend = oidc_fixture({})
+    state = backend.state
+    access = AccessService(
+        state, Roles(), sign_in_hooks={"example": {"groups": ["finance"], "handler": handler}}
     )
-    backend.groups = groups
-    roles = Roles()
-    access = AccessService(backend.state, roles, oidc_groups=groups)
     service = OAuthService(
-        backend.state, None, "https://mcp.example", backend, sync_groups=access.sync_oidc_groups
+        state, None, "https://mcp.example", backend, on_sign_in=access.on_sign_in
     )
-    person = backend.state.invite("jane@example.com", "Jane", "jane", provisioned=True)
+    person = state.invite("jane@example.com", "Jane", "jane", provisioned=True)
     access.create_group("finance")
     access.create_group("manual")
     access.membership("manual", person["id"])
-
-    def login():
-        started = backend.begin("browser")
-        assert "scope=openid+email+profile+groups" in started["url"]
-        backend.last_nonce = started["nonce"]
-        identity, flow = backend.callback(started["state"], "code")
-        assert flow == "browser"
-        service.login_identity(identity)
-
-    login()
-    login()
-    assert roles.changes.count(("finance", "jane", True)) == 1
-    origins = {r["group"]: r["source"] for r in access.health()["membership_sources"]}
-    assert origins == {"default": "local", "manual": "local", "finance": "oidc"}
-    with pytest.raises(ValueError, match="identity provider"):
-        access.membership("finance", person["id"], False)
-    claims["business_units"] = []
-    login()
-    assert backend.state.groups_for(person["id"]) == {"default", "manual"}
-    assert roles.changes[-1] == ("finance", "jane", False)
-
-
-@pytest.mark.parametrize("value", [None, "finance", [3]])
-def test_groups_require_complete_signed_string_list(value):
-    from vecten_shared.config import OidcGroups
-
-    backend = oidc_fixture({} if value is None else {"teams": value})
-    backend.groups = OidcGroups(claim="teams", bindings={"finance": "value"})
-    started = backend.begin("flow")
+    started = backend.begin("browser")
     backend.last_nonce = started["nonce"]
-    with pytest.raises(ValueError, match="group claim"):
-        backend.callback(started["state"], "code")
+    identity, _ = backend.callback(started["state"], "code")
+    service.login_identity(identity)
+    assert seen == [(person["email"], identity.subject)]
+    assert {r["group"]: r["source"] for r in access.health()["membership_sources"]} == {
+        "finance": "example",
+        "default": "local",
+        "manual": "local",
+    }
+    with pytest.raises(ValueError, match="example manages"):
+        access.membership("finance", person["id"], False)
+    assert access.delete_group("finance") == {"deleted": "finance"}
+    assert state.groups_for(person["id"]) == {"default", "manual"}

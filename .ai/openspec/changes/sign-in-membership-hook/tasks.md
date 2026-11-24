@@ -1,0 +1,3 @@
+- [x] Load and validate configured extension hooks and their ownership declarations.
+- [x] Invoke hooks with the identity, verified claims and a scoped membership writer.
+- [x] Protect manual changes, report the membership owner and support administrative group deletion.

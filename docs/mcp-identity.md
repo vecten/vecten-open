@@ -72,23 +72,6 @@ query, discovery and feedback tools are in the [tool reference](mcp-tools.md), a
 [admin panel](admin-panel.md) manages the same identities, groups and grants from a browser.
 Installed tool extensions use the same transport and its audited query execution service.
 
-## Groups from the identity provider
-
-To manage membership of a Vecten group through OIDC, create the group, configure the provider to put its group values into a signed ID-token claim, and add the mapping to the project's `vecten.toml`.
-
-```toml
-[mcp.oidc_groups]
-claim = "groups"
-scope = "groups"
-
-[mcp.oidc_groups.bindings]
-finance = "department-73"
-```
-
-The binding key is the Vecten group. Its value is the exact string the provider emits. Set `scope` only when the provider requires an additional scope. The provider must return a complete list, including an empty list for a person in none of its groups. A missing or malformed claim stops sign-in.
-
-On each sign-in, the MCP grants and revokes mapped groups for that provisioned person in the warehouse and in its own state. Membership changes reach Vecten at the person's next sign-in. Unknown groups are ignored. Service accounts, the default group and unmapped groups retain their local membership rules. Access health lists each active membership and its source. Removing a binding returns the group to local management with its current members.
-
 ## First administrator and login
 
 On the laptop, the default is password login. In a cloud environment, the default is OIDC;
@@ -170,6 +153,24 @@ issuer with an `http://` URL and to the loopback tunnel to `http://127.0.0.1:800
 same cookies go by their names without `__Host-` and without `Secure`, and the panel's and
 `/apps` page's are scoped to `/admin` and `/apps`. Browsers do not separate cookies by port, so
 on a loopback address any other local server could set them.
+## Sign-in extension hooks
+
+An installed project extension can register a `vecten.mcp.sign_in` entry point. Its factory
+receives `config` by keyword and returns a dictionary containing a list of local group names
+under `groups` and a callable under `handler`. Only one extension can own a group's human
+memberships. The default group always stays local.
+
+After the server verifies a person's identity and binds it to a local account, it calls the
+handler with keyword arguments `identity`, `verified_claims` and `set_membership`. The claims
+come from the verified identity token. Password sign-in supplies an empty dictionary.
+Calling `set_membership(group, grant)` updates the signed-in person's membership in one
+owned group. This requires a provisioned account. Access health lists the managing entry
+point. Local administrators can still delete the group and manage service accounts.
+
+The hook runs at sign-in. Disable a departing person locally to end access when they can no
+longer sign in. Directory synchronization, provider group mapping and SCIM provisioning
+belong to the Enterprise SSO extension.
+
 
 ## People, services, and warehouse roles
 

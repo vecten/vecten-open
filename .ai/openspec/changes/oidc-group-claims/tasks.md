@@ -1,3 +1,0 @@
-- [x] Configure, validate and read group claims from the verified token.
-- [x] Reconcile known groups on sign-in, protect manual writes and report provenance.
-- [x] Verify changes through the local OIDC issuer and warehouse adapter.

@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from collections import defaultdict
+from functools import partial
 from threading import RLock
 
 from sqlalchemy import delete, insert, select
@@ -13,7 +14,7 @@ from sqlalchemy import delete, insert, select
 from vecten_mcp.apps import APP_PRINCIPALS
 from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
-from vecten_mcp.state import groups, memberships
+from vecten_mcp.state import groups, memberships, principals
 from vecten_mcp.warehouse.base import Absent, RoleExists
 from vecten_shared.identity_setup import (
     ACCESS_VERSION,
@@ -106,12 +107,15 @@ class AccessService:
         areas=(),
         source_areas=(),
         built=None,
-        oidc_groups=None,
+        sign_in_hooks=None,
     ):
         self.state, self.adapter = state, adapter
         self.invalidate = invalidate or (lambda pid: None)
         self.datasets = {}
-        self.oidc_groups = oidc_groups
+        self.sign_in_hooks = sign_in_hooks or {}
+        self.membership_owners = {
+            group: name for name, hook in self.sign_in_hooks.items() for group in hook["groups"]
+        }
         self.areas = frozenset(areas)
         self.source_areas = frozenset(source_areas)
         # What the dbt DAG's last full build made, or None without a current record; None
@@ -436,7 +440,7 @@ class AccessService:
                     ).scalars()
                 )
             for pid in ids:
-                self.membership(name, pid, False)
+                self._membership(name, self.state.principal(pid), False)
             self.adapter.drop_group(group["warehouse_role"])
             with self.state.transaction() as conn:
                 # Dropping the role took every grant it held, revokes refused above included.
@@ -456,26 +460,31 @@ class AccessService:
             raise ValueError("unknown group")
         return group
 
-    def sync_oidc_groups(self, principal, values):
-        # Delete before adding so a failed update never adds the new access while
-        # retaining the access that the provider removed. Each completed step is retryable.
+    def on_sign_in(self, identity, principal):
+        for owner, hook in self.sign_in_hooks.items():
+            hook["handler"](
+                identity=identity,
+                verified_claims=dict(identity.verified_claims),
+                set_membership=partial(self._owned_membership, owner, principal),
+            )
+
+    def _owned_membership(self, owner, principal, group, grant):
+        if self.membership_owners.get(group) != owner:
+            raise ValueError(f"{owner} does not manage membership of {group}")
+        if principal["kind"] != "human" or not principal["provisioned"]:
+            raise ValueError("managed memberships require a provisioned person")
+        if type(grant) is not bool:
+            raise ValueError("grant must be a boolean")
         with self.lock:
-            known = {row["name"] for row in self.list_groups()}
-            mapped = known.intersection(self.oidc_groups.bindings)
-            desired = {g for g in mapped if self.oidc_groups.bindings[g] in values}
-            held = self.state.groups_for(principal["id"])
-            for group in sorted((held & mapped) - desired):
-                self._membership(group, principal, False)
-            for group in sorted(desired - held):
-                self._membership(group, principal, True)
-            self.state.put("oidc_memberships", principal["id"], {"groups": sorted(desired)})
+            if (group in self.state.groups_for(principal["id"])) != grant:
+                self._membership(group, principal, grant)
 
     def membership(self, group, principal_id, grant=True):
         principal = self.state.principal(principal_id)
         if not principal or not principal["provisioned"]:
             raise ValueError("principal is not provisioned")
-        if principal["kind"] == "human" and self.oidc_groups and group in self.oidc_groups.bindings:
-            raise ValueError("the identity provider manages human membership of this group")
+        if principal["kind"] == "human" and group in self.membership_owners:
+            raise ValueError(f"{self.membership_owners[group]} manages human membership of {group}")
         return self._membership(group, principal, grant)
 
     def _membership(self, group, principal, grant):
@@ -1160,28 +1169,23 @@ class AccessService:
             "unbound_roles": [],
             "unbuilt": [],
         }
-        if self.oidc_groups is not None:
-            origins = dict(self.state.scan("oidc_memberships"))
+        if self.membership_owners:
             with self.state.transaction() as conn:
                 rows = conn.execute(
-                    select(memberships).order_by(
-                        memberships.c.principal_id, memberships.c.group_name
-                    )
+                    select(memberships.c.principal_id, memberships.c.group_name, principals.c.kind)
+                    .join(principals, principals.c.id == memberships.c.principal_id)
+                    .order_by(memberships.c.principal_id, memberships.c.group_name)
                 )
-                health = {
-                    **health,
-                    "membership_sources": [
-                        {
-                            "principal_id": pid,
-                            "group": name,
-                            "source": "oidc"
-                            if name in self.oidc_groups.bindings
-                            and name in origins.get(pid, {}).get("groups", ())
-                            else "local",
-                        }
-                        for pid, name in rows
-                    ],
-                }
+                health["membership_sources"] = [
+                    {
+                        "principal_id": pid,
+                        "group": name,
+                        "source": self.membership_owners.get(name, "local")
+                        if kind == "human"
+                        else "local",
+                    }
+                    for pid, name, kind in rows
+                ]
         if self.apps is not None and self.apps.apps:
             health = {**health, "apps": self.apps.health() + self.app_role_health()}
         return health

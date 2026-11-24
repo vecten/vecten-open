@@ -1,7 +1,7 @@
 """Login identities and warehouse names, independent of warehouse credentials."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from text_unidecode import unidecode
 
@@ -24,7 +24,7 @@ class Identity:
     subject: str
     email: str
     name: str
-    group_claim: frozenset[str] | None = None
+    verified_claims: dict = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "email", self.email.strip().lower())

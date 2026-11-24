@@ -260,7 +260,6 @@ def configured_runtime(root, config, extensions):
             config.mcp.oidc_client_id,
             issuer + "/oidc/callback",
             client_secret=optional_secret(secrets, "MCP_OIDC_CLIENT_SECRET"),
-            groups=config.mcp.oidc_groups,
         )
     else:
         backend = extensions.identity_backend(selected)(
@@ -304,7 +303,7 @@ def configured_runtime(root, config, extensions):
         areas=config.areas,
         source_areas=source_layer_areas(config.areas),
         built=built_reader(config, os.environ),
-        oidc_groups=config.mcp.oidc_groups if selected == "oidc" else None,
+        sign_in_hooks=extensions.sign_in_hooks,
     )
     oauth = OAuthService(
         state,
@@ -313,7 +312,7 @@ def configured_runtime(root, config, extensions):
         backend,
         admins=config.mcp.admins,
         revoke_session=pools.revoke_session,
-        sync_groups=access.sync_oidc_groups if access.oidc_groups else None,
+        on_sign_in=access.on_sign_in if extensions.sign_in_hooks else None,
     )
 
     pools.validate = session_validator(state, oauth.clock)

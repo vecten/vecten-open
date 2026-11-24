@@ -19,6 +19,7 @@ GROUPS = (
     "vecten.mcp.auth",
     "vecten.mcp.provisioning",
     "vecten.mcp.audit_sinks",
+    "vecten.mcp.sign_in",
     "vecten.skills",
     "vecten.services",
     "vecten.apps",

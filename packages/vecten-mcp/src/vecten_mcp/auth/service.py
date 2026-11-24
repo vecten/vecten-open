@@ -49,13 +49,13 @@ class OAuthService:
         admins=(),
         clock=time.time,
         revoke_session=None,
-        sync_groups=None,
+        on_sign_in=None,
     ):
         self.state, self.keys, self.backend = state, keys, backend
         self.issuer, self.clock = issuer.rstrip("/"), clock
         self.resource = self.issuer + "/mcp"
         self.admins = {email.lower() for email in admins}
-        self.sync_groups = sync_groups
+        self.on_sign_in = on_sign_in
         self.revoke_session = revoke_session or (lambda sid: None)
         self.registration_limit = RateLimiter(limit=10, window=60, clock=clock)
         self.token_limit = RateLimiter(limit=60, window=60, clock=clock)
@@ -163,8 +163,8 @@ class OAuthService:
         principal = self.state.bind_identity(identity)
         if first_login and identity.email in self.admins:
             principal = self.state.update_principal(principal["id"], admin=True)
-        if self.sync_groups and identity.group_claim is not None and principal["provisioned"]:
-            self.sync_groups(principal, identity.group_claim)
+        if self.on_sign_in:
+            self.on_sign_in(identity, principal)
         self.event(principal["id"], "login", identity.email, "allowed")
         return principal
 
