@@ -277,6 +277,41 @@ def test_bind_and_confirm_refuse_a_role_the_warehouse_reports_too_powerful():
     assert managed and all({"analyst", "finance", "provisioner"} <= m for m in managed)
 
 
+def test_reconcile_reports_a_binding_that_gained_unsafe_grants_until_corrected():
+    adapter = Adapter()
+    adapter.recheck_bindings = True
+    access = service(adapter)
+    access.create_group("finance")
+    access.bind("finance", "client_reader")
+    adapter.granted["finance"] = {"client_reader"}
+    access.confirm_binding("finance")
+    adapter.problems["client_reader"] = "reaches another environment database ACME_PROD"
+    with pytest.raises(ValueError, match="ACME_PROD"):
+        access.bind("finance", "client_reader")
+    assert not access.reconcile()["complete"]
+    (failure,) = access.health()["failures"]
+    assert failure["operation"] == "verify" and failure["target"] == "client_reader"
+    assert failure["group"] == "finance" and "ACME_PROD" in failure["error"]
+    assert access.state.get("bindings", "finance")["confirmed"]
+    assert adapter.granted["finance"] == {"client_reader"}
+    del adapter.problems["client_reader"]
+    assert access.reconcile()["complete"]
+    assert not access.health()["failures"]
+
+
+def test_reconciliation_waits_for_binding_procedure_upgrade():
+    adapter = Adapter()
+    adapter.recheck_bindings = True
+    adapter.required_access_version = ACCESS_VERSION + 1
+    access = service(adapter)
+    access.create_group("finance")
+    access.bind("finance", "client_reader")
+    adapter.ops.clear()
+    assert access.reconcile()["complete"]
+    assert access.health()["outdated"]["installed"] == ACCESS_VERSION
+    assert all(op[0] != "check" for op in adapter.ops)
+
+
 def test_a_role_nested_under_a_group_role_other_than_its_binding_is_listed():
     adapter = Adapter()
     access = service(adapter)
@@ -347,7 +382,8 @@ def test_a_shared_account_refuses_binding_a_role_of_any_environment_of_the_proje
 
 
 def test_a_shared_account_binds_a_client_role():
-    access, _ = snowflake_service(shared_account=True)
+    access, cursor = snowflake_service(shared_account=True)
+    cursor.answer = [("ok",)]
     assert access.bind("finance", "FINANCE_ANALYST")["confirmed"] is False
     assert access.bind("marketing", "ACME_DEV_READERS")["bound_role"] == "ACME_DEV_READERS"
 

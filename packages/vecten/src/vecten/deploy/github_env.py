@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -391,7 +390,7 @@ query($owner: String!, $name: String!, $branch: String!, $context: String!, $fir
         ... on Commit {
           history(first: $first, after: $cursor) {
             pageInfo { hasNextPage endCursor }
-            nodes { oid status { context(name: $context) { state createdAt } } }
+            nodes { oid status { context(name: $context) { state createdAt description } } }
           }
         }
       }
@@ -414,6 +413,7 @@ def set_ship_status(
     state: str,
     *,
     target_url: str | None = None,
+    receipt: str | None = None,
 ) -> None:
     """Set `vecten/ship/<env>` on `commit`; the job's token needs `statuses: write`."""
     if state not in SHIP_STATES:
@@ -429,7 +429,7 @@ def set_ship_status(
         "-f",
         f"context={ship_context(env)}",
         "-f",
-        f"description={SHIP_STATUS_DESCRIPTIONS[state]}",
+        f"description={receipt or SHIP_STATUS_DESCRIPTIONS[state]}",
     ]
     if target_url:
         args += ["-f", f"target_url={target_url}"]
@@ -496,10 +496,18 @@ def last_shipped(
 def shipped_at(
     gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
 ) -> tuple[str, str] | None:
-    """`last_shipped`'s commit with the time its `success` status was set."""
+    """The last shipped commit and its timestamp."""
+    found = latest_ship(gh, project_root, repository, branch, env)
+    return found[:2] if found else None
+
+
+def latest_ship(
+    gh: ToolRunner, project_root: Path, repository: str, branch: str, env: str
+) -> tuple[str, str, str] | None:
+    """The most recent successful ship, including the settings its hosts acknowledged."""
     owner, name = repository.split("/", 1)
     cursor: str | None = None
-    newest: tuple[str, str] | None = None
+    newest: tuple[str, str, str] | None = None
     for start in range(0, SHIPPED_SEARCH_LIMIT, _HISTORY_PAGE):
         args = [
             "api",
@@ -535,7 +543,7 @@ def shipped_at(
             if str(context.get("state")).lower() == "success" and created:
                 # GitHub's ISO 8601 UTC times sort as text.
                 if newest is None or created > newest[1]:
-                    newest = (str(node["oid"]), created)
+                    newest = (str(node["oid"]), created, str(context.get("description") or ""))
         if not page.get("hasNextPage"):
             break
         cursor = page.get("endCursor")
@@ -656,15 +664,13 @@ def dispatch_and_follow(
     git: ToolRunner,
     *,
     commit: str | None = None,
-    on_dispatched: Callable[[], None] | None = None,
 ) -> dict:
     """Run `workflow` on the default branch for `env` and wait for its conclusion.
 
     The workflow always runs the default branch as GitHub holds it. With `commit` it ships
     that commit, which the result names as `commit`; the run's `head_sha` stays the default
     branch's. The result's `matches_local_head` says whether the run's head is this
-    checkout's HEAD. `on_dispatched` runs once GitHub accepted the dispatch, so a run exists,
-    before the run is looked up or followed.
+    checkout's HEAD.
     """
     config = load_config(project_root)
     if config.deploy is None:
@@ -689,8 +695,6 @@ def dispatch_and_follow(
         "--repo",
         repository,
     )
-    if on_dispatched is not None:
-        on_dispatched()
     run = _dispatched_run(gh, project_root, repository, workflow, env, since)
     run_id = run["databaseId"]
     url, head_sha, conclusion = _follow(

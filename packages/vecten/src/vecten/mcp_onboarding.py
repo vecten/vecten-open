@@ -2,6 +2,7 @@
 
 import json
 import re
+from uuid import uuid4
 
 from vecten.deploy.snowflake import environment_names, identity_ship_command, owed_ship_record
 from vecten.mcp_url import mcp_url
@@ -10,10 +11,11 @@ from vecten_shared.config import EnvironmentFacts, load_config, save_config, sou
 from vecten_shared.identity_setup import (
     introspection_document,
     provisioner_script,
-    required_access_version,
+    snowflake_access_version,
 )
 from vecten_shared.keypair import generate_one_line, load_private_key, public_body
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.provider import shared_layout
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import write_record, write_text_atomic
 
@@ -98,7 +100,11 @@ def setup_script(root, env, confirm=False, public_key=None):
     if confirm:
         # Only Snowflake's script installs access procedures that report a version.
         areas = source_layer_areas(config.areas) if config.warehouse.kind == "snowflake" else None
-        installed = required_access_version(areas) if areas is not None else None
+        installed = (
+            snowflake_access_version(shared_layout(config, env), areas)
+            if areas is not None
+            else None
+        )
         record = {"confirmed": True} | ({"access_version": installed} if installed else {})
         if installed:
             record["access_source_areas"] = areas
@@ -112,6 +118,7 @@ def setup_script(root, env, confirm=False, public_key=None):
             and before.deployed_commit
             and not before.provisioner_script_run
         ):
+            before.mcp_ship_generation = uuid4().hex
             write_record(root, owed_ship_record(env), {"command": then})
         if env != "local":
             facts = config.environments.setdefault(env, EnvironmentFacts())

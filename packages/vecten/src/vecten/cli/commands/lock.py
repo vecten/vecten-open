@@ -4,7 +4,7 @@ import typer
 
 from vecten.cli.context import CliContext
 from vecten.cli.runner import JsonFlag, run_command
-from vecten_shared.output import Result
+from vecten_shared.output import ExitCode, Failure, Result
 
 
 def lock(
@@ -12,15 +12,30 @@ def lock(
         list[str] | None,
         typer.Option("--upgrade", help="Let this package move in every lock; repeatable."),
     ] = None,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="Check locks and local extension declarations without changing them.",
+        ),
+    ] = False,
     json_output: bool = JsonFlag,
 ) -> None:
     """Resolve requirements.txt, the per-component locks and extensions.lock.json together."""
 
     def run(ctx: CliContext) -> Result:
+        from vecten.extensions import check_declarations, secrets_message
         from vecten.extensions import lock as lock_project
-        from vecten.extensions import secrets_message
 
-        data = lock_project(ctx.require_project(), tuple(upgrade or ()))
+        root = ctx.require_project()
+        if check:
+            if upgrade:
+                raise Failure(ExitCode.USAGE, "--check and --upgrade cannot be combined")
+            names = check_declarations(root)
+            return Result(
+                data={"checked": names}, message=f"checked {len(names)} in-repo extensions"
+            )
+        data = lock_project(root, tuple(upgrade or ()))
         files = ["requirements.txt", *data["locks"], "extensions.lock.json"]
         lines = ["wrote " + ", ".join(files)]
         if data["divergence"]:

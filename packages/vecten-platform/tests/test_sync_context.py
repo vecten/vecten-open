@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -63,6 +65,22 @@ def test_importing_sync_turns_dlt_telemetry_off():
     import vecten_platform.sync  # noqa: F401
 
     assert os.environ.get("RUNTIME__DLTHUB_TELEMETRY") == "false"
+
+
+@pytest.mark.parametrize(("override", "expected"), [(None, "False"), ("true", "True")])
+def test_dlt_airflow_variable_provider_is_opt_in(monkeypatch, override, expected):
+    key = "PROVIDERS__ENABLE_AIRFLOW_SECRETS"
+    if override is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, override)
+    code = """
+import vecten_platform.sync
+from dlt.common.configuration.resolve import resolve_configuration
+from dlt.common.configuration.specs.config_providers_context import ConfigProvidersConfiguration
+print(resolve_configuration(ConfigProvidersConfiguration()).enable_airflow_secrets)
+"""
+    assert subprocess.check_output([sys.executable, "-c", code], text=True).strip() == expected
 
 
 def test_a_cloud_provider_is_bound_to_the_runtime_environment(tmp_path, monkeypatch):

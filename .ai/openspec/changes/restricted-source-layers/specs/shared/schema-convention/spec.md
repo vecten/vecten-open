@@ -11,8 +11,8 @@ An area with `restricted_source_layers = true` SHALL also own `staging_<area>` a
 
 #### Scenario: Confirm the installed Snowflake source areas
 
-- **WHEN** an environment has version 6 procedures and no opted-in areas
-- **THEN** next requires no administrator rerun
+- **WHEN** an environment has the procedures its layout requires (7 for fixed names, 8 for a shared account) and no opted-in areas
+- **THEN** next requires no administrator rerun for source areas
 - **WHEN** the configured area list differs from the list last confirmed for version 9
 - **THEN** next names the provisioner command until the new list is confirmed, and expanding an area preserves the group's existing core and mart reads
 

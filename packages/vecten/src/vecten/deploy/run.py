@@ -33,6 +33,7 @@ from vecten.deploy.github_env import (
     default_branch,
     dispatch_and_follow,
     ensure_environment,
+    latest_ship,
     oidc_subject_prefixes,
     repository_facts,
     repository_ids,
@@ -43,7 +44,6 @@ from vecten.deploy.github_env import (
     set_ship_status,
     ship_context,
     ship_status,
-    shipped_at,
 )
 from vecten.deploy.guards import (
     in_actions,
@@ -61,13 +61,16 @@ from vecten.deploy.promotion import (
     fetch_default_branch,
     fetched_commit,
     given_commit,
+    mcp_ship_receipt,
     newest_shipped,
     previous_in,
     promoted_tree,
     promotion_order,
     read_commit_files,
     read_fetched_facts,
+    remember_mcp_ship,
     require_shipped_by,
+    ship_evidence_record,
 )
 from vecten.deploy.shipping import service_report
 from vecten.deploy.snowflake import (
@@ -82,7 +85,7 @@ from vecten.deploy.snowflake import (
 from vecten.deploy.snowflake_leftovers import read_leftovers
 from vecten.deploy.terraform import PlannedRoot, TerraformRunner, require_terraform
 from vecten.deploy.tfvars import check_tfvars
-from vecten.github.gh import ToolRunner, require_gh
+from vecten.github.gh import ToolRunner, get_git, require_gh
 from vecten_shared.config import DeploySection, VectenConfig, load_config, save_config
 from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
@@ -299,6 +302,7 @@ def write_plan_text(project_root: Path, env: str, plans: list[PlannedRoot]) -> P
     """Write the human-readable plan of every root, in plan order, to `plan_path`."""
     sections = []
     for planned in plans:
+        sections.extend(f"Warning: {warning}\n" for warning in planned.warnings)
         where = planned.root.root_dir.relative_to(project_root).as_posix()
         sections.append(f"Terraform root {where}:\n\n{planned.text.rstrip()}\n")
     path = plan_path(project_root, env)
@@ -323,12 +327,14 @@ def _plan_only(
     with tempfile.TemporaryDirectory(prefix="vecten-plan-") as tmp:
         plans = plan_environment(plane, env, terraform, Path(tmp), cloud_only=cloud_only)
         path = write_plan_text(project_root, env, plans)
+        warnings = [warning for plan in plans for warning in plan.warnings]
     return {
         "env": env,
         "plan_only": True,
         "dispatched": False,
         "roots": [p.root.name for p in plans],
         "plan_file": str(path),
+        **({"warnings": warnings} if warnings else {}),
     }
 
 
@@ -468,20 +474,7 @@ def _deploy(
             if has_snowflake_root(named)
             else None
         )
-        on_dispatched = None
-        if layout is not None:
-            shared, base = layout
-
-            def on_dispatched() -> None:
-                # The run exists from here, and may create Snowflake objects under these
-                # names before it fails; a dispatch GitHub refused created nothing.
-                recorded = load_config(project_root)
-                if record_layout(recorded, env, shared, base):
-                    save_config(project_root, recorded)
-
-        followed = dispatch_and_follow(
-            project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted, on_dispatched=on_dispatched
-        )
+        followed = dispatch_and_follow(project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted)
         try:
             deployed = check_commit(promoted or followed["head_sha"])
         except Failure:
@@ -569,7 +562,7 @@ def _deploy_in_actions(
             "roots": provisioned["roots"],
             "commit": view.commit,
         }
-        warnings = list(view.warnings)
+        warnings = [*view.warnings, *provisioned.get("warnings", [])]
         if not ships:
             data = {**data, "hosts": [], "ship_skipped": identity_pending_note(config, env)}
         else:
@@ -581,6 +574,7 @@ def _deploy_in_actions(
                 view.commit,
                 lambda: plane.ship_hosts(tree, config, env, outputs, view.commit, sources=sources),
                 required=env in view.order[:-1],
+                receipt=mcp_ship_receipt(config, env) if env in view.order[1:] else None,
             )
             warnings += recorded
             data = {**data, "hosts": hosts, **_services_after_ship(plane, tree, config, outputs)}
@@ -614,6 +608,7 @@ def recorded_ship[Shipped](
     ship: Callable[[], Shipped],
     *,
     required: bool,
+    receipt: str | None = None,
 ) -> tuple[Shipped, list[str]]:
     """Run `ship` between a `pending` and a final `vecten/ship/<env>` status on `commit`;
     what `ship` returned, and a warning for every status that could not be read or set.
@@ -637,7 +632,16 @@ def recorded_ship[Shipped](
 
     def record(state: str) -> None:
         try:
-            set_ship_status(gh, project_root, repository, commit, env, state, target_url=url)
+            set_ship_status(
+                gh,
+                project_root,
+                repository,
+                commit,
+                env,
+                state,
+                target_url=url,
+                receipt=receipt if state == "success" else None,
+            )
         except Failure as exc:
             if required:
                 raise
@@ -849,6 +853,7 @@ def _ship_in_actions(
                 view.commit,
                 lambda: plane.ship_hosts(tree, config, env, outputs, view.commit),
                 required=env in view.order[:-1],
+                receipt=mcp_ship_receipt(config, env) if env in view.order[1:] else None,
             )
             warnings += recorded
             data = {**data, "hosts": hosts, **_services_after_ship(plane, tree, config, outputs)}
@@ -943,6 +948,12 @@ def promote_env(
     # it, the run may have finished green with no host shipped.
     if fetched:
         remove_record(project_root, owed_ship_record(env))
+        if config.has("mcp"):
+            try:
+                recent = latest_ship(gh, project_root, repository, branch, env)
+                remember_mcp_ship(project_root, load_config(project_root), env, recent, git)
+            except Failure, OSError:
+                warnings.append("Run vecten promote --status to verify the MCP settings shipped.")
     result = {"env": env, "promotes_from": previous, "dispatched": True, **followed}
     return {**result, "warnings": warnings} if warnings else result
 
@@ -955,11 +966,12 @@ def promotion_status(project_root: Path, *, gh: ToolRunner) -> dict:
     order = promotion_order(project_root, config)
     require_gh(gh, project_root)
     branch = default_branch(gh, project_root, repository)
-    found = {env: shipped_at(gh, project_root, repository, branch, env) for env in order}
+    found = {env: latest_ship(gh, project_root, repository, branch, env) for env in order}
     listed = []
     for env in order:
         previous = config.promoted_from(env)
         mine, theirs = found[env], found.get(previous) if previous else None
+        remember_mcp_ship(project_root, config, env, mine, get_git())
         # Behind: the environment before it runs a commit this one has not been given.
         behind = theirs is not None and (mine is None or theirs[0] != mine[0])
         listed.append(
@@ -1070,12 +1082,14 @@ def destroy_env(
             # unrecorded environment would read as never deployed and take the setting.
             record_layout(recorded, env, shared_layout(recorded, env), shared_base(recorded))
         facts.deployed_commit = None
+        facts.mcp_ship_generation = None
         cleared = _clear_state_facts(recorded, env)
         save_config(project_root, recorded)
         # Both records name what the destroyed `state` database held: the session it issued
         # and the people still owed a password link.
         remove_record(project_root, login_record(env))
         remove_record(project_root, record_name(env))
+        remove_record(project_root, ship_evidence_record(env))
         # A new deploy ships no host until the identity is confirmed again.
         remove_record(project_root, owed_ship_record(env))
     return {
@@ -1112,7 +1126,10 @@ def _shared_leftovers(
             ExitCode.REFUSED,
             f"users or roles {names.provisioner_role} owns, its user or the integration "
             f"{names.integration} stay in Snowflake, and the users' sign-in policies live in "
-            "the database --delete-data drops; nothing was destroyed. "
+            "the database --delete-data drops. The MCP sign-in policy references the integration "
+            "and must be dropped before it. If an ACCOUNTADMIN has confirmed that the "
+            f"database {names.database} was already dropped, skip only the DROP AUTHENTICATION "
+            "POLICY statement. Nothing was destroyed. "
             "Have an ACCOUNTADMIN run, in order:\n" + "\n".join(statements),
             details={"statements": statements},
         )

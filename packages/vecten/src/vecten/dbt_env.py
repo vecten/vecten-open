@@ -11,16 +11,24 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from vecten.deploy.snowflake import LOADER_PRIVATE_KEY, environment_names
 from vecten.secrets import cloud_store
 from vecten_platform.dbt.deps import CONVENTION_PACKAGE, write_packages_yml
 from vecten_platform.dbt.profile import profile_env
-from vecten_platform.dbt.runner import base_env, convention_vars, output_tail, run_dbt
+from vecten_platform.dbt.runner import (
+    OSI_PATH_VAR,
+    base_env,
+    convention_vars,
+    output_tail,
+    run_dbt,
+)
 from vecten_shared.config import VectenConfig
 from vecten_shared.names import check_env_name
+from vecten_shared.osi.generate import dataset_database
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import ConnectionSpec
 
@@ -326,10 +334,34 @@ def without_dbt_settings(environ: Mapping[str, str]) -> dict[str, str]:
     return {k: v for k, v in environ.items() if k not in known and not k.startswith("DBT_ENGINE_")}
 
 
+@contextmanager
+def target_osi(root: Path, written: str, database: str) -> Iterator[dict[str, str]]:
+    if written.lower() == database.lower():
+        yield {}
+        return
+    with tempfile.TemporaryDirectory(dir=root / "dbt", prefix=".vecten-osi-") as directory:
+        for path in sorted((root / "osi").rglob("*.json")):
+            try:
+                document = json.loads(path.read_text(encoding="utf-8"))
+                for model in document["semantic_model"]:
+                    for dataset in model.get("datasets", []):
+                        # dbt matches a three-part source by its literal database, schema and alias.
+                        parts = dataset["source"].split(".", 2)
+                        if len(parts) == 3 and parts[0].lower() == written.lower():
+                            dataset["source"] = ".".join([database, *parts[1:]])
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                raise Failure(ExitCode.CONFIG, f"invalid Ossie document {path}: {exc}") from None
+            copy = Path(directory) / path.relative_to(root / "osi")
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_text(json.dumps(document), encoding="utf-8")
+        yield {OSI_PATH_VAR: directory}
+
+
+@contextmanager
 def environment_dbt_env(
     root: Path, config: VectenConfig, env: str, args: list[str]
-) -> dict[str, str]:
-    """The process environment dbt runs with against `env`; nothing of it is written."""
+) -> Iterator[dict[str, str]]:
+    """Keep target-specific Ossie documents available through the preflight and command."""
     if config.warehouse.kind != "snowflake":
         raise _refuse_postgres(env)
     store = cloud_store(root, env)
@@ -338,18 +370,21 @@ def environment_dbt_env(
     dbt_dir = root / "dbt"
     write_packages_yml(dbt_dir, config)
     inherited = without_dbt_settings(os.environ) if env == PROD_ENV else None
-    if env == PROD_ENV:
-        # The check parses without the credential, so a refused run never reads it.
-        check_env = base_env(dbt_dir, profile_env(spec, ""), inherited)
-        check_prod_project(dbt_dir, command, args, check_env)
-    try:
-        secret = store.call(lambda: store.provider.get_secret(LOADER_PRIVATE_KEY))
-    except Failure as failure:
-        raise Failure(
-            failure.code,
-            f"{failure.message}; `vecten deploy --env {env}` generates the loader's key pair",
-        ) from None
-    process_env = base_env(dbt_dir, {**profile_env(spec, secret), SCRUBBED_VAR: secret}, inherited)
-    if command == TEST:
-        process_env.update(UNIT_TESTS_OFF)
-    return process_env
+    with target_osi(root, dataset_database(config), spec.database) as osi_env:
+        if env == PROD_ENV:
+            # The check parses without the credential, so a refused run never reads it.
+            check_env = {**base_env(dbt_dir, profile_env(spec, ""), inherited), **osi_env}
+            check_prod_project(dbt_dir, command, args, check_env)
+        try:
+            secret = store.call(lambda: store.provider.get_secret(LOADER_PRIVATE_KEY))
+        except Failure as failure:
+            raise Failure(
+                failure.code,
+                f"{failure.message}; `vecten deploy --env {env}` generates the loader's key pair",
+            ) from None
+        process_env = base_env(
+            dbt_dir, {**profile_env(spec, secret), SCRUBBED_VAR: secret}, inherited
+        )
+        if command == TEST:
+            process_env.update(UNIT_TESTS_OFF)
+        yield {**process_env, **osi_env}

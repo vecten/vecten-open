@@ -808,16 +808,22 @@ def test_a_granted_schema_whose_revoke_fails_keeps_the_retry_record():
     access = service(adapter, areas={"finance"})
     access.create_group("finance")
     access.grant("finance", "area", "finance")
-    # The procedure's owner cannot see core_finance: gone or only invisible, the revoke
-    # it cannot make stays a failure.
+    # A failed readback keeps the retry record even while drift is report-only.
     adapter.absent.add("core_finance")
+    access.state.put("settings", "reconcile_drift", {"value": "report"})
+    adapter.ops.clear()
     result = access.revoke("finance", "area", "finance")
     failures = result["reconciliation"]["failures"]
     assert [(f["target"], f["operation"]) for f in failures] == [("finance", "revoke")]
+    assert ("schema", "finance", "marts_finance", False) in adapter.ops
+    assert not any(g[0:3] == ("finance", "usage", "marts_finance") for g in adapter.held)
     assert _applied_area(access)["granted"] == ["core_finance", "marts_finance"]
     adapter.ops.clear()
     access.reconcile()
     assert ("schema", "finance", "core_finance", False) in adapter.ops
+    adapter.absent.clear()
+    assert access.reconcile()["complete"]
+    assert not any(r["kind"] == "area" for _, r in access.state.scan("applied_grants"))
 
 
 def test_a_schema_granted_once_stays_recorded_when_a_later_grant_cannot_see_it():

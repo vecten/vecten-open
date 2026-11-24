@@ -926,7 +926,9 @@ def isolate_services(host: dict, run: Run, create_chain: bool = False) -> None:
     bridge = host["service_network"]
     if not bridge:
         return
-    if not _INTERFACE.fullmatch(bridge):
+    # Only the reserved service prefix may match more than one bridge. Older releases
+    # provide their exact interface name in the same field.
+    if bridge != "vecten-+" and not _INTERFACE.fullmatch(bridge):
         raise AgentError(f"service_network {bridge!r} is no interface name")
     address = METADATA_ADDRESSES.get(host["cloud"])
     if address is None:

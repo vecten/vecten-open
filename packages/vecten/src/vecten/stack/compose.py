@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Literal
 
 import yaml
 
+from vecten.stack import local_components
 from vecten.stack.images import BUILD_DIR, SOURCES_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
 from vecten_shared.apps import APP_CREDENTIAL, credential_names
@@ -47,6 +49,8 @@ VM_ENVIRONMENT_FILE = "/opt/vecten-env/environment.json"
 # The release holds the outputs under .vecten/environments, one level above the stack.
 VM_ENVIRONMENT_MOUNT = f"../environments/${{VECTEN_ENV}}.json:{VM_ENVIRONMENT_FILE}:ro"
 PASSWORDS_FILE_TARGET = "/opt/airflow/simple_auth_manager_passwords.json.generated"
+LOCAL_AUTH_DIR = "/run/vecten-airflow-auth"
+LOCAL_PASSWORDS_FILE = f"{LOCAL_AUTH_DIR}/passwords.json"
 # Project directories mounted into Airflow, relative to the stack directory, with the
 # stand-in under the stack directory that is mounted when the project lacks one.
 PROJECT_MOUNTS = (
@@ -303,10 +307,11 @@ def _airflow_common(
             VM_ENVIRONMENT_MOUNT,
         ]
     else:
-        common["volumes"].append(f"./airflow_passwords.json:{PASSWORDS_FILE_TARGET}")
-    if mode == "local":
-        # The passwords file is 0600 and owned by the host user, so Airflow must run as that
-        # uid; the official image supports an arbitrary uid only with gid 0.
+        common["environment"]["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE"] = (
+            LOCAL_PASSWORDS_FILE
+        )
+        common["volumes"].append(f"airflow-auth:{LOCAL_AUTH_DIR}")
+        # Files in project bind mounts must stay owned by the invoking user.
         common["user"] = f"{os.getuid()}:0"
     # Checked against every variable the stack sets, the VM's included: the agent hands secrets
     # to Compose after the stack's own values, so a colliding name would replace them.
@@ -321,9 +326,8 @@ def _airflow_common(
     return common
 
 
-SERVICES_NETWORK = "vecten-services"
-# The VM agent's DOCKER-USER rules match this interface name; Linux caps one at 15 characters.
-SERVICES_BRIDGE = "vecten-services"
+# The prefix also covers the bridge named in earlier host records during an upgrade.
+SERVICE_BRIDGE_PREFIX = "vecten-"
 SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
 SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
 # Processes and threads together; it bounds a fork loop, not a threaded server's pool.
@@ -351,10 +355,10 @@ def host_services(
     config: VectenConfig, record: dict[str, Extension], components: list[str]
 ) -> tuple[list[str], str]:
     """What a VM's agent needs for the services it runs: the secret names it reads and hands
-    to Compose, and the bridge it keeps off the metadata address, or empty for no service."""
+    to Compose, and the interface match for its metadata firewall rule, or empty for no service."""
     placed = [b for b in bound_services(config, record) if b.host in components]
     names = sorted({n for bound in placed for n in service_secret_names(bound, record)})
-    return names, SERVICES_BRIDGE if placed else ""
+    return names, SERVICE_BRIDGE_PREFIX + "+" if placed else ""
 
 
 def _literal(value: str) -> str:
@@ -399,6 +403,12 @@ def served_services(
         if name in listed:
             served.append((bound, name))
     return served
+
+
+def service_bridge(project: str, service: str) -> str:
+    # Linux interface names have at most 15 bytes. Compose names can be longer.
+    suffix = hashlib.sha256(f"{project}/{service}".encode()).hexdigest()[:8]
+    return SERVICE_BRIDGE_PREFIX + suffix
 
 
 def _service(
@@ -453,7 +463,7 @@ def _service(
         # Both images run as a non-root user, which holds no effective capability anyway.
         "cap_drop": ["ALL"],
         "security_opt": ["no-new-privileges:true"],
-        "networks": [SERVICES_NETWORK],
+        "networks": [bound.compose_name],
         "healthcheck": {
             "test": test,
             "interval": "10s",
@@ -559,6 +569,34 @@ def generate_compose(
             config, mode, stack_dir, project, hosts, dags_paused_at_creation, account_env
         )
         depends = {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
+        if mode == "local":
+            volumes["airflow-auth"] = {
+                "driver": "local",
+                "driver_opts": {
+                    "type": "tmpfs",
+                    "device": "tmpfs",
+                    "o": f"uid={os.getuid()},mode=0700,size=64k",
+                },
+            }
+            services["airflow-auth"] = {
+                "image": VERSIONS.airflow_image,
+                "profiles": ["platform"],
+                "user": common["user"],
+                "network_mode": "none",
+                "read_only": True,
+                "entrypoint": ["python", "/seed.py"],
+                "volumes": [
+                    "../../.env:/project.env:ro",
+                    "./airflow_auth.py:/seed.py:ro",
+                    f"airflow-auth:{LOCAL_AUTH_DIR}",
+                ],
+                "healthcheck": {
+                    "test": ["CMD", "test", "-s", LOCAL_PASSWORDS_FILE],
+                    "interval": "2s",
+                },
+                "restart": "unless-stopped",
+            }
+            depends["airflow-auth"] = {"condition": "service_healthy"}
         services["airflow-api-server"] = {
             **common,
             **({"ports": [f"127.0.0.1:{LOCAL_AIRFLOW_API_PORT}:8080"]} if mode == "local" else {}),
@@ -699,20 +737,21 @@ def generate_compose(
         "depends_on": nginx_depends,
         "restart": "unless-stopped",
     }
-    running = services_to_run(config, mode, host_components, stack_dir)
-    for bound in running:
-        services[bound.compose_name] = _service(bound, mode, project, hosts, stack_dir)
-        if bound.service.volume is not None:
-            volumes[f"{bound.compose_name}-data"] = {}
-    document = {"name": project, "services": services, "volumes": volumes}
-    if running:
-        services["nginx"]["networks"] = ["default", SERVICES_NETWORK]
-        network = (
-            {"driver_opts": {"com.docker.network.bridge.name": SERVICES_BRIDGE}}
+    networks = {}
+    for bound in services_to_run(config, mode, host_components, stack_dir):
+        name = bound.compose_name
+        services[name] = _service(bound, mode, project, hosts, stack_dir)
+        networks[name] = (
+            {"driver_opts": {"com.docker.network.bridge.name": service_bridge(project, name)}}
             if mode == "vm"
             else {}
         )
-        document["networks"] = {SERVICES_NETWORK: network}
+        if bound.service.volume is not None:
+            volumes[f"{name}-data"] = {}
+    document = {"name": project, "services": services, "volumes": volumes}
+    if networks:
+        services["nginx"]["networks"] = ["default", *networks]
+        document["networks"] = networks
     if config.packages.private_index:
         secrets = {}
         for name, service in services.items():
@@ -758,12 +797,19 @@ def write_compose(project_root: Path, config: VectenConfig) -> Path:
     if config.has("platform"):
         # Docker would create a missing bind-mount source owned by root.
         (project_root / LOCAL_ARTIFACTS).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(Path(__file__).with_name("airflow_auth.py"), stack_dir / "airflow_auth.py")
     _write_pg_init(stack_dir)
     write_extension_dag_loader(stack_dir)
     for source, empty, _ in PROJECT_MOUNTS:
         if not (stack_dir / source).is_dir():
             (stack_dir / "empty" / empty).mkdir(parents=True, exist_ok=True)
-    doc = generate_compose(config, "local", list(config.components), stack_dir)
+    doc = generate_compose(config, "local", local_components(config), stack_dir)
+    env_file = project_root / ".env"
+    if "airflow-auth" in doc["services"] and env_file.exists():
+        info = env_file.stat()
+        doc["services"]["airflow-auth"]["labels"] = {
+            "vecten.env-revision": f"{info.st_ino}-{info.st_mtime_ns}"
+        }
     path = stack_dir / "docker-compose.yml"
     path.write_text(yaml.safe_dump(doc, sort_keys=False))
     override = project_root / "orchestration" / "docker-compose.override.yml"

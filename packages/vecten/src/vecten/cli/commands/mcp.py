@@ -32,6 +32,21 @@ def validate(
         osi_dir = root / "osi"
         kind = config.warehouse.kind
         report = validate_osi(osi_dir, warehouse_kind=kind)
+        if report.ok and "platform" in config.components and report.homes:
+            try:
+                from vecten_platform.dbt.metricflow import semantic_manifest_issues
+            except ImportError as exc:
+                from vecten_shared.osi.issues import Issue
+
+                report.errors.append(
+                    Issue(
+                        "dbt_semantic_model",
+                        f"Cannot load MetricFlow validation ({exc}). Reinstall the matching "
+                        "vecten-platform distribution and its required dependencies.",
+                    )
+                )
+            else:
+                report.errors.extend(semantic_manifest_issues(osi_dir))
         record = {
             "ok": report.ok,
             "errors": len(report.errors),

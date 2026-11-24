@@ -7,7 +7,8 @@ from pathlib import Path
 from vecten.next.items import Item
 from vecten.secrets import provisioner_secret_names
 from vecten_shared.config import EnvironmentFacts, VectenConfig, source_layer_areas
-from vecten_shared.identity_setup import required_access_version
+from vecten_shared.identity_setup import snowflake_access_version
+from vecten_shared.provider import shared_layout
 from vecten_shared.provider.local import LocalProvider
 from vecten_shared.records import read_record
 
@@ -74,7 +75,7 @@ def access_rerun_item(root: Path, config: VectenConfig, env: str) -> Item | None
     # The confirmed facts for this environment travel with the project. A stale laptop
     # record can describe an earlier installation from another checkout.
     version, installed = runs[0]
-    if version >= required_access_version(areas):
+    if version >= snowflake_access_version(shared_layout(config, env), areas):
         if installed == areas:
             return None
         return Item(

@@ -28,6 +28,18 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
     --mount=type=cache,id=vecten-airflow-uv,target=/mnt/uv-cache,uid=50000,gid=0 \
     --mount=type=tmpfs,target=/tmp \
     --mount=type=bind,source=dist,target=/mnt/wheels \
-    /bin/uv pip install --cache-dir /mnt/uv-cache "apache-airflow==${AIRFLOW_VERSION}" \
-        /mnt/wheels/vecten_shared-*.whl /mnt/wheels/vecten_platform-*.whl \
-    && rm -f "${VIRTUAL_ENV}/.lock"
+    --mount=type=bind,source=uv.lock,target=/mnt/uv.lock <<'SH'
+set -e
+# Airflow resolves against its upstream image, but its Snowflake driver must match the MCP image.
+python - <<'PYTHON' > /tmp/snowflake-constraint.txt
+import tomllib
+
+with open("/mnt/uv.lock", "rb") as lock:
+    packages = tomllib.load(lock)["package"]
+[pin] = {p["version"] for p in packages if p["name"] == "snowflake-connector-python"}
+print(f"snowflake-connector-python=={pin}")
+PYTHON
+/bin/uv pip install --cache-dir /mnt/uv-cache --constraint /tmp/snowflake-constraint.txt \
+    "apache-airflow==${AIRFLOW_VERSION}" /mnt/wheels/vecten_shared-*.whl /mnt/wheels/vecten_platform-*.whl
+rm -f "${VIRTUAL_ENV}/.lock"
+SH

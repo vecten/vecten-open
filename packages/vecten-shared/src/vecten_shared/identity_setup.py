@@ -259,18 +259,33 @@ ALTER USER {user} SET AUTHENTICATION POLICY {service};
 """
 
 
-# The version the installed procedures must report for every feature this server uses; it
-# changes with their text, and an install that reports none is version 1.
-ACCESS_VERSION = 6
+# The version installed procedures report; one reporting none is version 1. A shared
+# layout adds the binding check, and opted-in source areas add their list.
+ACCESS_VERSION = 7
+SHARED_ACCESS_VERSION = 8
 SOURCE_AREAS_VERSION = 9
-# The oldest version whose READ_GRANT and READ_GRANTS serve area grants and drift; one from
-# here to ACCESS_VERSION lacks only the listing of the modelled relations.
+# The oldest procedure versions that serve area grants and list modelled relations.
 GRANTS_VERSION = 5
+LISTING_VERSION = 6
 
 
-def required_access_version(source_areas):
-    """Version 6 already serves all reads used without restricted source layers."""
-    return SOURCE_AREAS_VERSION if source_areas else ACCESS_VERSION
+def snowflake_access_version(shared_account, source_areas=()):
+    if source_areas:
+        return SOURCE_AREAS_VERSION
+    return SHARED_ACCESS_VERSION if shared_account else ACCESS_VERSION
+
+
+def _binding_check(namespace, names, provisioner):
+    if not names.suffix:
+        return ""
+    body = resources.files("vecten_shared.sql").joinpath("snowflake_binding.js").read_text()
+    return f"""CREATE OR REPLACE PROCEDURE {namespace}.CHECK_BINDING(TARGET VARCHAR)
+RETURNS VARCHAR LANGUAGE JAVASCRIPT EXECUTE AS OWNER AS $$
+var database = {_baked(names.database.upper())};
+{body}
+$$;
+GRANT USAGE ON PROCEDURE {namespace}.CHECK_BINDING(VARCHAR) TO ROLE {provisioner};
+"""
 
 
 def snowflake_access_helper(names, source_areas=()):
@@ -288,7 +303,7 @@ def snowflake_access_helper(names, source_areas=()):
         f"var loaderRole = {_baked(_name(names.loader_role))};\n"
         f"var suffix = {_baked(names.suffix)};\n"
         f"var sourceAreas = {_baked([area.upper() for area in source_areas])};\n"
-        f"var version = {required_access_version(source_areas)};\n"
+        f"var version = {snowflake_access_version(bool(names.suffix), source_areas)};\n"
     )
     metadata_query = _baked(
         f"SELECT COUNT(*) FROM {_ident(database)}.INFORMATION_SCHEMA.TABLES "
@@ -322,7 +337,7 @@ RETURNS VARIANT LANGUAGE JAVASCRIPT EXECUTE AS OWNER AS $$
 {handler}
 $$;
 GRANT USAGE ON PROCEDURE {report} TO ROLE {provisioner};
-"""
+{_binding_check(namespace, names, provisioner)}"""
 
 
 _POSTGRES_HEADER = (

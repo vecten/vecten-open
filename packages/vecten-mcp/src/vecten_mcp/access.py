@@ -15,7 +15,13 @@ from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
 from vecten_mcp.warehouse.base import Absent, RoleExists
-from vecten_shared.identity_setup import GRANTS_VERSION, required_access_version
+from vecten_shared.identity_setup import (
+    ACCESS_VERSION,
+    GRANTS_VERSION,
+    LISTING_VERSION,
+    SHARED_ACCESS_VERSION,
+    SOURCE_AREAS_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
@@ -33,6 +39,12 @@ LISTING_FIX = (
     "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
     "--confirm-run: until then the relations in core, marts and the areas that no model "
     "builds are not listed."
+)
+
+PARTIAL_GRANT_FIX = (
+    "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
+    "--confirm-run: until then a partial grant can be mistaken for a missing schema, "
+    "and a refused revoke lacks the remaining-grants diagnostic."
 )
 
 
@@ -349,11 +361,12 @@ class AccessService:
                 raise ValueError(
                     f"group {group} already binds {held['bound_role']}: unbind it first"
                 )
+            if not held or getattr(self.adapter, "recheck_bindings", False):
+                self._check_bound(bound)
             if held:
                 # Binding the same role again prints its statement; the record, confirmed
                 # or not, stays as it is.
                 return self._binding(group, role, bound, confirmed=held["confirmed"])
-            self._check_bound(bound)
             self.state.put("bindings", group, {"bound_role": bound, "confirmed": False})
         return self._binding(group, role, bound, confirmed=False)
 
@@ -555,11 +568,23 @@ class AccessService:
 
     def _outdated(self):
         installed = self.adapter.access_version()
-        required = required_access_version(self.source_areas)
+        required = getattr(self.adapter, "required_access_version", ACCESS_VERSION)
+        if self.source_areas:
+            required = max(required, SOURCE_AREAS_VERSION)
         if installed < required:
-            fix = OUTDATED_FIX if installed < GRANTS_VERSION else LISTING_FIX
-            if installed >= GRANTS_VERSION and self.source_areas:
+            if installed < GRANTS_VERSION:
+                fix = OUTDATED_FIX
+            elif installed < LISTING_VERSION:
+                fix = LISTING_FIX
+            elif self.source_areas:
                 fix = "Rerun the provisioner script and confirm it to grant staging or snapshots."
+            elif installed < ACCESS_VERSION:
+                fix = PARTIAL_GRANT_FIX
+            else:
+                fix = (
+                    "An administrator reruns `vecten mcp provisioner-script --env <env>` and "
+                    "confirms it with --confirm-run so shared-account bindings can be checked."
+                )
             return {"installed": installed, "required": required, "fix": fix}
         return None
 
@@ -599,6 +624,11 @@ class AccessService:
                     if allowed:
                         missing.append(schema)
                     continue
+                except Exception as exc:
+                    if allowed or grant["kind"] != "area":
+                        raise
+                    refused.append(f"{schema}: {describe_error(exc)}")
+                    continue
                 refused += [f"{schema}: {kind}" for kind in kinds]
                 if allowed and not kinds:
                     confirmed.append(schema)
@@ -610,7 +640,7 @@ class AccessService:
                     ", ".join(missing),
                 )
         if refused and not allowed:
-            raise RuntimeError("the warehouse refused part of the revoke: " + "; ".join(refused))
+            raise RuntimeError("part of the revoke failed: " + "; ".join(refused))
         if refused:
             logger.warning(
                 "%s of %s %s for %s left out: %s",
@@ -810,7 +840,7 @@ class AccessService:
                         else:
                             record = dict(row, source=done, granted=done, confirmed=kept)
                         self.state.put("applied_grants", key, record)
-            report["missing_bindings"], report["unbound_roles"] = self._bindings(failures)
+            report["missing_bindings"], report["unbound_roles"] = self._bindings(failures, outdated)
         report["unbuilt"], unlisted = self._unbuilt(outdated)
         health = {"checked_at": time.time(), "failures": failures, **report}
         if unlisted:
@@ -821,7 +851,7 @@ class AccessService:
         self.admit()
         return {"reconciled": reconciled, "complete": not failures, "failures": failures}
 
-    def _bindings(self, failures):
+    def _bindings(self, failures, outdated):
         """Confirmed bindings whose grant a group's role no longer holds, and every role
         nested under a group's role other than its confirmed binding."""
         missing, unbound = [], []
@@ -832,6 +862,27 @@ class AccessService:
                 continue
             binding = bindings.get(group) or {}
             bound = binding.get("bound_role") if binding.get("confirmed") else None
+            # A shared install from the binding version on has CHECK_BINDING, even while a
+            # newer source-area list waits for the administrator.
+            checkable = not outdated or outdated["installed"] >= SHARED_ACCESS_VERSION
+            if binding and getattr(self.adapter, "recheck_bindings", False) and checkable:
+                target = binding["bound_role"]
+                try:
+                    self._check_bound(target)
+                except Exception as exc:
+                    error = describe_error(exc)
+                    failures.append(
+                        dict(
+                            group=group,
+                            kind="binding",
+                            target=target,
+                            operation="verify",
+                            error=error,
+                        )
+                    )
+                    logger.warning(
+                        "Checking the bound role %s of %s failed: %s", target, group, error
+                    )
             try:
                 nested = self.adapter.granted_roles(role)
                 held = self.adapter.holds_role(role, bound) if bound else True
@@ -1015,7 +1066,7 @@ class AccessService:
         build did not make, each with the statement that drops it, and the listing's error.
         Without a current record any relation could be one a later build made, so none is
         listed; the server never drops one."""
-        if self.built is None or (outdated and outdated["installed"] < 6):
+        if self.built is None or (outdated and outdated["installed"] < LISTING_VERSION):
             return [], None
         try:
             record = self.built()

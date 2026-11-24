@@ -198,3 +198,27 @@ def test_replay_into_postgres_lands_raw_tables(tmp_path):
             assert replay_fixtures(target, connectors_dir, config)["demo"] == ["company"]
             with _pg_connect(target) as conn:
                 assert conn.execute("select count(*) from raw_demo.company").fetchone() == (2,)
+
+
+def test_local_build_can_query_a_recorded_json_column_alongside_legacy_rows(tmp_path):
+    connectors_dir, config = _project(tmp_path)
+    fixtures = connectors_dir / "demo" / "fixtures"
+    (fixtures / "ticket.jsonl").write_text('{"_raw": {"tags": ["open"]}}\n')
+    (fixtures / "ticket.schema.json").write_text(
+        json.dumps(
+            {
+                "tables": [
+                    {
+                        "name": "tickets",
+                        "write_disposition": "append",
+                        "columns": {"_raw": {"name": "_raw", "data_type": "json"}},
+                    }
+                ],
+                "max_table_nesting": 0,
+            }
+        )
+    )
+    with snowflake_emulation(tmp_path) as target:
+        assert replay_fixtures(target, connectors_dir, config)["demo"] == ["company", "tickets"]
+        cur = _fakesnow_connect("RAW_DEMO").cursor()
+        assert cur.execute("select _raw:tags[0]::string from tickets").fetchone() == ("open",)

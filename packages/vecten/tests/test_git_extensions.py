@@ -60,8 +60,9 @@ def _git(*args: str, cwd: Path) -> str:
 
 
 def _token() -> str:
-    # Letters that are no hex digit and no letter of the words a failure prints.
-    return "".join(secrets.choice("GHJKMNPQRSTUVWXYZ") for _ in range(32))
+    # Each four-character probe includes two URL-safe delimiters, so ordinary runner
+    # environment names such as SYSTEM cannot match a fragment of this test credential.
+    return "".join("~" + secrets.choice("GHJKMNPQRSTUVWXYZ") for _ in range(16))
 
 
 def _leaks(token: str, text: str) -> list[str]:
@@ -850,3 +851,89 @@ def test_an_index_pin_with_a_url_in_its_comment_is_not_read_as_a_source(project)
     # As before git sources, a pin with a comment is not one `vecten lock` writes or reads.
     assert locking.read_pins(project) == {}
     assert locking.git_problems(project, load_config(project)) == []
+
+
+@pytest.mark.network
+@pytest.mark.parametrize("crm_source", ["git", "project"])
+def test_registered_git_dependency_locks_and_installs_from_its_commit(
+    invoke, project, tmp_path, monkeypatch, request, crm_source
+):
+    from .test_up_e2e import use_checkout_wheels
+
+    work = tmp_path / "monorepo"
+    work.mkdir()
+    _git("init", "-q", "-b", "main", cwd=work)
+    for name, dependencies, module in (
+        ("acme-core", [], 'MARKER = "from the tagged core"'),
+        ("acme-crm", ["acme-core==1.2.0"], "from acme_core import MARKER"),
+    ):
+        folder = work / "extensions" / name
+        package = folder / "src" / name.replace("-", "_")
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text(module + "\ndags = []\n")
+        (folder / "pyproject.toml").write_text(
+            f'[project]\nname = "{name}"\nversion = "1.2.0"\n'
+            f"dependencies = {json.dumps(dependencies)}\n"
+            f'[project.entry-points."vecten.dags"]\n{name} = "{package.name}:dags"\n'
+            '[build-system]\nrequires = ["hatchling>=1.26"]\nbuild-backend = "hatchling.build"\n'
+        )
+    _git("add", ".", cwd=work)
+    _git("commit", "-qm", "registered pair", cwd=work)
+    commit = _git("rev-parse", "HEAD", cwd=work)
+    _git("tag", "v1.2.0", cwd=work)
+    core = work / "extensions/acme-core/src/acme_core/__init__.py"
+    core.write_text('MARKER = "from the later commit"\ndags = []\n')
+    _git("commit", "-qam", "advance the default branch", cwd=work)
+    repositories = tmp_path / "repos"
+    repositories.mkdir()
+    _git("clone", "--bare", str(work), "pair.git", cwd=repositories)
+    server = (
+        _load_git_http().GitServer(repositories, {}, public={"pair.git"}).start(tmp_path / "tls")
+    )
+    request.addfinalizer(server.stop)
+    monkeypatch.setenv("GIT_SSL_CAINFO", str(server.ca_path))
+    monkeypatch.delenv("GIT_CREDENTIALS", raising=False)
+    use_checkout_wheels(tmp_path, monkeypatch)
+    monkeypatch.setattr(extensions, "base_constraints", lambda kind: "")
+
+    def isolated_python(name):
+        target = tmp_path / name
+        subprocess.run(["uv", "venv", "--python", sys.executable, str(target)], check=True)
+        python = target / "bin" / "python"
+        monkeypatch.setattr(extensions, "sys", SimpleNamespace(executable=str(python)))
+        return python
+
+    isolated_python("author")
+    git_names = ["acme-core", "acme-crm"] if crm_source == "git" else ["acme-core"]
+    for name in ("acme-core", "acme-crm"):
+        if name in git_names:
+            source = f"{name} @ git+{server.url}/pair.git@v1.2.0#subdirectory=extensions/{name}"
+        else:
+            source = f"./extensions/{name}"
+            shutil.copytree(work / source, project / source)
+        result = invoke("extension", "add", source, "--json")
+        assert result.exit_code == 0, result.stdout
+    result = invoke("lock", "--json")
+    assert result.exit_code == 0, result.stdout
+    for lock in locking.LOCK_FILES.values():
+        lines = _lock_lines(project, lock)
+        for name in git_names:
+            assert any(
+                f"{name} @ git+{server.url}/pair.git@{commit}#subdirectory=extensions/{name}"
+                in line
+                for line in lines
+            )
+    python = isolated_python("consumer")
+    result = invoke("extension", "sync", "--json")
+    assert result.exit_code == 0, result.stdout
+    assert json.loads(result.stdout)["sources"] == {name: commit for name in git_names}
+    subprocess.run(
+        [
+            str(python),
+            "-I",
+            "-c",
+            'from acme_crm import MARKER; assert MARKER == "from the tagged core"',
+        ],
+        cwd=tmp_path,
+        check=True,
+    )

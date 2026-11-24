@@ -847,7 +847,7 @@ def rerun_item(env="prod"):
 def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version_is_current(
     snowflake_deploy_layer,
 ):
-    from vecten_shared.identity_setup import SOURCE_AREAS_VERSION
+    from vecten_shared.identity_setup import ACCESS_VERSION, SOURCE_AREAS_VERSION
 
     root, config = snowflake_deploy_layer
     facts = deployed(config).environments["prod"]
@@ -856,7 +856,7 @@ def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version
     assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
     dirty = GitState(has_repo=True, has_origin=True, dirty=True, ahead=False)
     assert post_deploy_items(root, config, "prod", dirty)[:2] == [PUSH, rerun_item()]
-    facts.access_version = 6
+    facts.access_version = ACCESS_VERSION
     assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
     from vecten_shared.config import AreaDecl
 
@@ -872,12 +872,12 @@ def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version
 
 
 def test_a_previous_local_confirmation_cannot_override_shipped_area_facts(snowflake_deploy_layer):
-    from vecten_shared.identity_setup import SOURCE_AREAS_VERSION
+    from vecten_shared.identity_setup import ACCESS_VERSION, SOURCE_AREAS_VERSION
 
     root, config = snowflake_deploy_layer
     facts = deployed(config).environments["prod"]
     facts.provisioner_script_run = True
-    facts.access_version = 6
+    facts.access_version = ACCESS_VERSION
     write_record(
         root,
         "provisioner-prod",
@@ -888,6 +888,19 @@ def test_a_previous_local_confirmation_cannot_override_shipped_area_facts(snowfl
         },
     )
     assert post_deploy_items(root, config, "prod", CLEAN)[0] == OIDC
+
+
+def test_shared_account_needs_the_binding_check_after_a_version_six_install(snowflake_deploy_layer):
+    from vecten_shared.identity_setup import ACCESS_VERSION, SHARED_ACCESS_VERSION
+
+    root, config = snowflake_deploy_layer
+    facts = deployed(config).environments["prod"]
+    facts.provisioner_script_run = True
+    facts.snowflake_shared_account = True
+    facts.access_version = ACCESS_VERSION
+    assert rerun_item() in post_deploy_items(root, config, "prod", CLEAN)
+    facts.access_version = SHARED_ACCESS_VERSION
+    assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
 
 
 def test_the_rerun_does_not_hold_back_the_other_post_deploy_items(snowflake_deploy_layer):

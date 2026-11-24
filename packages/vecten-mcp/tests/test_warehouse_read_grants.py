@@ -187,6 +187,7 @@ def test_snowflake_read_grants_refuses_a_reserved_role_before_any_call():
     ("name", "grant_option", "valid"),
     [
         ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "false", True),
+        ("D.VECTEN_ACCESS.CHECK_BINDING(VARCHAR)", "false", False),
         ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "true", False),
         ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR, VARCHAR)", "false", False),
         ("OTHER.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "false", False),
