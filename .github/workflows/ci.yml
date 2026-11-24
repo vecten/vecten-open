@@ -102,10 +102,10 @@ jobs:
       - run: uv sync --locked --all-packages
       - name: Read pinned Terraform version
         id: terraform
-        run: echo "version=$(uv run python -c 'from vecten_shared.versions import VERSIONS; print(VERSIONS.terraform)')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: ~${{ steps.terraform.outputs.version }}.0
+          terraform_version: ${{ steps.terraform.outputs.version }}
           terraform_wrapper: false
       # The unmarked tests of these modules run in the test shards. Each terraform test inits
       # its own root and downloads its providers, so the tests wait on the network side by side.
