@@ -31,6 +31,17 @@ parent and child both request live inputs, recording SHALL identify this limitat
 preserve earlier fixtures. Generated CI SHALL make declared connector dependencies
 available to both commands that replay input samples.
 
+An input sample SHALL record the output row limit of the run that captured it. Replay SHALL
+stop the transformed output at that limit, at the same place as the recording did, so the
+recorded rows and the replayed rows match under `--limit` and when one input yields several
+rows.
+
+#### Scenario: A limited recording of paged or fanned-out inputs
+
+- **WHEN** a connector reads 100-row pages, or yields ten rows per input, and records with `--record --record-inputs --limit 3`
+- **THEN** the output fixture holds three rows and the input fixture records the limit
+- **AND** offline replay transforms the saved inputs and verifies the same three rows
+
 #### Scenario: All captured inputs are filtered out
 
 - **WHEN** input recording succeeds with zero output rows and there is no prior output fixture

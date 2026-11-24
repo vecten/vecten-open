@@ -49,7 +49,9 @@ class InputSample:
         if self.saved_rows is not None:
             yield from self.saved_rows
             return
-        remaining = self.limit or RECORD_LIMIT
+        # The recording limit counts output rows, so a filtering connector may need more
+        # input rows than that; replay's bound keeps the comparison to the recorded rows.
+        remaining = RECORD_LIMIT
         for row in fetch():
             if isinstance(row, list):
                 row = row[:remaining]
@@ -137,7 +139,7 @@ def _replay(path: Path, connector_dir: Path, connector: str, temp: Path) -> None
     sample = InputSample(doc["inputs"], limit=limit)
     connectors = connector_dir.parent
     runtime = context.RuntimeContext(
-        connectors.parent, connectors, "local", _OfflineProvider(), temp
+        connectors.parent, connectors, "local", _OfflineProvider(), temp, record_limit=limit
     )
     with ExitStack() as stack:
         stack.enter_context(patch.object(context, "_RUNTIME", runtime))

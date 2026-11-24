@@ -474,7 +474,7 @@ def test_paged_input_budget_preserves_trimmed_pages(invoke, project, tmp_path, m
     }
 
 
-@pytest.mark.parametrize("shape", ["pages", "fan-out"])
+@pytest.mark.parametrize("shape", ["pages", "fan-out", "filter"])
 def test_limited_input_recording_replays_the_same_rows(
     invoke, project, tmp_path, monkeypatch, shape
 ):
@@ -486,8 +486,17 @@ def test_limited_input_recording_replays_the_same_rows(
         ).replace(
             "for row in inputs(fetch):", "for page in inputs(fetch):\n          for row in page:"
         )
-    else:
+    elif shape == "fan-out":
         module = INPUT_CONNECTOR.replace("yield row", 'yield [{**row, "n": n} for n in range(10)]')
+    else:
+        module = INPUT_CONNECTOR.replace(
+            'yield {"userId": 7}', 'yield from ({"userId": n} for n in range(20))'
+        ).replace(
+            "for row in inputs(fetch):",
+            "for row in inputs(fetch):\n"
+            '            if row["userId"] % 2:\n'
+            "                continue",
+        )
     directory = project / "connectors/demo"
     (directory / "connector.py").write_text(module)
     command = ("connector", "run", "demo", "--record", "--record-inputs", "--limit", "3", "--json")
@@ -495,7 +504,7 @@ def test_limited_input_recording_replays_the_same_rows(
     assert r.exit_code == 0, r.stdout
     sample = json.loads((directory / "fixtures/inputs/people.json").read_text())
     assert sample["limit"] == 3 and sample["expected"]["rows"] == 3
-    assert sum(len(v) if isinstance(v, list) else 1 for v in sample["inputs"]) <= 3
+    assert len((directory / "fixtures/people.jsonl").read_text().splitlines()) == 3
     assert replay_connector_test(directory, "demo", tmp_path / "work", monkeypatch) == {"people": 3}
 
 

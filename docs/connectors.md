@@ -110,10 +110,11 @@ that the saved rows load. Keep using `--record` alone to refresh deals. The inpu
 steps below apply to a single reader.
 
 1. Run `vecten connector run demo --object people --record --record-inputs` against a
-   source whose original payloads are safe to save. A sample holds up to the `--limit` (200
-   records by default). A list page contributes its row count, and Vecten trims the final
-   page to fit. The input file records the limit, and replay stops the output at the same
-   row as the recording did. An empty page uses one slot. Vecten writes `connectors/demo/fixtures/inputs/people.json`. The input file
+   source whose original payloads are safe to save. The output stops at `--limit` rows (200
+   by default), and the input sample keeps what the connector read to produce them, up to
+   200 records. A list page contributes its row count, and Vecten trims the final page to
+   fit. The input file records the limit, and replay stops the output at the same row as
+   the recording did. An empty page uses one slot. Vecten writes `connectors/demo/fixtures/inputs/people.json`. The input file
    contains the original fields, including fields your transformation drops. Inspect it
    before committing it. Vecten refuses input recording when the connector defines
    `redact_fixture`, because that hook operates on transformed output.
