@@ -39,6 +39,12 @@ A service on the MCP host holds no more access than one on the platform host (se
 [isolation](#isolation-what-a-service-can-reach)), but it shares the VM's memory and CPU with
 the MCP server, which every person's question goes through.
 
+## Where login checks run
+
+A project with a bound login route runs `login-gate` from its MCP image on the MCP host. The gate checks service cookies against sessions, group memberships and app admission in the state database. It has its own network, and its container receives only the state database credential. A split platform host reaches the gate through the MCP host’s HTTPS proxy.
+
+Existing service sessions keep working through an MCP process outage. New sign-ins use the MCP issuer on its own hostname and require that process. The state database and the NGINX proxies must remain available for either path.
+
 ## Hostnames and `vecten deploy`
 
 Each service with a bound route gets a hostname of its own: `<label>.<domain>`, or `<domain>`

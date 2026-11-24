@@ -104,6 +104,27 @@ def test_a_container_app_runs_the_launcher_from_the_platform_image(tmp_path):
     }
 
 
+def test_gate_uses_only_state_and_runs_on_its_own_guarded_network(tmp_path):
+    cfg = config(BOUND)
+    doc = generate_compose(cfg, "vm", ["mcp"], stack(tmp_path), hosts=VM_HOSTS)
+    gate = doc["services"]["login-gate"]
+    assert gate["image"] == doc["services"]["mcp-server"]["image"]
+    assert gate["networks"] == ["login-gate"]
+    assert set(gate["environment"]) == {
+        "VECTEN_MCP_PUBLIC_URL",
+        "VECTEN_PROVIDER",
+        "VECTEN_ENV",
+        "VECTEN_PROJECT_ROOT",
+        "VECTEN_ENVIRONMENT_FILE",
+        "MCP_STATE_DB_PASSWORD",
+    }
+    assert not any("secret" in item for item in gate["volumes"])
+    assert doc["networks"]["login-gate"]["driver_opts"][
+        "com.docker.network.bridge.name"
+    ].startswith("vecten-")
+    assert "mcp-server" not in doc["services"]["nginx"]["depends_on"]
+
+
 def test_on_the_laptop_no_mcp_url_is_rendered_since_no_container_reaches_it(tmp_path):
     doc = generate_compose(config(BOUND), "local", ["platform", "mcp"], stack(tmp_path))
     assert "VECTEN_MCP_URL" not in doc["services"]["svc-acme-app-overview"]["environment"]
@@ -144,7 +165,7 @@ def test_the_agent_reads_the_app_credentials_from_the_hosts_scope(tmp_path):
     names, bridge = host_services(config(BOUND), record, ["platform"])
     assert names == ["ACME_API_KEY", "APP_OVERVIEW_CLIENT_ID", "APP_OVERVIEW_CLIENT_SECRET"]
     assert bridge == "vecten-+"
-    assert host_services(config(BOUND), record, ["mcp"]) == ([], "")
+    assert host_services(config(BOUND), record, ["mcp"]) == ([], "vecten-+")
 
 
 def test_nginx_serves_the_app_at_its_hostname_with_one_login_route_and_its_health(tmp_path):

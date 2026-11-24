@@ -53,7 +53,7 @@ BROWSER = frozenset(
 )
 
 
-def auth_routes(service, gate=None):
+def auth_routes(service, gate=None, *, surface="combined"):
     state = service.state
 
     def loopback_origin(request):
@@ -569,10 +569,13 @@ def auth_routes(service, gate=None):
         ("/set-password", password_setup, ["GET", "POST"]),
         ("/jwks", jwks, ["GET"]),
     ]
-    if gate is not None:
+    if surface == "service":
+        endpoints = []
+    elif gate is not None:
+        endpoints.append(("/gate/authorize", gate_authorize, ["GET"]))
+    if gate is not None and surface != "issuer":
         endpoints += [
             ("/gate/start", gate_start, ["GET"]),
-            ("/gate/authorize", gate_authorize, ["GET"]),
             ("/gate/callback", gate_callback, ["GET"]),
             ("/gate/logout", gate_logout, ["GET", "POST"]),
         ]
@@ -580,7 +583,7 @@ def auth_routes(service, gate=None):
         Route(path, safe(handler, browser=path in BROWSER), methods=methods)
         for path, handler, methods in endpoints
     ]
-    if gate is not None:
+    if gate is not None and surface != "issuer":
         # NGINX asks on every request of a login route, all from one address per host, so no
         # per-address limit applies; an unknown session gets 401 and nothing else.
         routes.append(Route("/gate/verify", gate_verify, methods=["GET"]))

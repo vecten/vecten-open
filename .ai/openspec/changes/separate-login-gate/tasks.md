@@ -1,0 +1,3 @@
+- [x] Separate issuer and service-host routes, and start a state-only gate process.
+- [x] Render the isolated container and route same-host and split-host requests.
+- [x] Exercise authorization through an MCP pause in the Docker integration suite.

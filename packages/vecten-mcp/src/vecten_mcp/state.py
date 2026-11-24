@@ -107,7 +107,7 @@ MIGRATED_TABLES = {"gate_sessions"}
 
 
 class StateStore:
-    def __init__(self, url: str):
+    def __init__(self, url: str, *, initialize=True):
         options = {"pool_pre_ping": True}
         if str(url).startswith("sqlite:"):
             options.update(connect_args={"check_same_thread": False, "timeout": 30})
@@ -120,6 +120,12 @@ class StateStore:
         if self.engine.dialect.name == "postgresql":
             self.check_audit_scope()
             skipped |= {"audit_log", "access_events"}
+        if not initialize:
+            with self.engine.connect() as conn:
+                current = conn.execute(select(schema_version.c.version)).scalar_one()
+                if current != SCHEMA_VERSION:
+                    raise ValueError("gate requires the MCP state schema for this release")
+            return
         metadata.create_all(
             self.engine,
             tables=[table for table in metadata.sorted_tables if table.name not in skipped],

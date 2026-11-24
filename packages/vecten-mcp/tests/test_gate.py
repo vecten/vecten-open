@@ -701,17 +701,26 @@ def test_on_the_laptop_a_service_hostname_keeps_the_published_port(gate):
     assert built.origin("portal.localhost") == "https://portal.localhost:8443"
 
 
-def test_the_server_answers_the_gate_when_its_runtime_has_one(gate):
+def test_issuer_and_standalone_gate_serve_distinct_surfaces(gate):
     from vecten_mcp.app import create_app
     from vecten_mcp.extensions import McpExtensions
+    from vecten_mcp.gate_server import create_app as gate_app
     from vecten_mcp.runtime import Runtime
 
     service, _, _ = gate
     runtime = Runtime(
         service.state, service.oauth, McpExtensions({}, {}, {}, {}), None, None, gate=service
     )
-    with TestClient(create_app(runtime=runtime), base_url=ISSUER) as http:
-        refused = http.get("/gate/verify", headers={"X-Vecten-Gate-Host": PORTAL})
-        assert refused.status_code == 401
-        assert http.get("/gate/start?rd=/", headers={"X-Vecten-Gate-Host": PORTAL},
-                        follow_redirects=False).status_code == 303  # fmt: skip
+    with TestClient(gate_app(lambda: service), base_url=ISSUER) as http:
+        with TestClient(create_app(runtime=runtime), base_url=ISSUER) as issuer:
+            assert issuer.get("/gate/verify").status_code == 404
+            assert http.get("/gate/authorize").status_code == 404
+            assert http.get("/jwks").status_code == 404
+            assert (
+                http.get("/gate/verify", headers={"X-Vecten-Gate-Host": PORTAL}).status_code == 401
+            )
+            start = http.get(
+                "/gate/start?rd=/", headers={"X-Vecten-Gate-Host": PORTAL}, follow_redirects=False
+            )
+            assert start.status_code == 303
+            assert issuer.get(start.headers["location"]).status_code == 200
