@@ -567,21 +567,23 @@ def test_only_a_git_sources_files_keep_their_executable_bit():
     assert mode(".vecten/ship/apply.py", frozenset({NAME})) == 0o644
 
 
-# The decompressed bundles a project without git sources ships, as the release without git
-# sources built them for this project; gzip's own bytes depend on the zlib build, so they are
-# left out. A change meant to alter every bundle updates these.
+# Every tar byte is pinned with fixed agent/SQL inputs. Gzip bytes depend on the zlib build.
 UNCHANGED_BUNDLES = {
-    "platform": "0ee51417b7a89f13c5db009948025a131404734c97f359e4b097629b0cc4b447",
-    "mcp": "69fd93184a57c800a8f55cc0f0bd68b635c077724b6053c6fd1771b602d794ed",
+    "platform": "4ebcfbb21ddfd6adb7fa1a48ec0fe0100c840c1a923fe2f204c512afd18a39be",
+    "mcp": "9178c6b2f0d6eacc1678595a3f42cc315d5a00baf5f8ae3dce23108260c28992",
 }
 
 
-def test_a_project_without_git_sources_ships_the_bytes_it_shipped_before_them(tmp_path):
+def test_a_project_without_git_sources_ships_the_bytes_it_shipped_before_them(
+    tmp_path, monkeypatch
+):
     import gzip
     import hashlib
+    from importlib.resources import files
 
-    from vecten.deploy.bundle import build_host_bundle
+    from vecten.deploy import bundle as bundler
     from vecten_shared.provider.environment import EnvironmentOutputs
+    from vecten_shared.sql import setup_sql_path
 
     from .deploy_fixtures import COMMIT as SHIPPED
     from .deploy_fixtures import STANDARD_OUTPUTS, render_aws
@@ -598,9 +600,22 @@ def test_a_project_without_git_sources_ships_the_bytes_it_shipped_before_them(tm
     # Lineage and feedback come from git and the MCP; pinned, the bundle depends on files alone.
     lineage = {"commit": SHIPPED, "ancestors": []}
     metadata = (lineage, {**lineage, "resolutions": [], "unreviewed": []})
+    write_tarball = bundler._write_tarball
+    agent = files("vecten.deploy.vm").joinpath("apply.py")
+
+    def write_fixture_tarball(stage, target, sources):
+        # The runtime agent and SQL are versioned inputs, copied verbatim into each host's
+        # bundle. Fix their contents only after checking the exact bytes staged by the CLI.
+        for name, source in (("apply.py", agent), ("warehouse_setup.sql", setup_sql_path())):
+            staged = stage / ".vecten/ship" / name
+            assert staged.read_bytes() == source.read_bytes()
+            staged.write_bytes(f"fixture for {name}\n".encode())
+        write_tarball(stage, target, sources)
+
+    monkeypatch.setattr(bundler, "_write_tarball", write_fixture_tarball)
     found = {}
     for host in UNCHANGED_BUNDLES:
-        bundle = build_host_bundle(
+        bundle = bundler.build_host_bundle(
             root, load(root), "prod", outputs, host, SHIPPED, tmp_path / "out", metadata=metadata
         )
         found[host] = hashlib.sha256(gzip.decompress(bundle.read_bytes())).hexdigest()
