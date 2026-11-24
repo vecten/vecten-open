@@ -133,6 +133,42 @@ issuer. For cloud, run
 transport is unavailable. Use the connected-clients page at `/connected-clients` to review and
 revoke the browser user's client sessions.
 
+### Microsoft Entra ID workforce sign-in for the MCP
+
+Use a single-tenant web app for the workforce directory that manages your users. On first
+sign-in, Vecten matches the token's email to an invitation or a configured administrator
+address, then binds that account to the token's issuer and subject. Entra can issue
+`xms_edov: true` when the tenant has verified ownership of the email domain. An account's
+email address can still change. Before enabling this sign-in method in Vecten, confirm that
+directory administrators control those addresses and that each invited or administrator
+address belongs to exactly one intended account. Otherwise a first sign-in could bind a
+Vecten invitation or administrator account to the wrong person.
+[Microsoft's optional claims reference](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference)
+
+1. In **App registrations**, register an app for accounts in this organizational directory
+   only. Add a **Web** redirect URI of `https://mcp.<domain>/oidc/callback`, replacing
+   `<domain>` with the environment's domain.
+2. Under **Token configuration**, add the optional **ID token** claims `email` and `xms_edov`.
+   Under **Certificates & secrets**, create a client secret. Enter its **Value** at the prompt
+   for `vecten secret set MCP_OIDC_CLIENT_SECRET --env <environment>`.
+3. For the corresponding **Enterprise application**, set **Properties → Assignment required?**
+   to **Yes**, grant admin consent for the requested sign-in permissions, and assign the
+   intended users or groups under **Users and groups**.
+   [Microsoft's assignment guide](https://learn.microsoft.com/en-us/entra/identity-platform/howto-restrict-your-app-to-a-set-of-users)
+4. In the project's `vecten.toml`, set the following keys in the existing `[mcp]` section.
+   Use the **Directory (tenant) ID** and **Application (client) ID** from the app's overview.
+
+   ```toml
+   [mcp]
+   auth = "oidc"
+   oidc_issuer = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+   oidc_client_id = "<application-client-id>"
+   oidc_email_verified_claim = "xms_edov"
+   ```
+
+The built-in MCP login accepts only the JSON boolean `true` in the selected claim. Other
+providers use `email_verified` by default. Airflow has its own [sign-in configuration](orchestration.md).
+
 ### Browser cookies
 
 Any hostname under your domain, such as Airflow, an extension service or an analytics app, can

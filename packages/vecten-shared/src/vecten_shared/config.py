@@ -208,6 +208,7 @@ class McpSection(Strict):
     auth: str = Field(default="oidc", pattern=r"^[a-z][a-z0-9_-]*$")
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
+    oidc_email_verified_claim: str = Field(default="email_verified", min_length=1)
     admin_panel: Literal["public", "off"] = "public"
     admin_allow: list[str] = Field(default_factory=list)
 

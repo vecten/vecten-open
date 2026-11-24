@@ -62,7 +62,7 @@ def test_limiter_applies_address_limit_across_identities():
         limiter.hit("ip")
 
 
-def oidc_fixture(claims=None):
+def oidc_fixture(claims=None, *, verification=None, **backend_options):
     secrets = Secrets()
     signer = SigningKeys(secrets, issuer="https://idp.example", clock=lambda: 100)
     state = StateStore("sqlite://")
@@ -88,7 +88,7 @@ def oidc_fixture(claims=None):
                 200,
                 extra={
                     "email": "jane@example.com",
-                    "email_verified": True,
+                    **({"email_verified": True} if verification is None else verification),
                     "name": "Jane",
                     "nonce": backend.last_nonce,
                     **(claims or {}),
@@ -105,6 +105,7 @@ def oidc_fixture(claims=None):
         "https://mcp.example/oidc/callback",
         client=client,
         clock=lambda: 100,
+        **backend_options,
     )
     return backend
 
@@ -130,6 +131,37 @@ def test_oidc_rejects_unverified_or_misbound_id_token(claims):
     backend.last_nonce = result["nonce"]
     with pytest.raises(ValueError):
         backend.callback(result["state"], "code")
+
+
+def test_oidc_accepts_the_configured_email_verification_claim():
+    backend = oidc_fixture(verification={"xms_edov": True}, email_verified_claim="xms_edov")
+    pending = backend.begin("flow")
+    backend.last_nonce = pending["nonce"]
+    identity, flow = backend.callback(pending["state"], "code")
+    assert (identity.issuer, identity.subject, identity.email, flow) == (
+        "https://idp.example",
+        "subject",
+        "jane@example.com",
+        "flow",
+    )
+
+
+@pytest.mark.parametrize(
+    ("options", "verification"),
+    [
+        ({}, {"xms_edov": True}),
+        ({"email_verified_claim": "xms_edov"}, {"email_verified": True}),
+        ({"email_verified_claim": "xms_edov"}, {"xms_edov": False, "email_verified": True}),
+        ({"email_verified_claim": "xms_edov"}, {"xms_edov": "true"}),
+        ({"email_verified_claim": "xms_edov"}, {"xms_edov": 1}),
+    ],
+)
+def test_oidc_requires_literal_true_in_the_selected_claim(options, verification):
+    backend = oidc_fixture(verification=verification, **options)
+    pending = backend.begin("flow")
+    backend.last_nonce = pending["nonce"]
+    with pytest.raises(ValueError, match="unverified"):
+        backend.callback(pending["state"], "code")
 
 
 def test_unconfigured_oidc_refuses_login():

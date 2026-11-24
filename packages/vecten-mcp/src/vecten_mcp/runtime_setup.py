@@ -260,6 +260,7 @@ def configured_runtime(root, config, extensions):
             config.mcp.oidc_client_id,
             issuer + "/oidc/callback",
             client_secret=optional_secret(secrets, "MCP_OIDC_CLIENT_SECRET"),
+            email_verified_claim=config.mcp.oidc_email_verified_claim,
         )
     else:
         backend = extensions.identity_backend(selected)(

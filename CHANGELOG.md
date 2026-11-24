@@ -39,6 +39,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Fixed
 
+- MCP OIDC sign-in supports a provider-specific boolean email verification claim, including
+  Microsoft Entra ID's `xms_edov` for a single workforce tenant ([#190](https://github.com/vecten/vecten-open/issues/190)).
 - An area revoke attempts every previously granted schema and reports any that still need
   a retry. Snowflake access procedures version 7 track partial schema grants and check the
   role's remaining visible privileges when a revoke fails. The revoke stays pending even
