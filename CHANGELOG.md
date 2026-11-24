@@ -5,9 +5,80 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
+- A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help ([#131](https://github.com/vecten/vecten-open/issues/131)).
+- Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
+- Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
+- Project CI runs `vecten lock --check` to catch changed in-repo manifests, services, and apps ([#113](https://github.com/vecten/vecten-open/issues/113)).
+- Extension settings support nested object schemas, array, string and numeric constraints, and
+  constant values ([#139](https://github.com/vecten/vecten-open/issues/139)).
+- Connector recording bounds extraction per object and supports redaction and a recording
+  opt-out. Hand-written fixtures can be checked offline against declared objects
+  ([#46](https://github.com/vecten/vecten-open/issues/46)).
+- Connector authors can opt into `--record --record-inputs` to test parsing against saved
+  upstream JSON in connector tests and local dbt builds. See [connector fixtures](docs/connectors.md#test-connector-parsing-offline).
+  ([#6](https://github.com/vecten/vecten-open/issues/6))
+- An area can opt into restricted staging and snapshot schemas. Existing area grants cover
+  those layers once enabled and models are explicitly placed there
+  ([#135](https://github.com/vecten/vecten-open/issues/135)). On Snowflake, opting in needs
+  version 9 of the access procedures: rerun the provisioner script, and again whenever the
+  opted-in areas change.
+- Deployment plans name the bound service volumes that will be lost when an AWS or Scaleway
+  host is removed or replaced. The apply workflow also prints the warning before applying
+  ([#129](https://github.com/vecten/vecten-open/issues/129)).
+- `vecten up` reports each active component’s base image and how to select published images when a local build was chosen ([#21](https://github.com/vecten/vecten-open/issues/21)).
+
 ### Fixed
 
-- After confirming an identity or changing MCP onboarding answers, `vecten promote --status` verifies the target environment’s last successful ship in a fresh checkout. `vecten next` uses the saved result offline before offering user administration (#100).
+- An area revoke attempts every previously granted schema and reports any that still need
+  a retry. Snowflake access procedures version 7 track partial schema grants and check the
+  role's remaining visible privileges when a revoke fails. The revoke stays pending even
+  after a drop because Snowflake can restore grants with `UNDROP`. An ACCOUNTADMIN installs the
+  update with `vecten mcp provisioner-script` and confirms it with `--confirm-run`
+  ([#116](https://github.com/vecten/vecten-open/issues/116), [#117](https://github.com/vecten/vecten-open/issues/117)).
+  Every Snowflake project with the MCP reruns the script once after upgrading; `vecten next`
+  lists it.
+- Group bindings in shared Snowflake accounts check inherited grants before binding or
+  confirming a role. Access health reports bindings that later reach another environment or
+  cannot be verified. A shared account installs the check with version 8 of the access
+  procedures, which the same provisioner script rerun provides.
+- `vecten up` starts Airflow locally for Snowflake projects configured with both platform
+  and MCP components. The generated NGINX service depends only on the local Airflow API
+  ([#133](https://github.com/vecten/vecten-open/issues/133)).
+- `vecten init` keeps a Snowflake platform project’s recorded shared-account choice in
+  `vecten.toml` and renders the corresponding runbook through subsequent updates
+  ([#132](https://github.com/vecten/vecten-open/issues/132)).
+- The shared-account Snowflake teardown instructions drop the environment’s MCP sign-in policy
+  before the security integration it references ([#122](https://github.com/vecten/vecten-open/issues/122)).
+- `vecten connector run <source> --record` saves each object's dlt schema beside its fixture.
+  The connector test and `vecten dbt-build-local` preserve JSON columns, nesting and merge keys
+  on replay. Existing JSON Lines fixtures still load with dlt's default inference.
+  ([#45](https://github.com/vecten/vecten-open/issues/45))
+- The first guided project now initializes in the folder where Claude Code started, even
+  when it contains `.claude/` or Finder's `.DS_Store`. If other entries block initialization,
+  the CLI lists them. The guide explains the project name format and checks it when you answer.
+- Airflow syncs and dbt builds use the release's locked Snowflake connector. Syncs now skip
+  dlt's Airflow Variable lookups by default. Set `PROVIDERS__ENABLE_AIRFLOW_SECRETS=true`
+  to read dlt configuration from Airflow Variables
+  ([#136](https://github.com/vecten/vecten-open/issues/136), [#137](https://github.com/vecten/vecten-open/issues/137)).
+- Generated semantic field names use lowercase while their SQL expressions preserve the physical
+  column. With metrics present, platform project validation applies MetricFlow’s default
+  semantic-manifest rules to the generated datasets and metrics ([#142](https://github.com/vecten/vecten-open/issues/142)).
+- A shared-account Snowflake environment parses project datasets under its own database in
+  `vecten dbt --env` ([#142](https://github.com/vecten/vecten-open/issues/142)).
+- Deploy checks existing Snowflake object names in the saved Terraform plan before applying
+  either root. A failed first dispatch leaves the layout open for correction
+  ([#99](https://github.com/vecten/vecten-open/issues/99)).
+- After confirming an identity or changing MCP onboarding answers, `vecten promote --status` verifies the target environment’s last successful ship in a fresh checkout. `vecten next` uses the saved result offline before offering user administration ([#100](https://github.com/vecten/vecten-open/issues/100)).
+
+### Security
+
+- Each running extension service and container app gets a Docker network shared only with
+  NGINX. NGINX clears incoming `X-Vecten-On-Behalf-Of` headers so only the app can set
+  viewer attribution on its outbound MCP calls.
+  ([#90](https://github.com/vecten/vecten-open/issues/90), [#118](https://github.com/vecten/vecten-open/issues/118))
+- The local Airflow stack reads its admin password file from tmpfs and removes the old on-disk copy during `up` or `down` ([#33](https://github.com/vecten/vecten-open/issues/33)).
 
 ## [0.1.1] - 2026-11-18
 
