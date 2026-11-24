@@ -96,9 +96,11 @@ def test_answers_file_written_atomically_as_utf8(tmp_path, monkeypatch):
         real(path, text)
 
     monkeypatch.setattr(answers_module, "write_text_atomic", spy)
-    write_answer(tmp_path, "name", "Café Données")
+    locator = "postgres://db.example.com/données"
+    write_answer(tmp_path, "warehouse_url", locator)
     assert calls == [tmp_path / "vecten-answers.yml"]
-    assert read_answers(tmp_path)["name"] == "Café Données"
+    assert locator.encode("utf-8") in calls[0].read_bytes()
+    assert read_answers(tmp_path)["warehouse_url"] == locator
 
 
 @pytest.mark.parametrize("raw", ["", "   ", " , "])

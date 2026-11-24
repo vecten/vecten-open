@@ -15,7 +15,7 @@ from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
 from vecten_mcp.warehouse.base import Absent, RoleExists
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, LISTING_VERSION
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
@@ -33,6 +33,12 @@ LISTING_FIX = (
     "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
     "--confirm-run: until then the relations in core, marts and the areas that no model "
     "builds are not listed."
+)
+
+PARTIAL_GRANT_FIX = (
+    "An ACCOUNTADMIN reruns `vecten mcp provisioner-script --env <env>` and confirms it with "
+    "--confirm-run: until then a partial grant can be mistaken for a missing schema, "
+    "and a refused revoke lacks the remaining-grants diagnostic."
 )
 
 
@@ -532,8 +538,13 @@ class AccessService:
         installed = self.adapter.access_version()
         required = getattr(self.adapter, "required_access_version", ACCESS_VERSION)
         if installed < required:
-            fix = OUTDATED_FIX if installed < GRANTS_VERSION else LISTING_FIX
-            if installed >= ACCESS_VERSION:
+            if installed < GRANTS_VERSION:
+                fix = OUTDATED_FIX
+            elif installed < LISTING_VERSION:
+                fix = LISTING_FIX
+            elif installed < ACCESS_VERSION:
+                fix = PARTIAL_GRANT_FIX
+            else:
                 fix = (
                     "An administrator reruns `vecten mcp provisioner-script --env <env>` and "
                     "confirms it with --confirm-run so shared-account bindings can be checked."
@@ -577,6 +588,11 @@ class AccessService:
                     if allowed:
                         missing.append(schema)
                     continue
+                except Exception as exc:
+                    if allowed or grant["kind"] != "area":
+                        raise
+                    refused.append(f"{schema}: {describe_error(exc)}")
+                    continue
                 refused += [f"{schema}: {kind}" for kind in kinds]
                 if allowed and not kinds:
                     confirmed.append(schema)
@@ -588,7 +604,7 @@ class AccessService:
                     ", ".join(missing),
                 )
         if refused and not allowed:
-            raise RuntimeError("the warehouse refused part of the revoke: " + "; ".join(refused))
+            raise RuntimeError("part of the revoke failed: " + "; ".join(refused))
         if refused:
             logger.warning(
                 "%s of %s %s for %s left out: %s",
@@ -992,7 +1008,7 @@ class AccessService:
         build did not make, each with the statement that drops it, and the listing's error.
         Without a current record any relation could be one a later build made, so none is
         listed; the server never drops one."""
-        if self.built is None or (outdated and outdated["installed"] < ACCESS_VERSION):
+        if self.built is None or (outdated and outdated["installed"] < LISTING_VERSION):
             return [], None
         try:
             record = self.built()

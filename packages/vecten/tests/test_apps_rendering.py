@@ -7,7 +7,7 @@ import pytest
 import tomli_w
 import yaml
 
-from vecten.stack.compose import SERVICES_NETWORK, generate_compose
+from vecten.stack.compose import generate_compose
 from vecten.stack.nginx import generate_nginx_conf, service_site
 from vecten_shared.apps import parse_app
 from vecten_shared.config import VectenConfig, load_config
@@ -81,7 +81,7 @@ def test_a_container_app_runs_the_launcher_from_the_platform_image(tmp_path):
     assert (svc["mem_limit"], svc["cpus"]) == ("512m", 0.5)
     assert (svc["cap_drop"], svc["security_opt"]) == (["ALL"], ["no-new-privileges:true"])
     assert svc["pids_limit"] > 0
-    assert svc["networks"] == [SERVICES_NETWORK]
+    assert svc["networks"] == ["svc-acme-app-overview"]
     assert svc["healthcheck"]["test"] == [
         "CMD",
         "curl",
@@ -143,7 +143,7 @@ def test_the_agent_reads_the_app_credentials_from_the_hosts_scope(tmp_path):
     record = read_record(tmp_path / "proj")
     names, bridge = host_services(config(BOUND), record, ["platform"])
     assert names == ["ACME_API_KEY", "APP_OVERVIEW_CLIENT_ID", "APP_OVERVIEW_CLIENT_SECRET"]
-    assert bridge == "vecten-services"
+    assert bridge == "vecten-+"
     assert host_services(config(BOUND), record, ["mcp"]) == ([], "")
 
 

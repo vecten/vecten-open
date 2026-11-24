@@ -218,11 +218,8 @@ them trustworthy there:
   from the MCP's answer; everywhere else, on `public` routes, the health path, the gate and the
   404 answers, it sets them empty, which forwards none. A header of these names sent by the
   client never reaches the service, in any letter case; spellings with `_` for `-` are dropped.
-- **Only NGINX can reach a service.** A service publishes no port and sits on a Docker network
-  that, of the stack's own containers, only NGINX joins, so no DAG, connector or other part of
-  the stack can send it a request. Every bound service on a host shares that network, though,
-  so another service on the same host can reach its port directly: trust the headers only as
-  far as you trust every service bound on that host.
+- **NGINX is the only other container on the service's network.** Each service publishes no
+  host port. Requests from other services on the host must go through the routes NGINX exposes.
 - **The service never sees the gate's cookies.** NGINX removes `__Host-vecten-gate` and
   `__Host-vecten-gate-state` from the `Cookie` header it forwards, so a service holds no
   credential it could replay to the gate. A service must not set a cookie of either name
@@ -287,14 +284,14 @@ address, so the services on one VM share those limits.
 A public route is the code in a deployment most exposed to the internet, so a service holds as
 little as possible:
 
-- **Its own network.** Services join the Docker network `vecten-services`, which, of the
-  stack's containers, only NGINX joins, and publish no port. Airflow, DAG code and the MCP
-  server cannot resolve or reach a service, and a service reaches them only through their
-  public hostnames, as any client would.
+- **Its own network.** Each running extension service and container app has a Docker network
+  shared only with NGINX. NGINX also joins the stack's default network, where Airflow and the
+  MCP server run. On a VM, services can call them through the deployed hostnames
+  `airflow.<domain>` and `mcp.<domain>`, using `domain` from the environment’s Terraform variables.
 - **No cloud identity.** A service's environment holds no `AWS_*` or `SCW_*` key and no
   `AIRFLOW_CONN_*` connection. On a VM, the VM agent, the program that applies each ship, adds
   a firewall rule
-  (`iptables`, in Docker's `DOCKER-USER` chain) that drops traffic from that network to the
+  (`iptables`, in Docker's `DOCKER-USER` chain) that drops traffic from the service bridges to the
   cloud's instance metadata address (169.254.169.254 on AWS, 169.254.42.42 on Scaleway), where a
   container would otherwise obtain the VM's own cloud credentials. The rule is added on every
   ship before any container starts, and at boot by the unit `vecten-services-guard.service`
@@ -316,7 +313,17 @@ keeps Docker, and with it the host's whole stack, Airflow and the MCP included, 
 operator fixes the cause. On Scaleway, whose VMs accept no SSH and no run command, that means a new VM. Outbound internet stays open, and a service shares the host's kernel
 with the rest of the stack: install only extensions you trust.
 
+After upgrading a project from the single `vecten-services` network, Compose can leave the old
+network on the host. The new containers use their individual networks. The VM firewall rule
+also covers the old bridge during the transition.
+
 ## Limits and sizing
+
+Allow one Docker subnet per running service or container app, plus subnets for the rest
+of the host's Docker networks. Docker's built-in IPv4 pools have room for about 30 networks
+in total. Existing networks and overlapping host routes reduce the available capacity.
+For larger stacks, configure the Docker daemon's `default-address-pools` to allocate smaller
+subnets. [Docker subnet allocation](https://docs.docker.com/engine/network/#automatic-subnet-allocation)
 
 Every service runs with a memory limit and a CPU limit: the declaration's, 256 MB and half a
 CPU unless it says otherwise, or the binding's `memory_mb` and `cpus`. A service that exceeds its
@@ -355,6 +362,13 @@ host's instance being replaced or destroyed. Moving a service to the other host 
 starts it with an empty volume there. Keep in a volume only what the service can rebuild, such
 as a bot's conversation references, which it gets back when people message it again. Data that
 must last belongs in a store outside the VM.
+
+Before approving a deployment, run `vecten deploy --env <env> --plan-only` with the target
+environment's name. The generated pull-request workflow posts the plan for `prod`.
+For other environments, use the plan-only command to see the warning before apply.
+If the plan removes a host, its warning lists the Docker volumes
+for services currently bound to that host. Back up any data you need before applying.
+Check the old host separately for volumes from services you have moved or removed.
 
 Removing a service's binding stops its container but keeps its volume, and the next ship, and
 every ship after it, names the volume:

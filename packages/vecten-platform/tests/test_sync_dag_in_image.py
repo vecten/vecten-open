@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
@@ -40,8 +41,11 @@ def test_sync_dag_tests_pass_inside_the_airflow_image(tmp_path):
         for p in (REPO / "dist").glob("*.whl")
         if "vecten_platform" in p.name or "vecten_shared" in p.name
     )
+    driver_version = version("snowflake-connector-python")
     script = (
         "set -e; export AIRFLOW_HOME=/tmp/af; export AIRFLOW__CORE__LOAD_EXAMPLES=False; "
+        'python -c "from importlib.metadata import version; '
+        f"assert version('snowflake-connector-python') == '{driver_version}'\"; "
         "pip install --quiet --no-cache-dir pytest duckdb "
         + " ".join(f"/src/{w}" for w in wheels)
         + " && "

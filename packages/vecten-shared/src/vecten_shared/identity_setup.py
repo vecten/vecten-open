@@ -259,13 +259,13 @@ ALTER USER {user} SET AUTHENTICATION POLICY {service};
 """
 
 
-# Fixed-layout procedures list modelled relations at version 6. Only the shared layout
-# installs the binding hierarchy check. An install that reports no version is version 1.
-ACCESS_VERSION = 6
+# The version installed procedures report; one reporting none is version 1. Only the
+# shared layout's script also installs the binding check, at SHARED_ACCESS_VERSION.
+ACCESS_VERSION = 7
 SHARED_ACCESS_VERSION = 8
-# The oldest version whose READ_GRANT and READ_GRANTS serve area grants and drift; one from
-# here to ACCESS_VERSION lacks only the listing of the modelled relations.
+# The oldest procedure versions that serve area grants and list modelled relations.
 GRANTS_VERSION = 5
+LISTING_VERSION = 6
 
 
 def snowflake_access_version(shared_account):

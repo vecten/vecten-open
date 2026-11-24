@@ -43,7 +43,7 @@ that Grace's client signs in to it with the password she set through her link.
 | Do you already have a data warehouse? | no |
 | Do you have data sources to connect, ... or do you want to start empty? | demo, our CRM at https://api.demo.test/v1; the docs are in docs/demo-api.md |
 | Should the warehouse be Postgres, run for you, or a Snowflake account you already have? | postgres |
-| What should the project be called? | acme |
+| What should the project be called? Use up to 63 lowercase letters, digits, hyphens or underscores, starting with a letter. | acme |
 | How many people and agents will use the warehouse? | 5 |
 | Who may read the demo raw data? | sales |
 | Do you have a cloud account? Which provider? | aws |
@@ -80,7 +80,7 @@ project.
 |---|---|
 | Do you already have a data warehouse? | yes |
 | What is the locator of the existing warehouse? | postgresql://mcp_admin@warehouse.acme.test:5432/analytics |
-| What should the project be called? | acme |
+| What should the project be called? Use up to 63 lowercase letters, digits, hyphens or underscores, starting with a letter. | acme |
 | How many people and agents will use the warehouse? | 20 |
 | Do you have a cloud account? Which provider? | aws |
 | Do you have a registered domain? | yes, data.acme.test, and its zone is data.acme.test |
@@ -111,7 +111,7 @@ running the evaluation completes the browser sign-in as grace@acme.test and repl
 | Do you already have a data warehouse? | no |
 | Do you have data sources to connect, ... or do you want to start empty? | start empty |
 | Should the warehouse be Postgres, run for you, or a Snowflake account you already have? | postgres |
-| What should the project be called? | sandbox |
+| What should the project be called? Use up to 63 lowercase letters, digits, hyphens or underscores, starting with a letter. | sandbox |
 | How many people and agents will use the warehouse? | 2 |
 | Do you have a cloud account? Which provider? (first time) | I do not have one |
 | Do you have a cloud account? Which provider? (after the guide) | aws |
