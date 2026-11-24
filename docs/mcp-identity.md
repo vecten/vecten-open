@@ -219,15 +219,24 @@ roles (`LOADER_ACME_DEV`, `MARKETING_ACME_DEV`) and every other environment's
 (`ANALYST_ACME_PROD`). A group's role named with such an ending is refused as well, since the
 environment adds its own suffix to it.
 
-On Snowflake, binding checks a role by its name only. The provisioner cannot read the
-privileges of a role it neither owns nor holds, so it cannot check what a bound role reaches:
-the administrator's review is the check. In a shared account the review's header names what
-else makes a role unsafe to bind: a grant on another environment's database (`ACME_PROD`) or on
-anything in it, or `USAGE` on a role named `*_<BASE>_<ENV>`. Binding accepts such a role, for
-example `FINANCE_ANALYST` with `SELECT` on `ACME_PROD`, or the role Terraform deploys with; the
-administrator refuses it. The review lists every grant through the role's hierarchy with each
-object's database, and ends with `SHOW GRANTS TO ROLE`, which also shows the grants of the last
-two hours that `ACCOUNT_USAGE` does not list yet.
+In a shared Snowflake account, the MCP checks the candidate role's current and future grants,
+including grants inherited through other roles. For example, binding `FINANCE_ANALYST` in dev
+is refused if an inherited role can read the same project's production database, `ACME_PROD`.
+The check also refuses account privileges, ownership of the environment's database, and access
+to a Vecten role or an administrator role.
+Before running the grant statement, an administrator runs the review queries printed by
+`vecten group bind` to see which privileges the group would inherit. In a dedicated Snowflake
+account, the administrator's review remains the check on the role's privileges.
+
+To install or upgrade this check, generate the SQL with `vecten mcp provisioner-script --env <env>`,
+run it in Snowflake as an administrator with `MANAGE GRANTS`, then repeat the command with
+`--confirm-run`. The installed procedure uses its owner's privileges to check the role and
+returns a verdict to the MCP. Binding and confirmation require a successful check. Each
+reconciliation checks recorded bindings again. If a later grant makes a binding unsafe, or
+Snowflake cannot verify it, `vecten issues` identifies the group, role and error. The group's
+existing access continues until a warehouse administrator corrects or revokes the grant.
+For a verification error, check that the procedure is installed and its owner still holds
+`MANAGE GRANTS`. Run `vecten reconcile --env <env>` to check again.
 
 The provisioner owns each group's role, and an owner can grant itself the roles it owns, so it
 can reach whatever a bound role reaches. A bound role must therefore never hold account-level
