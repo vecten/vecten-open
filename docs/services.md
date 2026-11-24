@@ -100,6 +100,7 @@ On a service's hostname NGINX answers each request this way:
 |---|---|
 | `/_vecten/health` | The service's health check, to every address, for `GET` and `HEAD` (see [health](#health-and-the-ship-report)). |
 | `/_vecten/gate/...` | The gate's sign-in, on a hostname with a `login` route. |
+| Packaged files under `/_vecten/assets/` | On a hostname with a `login` route, `GET` and `HEAD` serve the gate's favicon, stylesheet, fonts and font license, including after sign-out. |
 | Any other path under `/_vecten` | 404. |
 | A path a bound route covers | The route's access mode, below. |
 | A path a declared route that `vecten.toml` does not bind covers | 404, even under a bound route's path. |
@@ -225,6 +226,11 @@ and `/_vecten/gate/logout` to `/gate/start`, `/gate/callback` and `/gate/logout`
 host. Let browsers reach these paths before checking their login. Forward the browser's
 gate cookies to these endpoints and supply the service hostname in `X-Forwarded-Host`.
 Pass the gate’s redirects and cookie responses back to the browser.
+
+The sign-out page also needs its files after the session ends. Copy the exact
+`/_vecten/assets/` locations from the generated NGINX configuration described below.
+Forward `GET` and `HEAD` for those files to the same paths on the MCP host before checking
+login. Omit client credentials on these requests and return 404 for unknown asset paths.
 
 The gate checks the longest declared path on the service hostname. The proxy enforces
 the route's IP allow-list and forwards public routes itself. The generated NGINX

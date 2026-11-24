@@ -2,12 +2,18 @@
 
 ### Requirement: The gate signs people in for service routes
 
-NGINX SHALL forward service-host gate start, callback and logout to the standalone login gate. Start SHALL bind a random verifier to a short-lived HttpOnly host cookie and redirect to the MCP issuer. The issuer SHALL authenticate the human and issue a one-time code bound to the known hostname, relative return path and challenge. The gate SHALL redeem it only with the matching verifier, set a host-only session cookie, store its hash and end that session on logout.
+NGINX SHALL proxy service-host start, callback and logout to the standalone gate and packaged `/_vecten/assets/` files to the gate upstream. Start SHALL bind a random verifier to a short-lived HttpOnly host cookie and redirect to the MCP issuer. The issuer SHALL authenticate the user and bind a one-time code to the known host, relative return path and challenge. The gate SHALL redeem it only with the matching verifier, set a host-only session cookie, store its hash and revoke it on logout.
 
 #### Scenario: First visit
 
 - **WHEN** Ada, not signed in anywhere, opens `https://portal.<domain>/docs` on a `login` route
 - **THEN** she signs in on `mcp.<domain>` and lands on `https://portal.<domain>/docs` with a gate cookie for `portal.<domain>` only
+
+#### Scenario: The sign-out page loads after the session ends
+
+- **WHEN** a signed-out browser requests the sign-out page's favicon, stylesheet or fonts on a service hostname with a `login` route
+- **THEN** NGINX forwards only `GET` and `HEAD` for the packaged files to fixed upstream paths without client credentials or a sign-in check
+- **AND** unknown paths under `/_vecten/assets/` return 404
 
 #### Scenario: Second service, same browser
 
