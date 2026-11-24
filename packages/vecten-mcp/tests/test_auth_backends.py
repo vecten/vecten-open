@@ -249,9 +249,8 @@ def test_unprovisioned_sign_in_skips_membership_hooks(first_admin):
     ],
 )
 def test_sign_in_hook_loader_rejects_ambiguous_or_invalid_owners(declarations, monkeypatch):
-    from types import SimpleNamespace
-
     from vecten_mcp import extensions
+    from vecten_shared.config import VectenConfig
     from vecten_shared.output import Failure
 
     def factory(names):
@@ -265,4 +264,8 @@ def test_sign_in_hook_loader_rejects_ambiguous_or_invalid_owners(declarations, m
     )
     monkeypatch.setattr(extensions, "selected_entry_points", lambda *args: [])
     with pytest.raises(Failure, match="sign-in extension"):
-        extensions.McpExtensions.from_config(SimpleNamespace(mcp=SimpleNamespace(auth="password")))
+        extensions.McpExtensions.from_config(
+            VectenConfig.model_validate(
+                {"project": {"name": "fixture", "scaffold_version": "0.1.0"}, "users": 2}
+            )
+        )
