@@ -29,15 +29,28 @@ def finish_unit(cursor: str | int | None, *, more: bool) -> None:
     import dlt
 
     disposition = dlt.current.resource().write_disposition
+    strategy = None
     if isinstance(disposition, dict):
+        strategy = disposition.get("strategy")
         disposition = disposition.get("disposition")
-    if disposition not in ("append", "merge"):
-        raise ValueError("checkpointed units need an append or merge resource")
+    if disposition not in ("append", "merge") or strategy not in (
+        None,
+        "delete-insert",
+        "upsert",
+        "insert-only",
+    ):
+        raise ValueError("checkpointed units need an append or merge-by-key resource")
     if not isinstance(more, bool) or (cursor is not None and type(cursor) not in (int, str)):
         raise ValueError("finish_unit needs a string, integer, or null cursor and boolean more")
-    if more and (cursor is None or cursor == unit_cursor()):
+    previous = unit_cursor()
+    if more and (cursor is None or cursor == previous):
         raise ValueError("another unit needs a new cursor")
-    dlt.current.resource_state()["vecten_unit"] = {"cursor": cursor, "more": more}
+    dlt.current.resource_state()["vecten_unit"] = {
+        "cursor": cursor,
+        "previous": previous,
+        "more": more,
+        "load_id": dlt.current.load_package_state()["load_id"],
+    }
 
 
 __all__ = [

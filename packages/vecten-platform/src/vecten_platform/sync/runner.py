@@ -73,6 +73,30 @@ def _landed(pipeline) -> dict[str, int]:
     return top_level_counts(info.row_counts if info else {})
 
 
+def _recover_pending(pipeline) -> Counter:
+    # A destination with no first load can wipe the local package when run() restores state.
+    # Finish outstanding normalization and loads before requesting any new data.
+    counts = Counter()
+    pending = set(pipeline.list_normalized_load_packages())
+    trace = pipeline.last_trace
+    normalized = trace.last_normalize_info if trace else None
+    if normalized:
+        for load_id in pending.intersection(normalized.metrics):
+            for step in normalized.metrics[load_id]:
+                counts.update(
+                    top_level_counts(
+                        {
+                            table: metric.items_count
+                            for table, metric in step["table_metrics"].items()
+                        }
+                    )
+                )
+    if pipeline.list_extracted_load_packages():
+        counts.update(top_level_counts(pipeline.normalize().row_counts))
+    pipeline.load().raise_on_failed_jobs()
+    return counts
+
+
 def _chain(exc: BaseException) -> list[BaseException]:
     """The exception and what it was raised from, outermost first, honouring `from None`."""
     chain: list[BaseException] = []
@@ -111,10 +135,7 @@ def run_object(
     landed = Counter()
     try:
         if pipeline.has_pending_data:
-            # dlt otherwise consumes pending packages instead of extracting the supplied source.
-            recovered = pipeline.run()
-            if recovered:
-                recovered.raise_on_failed_jobs()
+            landed.update(_recover_pending(pipeline))
 
         sample = InputSample(limit=limit) if record_inputs else None
         if sample is not None and record_dir is None:
@@ -146,16 +167,21 @@ def run_object(
                 input_document=sample.document() if sample is not None else None,
             )
         else:
-            previous = None
+            seen_cursors = set()
             while True:
-                pipeline.run(selected).raise_on_failed_jobs()
+                loaded = pipeline.run(selected)
+                loaded.raise_on_failed_jobs()
                 landed.update(_landed(pipeline))
                 unit = selected.resources[object_name].state.get("vecten_unit", {})
-                if single_unit or not unit.get("more"):
+                if not unit.get("more"):
                     break
-                if unit["cursor"] == previous:
-                    raise ValueError("checkpointed resource finished without advancing its cursor")
-                previous = unit["cursor"]
+                if unit.get("load_id") not in loaded.loads_ids:
+                    raise ValueError("checkpointed resource finished without calling finish_unit")
+                seen_cursors.add(unit["previous"])
+                if unit["cursor"] in seen_cursors:
+                    raise ValueError("checkpointed resource repeated a cursor")
+                if single_unit:
+                    break
                 selected = make_source().with_resources(object_name)
     except Exception as exc:
         if recording is not None:

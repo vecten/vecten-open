@@ -482,7 +482,12 @@ def test_paid_units_commit_before_next_read_and_resume_in_a_fresh_directory(duck
 
 @pytest.mark.parametrize(
     ("disposition", "cursor", "reason"),
-    [("replace", 1, "append or merge"), ("append", None, "new cursor")],
+    [
+        ("replace", 1, "append or merge"),
+        ({"disposition": "merge", "strategy": "scd2"}, 1, "append or merge"),
+        ({"disposition": "merge", "strategy": "cdc"}, 1, "append or merge"),
+        ("append", None, "new cursor"),
+    ],
 )
 def test_invalid_unit_fails_before_loading_its_rows(
     duckdb_dest, tmp_path, disposition, cursor, reason
@@ -501,3 +506,58 @@ def test_invalid_unit_fails_before_loading_its_rows(
     result = run_object("demo", source, "orders", duckdb_dest, tmp_path / "dlt")
     assert not result.ok and reason in result.error
     assert result.rows == 0
+
+
+@pytest.mark.parametrize("skip_finish", [False, True])
+def test_metered_resource_stops_on_stale_or_circular_cursor(skip_finish, duckdb_dest, tmp_path):
+    from vecten_platform.sync import finish_unit, unit_cursor
+
+    calls = []
+
+    @dlt.resource
+    def items():
+        cursor = unit_cursor("A")
+        calls.append(cursor)
+        if cursor == "B" and skip_finish:
+            return
+        yield {"cursor": cursor}
+        finish_unit("A" if cursor == "B" else "B", more=True)
+
+    @dlt.source
+    def source():
+        return [items]
+
+    result = run_object("metered", source, "items", duckdb_dest, tmp_path / "dlt", single_unit=True)
+    assert result.ok, result.error
+    calls.clear()
+    # A fresh directory restores the pending cursor from the destination on its first extract.
+    result = run_object("metered", source, "items", duckdb_dest, tmp_path / "fresh")
+    assert not result.ok
+    assert ("without calling finish_unit" if skip_finish else "repeated a cursor") in result.error
+    assert calls == (["B"] if skip_finish else ["B", "A"])
+
+
+@pytest.mark.parametrize("normalized", [False, True])
+def test_counts_recovered_package_and_new_tables(duckdb_dest, tmp_path, normalized):
+    @dlt.resource(name="items", table_name=lambda row: row["table"])
+    def items(table):
+        yield {"table": table}
+
+    @dlt.source
+    def source(table):
+        return [items(table)]
+
+    directory = tmp_path / "dlt"
+    pipeline = dlt.pipeline(
+        "demo__items",
+        destination=duckdb_dest,
+        dataset_name="raw_demo",
+        pipelines_dir=str(directory),
+    )
+    pipeline.extract(source("old_table"))
+    if normalized:
+        pipeline.normalize()
+    result = run_object("demo", lambda: source("new_table"), "items", duckdb_dest, directory)
+    assert result.ok, result.error
+    assert result.rows == 2
+    assert result.tables == ("new_table", "old_table")
