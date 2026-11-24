@@ -18,3 +18,4 @@ A local or scheduled object run SHALL support append resources and merges by pri
 
 - **WHEN** a checkpointed table uses a resource or column merge key or a destination scope
 - **THEN** extraction SHALL fail before any of that unit's rows load
+- **AND** the check SHALL run when the resource reads its cursor, so the resource fails before its first upstream request

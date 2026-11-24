@@ -613,3 +613,58 @@ def test_checkpoint_refuses_a_routed_table_with_a_column_merge_key(duckdb_dest, 
 
     result = run_object("demo", source, "orders", duckdb_dest, tmp_path / "dlt")
     assert not result.ok and "merge key" in result.error and result.rows == 0
+
+
+def test_unsafe_checkpoint_is_refused_before_its_first_paid_request(duckdb_dest, tmp_path):
+    from vecten_platform.sync import finish_unit, unit_cursor
+
+    paid = []
+
+    @dlt.resource(name="orders", write_disposition="merge", primary_key="id", merge_key="day")
+    def orders():
+        index = unit_cursor(0)
+        paid.append(index)
+        yield {"id": index, "day": 1}
+        finish_unit(index + 1, more=False)
+
+    @dlt.source
+    def source():
+        return [orders]
+
+    result = run_object("demo", source, "orders", duckdb_dest, tmp_path / "dlt")
+    assert not result.ok and "merge key" in result.error
+    assert paid == [] and result.rows == 0 and result.tables == ()
+
+
+@pytest.mark.parametrize(
+    ("resource_hints", "row_hints", "error"),
+    [
+        ({"write_disposition": "merge"}, {"primary_key": "id"}, None),
+        ({}, {"write_disposition": "merge", "primary_key": "id", "merge_key": "day"}, "merge key"),
+        ({"table_name": lambda row: "orders", "primary_key": "id"}, None, None),
+    ],
+)
+def test_checkpoint_waits_for_row_hints_until_the_unit_finishes(
+    duckdb_dest, tmp_path, resource_hints, row_hints, error
+):
+    from vecten_platform.sync import finish_unit, unit_cursor
+
+    @dlt.resource(name="orders", **resource_hints)
+    def orders():
+        index = unit_cursor(0)
+        row = {"id": index, "day": 1}
+        if row_hints is not None:
+            row = dlt.mark.with_hints(row, dlt.mark.make_hints(**row_hints))
+        yield row
+        finish_unit(index + 1, more=index == 0)
+
+    @dlt.source
+    def source():
+        return [orders]
+
+    result = run_object("demo", source, "orders", duckdb_dest, tmp_path / "dlt")
+    if error is None:
+        assert result.ok, result.error
+        assert [r[0] for r in rows(tmp_path / "wh.duckdb", "orders")] == [0, 1]
+    else:
+        assert not result.ok and error in result.error and result.rows == 0
