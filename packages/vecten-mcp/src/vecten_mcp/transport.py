@@ -11,23 +11,16 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, ValidationError
+from mcp.types import CallToolResult, TextContent
 
 from vecten_mcp import __version__
 from vecten_mcp.audit_call import AuditCall, current_audit
 from vecten_mcp.auth.service import is_admin
+from vecten_mcp.extensions import tool_metadata
 from vecten_mcp.failures import describe_error, sign_in_reason, warehouse_reason
-from vecten_shared.output import ExitCode, Failure
 
 current_request = ContextVar("vecten_request", default=None)
 logger = logging.getLogger(__name__)
-
-
-class ToolMetadata(BaseModel):
-    title: str | None = None
-    description: str | None = None
-    annotations: ToolAnnotations | None = None
 
 
 class Verifier:
@@ -64,13 +57,7 @@ class AuthorizedMCP(MCPServer):
             ),
         )
         for name, tool in runtime.extensions.tools.items():
-            try:
-                metadata = ToolMetadata.model_validate(tool, strict=True)
-            except ValidationError as exc:
-                field = ".".join(map(str, exc.errors()[0]["loc"]))
-                raise Failure(
-                    ExitCode.CONFIG, f"tool extension {name} has invalid {field}"
-                ) from None
+            metadata = tool_metadata(name, tool)
             self.add_tool(
                 tool["handler"],
                 name=name,

@@ -139,20 +139,58 @@ def test_sdk_serves_authenticated_calls_and_current_groups(client):
     with oauth.state.transaction() as conn:
         conn.execute(delete(memberships).where(memberships.c.principal_id == p["id"]))
     assert rpc(http, token, "tools/list").json()["result"]["tools"] == []
-    denied = rpc(http, token, "tools/call", {"name": "repeat", "arguments": {"value": "denied"}})
-    assert denied.json()["result"]["isError"] and calls == ["hello"]
+    for name in ("echo", "repeat"):
+        denied = rpc(http, token, "tools/call", {"name": name, "arguments": {"value": "denied"}})
+        assert denied.json()["result"]["isError"] and calls == ["hello"]
 
 
-def test_malformed_annotation_names_the_tool_and_field(client):
-    from vecten_mcp.transport import AuthorizedMCP
+def _registry(tool, monkeypatch):
+    from vecten_mcp import extensions
+    from vecten_shared.config import VectenConfig
+
+    tools = {"repeat": {"handler": lambda value: value, "groups": ["default"], **tool}}
+    monkeypatch.setattr(
+        extensions, "load_group", lambda config, group: tools if group == "vecten.mcp.tools" else {}
+    )
+    monkeypatch.setattr(extensions, "selected_entry_points", lambda *args: [])
+    return extensions.McpExtensions.from_config(
+        VectenConfig.model_validate(
+            {"project": {"name": "fixture", "scaffold_version": "0.1.0"}, "users": 2}
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool", "problem"),
+    [
+        ({"anotations": {"readOnlyHint": True}}, r"unknown anotations$"),
+        ({"annotations": {"readonlyHint": True}}, r"unknown annotations\.readonlyHint$"),
+        ({"annotations": {"read_only_hint": True}}, r"unknown annotations\.read_only_hint$"),
+        ({"annotations": {"readOnlyHint": "true"}}, r"invalid annotations\.readOnlyHint \("),
+        ({"annotations": {"readOnlyHint": 1}}, r"invalid annotations\.readOnlyHint \("),
+        ({"annotations": ["readOnlyHint"]}, r"invalid annotations \("),
+        ({"title": ""}, r"invalid title \("),
+        ({"description": "", "title": 3}, r"invalid title \(.*\); description \("),
+    ],
+)
+def test_the_registry_refuses_malformed_tool_metadata(tool, problem, monkeypatch):
     from vecten_shared.output import ExitCode, Failure
 
-    http, *_ = client
-    runtime = http.app.state.runtime
-    runtime.extensions.tools["repeat"]["annotations"] = {"readOnlyHint": "sometimes"}
-    with pytest.raises(Failure, match=r"repeat has invalid annotations\.readOnlyHint") as caught:
-        AuthorizedMCP(runtime)
+    with pytest.raises(Failure, match=rf"tool extension repeat has {problem}") as caught:
+        _registry(tool, monkeypatch)
     assert caught.value.code == ExitCode.CONFIG
+
+
+def test_the_registry_accepts_every_documented_hint(monkeypatch):
+    hints = {
+        "title": "Repeat",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    registry = _registry({"title": "Repeat a value", "annotations": hints}, monkeypatch)
+    assert registry.tools["repeat"]["annotations"] == hints
 
 
 def test_auth_fails_before_tool_runs_and_sse_is_absent(client):

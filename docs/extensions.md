@@ -294,6 +294,11 @@ The title gives clients a display name. The description defaults to the handler'
 and the handler's signature supplies the input schema. The read-only hint tells clients that
 the handler only reads data. Each client decides whether to ask for confirmation.
 
+The hints take their MCP names: `readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint` and `title`, each a boolean except `title`. When the server loads its
+extensions, it refuses a declaration with an unknown field or hint name, an empty title or
+description, or a value of the wrong type, and names the tool and field.
+
 HTTP routes are declared as part of a [service](#services). No CLI-command hooks are offered yet.
 
 ### Secrets and settings
