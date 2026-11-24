@@ -8,6 +8,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 ### Added
 
 - A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help ([#131](https://github.com/vecten/vecten-open/issues/131)).
+- The guide checks for the CLI before intake and installs a missing copy with uv and Python 3.14 ([#20](https://github.com/vecten/vecten-open/issues/20)).
 - Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
 - Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
 - Project CI runs `vecten lock --check` to catch changed in-repo manifests, services, and apps ([#113](https://github.com/vecten/vecten-open/issues/113)).
