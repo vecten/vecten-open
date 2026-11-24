@@ -192,8 +192,17 @@ def test_only_a_merged_fix_for_one_issue_on_main_clears_it(shell, tmp_path):
     case["expect"]["sql_sha256"] = sql_sha256(sql)
     spec.write_text(yaml.safe_dump(qualified))
     shutil.copytree(project / "osi", root / "osi", dirs_exist_ok=True)
+    shutil.copytree(project / "dbt/models/core", root / "dbt/models/core")
     sales = "dbt/models/marts/sales_pipeline.sql"
-    partial = commit(sales, (project / sales).read_text())
+    sql = (
+        (project / sales)
+        .read_text()
+        .replace(
+            "d.refunded_amount,",
+            "d.title, c.domain, coalesce(d.refunded_amount, 0) as refunded_amount,",
+        )
+    )
+    partial = commit(sales, sql)
     merge(store, 9, ids[2], commit=partial)
     assert listed() == ids[2:]
     good = commit("evals/semantic.yaml", (project / "evals/semantic.yaml").read_text())
@@ -226,6 +235,7 @@ def test_connector_preserves_landed_name_with_constants_and_fallbacks():
     source = """FIELD = 'deal_name'
 def deals():
     for row in response:
+        logger.warning("reading row %s", row['id'])
         props = row['properties']
         if FIELD in props:
             name = props[FIELD]
@@ -234,6 +244,8 @@ def deals():
         yield {'dealname': name}
 """
     assert reads_deal_name(source)
+    assert reads_deal_name(source.replace("row['id']", "row.get('id')"))
+    assert not reads_deal_name(source.replace("row['id']", "row.pop('properties')"))
     assert not reads_deal_name(source.replace("yield {'dealname':", "yield {'deal_name':"))
     assert not reads_deal_name(source.replace("props['dealname']", "None"))
 

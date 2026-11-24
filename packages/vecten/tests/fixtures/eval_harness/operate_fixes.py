@@ -64,6 +64,23 @@ def _landed_rows(nodes, env):
                 env[name] = _field_value(value, env)
             case ast.If(test=test, body=body, orelse=other):
                 yield from _landed_rows(body if _field_value(test, env) else other, env)
+            case ast.Expr(
+                value=ast.Call(func=ast.Attribute(value=ast.Name(id=logger), attr=level)) as log
+            ) if logger in {"logger", "log", "logging"} and level in {
+                "debug",
+                "info",
+                "warning",
+                "error",
+                "exception",
+                "critical",
+            }:
+                # The fixture's records are dictionaries. Their get() is a read, but pop()
+                # or an assignment in a log argument could change the value later yielded.
+                for arg in ast.walk(log):
+                    if isinstance(arg, (ast.NamedExpr, ast.Yield, ast.YieldFrom)):
+                        raise ValueError("unsupported log argument")
+                    if isinstance(arg, ast.Call) and arg is not log:
+                        _field_value(arg, env)
             case ast.Expr(value=ast.Yield(value=value)):
                 yield _field_value(value, env)
             case ast.Raise():
@@ -192,14 +209,20 @@ def _semantic_fix(bare, commit, gap):
         if not isinstance(select, exp.Query):
             return False
         with closing(sqlite3.connect(":memory:")) as db:
-            db.executescript("""
-                CREATE TABLE deal(deal_id, company_id, stage, amount, refunded_amount,
-                                  created_at, close_date, is_won);
-                CREATE TABLE company(company_id, name, country);
-                INSERT INTO company VALUES (1,'Demo','DE');
-                INSERT INTO deal VALUES (1,1,'won',100,17,NULL,NULL,1),
-                                        (2,1,'won',40,NULL,NULL,NULL,1);
-            """)
+            schema = yaml.safe_load(_file(bare, commit, "dbt/models/core/schema.yml"))
+            models = {model["name"]: model for model in schema["models"]}
+            for name in ("company", "deal"):
+                columns = [
+                    exp.to_identifier(col["name"], quoted=True).sql(dialect="sqlite")
+                    for col in models[name]["columns"]
+                ]
+                db.execute(f"CREATE TABLE {name} ({', '.join(columns)})")
+            db.execute("INSERT INTO company(company_id, name, country) VALUES (1,'Demo','DE')")
+            db.executemany(
+                "INSERT INTO deal(deal_id,company_id,stage,amount,refunded_amount,is_won) "
+                "VALUES (?,1,'won',?,?,1)",
+                [(1, 100, 17), (2, 40, None)],
+            )
             # A projected literal or a refund field present only in core cannot satisfy both rows.
             mart_sql = select.sql(dialect="sqlite")
             observed = list(
@@ -208,7 +231,7 @@ def _semantic_fix(bare, commit, gap):
                     f"SELECT amount, refunded_amount FROM ({mart_sql}) ORDER BY amount",
                 )
             )
-            if observed != [(40, None), (100, 17)]:
+            if observed not in ([(40, None), (100, 17)], [(40, 0), (100, 17)]):
                 return False
             with TemporaryDirectory() as folder:
                 root = Path(folder)
@@ -246,7 +269,7 @@ def _semantic_fix(bare, commit, gap):
                     and run_case(model, case).ok
                     for case in load_cases(path)
                 )
-    except KeyError, ValueError, TypeError, ModelError, sqlite3.Error, SqlglotError:
+    except KeyError, ValueError, TypeError, ModelError, sqlite3.Error, SqlglotError, yaml.YAMLError:
         return False
 
 
