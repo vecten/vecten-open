@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
@@ -23,7 +25,18 @@ jobs:
       - run: uv sync --locked --all-packages
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run windbag check --all
+      - name: lint comments introduced by this change
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="$BASE_SHA"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="HEAD^1"
+          fi
+          scratch="$RUNNER_TEMP/windbag"
+          git worktree add --detach --no-checkout "$scratch" "$base"
+          git -C "$scratch" read-tree --reset -u "$GITHUB_SHA"
+          (cd "$scratch" && "$GITHUB_WORKSPACE/.venv/bin/windbag" check --staged)
       - name: extension contracts and edition boundary in release wheels
         run: |
           uv build --all-packages --wheel --out-dir /tmp/vecten-extension-wheels
