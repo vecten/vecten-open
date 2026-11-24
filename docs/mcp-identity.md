@@ -312,11 +312,13 @@ area with marts only has no `core_<area>`: the grant covers the schemas the ware
 its result names the others as waiting, and the first reconciliation after dbt creates one
 grants it. The MCP's state records which of the area's schemas were granted, and revoking or
 rolling back the grant revokes only those, so a schema that only ever waited needs no revoke.
-On Snowflake the provisioner sees no schema it holds nothing on, so `READ_GRANT` looks the
-schema up as its owner once a grant on it has failed. `INFORMATION_SCHEMA` lists only what that
-owner may use, so a waiting schema is missing or not visible to it, and a revoke never relies
-on the lookup: one Snowflake refuses stays a failure and is retried. On Postgres, whose catalogs
-show every object to every role, a revoke on a schema or relation that is gone counts as done.
+On Snowflake an area schema waits when its USAGE grant fails and the procedure owner cannot
+see the schema. If USAGE succeeds and a later grant fails, the MCP tracks the partial grant
+until it can roll it back. An area revoke attempts each previously granted schema. If Snowflake
+refuses a revoke, the MCP keeps retrying it, including when the role shows no remaining access.
+Snowflake can hide grants from the procedure owner, and restoring a dropped object with
+`UNDROP` can restore its grants. Once the object is restored, reconciliation can revoke them.
+On Postgres a dropped schema or relation takes its grants with it.
 A schema or dataset grant on a missing object is refused, naming it. An area grant is refused
 for an area with no `[areas.<area>]` entry, and an area removed from `vecten.toml` has its
 grants revoked and forgotten, so declaring it again starts with none. Each granted schema

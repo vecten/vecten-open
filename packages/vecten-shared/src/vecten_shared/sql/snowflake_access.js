@@ -63,12 +63,22 @@ function readGrant() {
         throw new Error('schema is outside the approved convention');
     }
     owned(TARGET);
+    if (relation !== null) quoted(relation);
     try {
         return change(enabled, relation);
     } catch (e) {
-        // A schema the owner cannot list may be gone or only invisible to it, so a revoke's
-        // failure stands; a grant then waits, which grants nothing.
-        if (enabled && !schemaListed()) return 'absent';
+        // SHOW filters grants by the owner's visibility. UNDROP also restores the grants
+        // of a dropped object, so an empty listing cannot discharge a refused revoke.
+        if (!enabled) {
+            var remaining;
+            try { remaining = holdsRead(relation); }
+            catch (readError) {
+                throw new Error('revoke failed: ' + e + '; checking remaining grants failed: ' + readError);
+            }
+            if (!remaining) {
+                throw new Error('revoke failed: ' + e + '; no remaining grant is visible to the procedure owner');
+            }
+        }
         throw e;
     }
 }
@@ -90,7 +100,6 @@ function change(enabled, relation) {
     var direction = enabled ? ' TO' : ' FROM';
     var relationTypes = [];
     if (relation !== null) {
-        quoted(relation);
         var table = snowflake.execute({
             sqlText: 'SELECT TABLE_TYPE FROM ' + quoted(database) + '.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?',
             binds: [SCHEMA_NAME, relation]
@@ -114,9 +123,14 @@ function change(enabled, relation) {
     if (enabled) {
         execute('GRANT USAGE ON DATABASE ' + quoted(database) + ' TO' + target);
         if (warehouse !== null) execute('GRANT USAGE ON WAREHOUSE ' + quoted(warehouse) + ' TO' + target);
-        execute('GRANT USAGE ON SCHEMA ' + schema + ' TO' + target);
+        try {
+            execute('GRANT USAGE ON SCHEMA ' + schema + ' TO' + target);
+        } catch (e) {
+            // Once schema USAGE succeeds, a later failure can leave a partial grant.
+            if (!schemaListed()) return 'absent';
+            throw e;
+        }
     }
-    var prefix = database + '.' + SCHEMA_NAME + '.';
     if (relation !== null) {
         var first = null;
         for (var i = 0; i < relationTypes.length; i++) {
@@ -127,10 +141,10 @@ function change(enabled, relation) {
                 if (first === null) first = e;
                 continue;
             }
-            if (selectsIn(prefix + relation, false) === enabled) return 'ok';
+            if (holdsRead(relation) === enabled) return 'ok';
         }
         throw first !== null ? first
-            : new Error('no object type changed SELECT on ' + prefix + relation);
+            : new Error('no object type changed SELECT on ' + schema + '.' + relation);
     }
     // A refusal on tables or views, which hold dbt's default marts, fails the call.
     var refused = [];
@@ -143,29 +157,33 @@ function change(enabled, relation) {
             catch (e) { refused.push({kind: shape + ' ' + kind, error: String(e.message || e)}); }
         });
     });
-    // A grant reports another refused kind and keeps the rest; a revoke fails while the
-    // target still reads anything in the schema.
+    // A grant may be partial. A refused revoke stays pending even when the owner
+    // cannot see the remaining grant, so try every optional kind before reporting it.
     if (enabled) return refused.length ? 'refused: ' + JSON.stringify(refused) : 'ok';
     execute('REVOKE USAGE ON SCHEMA ' + schema + ' FROM' + target);
-    if (refused.length && selectsIn(prefix, true)) {
-        throw new Error('the target still holds SELECT in ' + database + '.' + SCHEMA_NAME +
-            ' after refusals: ' + refused.map(function(r) {
+    if (refused.length) {
+        throw new Error('could not revoke every relation kind in ' + database + '.' + SCHEMA_NAME +
+            ': ' + refused.map(function(r) {
                 return r.kind + ': ' + r.error;
             }).join('; '));
     }
     return 'ok';
 }
-// Whether the target holds SELECT on the relation `name`, or, with `within`, on any relation
-// or future relation whose name starts with it.
-function selectsIn(name, within) {
-    name = name.replace(/"/g, '');
+// A dataset revoke removes its SELECT only. A schema revoke also removes schema USAGE
+// and the SELECTs on current and future relations in that schema.
+function holdsRead(relation) {
+    var schema = (database + '.' + SCHEMA_NAME).replace(/"/g, '');
+    var name = relation === null ? null : schema + '.' + relation.replace(/"/g, '');
     var shows = ['SHOW GRANTS TO ROLE ', 'SHOW FUTURE GRANTS TO ROLE '];
-    for (var i = 0; i < (within ? 2 : 1); i++) {
+    for (var i = 0; i < (relation === null ? 2 : 1); i++) {
         var rows = execute(shows[i] + quoted(TARGET));
         while (rows.next()) {
             var held = String(rows.getColumnValue('name')).replace(/"/g, '');
-            if (rows.getColumnValue('privilege') === 'SELECT' &&
-                (within ? held.indexOf(name) === 0 : held === name)) return true;
+            var privilege = rows.getColumnValue('privilege');
+            if (relation === null && i === 0 && privilege === 'USAGE' && held === schema &&
+                rows.getColumnValue('granted_on') === 'SCHEMA') return true;
+            if (privilege === 'SELECT' &&
+                (relation === null ? held.indexOf(schema + '.') === 0 : held === name)) return true;
         }
     }
     return false;
