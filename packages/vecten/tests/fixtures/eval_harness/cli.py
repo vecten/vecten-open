@@ -127,8 +127,12 @@ def write_env(
             raise ValueError("guide-4 requires uv on PATH")
         if not (tools / "uv").exists():
             (tools / "uv").symlink_to(uv)
+        python = tools / "python3.14"
+        if not python.exists():
+            python.symlink_to(Path(sys.executable).resolve())
         values.update(
             PATH=os.pathsep.join([str(tools), "/usr/bin", "/bin"]),
+            UV_PYTHON_INSTALL_DIR=str(paths.dir / "managed-python"),
             UV_TOOL_BIN_DIR=str(tools),
             UV_TOOL_DIR=str(paths.dir / "tools"),
         )
