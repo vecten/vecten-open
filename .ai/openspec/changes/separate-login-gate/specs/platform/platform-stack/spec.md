@@ -19,11 +19,14 @@ A project with a bound login route SHALL run the service-host gate in a separate
 - **WHEN** the browser starts a service login
 - **THEN** the gate hands it to the issuer and redeems the resulting one-time code at the service hostname
 
-#### Scenario: Upgrade a deployed environment
+#### Scenario: Upgrade an environment without a login route
 
-- **WHEN** a project has no bound login route, including an older release with no gate declaration
+- **WHEN** a deployed project has no bound login route, including an older release with no gate declaration
 - **THEN** its VM agent SHALL neither access the gate password nor provision its database role
-- **WHEN** a platform service has a login route and the MCP runs on a separate VM
+
+#### Scenario: Upgrade a split environment with a platform login route
+
+- **WHEN** a deployed platform service has a login route and the MCP runs on a separate VM
 - **THEN** the setup host SHALL provision the gate login only on the MCP state database instance, and only the MCP host SHALL pass its password to the gate
 
 ## MODIFIED Requirements
@@ -54,13 +57,12 @@ The stack SHALL define `platform` (Airflow API server, scheduler, DAG processor,
 
 ### Requirement: NGINX routes by hostname
 
-NGINX SHALL route the Airflow hostname to Airflow and the MCP hostname to the MCP server for its MCP endpoint, OAuth, gate authorization and admin panel. On the MCP hostname, the service gate's start, callback, logout and verify paths SHALL go to the separate gate. A bound service hostname SHALL serve only its bound routes, gate paths and health path. Unknown hosts and paths SHALL be refused. Both built-in names SHALL be issued under every profile and local up SHALL print the started routes.
+NGINX SHALL route the Airflow hostname to Airflow and the MCP hostname to the MCP server for its MCP endpoint, OAuth, gate authorization and admin panel. On the MCP hostname, the service gate's start, callback, logout and verify paths SHALL go to the separate gate. A bound service hostname SHALL serve only its bound routes, gate paths and health path, and no service route SHALL be served on `airflow.<domain>` or `mcp.<domain>`. Unknown hosts and paths SHALL be refused. Both built-in names SHALL be issued under every profile and local up SHALL print the started routes.
 
 #### Scenario: Airflow host
 
 - **WHEN** a client requests `https://airflow.<domain>/`
 - **THEN** the Airflow UI is served
-- **AND** service routes SHALL never be served on `airflow.<domain>` or `mcp.<domain>`
 
 #### Scenario: MCP host
 

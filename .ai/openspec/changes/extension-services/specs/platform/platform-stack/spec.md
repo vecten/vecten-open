@@ -148,13 +148,12 @@ The stack SHALL define `platform` (Airflow API server, scheduler, DAG processor,
 
 ### Requirement: NGINX routes by hostname
 
-NGINX SHALL route the Airflow hostname to Airflow and the MCP hostname to the MCP server for its MCP endpoint, OAuth, gate authorization and admin panel. On the MCP hostname, the service gate's start, callback, logout and verify paths SHALL go to the separate gate. A bound service hostname SHALL serve only its bound routes, gate paths and health path. Unknown hosts and paths SHALL be refused. Both built-in names SHALL be issued under every profile and local up SHALL print the started routes.
+NGINX SHALL route the Airflow hostname to Airflow and the MCP hostname to the MCP server for its MCP endpoint, OAuth, gate authorization and admin panel. On the MCP hostname, the service gate's start, callback, logout and verify paths SHALL go to the separate gate. A bound service hostname SHALL serve only its bound routes, gate paths and health path, and no service route SHALL be served on `airflow.<domain>` or `mcp.<domain>`. Unknown hosts and paths SHALL be refused. Both built-in names SHALL be issued under every profile and local up SHALL print the started routes.
 
 #### Scenario: Airflow host
 
 - **WHEN** a client requests `https://airflow.<domain>/`
 - **THEN** the Airflow UI is served
-- **AND** service routes SHALL never be served on `airflow.<domain>` or `mcp.<domain>`
 
 #### Scenario: MCP host
 
