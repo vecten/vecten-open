@@ -474,20 +474,7 @@ def _deploy(
             if has_snowflake_root(named)
             else None
         )
-        on_dispatched = None
-        if layout is not None:
-            shared, base = layout
-
-            def on_dispatched() -> None:
-                # The run exists from here, and may create Snowflake objects under these
-                # names before it fails; a dispatch GitHub refused created nothing.
-                recorded = load_config(project_root)
-                if record_layout(recorded, env, shared, base):
-                    save_config(project_root, recorded)
-
-        followed = dispatch_and_follow(
-            project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted, on_dispatched=on_dispatched
-        )
+        followed = dispatch_and_follow(project_root, APPLY_WORKFLOW, env, gh, git, commit=promoted)
         try:
             deployed = check_commit(promoted or followed["head_sha"])
         except Failure:

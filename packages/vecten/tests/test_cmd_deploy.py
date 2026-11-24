@@ -396,6 +396,7 @@ def test_snowflake_project_plans_both_roots_then_applies_cloud_first(
         ("init", "snowflake"),
         ("plan", "snowflake"),
         ("show", "snowflake"),
+        ("show", "snowflake"),
         ("apply", "aws"),
         ("output", "aws"),
         ("apply", "snowflake"),
@@ -410,6 +411,74 @@ def test_snowflake_project_plans_both_roots_then_applies_cloud_first(
         "-backend-config=key=prod/aws.tfstate",
         "-backend-config=key=prod/snowflake.tfstate",
     ]
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "settings"),
+    [
+        ("LOADER_ACME_PROD", "LOADER", 'snowflake_base = "ACME"'),
+        ("LOADER_ACME_PROD", "LOADER_NEW_PROD", "snowflake_shared_account = true"),
+        ("LOADER", "LOADER_ACME_PROD", "snowflake_shared_account = false"),
+    ],
+)
+def test_ci_refuses_a_layout_rename_from_terraform_state(
+    invoke, deploy_secrets, snowflake, monkeypatch, before, after, settings
+):
+    monkeypatch.setattr(
+        FakeTerraform,
+        "changes",
+        [
+            {
+                "address": 'module.reporting.snowflake_account_role.this["LOADER"]',
+                "type": "snowflake_account_role",
+                "change": {
+                    "actions": ["no-op"],
+                    "before": {"name": "LOADER_WRONG_PROD"},
+                    "after": {"name": "LOADER_WRONG_PROD"},
+                },
+            },
+            {
+                "address": 'module.snowflake.snowflake_account_role.this["LOADER"]',
+                "type": "snowflake_account_role",
+                "change": {
+                    "actions": ["update"],
+                    "before": {"name": before},
+                    "after": {"name": after},
+                },
+            },
+        ],
+    )
+    result = invoke("deploy", "--env", "prod", "--json")
+    assert result.exit_code == 4, result.stdout
+    assert before in doc(result)["error"]
+    assert settings in doc(result)["error"]
+    assert "[environments.prod]" in doc(result)["error"] and "push" in doc(result)["error"]
+    assert "apply" not in FakeTerraform.commands()
+
+
+def test_ci_applies_project_snowflake_renames_alongside_first_deploy(
+    invoke, deploy_secrets, snowflake, monkeypatch
+):
+    changes = [
+        {
+            "address": "module.snowflake.snowflake_database.this",
+            "type": "snowflake_database",
+            "change": {"actions": ["create"], "before": None, "after": {"name": "ACME"}},
+        },
+        {
+            "address": "module.reporting.snowflake_database.this",
+            "type": "snowflake_database",
+            "change": {
+                "actions": ["update"],
+                "before": {"name": "REPORT"},
+                "after": {"name": "BI"},
+            },
+        },
+    ]
+    monkeypatch.setattr(FakeTerraform, "changes", changes)
+    result = invoke("deploy", "--env", "prod", "--json")
+    assert result.exit_code == 0, result.stdout
+    assert "apply" in FakeTerraform.commands()
 
 
 def test_snowflake_terraform_authenticates_from_the_deploy_secrets(
@@ -717,15 +786,17 @@ def test_a_snowflake_deploy_records_the_layout_it_was_first_deployed_with(
     assert facts.deployed_commit == COMMIT
 
 
-def test_a_failed_first_run_records_the_layout_it_tried(invoke, laptop, snowflake, monkeypatch):
+def test_a_failed_first_run_does_not_guess_whether_objects_were_created(
+    invoke, laptop, snowflake, monkeypatch
+):
     _share_account(snowflake)
     laptop.watch_code = 1
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code != 0, r.stdout
     facts = load_config(snowflake).environments["prod"]
-    # The run may have created Snowflake objects under these names before it failed.
-    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME"
+    # CI checks the saved plan against any objects the failed run actually created.
+    assert facts.snowflake_shared_account is None and facts.snowflake_base is None
     assert facts.deployed_commit is None
 
 
@@ -800,7 +871,8 @@ def test_a_promoted_first_deploy_records_the_layout_of_the_commit_it_deploys(
     assert (r.exit_code == 0) is (watch_code == 0), r.stdout
     facts = load_config(snowflake).environments["prod"]
     # The run named the objects by SHIPPED's vecten.toml, which keeps the fixed layout.
-    assert facts.snowflake_shared_account is False and facts.snowflake_base is None
+    assert facts.snowflake_shared_account is (None if watch_code else False)
+    assert facts.snowflake_base is None
 
 
 def test_a_promoted_first_deploy_records_the_base_of_the_commit_it_deploys(
@@ -842,7 +914,8 @@ def test_a_first_deploy_records_the_base_of_the_fetched_head(
     assert (r.exit_code == 0) is (watch_code == 0), r.stdout
     facts = load_config(snowflake).environments["prod"]
     # CI deployed the default branch's head, whose vecten.toml names the base ACME_DW.
-    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME_DW"
+    assert facts.snowflake_shared_account is (None if watch_code else True)
+    assert facts.snowflake_base == (None if watch_code else "ACME_DW")
 
 
 def test_a_first_deploy_records_the_layout_the_fetched_head_records(

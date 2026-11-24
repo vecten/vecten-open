@@ -513,6 +513,38 @@ def plan_environment(
     ]
 
 
+def _layout_recovery(changes: list[dict], config: VectenConfig, env: str) -> str:
+    from vecten_shared.provider import snowflake_names
+
+    fixed = snowflake_names(config, env, shared_account=False).loader_role
+    table = f"[environments.{env}] in vecten.toml"
+    # The fixed database and warehouse names may also look suffixed. Only the
+    # managed loader has an unambiguous fixed name and shared suffix.
+    suffix = "_" + env.upper()
+    for resource in changes:
+        address = resource.get("address", "")
+        if not address.endswith(
+            (f'snowflake_account_role.this["{fixed}"]', "snowflake_service_user.loader")
+        ):
+            continue
+        name = (resource["change"].get("before") or {}).get("name", "")
+        if name == fixed:
+            return f"Record snowflake_shared_account = false under {table} and push."
+        if name.startswith(f"{fixed}_") and name.endswith(suffix):
+            base = name[len(fixed) + 1 : -len(suffix)]
+            if base:
+                return (
+                    f"To keep these shared names, set snowflake_shared_account = true and "
+                    f'snowflake_base = "{base}" under {table}, set the [warehouse] database to '
+                    f"{base}, and push."
+                )
+    return (
+        f"Check the environment's existing loader role in Terraform state. Record its layout "
+        f"under {table} using snowflake_shared_account and, for shared names, snowflake_base. "
+        "Push the recorded layout."
+    )
+
+
 def apply_environment(
     plane: ControlPlane, env: str, terraform: TerraformRunner, plans: list[PlannedRoot]
 ) -> EnvironmentOutputs:
@@ -523,10 +555,38 @@ def apply_environment(
     follows at once, so what the cloud root left undone is done in the same run.
     """
     require_bootstrapped(plane.config(), env)
-    if plane.guarded_resources:
-        for planned in plans:
-            if planned.root.name == plane.cloud:
-                refuse_guarded_changes(plane, terraform, planned)
+    for planned in plans:
+        root = planned.root
+        if root.name == plane.cloud and plane.guarded_resources:
+            refuse_guarded_changes(plane, terraform, planned)
+        if root.name == "snowflake":
+            changes = terraform_plan_changes(
+                terraform, root.root_dir, planned.plan_file, env=root.env, secrets=root.secrets
+            )
+            # Projects can add their own resources and modules to this root. Only the
+            # generated module's addresses carry Vecten's fixed or environment-specific names.
+            layout_changes = [
+                resource
+                for resource in changes
+                if resource["address"].partition("[")[0]
+                in {
+                    "module.snowflake.snowflake_database.this",
+                    "module.snowflake.snowflake_warehouse.this",
+                    "module.snowflake.snowflake_account_role.this",
+                    "module.snowflake.snowflake_service_user.loader",
+                }
+            ]
+            for resource in layout_changes:
+                change = resource["change"]
+                before, after = change.get("before"), change.get("after")
+                if before and after and before["name"] != after.get("name"):
+                    raise Failure(
+                        ExitCode.REFUSED,
+                        f"{resource['address']} would rename an existing Snowflake object "
+                        f"from {before['name']} to {after.get('name')}. "
+                        f"{_layout_recovery(layout_changes, plane.config(), env)} "
+                        "To change layouts, migrate as a new deployment. Nothing was applied.",
+                    )
     outputs: EnvironmentOutputs | None = None
     for planned in plans:
         apply_root(terraform, planned)
