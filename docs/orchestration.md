@@ -161,9 +161,9 @@ at the token endpoint.
 
 After the next ship, open Airflow and sign in with the provider. Airflow grants administrator
 access to users whose verified email is in `[mcp] admins`. Removing an email takes effect
-when you ship the updated configuration. Airflow logout ends the Airflow session. To also
-end single sign-on, sign out at the identity provider. While the provider session is active,
-opening Airflow can sign you straight back in. Password API tokens, including those used by
+when you ship the updated configuration. Clicking **Log out** ends the Airflow session and immediately
+redirects to the identity provider. If the provider session is still active, it can sign you
+straight back in. Sign out at the provider to end single sign-on. Password API tokens, including those used by
 `vecten issues`, have viewer access in this mode. The laptop continues to use its password.
 
 **Who reaches the login.** By default anyone on the internet can reach Airflow's sign-in page at

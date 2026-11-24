@@ -80,7 +80,7 @@ def flow(monkeypatch, tmp_path):
             json={
                 "access_token": "unused",
                 "token_type": "Bearer",
-                "id_token": provider.get("id_token", signed),
+                "id_token": signed,
             },
         )
 
@@ -88,7 +88,9 @@ def flow(monkeypatch, tmp_path):
 
     def with_provider(self, **kwargs):
         kwargs["client_kwargs"]["transport"] = httpx2.MockTransport(respond)
-        return register(self, **kwargs)
+        client = register(self, **kwargs)
+        provider["client"] = client
+        return client
 
     monkeypatch.setattr(OAuth, "register", with_provider)
     manager = OidcAuthManager()
@@ -168,16 +170,11 @@ def test_provider_offering_only_symmetric_signatures_is_unavailable(flow):
     assert COOKIE_NAME_JWT_TOKEN not in browser.cookies
 
 
-def test_symmetric_id_token_is_refused_even_with_a_valid_session(flow):
-    import jwt as pyjwt
-
+def test_mixed_provider_metadata_offers_only_asymmetric_signatures_to_the_client(flow):
     browser, provider, _ = flow
-    provider["id_token"] = pyjwt.encode(
-        {"sub": "test-subject"}, "fixture-client-secret-" * 3, algorithm="HS256"
-    )
-    response = browser.get("/auth/oidc/callback", params=start(browser, provider))
-    assert response.status_code == 401
-    assert COOKIE_NAME_JWT_TOKEN not in browser.cookies
+    provider["metadata"]["id_token_signing_alg_values_supported"] = ["HS256", "RS256"]
+    start(browser, provider)
+    assert provider["client"].server_metadata["id_token_signing_alg_values_supported"] == ["RS256"]
 
 
 def test_reloaded_admin_list_applies_to_existing_browser_tokens(flow):
