@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           python="$(uv tool dir)/vecten/bin/python"
-          "$python" -c 'from pathlib import Path; from vecten.extensions import check_declarations; check_declarations(Path.cwd(), project_ci=True)'
+          "$python" -m vecten.ci_declarations
       - run: python -c "import tomllib; tomllib.load(open('vecten.toml','rb'))"
       - run: uvx ruff@[[ ruff_version ]] check .
 [% if 'platform' in components %]      - name: Read connector dependencies for offline replay

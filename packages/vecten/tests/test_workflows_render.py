@@ -765,5 +765,5 @@ def test_project_ci_checks_local_declarations_without_fetching_git(renders, tmp_
     step = next(s for s in steps(job) if s.get("name") == "Check in-repo extension declarations")
     assert steps(job)[0]["with"]["persist-credentials"] is False
     assert "requirements*.lock" in step["if"]
-    assert "check_declarations(Path.cwd(), project_ci=True)" in step["run"]
+    assert '"$python" -m vecten.ci_declarations' in step["run"]
     assert "env" not in step
