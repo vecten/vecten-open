@@ -1,5 +1,4 @@
-"""The MCP's browser pages share the Vecten design system's stylesheet and fonts, served by the
-MCP itself, under a CSP that admits only same-origin styles and fonts."""
+"""The MCP's browser pages use same-origin styles, fonts and icons."""
 
 import re
 
@@ -7,12 +6,12 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from vecten_mcp.assets import ASSETS, LOGO, asset_routes
+from vecten_mcp.assets import LOGO, asset_routes
 from vecten_mcp.auth.pages import consent_page, login_page, page, redirect_page
 from vecten_mcp.panel.html import layout
 
 SIGN_IN_CSP = (
-    "default-src 'none'; style-src 'self'; font-src 'self'; form-action 'self'; "
+    "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'"
 )
 
@@ -40,13 +39,15 @@ def test_only_the_listed_assets_are_served(client, path):
 
 
 def test_every_font_the_stylesheet_names_is_served(client):
-    css = client.get("/assets/vecten.css").text
-    named = re.findall(r'url\("/assets/([^"]+)"\)', css)
-    assert named and set(named) <= set(ASSETS)
+    css = client.get("/_vecten/assets/vecten.css").text
+    named = re.findall(r'url\("([^"]+)"\)', css)
+    assert named
+    for font in named:
+        assert client.get(f"/_vecten/assets/{font}").headers["content-type"] == "font/ttf"
 
 
 def test_the_stylesheet_has_a_light_and_a_dark_theme(client):
-    css = client.get("/assets/vecten.css").text
+    css = client.get("/_vecten/assets/vecten.css").text
     assert "@media (prefers-color-scheme: dark)" in css
     assert "--midnight-900: #10233c" in css and "--gold-400: #f3b838" in css
     # The CSP admits no other origin, so nothing may load from a CDN or Google Fonts.
@@ -71,8 +72,9 @@ def _no_inline_style_or_script(html):
 def test_sign_in_pages_take_the_shared_stylesheet_under_a_same_origin_csp(response):
     html = response.body.decode()
     assert response.headers["content-security-policy"] == SIGN_IN_CSP
-    assert '<link rel="stylesheet" href="/assets/vecten.css">' in html
+    assert '<link rel="stylesheet" href="/_vecten/assets/vecten.css">' in html
     assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+    assert '<link rel="icon" type="image/png" href="/_vecten/assets/favicon.png">' in html
     assert LOGO in html
     _no_inline_style_or_script(html)
 
@@ -88,7 +90,8 @@ def test_the_admin_panel_takes_the_shared_stylesheet_and_fonts():
     html = response.body.decode()
     csp = response.headers["content-security-policy"]
     assert "style-src 'self'" in csp and "font-src 'self'" in csp
-    assert "default-src 'none'" in csp
-    assert '<link rel="stylesheet" href="/assets/vecten.css">' in html
+    assert "default-src 'none'" in csp and "img-src 'self'" in csp
+    assert '<link rel="stylesheet" href="/_vecten/assets/vecten.css">' in html
+    assert '<link rel="icon" type="image/png" href="/_vecten/assets/favicon.png">' in html
     assert LOGO in html
     _no_inline_style_or_script(html)

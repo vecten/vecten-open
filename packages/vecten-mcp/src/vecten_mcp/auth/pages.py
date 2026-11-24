@@ -4,20 +4,20 @@ from html import escape
 
 from starlette.responses import HTMLResponse
 
-from vecten_mcp.assets import LOGO, STYLESHEET
+from vecten_mcp.assets import ASSET_CSP, LOGO, PAGE_ASSETS
 
 
 def page(title, body, status=200, *, head=""):
     return HTMLResponse(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{escape(title)}</title>{STYLESHEET}{head}</head>"
+        f"<title>{escape(title)}</title>{PAGE_ASSETS}{head}</head>"
         f'<body class="signin"><main>{LOGO}<p class="eyebrow">Vecten Open</p>'
         f"<h1>{escape(title)}</h1>{body}</main></body></html>",
         status_code=status,
         headers={
             "Cache-Control": "no-store",
-            "Content-Security-Policy": "default-src 'none'; style-src 'self'; font-src 'self'; "
+            "Content-Security-Policy": f"default-src 'none'; {ASSET_CSP} "
             "form-action 'self'; frame-ancestors 'none'",
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",

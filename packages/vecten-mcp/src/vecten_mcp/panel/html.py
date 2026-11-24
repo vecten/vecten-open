@@ -5,11 +5,11 @@ from urllib.parse import urlencode
 
 from starlette.responses import HTMLResponse, RedirectResponse
 
-from vecten_mcp.assets import LOGO, STYLESHEET
+from vecten_mcp.assets import ASSET_CSP, LOGO, PAGE_ASSETS
 
 HEADERS = {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'none'; style-src 'self'; font-src 'self'; "
+    "Content-Security-Policy": f"default-src 'none'; {ASSET_CSP} "
     "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
@@ -102,7 +102,7 @@ def layout(title, body, *, csrf=None, status=200, nav=True, notice=None, brand="
     page = (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{esc(title)} · {esc(brand)}</title>{STYLESHEET}</head>"
+        f"<title>{esc(title)} · {esc(brand)}</title>{PAGE_ASSETS}</head>"
         f'<body class="panel"><header><p class="brand">{LOGO}{esc(brand)}</p>{menu}</header>'
         f"<main><h1>{esc(title)}</h1>{message}{esc(body)}</main></body></html>"
     )
