@@ -88,24 +88,27 @@ def parse(argv: list[str]) -> tuple[str | None, str | None, bool] | None:
     """(issue id or None, env, json) for an `issues` call this replay answers, else None."""
     if argv[:1] != ["issues"]:
         return None
-    rest, issue_id, env, as_json = argv[1:], None, None, False
-    if rest[:1] == ["show"]:
-        rest = rest[1:]
-        if not rest or rest[0].startswith("-"):
-            return None
-        issue_id, rest = rest[0], rest[1:]
-    i = 0
-    while i < len(rest):
-        if rest[i] == "--json":
+    positional = []
+    env, as_json = None, False
+    args = iter(argv[1:])
+    for arg in args:
+        if arg == "--json":
             as_json = True
-        elif rest[i] == "--env" and i + 1 < len(rest):
-            env, i = rest[i + 1], i + 1
-        elif rest[i].startswith("--env="):
-            env = rest[i].split("=", 1)[1]
-        else:
+        elif arg == "--env":
+            env = next(args, None)
+            if not env or env.startswith("-"):
+                return None
+        elif arg.startswith("--env="):
+            env = arg.removeprefix("--env=")
+        elif arg.startswith("-"):
             return None
-        i += 1
-    return issue_id, env, as_json
+        else:
+            positional.append(arg)
+    if not positional:
+        return None, env, as_json
+    if len(positional) == 2 and positional[0] == "show":
+        return positional[1], env, as_json
+    return None
 
 
 def answer(doc: dict, issue_id: str | None, gh_dir: Path | None):
@@ -166,6 +169,13 @@ def main(argv: list[str] | None = None) -> int:
     parsed = parse(argv) if fixture else None
     doc = json.loads(Path(fixture).read_text()) if parsed else None
     if parsed is None or doc is None or parsed[1] != doc["env"]:
+        if fixture and argv[:1] == ["issues"]:
+            message = "the evaluation replay does not answer this issues command or environment"
+            if "--json" in argv:
+                print(json.dumps({"ok": False, "error": message}))
+            else:
+                print(message, file=sys.stderr)
+            return 2
         real = shlex.split(os.environ.get(REAL_VAR) or "") or real_vecten(os.environ["PATH"])
         os.execv(real[0], [*real, *argv])
     from vecten_shared.output import render

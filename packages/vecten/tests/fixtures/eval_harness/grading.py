@@ -145,8 +145,11 @@ def report(iteration: Path, *, executor: str, grader: str, commit: str) -> str:
         f"tokens {delta['tokens']}.",
         "",
     ]
-    for case in sorted(iteration.glob("eval-*")):
-        meta = json.loads((case / "eval_metadata.json").read_text())
+    cases = [
+        (case, json.loads((case / "eval_metadata.json").read_text()))
+        for case in iteration.glob("eval-*")
+    ]
+    for case, meta in sorted(cases, key=lambda item: int(item[1]["eval_id"])):
         lines += [f"### Case {meta['eval_id']}: {meta['eval_name']}", ""]
         for key, label in CONFIGS:
             run = case / key / "run-1"

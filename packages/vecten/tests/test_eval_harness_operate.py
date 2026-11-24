@@ -118,4 +118,17 @@ def test_every_other_command_reaches_the_real_vecten(shell, tmp_path):
     code, out, _ = vecten(make("revoked-key"), "version", "--json")
     assert code == 0 and "vecten" in json.loads(out)
     code, out, _ = vecten(make("revoked-key"), "issues", "--json", cwd=tmp_path)
-    assert code != 0 and "project" in json.loads(out)["error"]
+    assert code != 0 and "replay does not answer" in json.loads(out)["error"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--env", "prod", "--json", "show", "id"],
+        ["show", "--env=prod", "--json", "id"],
+        ["show", "--json", "id", "--env", "prod"],
+        ["show", "id", "--env=prod", "--json"],
+    ],
+)
+def test_show_accepts_options_around_the_issue_id(args):
+    assert issues_replay.parse(["issues", *args]) == ("id", "prod", True)
