@@ -67,10 +67,10 @@ def replay_fixtures(
             dataset_name=dataset_name(name),
             pipelines_dir=str(target.workdir / "dlt"),
         )
-        # Fixture resources append, so the raw tables are dropped first to hold the fixtures only.
+        # Each local build starts from exactly the rows in the current fixtures.
         try:
             pipeline.run(replay_source(fixtures_dir, name), refresh="drop_sources")
-        except PipelineStepFailed as exc:
+        except (PipelineStepFailed, ValueError) as exc:
             raise Failure(
                 ExitCode.TOOL_FAILED, f"replaying connector {name} failed: {exc}"
             ) from exc

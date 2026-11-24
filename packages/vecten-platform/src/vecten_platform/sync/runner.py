@@ -107,11 +107,19 @@ def run_object(
             return ObjectOutcome(object_name, False, 0, f"unknown object; the source has: {known}")
         selected = source.with_resources(object_name)
         if record_dir is not None:
-            recording = record_to(record_dir / f"{object_name}.jsonl")
-            selected.resources[object_name].add_map(recording)
+            resource = selected.resources[object_name]
+            recording = record_to(
+                record_dir / f"{object_name}.jsonl",
+                table_name=resource.table_name,
+            )
+            resource.add_map(recording)
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
             # recording truncates the object's tables, resets its state and reloads everything.
             pipeline.run(selected, refresh="drop_data")
+            nesting = resource.max_table_nesting
+            recording.commit(
+                pipeline.default_schema, selected.max_table_nesting if nesting is None else nesting
+            )
         else:
             pipeline.run(selected)
     except Exception as exc:
@@ -136,8 +144,6 @@ def run_object(
         if recording is not None:
             recording.discard()
         raise
-    if recording is not None:
-        recording.commit()
     landed = _landed(pipeline)
     return ObjectOutcome(object_name, True, sum(landed.values()), tables=tuple(sorted(landed)))
 

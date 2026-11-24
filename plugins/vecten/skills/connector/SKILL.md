@@ -193,7 +193,8 @@ is down: run `vecten up --json`, then retry.
 Before the first run, tell the human what a fixture is: `--record` writes up to 200 real
 records per object to `connectors/<name>/fixtures/<object>.jsonl`. Those files are committed to
 the project and replayed by the connector test and by `vecten dbt-build-local`, so they are real
-data in git. Ask which objects hold personal data they do not want there.
+data in git. Commit each `<object>.schema.json` beside its rows so replay preserves JSON columns,
+table names and merge keys. Ask which objects hold personal data they do not want there.
 
 After any later change to `connector.py`, run `vecten connector run <name> --json` again before
 calling the change done. Neither the connector test nor `vecten dbt-build-local` runs the code,
@@ -213,7 +214,8 @@ vecten connector run <name> --record --json
 Ask before the first run, because a table a sync has landed stays declared in
 `dbt/models/staging/sources.yml`, a file the CLI writes and you never edit. When an object the
 human now wants out was already synced or recorded, drop it from `connector.py`, delete its
-`connectors/<name>/fixtures/<object>.jsonl`, run `vecten connector run <name> --record --json`
+`connectors/<name>/fixtures/<object>.jsonl` and its companion `<object>.schema.json`, then run
+`vecten connector run <name> --record --json`
 again, and tell the human that its table entry stays in `sources.yml` until they remove it by
 hand.
 
