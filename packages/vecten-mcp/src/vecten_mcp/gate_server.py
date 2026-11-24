@@ -18,7 +18,7 @@ from vecten_mcp.http_limits import BodyLimit
 from vecten_mcp.runtime_setup import state_url
 from vecten_mcp.state import StateStore
 from vecten_shared.config import load_config
-from vecten_shared.extension_record import Extension, read_record
+from vecten_shared.extension_record import read_record
 from vecten_shared.provider import get_provider
 
 
@@ -26,7 +26,6 @@ from vecten_shared.provider import get_provider
 class GateIssuer:
     issuer: str
     state: StateStore
-    record: dict[str, Extension] | None
 
     clock = staticmethod(time.time)
 
@@ -38,11 +37,12 @@ def configured_gate():
     cloud = os.environ["VECTEN_PROVIDER"]
     spec = get_provider(cloud, root, env).connection(env, "mcp_state")
     state = StateStore(
-        state_url(spec, os.environ["MCP_STATE_DB_PASSWORD"], cloud), initialize=False
+        state_url(spec, os.environ["MCP_GATE_DB_PASSWORD"], cloud).set(username="mcp_gate"),
+        initialize=False,
     )
-    issuer = GateIssuer(os.environ["VECTEN_MCP_PUBLIC_URL"], state, read_record(root))
+    issuer = GateIssuer(os.environ["VECTEN_MCP_PUBLIC_URL"], state)
     apps = AppScopes(state, read_bound_apps(root, config), kind=config.warehouse.kind)
-    return GateService.from_config(issuer, config, apps=apps)
+    return GateService.from_config(issuer, config, apps=apps, record=read_record(root) or {})
 
 
 def create_app(factory=configured_gate):

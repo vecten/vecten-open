@@ -29,6 +29,7 @@ SCRIPT = "/docker-entrypoint-initdb.d/vecten/warehouse_setup.sql"
 PASSWORDS = {
     "AIRFLOW_DB_PASSWORD": "a1",
     "MCP_STATE_DB_PASSWORD": "m1",
+    "MCP_GATE_DB_PASSWORD": "fixture-gate",
     "LOADER_PASSWORD": "l1",
     "PROVISIONER_PASSWORD": "p1",
     "IMPERSONATOR_PASSWORD": "i1",

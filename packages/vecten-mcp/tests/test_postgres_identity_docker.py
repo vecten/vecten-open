@@ -252,6 +252,8 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
                 "exec",
                 "-e",
                 "MCP_STATE_DB_PASSWORD=fixture-state",
+                "-e",
+                "MCP_GATE_DB_PASSWORD=fixture-gate",
                 container,
                 "psql",
                 "-U",
@@ -294,6 +296,7 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
             "VECTEN_MCP_PUBLIC_URL": "https://mcp.example",
             "VECTEN_MCP_SECRET_DIR": str(tmp_path / "keys"),
             "MCP_STATE_DB_PASSWORD": "fixture-state",
+            "MCP_GATE_DB_PASSWORD": "fixture-gate",
             "MCP_PROVISIONER_PASSWORD": "fixture-provisioner",
             "MCP_IMPERSONATOR_PASSWORD": "fixture-impersonator",
         }.items():

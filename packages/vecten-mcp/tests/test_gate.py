@@ -669,6 +669,7 @@ def test_the_server_reads_its_login_routes_from_vecten_toml(gate):
         "acme-portal.apex.home": GateRoute("data.acme.com", ("sales",)),
     }
     assert built.origin("portal.data.acme.com") == "https://portal.data.acme.com"
+    assert GateService.from_config(service.oauth, config(SERVICES), record={}).routes == {}
 
 
 def test_the_server_reads_its_container_apps_routes_and_hostnames(gate):

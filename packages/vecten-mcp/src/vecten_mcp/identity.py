@@ -13,6 +13,7 @@ RESERVED = {
     "analyst",
     "airflow",
     "mcp_state",
+    "mcp_gate",
     "warehouse_owner",
     "reader",
 }

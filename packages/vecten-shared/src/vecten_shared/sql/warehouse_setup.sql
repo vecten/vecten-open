@@ -70,6 +70,24 @@ RESET ROLE;
 
 \if :with_mcp_state
 \getenv mcp_state_password MCP_STATE_DB_PASSWORD
+\getenv mcp_gate_password MCP_GATE_DB_PASSWORD
+-- Existing installations could have given the name to a person or a warehouse group.
+-- Never turn that role (or its members) into a reader of MCP identity state.
+DO $check_gate$
+BEGIN
+  IF EXISTS (
+    SELECT FROM pg_roles r WHERE r.rolname = 'mcp_gate' AND
+      (shobj_description(r.oid, 'pg_authid') IS DISTINCT FROM 'Vecten service login: MCP gate'
+       OR NOT r.rolcanlogin OR r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb
+       OR r.rolreplication OR EXISTS (SELECT FROM pg_auth_members m WHERE m.member = r.oid))
+  ) THEN
+    RAISE EXCEPTION 'existing mcp_gate role is not the dedicated gate login';
+  END IF;
+END;
+$check_gate$;
+SELECT format('CREATE ROLE mcp_gate LOGIN PASSWORD %L; '
+              'COMMENT ON ROLE mcp_gate IS %L', :'mcp_gate_password', 'Vecten service login: MCP gate')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mcp_gate') \gexec
 SELECT format('CREATE ROLE mcp_state LOGIN PASSWORD %L', :'mcp_state_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mcp_state') \gexec
 SELECT format('GRANT mcp_state TO %I WITH INHERIT FALSE, SET TRUE', :'master_role')
@@ -103,6 +121,8 @@ SET ROLE mcp_state_maintenance;
 GRANT CONNECT ON DATABASE mcp_state TO mcp_state;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO mcp_state;
+GRANT CONNECT ON DATABASE mcp_state TO mcp_gate;
+GRANT USAGE ON SCHEMA public TO mcp_gate;
 CREATE SCHEMA IF NOT EXISTS vecten_audit AUTHORIZATION mcp_state_maintenance;
 REVOKE ALL ON SCHEMA vecten_audit FROM PUBLIC;
 GRANT USAGE ON SCHEMA vecten_audit TO mcp_state;

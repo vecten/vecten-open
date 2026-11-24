@@ -59,7 +59,7 @@ class GateService:
         self.apps = apps
 
     @classmethod
-    def from_config(cls, oauth, config, apps=None):
+    def from_config(cls, oauth, config, apps=None, *, record=None):
         """Every `login` route vecten.toml binds, and the route of each bound container app in
         `apps` (AppScopes), at its hostname below the issuer's domain."""
         from vecten_shared.apps import ROUTE, app_service_name
@@ -73,6 +73,10 @@ class GateService:
         routes = {}
         for extension, bindings in config.services.items():
             for service, binding in bindings.items():
+                entry = (record or {}).get(extension)
+                declared = entry.services.get(service) if entry else None
+                if record is not None and declared is None:
+                    continue
                 if binding.hostname is None:
                     continue
                 host = service_hostname(binding.hostname, domain)
@@ -203,9 +207,4 @@ class GateService:
             return
         if not hmac.compare_digest(str(token), self.logout_token(sid)):
             raise ValueError("invalid browser state")
-        session = self.state.gate_session(digest(sid), now=self.oauth.clock())
-        self.state.end_gate_session(digest(sid))
-        if session:
-            for key, row in self.state.scan("browser_sessions"):
-                if row.get("principal_id") == session["principal_id"]:
-                    self.state.remove("browser_sessions", key)
+        self.state.logout_gate_session(digest(sid), now=self.oauth.clock())

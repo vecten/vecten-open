@@ -41,7 +41,7 @@ the MCP server, which every person's question goes through.
 
 ## Where login checks run
 
-A project with a bound login route runs `login-gate` from its MCP image on the MCP host. The gate checks service cookies against sessions, group memberships and app admission in the state database. It has its own network, and its container receives only the state database credential. A split platform host reaches the gate through the MCP host’s HTTPS proxy.
+A project with a bound login route runs `login-gate` from its MCP image on the MCP host. The gate checks service cookies against sessions, group memberships and app admission in the state database. It has its own network, and its container receives only the dedicated `mcp_gate` login for the state database. A split platform host reaches the gate through the MCP host’s HTTPS proxy.
 
 Existing service sessions keep working through an MCP process outage. New sign-ins use the MCP issuer on its own hostname and require that process. The state database and the NGINX proxies must remain available for either path.
 
@@ -154,12 +154,12 @@ the identity provider: it only ever returns to the MCP.
 
 The sign-in flow:
 
-1. A browser asks for a `login` route. For every such request NGINX first asks the MCP server
+1. A browser asks for a `login` route. For every such request NGINX first asks the login gate
    whether the request's gate cookie belongs to an active person in one of the route's groups.
    Without a valid gate session, NGINX redirects the browser to
    `https://<hostname>/_vecten/gate/start` on the service's own hostname, carrying the path the
    person asked for.
-2. `start`, answered by the MCP server through NGINX, sets the state cookie
+2. `start`, answered by the login gate through NGINX, sets the state cookie
    `__Host-vecten-gate-state` on the service's hostname, holding a random value for 600
    seconds (HTTPS only, hidden from scripts, sent to that hostname only, `SameSite=Lax`). It
    then redirects to the MCP's
@@ -169,7 +169,7 @@ The sign-in flow:
    in to the MCP's browser pages passes straight through, so one sign-in covers every service.
 3. The MCP redirects back to `https://<hostname>/_vecten/gate/callback` with a one-time code,
    valid for at most 60 seconds and only for that hostname and that hash. The callback, again
-   answered by the MCP, accepts the code only together with the state cookie's value, so a
+   answered by the login gate, accepts the code only together with the state cookie's value, so a
    callback address leaked through a log is useless without the browser that started the
    sign-in. It creates a gate session, sets the cookie `__Host-vecten-gate` (with the same
    attributes) holding the session's id, clears the state cookie, and returns the browser to

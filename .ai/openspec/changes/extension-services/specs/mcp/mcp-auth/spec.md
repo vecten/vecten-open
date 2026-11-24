@@ -2,7 +2,7 @@
 
 ### Requirement: The gate signs people in for service routes
 
-The server SHALL serve a gate for every hostname that a `login` route binds in its own copy of `vecten.toml`. On such a hostname, NGINX SHALL forward `/_vecten/gate/start`, `/_vecten/gate/callback` and `/_vecten/gate/logout` to the server. `start` SHALL set a short-lived HttpOnly state cookie on that hostname holding a random verifier, and redirect to the server's `/gate/authorize` on `mcp.<domain>` with the hostname, the verifier's hash and the return path, never the verifier. `authorize` SHALL sign the person in through the configured identity backend, or use the person's existing browser session on the server, and SHALL redirect back to `/_vecten/gate/callback` on the same hostname with a one-time code bound to that hostname and that hash and valid for at most 60 seconds. The callback SHALL redeem the code only with a verifier from the state cookie whose hash matches, create a gate session for the principal in `mcp_state`, set the cookie `__Host-vecten-gate` (Secure, HttpOnly, SameSite=Lax, no Domain) holding an opaque random session id, and redirect to the return path. The server SHALL refuse `authorize` for a hostname no `login` route binds, a return path that is not a path on that hostname, and a principal that is disabled or not provisioned as a person; service principals SHALL NOT receive gate sessions. Gate session ids SHALL be stored only as hashes. `logout` SHALL end the gate session and clear the cookie.
+NGINX SHALL forward service-host gate start, callback and logout to the standalone login gate. Start SHALL bind a random verifier to a short-lived HttpOnly host cookie and redirect to the MCP issuer. The issuer SHALL authenticate the human and issue a one-time code bound to the known hostname, relative return path and challenge. The gate SHALL redeem it only with the matching verifier, set a host-only session cookie, store its hash and end that session on logout.
 
 #### Scenario: First visit
 
@@ -31,7 +31,13 @@ The server SHALL serve a gate for every hostname that a `login` route binds in i
 
 ### Requirement: The gate verifies every request with live groups
 
-The server SHALL offer NGINX a verify operation that takes the request's gate cookie and the bound route. It SHALL answer 200 with the principal's email, id, display name, current groups and admin flag when the gate session exists for that hostname, has not expired and the principal is active and belongs to at least one of the route's groups in its own copy of `vecten.toml`; 401 when there is no valid session; and 403 when the person is outside the groups. Under `standard`, NGINX on another VM SHALL reach the operation over HTTPS at `mcp.<domain>` with the server's certificate verified; on the MCP's own VM it SHALL reach it on the Compose network. The operation SHALL be exempt from per-address rate limits and SHALL return nothing about a principal for an invalid session. A gate session SHALL end at the server's maximum session lifetime, when the principal is disabled or deleted, and on logout.
+The standalone gate SHALL verify the service cookie and bound route against the active principal and current memberships. It SHALL return 200 and verified identity headers when admitted, 401 without a valid session, or 403 when outside the groups. NGINX SHALL reach it over the local bridge or verified HTTPS through the MCP host. Verification SHALL be exempt from per-address limits. Logout, disable, deletion and expiry SHALL end access.
+
+#### Scenario: Trusted verification response
+
+- **WHEN** NGINX verifies an admitted person's session
+- **THEN** the gate returns only the defined identity headers for the person's email, principal ID, display name, current groups and administrator status
+- **AND** an invalid session's response contains no principal details
 
 #### Scenario: Person disabled
 

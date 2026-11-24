@@ -91,7 +91,10 @@ def auth_routes(service, gate=None, *, surface="combined"):
         state.put(
             "browser_sessions",
             digest(token),
-            {"principal_id": principal["id"]},
+            {
+                "principal_id": principal["id"],
+                "gate_logout": state.get("gate_logouts", principal["id"]),
+            },
             expires_at=service.clock() + 3600,
         )
         response.set_cookie(
@@ -334,7 +337,9 @@ def auth_routes(service, gate=None, *, surface="combined"):
             digest(held(request, "vecten_browser")),
             now=service.clock(),
         )
-        principal = state.principal(row["principal_id"]) if row else None
+        if not row or row.get("gate_logout") != state.get("gate_logouts", row["principal_id"]):
+            return None
+        principal = state.principal(row["principal_id"])
         return principal if principal and principal["enabled"] else None
 
     def current_browser(request):
