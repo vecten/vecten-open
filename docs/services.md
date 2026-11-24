@@ -132,6 +132,11 @@ paths cannot be routed.
   (see [webhooks](#webhooks-and-signature-checks)).
 - **`login`**: only people signed in to the MCP who belong to one of the route's `groups`,
   through [the gate](#the-gate-signing-in-for-login-routes). It needs the `mcp` component.
+  An environment's first `login` route also needs the gate's database password,
+  `MCP_GATE_DB_PASSWORD`, which the setup host can create only once its permissions cover it:
+  on Scaleway run `vecten bootstrap --env <env>` and then `vecten deploy --env <env>` before
+  the ship that adds the route, on AWS `vecten deploy --env <env>`. Without them that ship
+  stops at its generated secrets step, before any container changes, and names those commands.
 - **`allow`** narrows either mode to the listed networks: on a deployed host NGINX answers 403 to
   every other address before any sign-in. `vecten up` ignores it, because the laptop's NGINX
   sees every request as coming from Docker's own address.

@@ -230,6 +230,14 @@ class PrivilegeError(AgentError):
     """The process may not bind the source port the metadata server demands."""
 
 
+class UngrantedSecretError(AgentError):
+    """The cloud refused a secret, or has no secret to write, until the host is granted it.
+
+    A generated name new to an environment exists and is writable only after the commands
+    the backend's `grant_steps` names have run.
+    """
+
+
 @contextlib.contextmanager
 def step(name: str):
     try:
@@ -508,6 +516,10 @@ class Backend:
     def describe(self, name: str) -> str:
         raise NotImplementedError
 
+    def grant_steps(self, env: str) -> str:
+        """The instruction, run from the project, that grants the host a newly generated name."""
+        raise NotImplementedError
+
     def read_secret(self, name: str) -> str | None:
         raise NotImplementedError
 
@@ -541,6 +553,15 @@ class AwsBackend(Backend):
     def describe(self, name: str) -> str:
         return f"{self.secret_prefix}{scope_for(name)}/{name}"
 
+    def grant_steps(self, env: str) -> str:
+        # Terraform grants the instance role every generated name; the agent creates the secret.
+        return f"run `vecten deploy --env {env}`"
+
+    def _error(self, message: str, stderr: str) -> AgentError:
+        if "AccessDenied" in stderr:
+            return UngrantedSecretError(message)
+        return AgentError(message)
+
     def read_reference(self, reference: str) -> str | None:
         """The value of `reference` (a name or an ARN), or None when it holds no value."""
         result = self.run(
@@ -551,7 +572,7 @@ class AwsBackend(Backend):
             return result.stdout[:-1] if result.stdout.endswith("\n") else result.stdout
         if "ResourceNotFoundException" in result.stderr:
             return None
-        raise AgentError(f"reading {reference} failed (exit {result.returncode})")
+        raise self._error(f"reading {reference} failed (exit {result.returncode})", result.stderr)
 
     def read_secret(self, name: str) -> str | None:
         return self.read_reference(self.describe(name))
@@ -565,7 +586,7 @@ class AwsBackend(Backend):
         if created.returncode == 0:
             return
         if "ResourceExistsException" not in created.stderr:
-            raise AgentError(f"creating {sid} failed (exit {created.returncode})")
+            raise self._error(f"creating {sid} failed (exit {created.returncode})", created.stderr)
         if name in AIRFLOW_APP_SECRETS:
             # The platform host's role may create these secrets but not write a version.
             raise AgentError(
@@ -580,7 +601,7 @@ class AwsBackend(Backend):
             input=value,
         )
         if put.returncode != 0:
-            raise AgentError(f"storing {sid} failed (exit {put.returncode})")
+            raise self._error(f"storing {sid} failed (exit {put.returncode})", put.stderr)
 
     def get_object(self, key: str) -> bytes | None:
         raise AgentError("on AWS, releases arrive through SSM; the agent reads no objects")
@@ -648,6 +669,10 @@ class ScalewayBackend(Backend):
         path, plain = self.secret_location(name)
         return f"{path}/{plain}"
 
+    def grant_steps(self, env: str) -> str:
+        # Bootstrap writes the host key's policy; Terraform then creates the empty secret.
+        return f"run `vecten bootstrap --env {env}`, then `vecten deploy --env {env}`"
+
     def _api(
         self, method: str, path: str, query: dict | None = None, payload: dict | None = None
     ) -> tuple[int, bytes]:
@@ -662,9 +687,10 @@ class ScalewayBackend(Backend):
         return self._send(method, url, headers, body)
 
     def _failure(self, operation: str, subject: str, status: int, raw: bytes) -> AgentError:
-        return AgentError(
+        message = (
             f"Secret Manager {operation} for {subject} answered HTTP {status}{_error_type(raw)}"
         )
+        return UngrantedSecretError(message) if status == 403 else AgentError(message)
 
     def _secret_id(self, name: str) -> str | None:
         path, plain = self.secret_location(name)
@@ -719,9 +745,7 @@ class ScalewayBackend(Backend):
         sid = self._secret_id(name)
         # Terraform creates every secret a VM writes, and the VM key may only add versions.
         if sid is None:
-            raise AgentError(
-                f"{self.describe(name)} does not exist; run `vecten deploy` to create it"
-            )
+            raise UngrantedSecretError(f"{self.describe(name)} does not exist")
         payload = {"data": base64.b64encode(value.encode("utf-8")).decode("ascii")}
         status, raw = self._api(
             "POST", f"/secrets/{urllib.parse.quote(sid, safe='')}/versions", payload=payload
@@ -816,8 +840,19 @@ def ensure_generated(host: dict, outputs: dict, run: Run, backend: Backend | Non
     if "platform" in host["components"]:
         names += list(AIRFLOW_APP_SECRETS)
     for name in names:
-        if not backend.secret_has_value(name):
-            backend.add_secret_version(name, _new_value(name))
+        try:
+            if not backend.secret_has_value(name):
+                backend.add_secret_version(name, _new_value(name))
+        except UngrantedSecretError as exc:
+            raise AgentError(f"{exc}; {_grant_advice(name, backend, host['env'])}") from None
+
+
+def _grant_advice(name: str, backend: Backend, env: str) -> str:
+    if name == "MCP_GATE_DB_PASSWORD":
+        lead = "MCP_GATE_DB_PASSWORD is new with the first bound `login` route:"
+    else:
+        lead = f"if {name} is new to this environment,"
+    return f"{lead} {backend.grant_steps(env)}, then ship again"
 
 
 def _instance(outputs: dict, database: str) -> dict:

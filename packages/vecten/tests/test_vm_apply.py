@@ -454,6 +454,29 @@ def test_existing_secret_without_a_value_gets_put_not_created_twice(agent, tmp_p
     }
 
 
+def test_a_first_login_route_the_role_cannot_read_yet_names_deploy(agent, tmp_path):
+    out = outputs("mcp_only")
+    host = agent.load_host(
+        stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
+    )
+    run = FakeRun(store=master(out, "state"))
+
+    def answer(args, env=None, input=None):
+        if "get-secret-value" in args and f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD" in args:
+            run.calls.append({"args": list(args), "env": {}, "input": input})
+            return subprocess.CompletedProcess(
+                args, 254, "", "An error occurred (AccessDeniedException) when calling"
+            )
+        return run(args, env, input)
+
+    with pytest.raises(agent.AgentError) as exc:
+        agent.ensure_generated(host, out, answer)
+    assert str(exc.value) == (
+        f"reading {PREFIX}mcp/MCP_GATE_DB_PASSWORD failed (exit 254); MCP_GATE_DB_PASSWORD is "
+        "new with the first bound `login` route: run `vecten deploy --env prod`, then ship again"
+    )
+
+
 def test_an_airflow_app_secret_without_a_value_is_named_never_put(agent, tmp_path):
     out = outputs("standard")
     host = agent.load_host(stage(tmp_path / "releases", out, "platform"))
