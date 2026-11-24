@@ -5,10 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Added
-
-- `vecten up` reports each active component’s base image and how to select published images when a local build was chosen (#21).
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
