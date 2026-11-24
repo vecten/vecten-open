@@ -5,9 +5,11 @@ import stat
 import zipfile
 from pathlib import Path
 
-from vecten_shared.extensions import load_group
+from vecten_shared.extensions import selected_entry_points
 from vecten_shared.names import SKILL_NAME
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.requirements import requirement
+from vecten_shared.versions import normalize_name
 
 GROUP = "vecten.consumer_skills"
 
@@ -57,11 +59,54 @@ def package_skill(name: str, declaration: object) -> bytes:
     return archive.getvalue()
 
 
-def skill_packages(config, names):
-    declarations = load_group(config, GROUP)
-    result = {}
+def installed_skills(config, names):
+    points = {p.name: p for p in selected_entry_points(config, GROUP)}
     for name in names:
-        if name not in declarations:
+        if name not in points:
             raise Failure(ExitCode.CONFIG, f"no listed extension declares consumer skill {name}")
-        result[name] = package_skill(name, declarations[name])
-    return result
+        point = points[name]
+        try:
+            declaration = point.load()
+        except Exception as exc:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"extension {point.dist.name}: cannot load consumer skill {name} "
+                f"({type(exc).__name__})",
+            ) from exc
+        yield name, normalize_name(point.dist.name), package_skill(name, declaration)
+
+
+def skill_packages(config, names):
+    return {name: archive for name, _, archive in installed_skills(config, names)}
+
+
+def locked_skill_owners(config, record):
+    listed = {normalize_name(requirement(line).name) for line in config.extensions}
+    owners = {}
+    for owner in listed.intersection(record):
+        for name in record[owner].consumer_skills:
+            if name in owners:
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"consumer skill {name} has multiple owners in extensions.lock.json",
+                )
+            owners[name] = owner
+    for name in config.consumer_skills:
+        if name not in owners:
+            raise Failure(
+                ExitCode.CONFIG,
+                f"consumer skill {name} is missing from extensions.lock.json; run `vecten lock`",
+            )
+    return {name: owners[name] for name in config.consumer_skills}
+
+
+if __name__ == "__main__":
+    import sys
+
+    from vecten_shared.config import VectenConfig
+
+    config = VectenConfig.model_validate_json(Path(sys.argv[1]).read_bytes())
+    try:
+        skill_packages(config, config.consumer_skills)
+    except Failure as error:
+        sys.exit(error.message)

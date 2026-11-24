@@ -159,6 +159,51 @@ def test_each_source_extension_builds_with_only_its_own_build_pins(tmp_path):
     assert (stack / "build" / "airflow.Dockerfile").read_text() == first
 
 
+@pytest.mark.parametrize("private_index", [False, True])
+def test_private_git_skill_checks_the_record_without_fetching_and_the_installed_mcp_image(
+    tmp_path, monkeypatch, private_index
+):
+    from dataclasses import replace
+
+    from vecten import extensions
+    from vecten_shared.services import check_bindings
+
+    config_doc = config(
+        consumer_skills={"orders": {"groups": ["sales"]}}, packages={"private_index": private_index}
+    )
+    git_project(tmp_path, config_doc)
+    record = locking.read_record(tmp_path)
+    record[NAME] = replace(record[NAME], consumer_skills=("orders",))
+    (tmp_path / locking.RECORD_FILE).write_text(locking.record_text(record))
+
+    def no_fetch(*args, **kwargs):
+        pytest.fail("credential-free CI tried to install, fetch or import a remote extension")
+
+    monkeypatch.setattr(extensions, "install_lock", no_fetch)
+    monkeypatch.setattr(extensions, "sync", no_fetch)
+    monkeypatch.setattr(extensions, "installed_skills", no_fetch)
+    monkeypatch.setattr(git_extensions, "write_sources", no_fetch)
+    extensions.prepare_declaration_check(tmp_path)
+    assert extensions.check_declarations(tmp_path, project_ci=True) == []
+    with pytest.raises(Failure, match="orders is missing"):
+        check_bindings(config_doc, {})
+    stack = tmp_path / ".vecten" / "stack"
+    write_project_layer(stack, config_doc, None)
+    build = stack / "build"
+    dockerfile = (build / "mcp.Dockerfile").read_text()
+    assert dockerfile.index("pip check") < dockerfile.index(
+        "python -m vecten_shared.consumer_skills"
+    )
+    assert "consumer-skills.json" not in (build / "airflow.Dockerfile").read_text()
+    assert "secret" not in dockerfile.split("RUN --network=none")[-1]
+    image_config = VectenConfig.model_validate_json((build / "consumer-skills.json").read_bytes())
+    assert list(image_config.consumer_skills) == ["orders"] and image_config.extensions == [NAME]
+    record[NAME] = replace(record[NAME], consumer_skills=())
+    (tmp_path / locking.RECORD_FILE).write_text(locking.record_text(record))
+    with pytest.raises(Failure, match="orders is missing"):
+        extensions.check_declarations(tmp_path, project_ci=True)
+
+
 def test_a_url_line_the_record_does_not_hold_still_fails_the_layer(tmp_path):
     c = config()
     line = git_project(tmp_path, c)

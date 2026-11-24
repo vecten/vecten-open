@@ -121,8 +121,11 @@ def test_lock_and_check_package_the_bound_skills(invoke, project, fakes, monkeyp
     )
     (project / "SKILL.md").write_text("Orders")
     declaration = {"directory": project, "files": []}
+    point = SimpleNamespace(
+        name="orders", dist=SimpleNamespace(name="acme-demo"), load=lambda: declaration
+    )
     monkeypatch.setattr(
-        "vecten_shared.consumer_skills.load_group", lambda *args: {"orders": declaration}
+        "vecten_shared.consumer_skills.selected_entry_points", lambda *args: [point]
     )
     assert invoke("lock").exit_code == 0
     assert invoke("lock", "--check").exit_code == 0

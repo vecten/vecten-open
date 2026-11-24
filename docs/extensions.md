@@ -527,8 +527,8 @@ editing its manifest, services or apps. On a fresh laptop checkout, run `vecten 
 first to install the local packages in the CLI environment. The check compares their current
 secret names, settings schemas, service and app declarations with `extensions.lock.json`.
 If they differ, run `vecten lock` and commit the updated record with the code. Project CI
-runs the same check on pull requests. Its declaration check installs the in-repo
-extensions and their locked index dependencies. It does not fetch registered Git
+normally runs this check by installing the in-repo extensions and their locked index dependencies.
+Projects with both a private index and a bound consumer skill use the committed record in PR CI. It does not fetch registered Git
 extensions. Keep imports of those packages inside the runtime code that uses them so CI
 can load your manifest, service and app declarations. On the laptop, `vecten up` also
 checks services and apps before starting containers.
@@ -682,8 +682,16 @@ then use the project’s ship workflow for the target environment. After the new
 shown by `vecten mcp connection --env <env>`. A member signs in and chooses **monthly-orders** under
 **Skills for your assistant**. The server checks current membership on each download.
 Removing a member stops future downloads. Copies already downloaded stay with their recipients.
-The access log records successful and denied download attempts by signed-in users. Run
-`vecten lock --check` with the project extensions installed to verify that each configured
-skill can be packaged before shipping.
+The MCP access log records successful and denied download attempts by signed-in users.
+After adding or changing a skill binding, run `vecten lock` and commit `extensions.lock.json`.
+The lock records which extension successfully packaged each skill. With the extensions installed,
+`vecten lock --check` checks their files again.
+
+Pull-request CI checks bindings against the committed record. It checks installed in-repo skills
+when their dependencies are public. For a project with bound skills and a private package index,
+CI checks the records only. Use `vecten lock --check` in your authenticated development environment
+after editing a local declaration. Ship checks the recorded bindings before contacting a host.
+The project MCP image build packages the archives again from the installed wheels before the
+new server starts. This build check also runs on the laptop and needs no network access.
 
 Back to the [docs index](README.md).

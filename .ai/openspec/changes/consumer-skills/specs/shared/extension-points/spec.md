@@ -16,7 +16,7 @@ A listed extension SHALL be able to export a directory containing SKILL.md and a
 
 ### Requirement: Validate bound skills before shipping
 
-Skill bindings SHALL require the MCP component and a valid skill name. Both locking and checking the project SHALL refuse a bound skill whose installed extension cannot produce its archive.
+Skill bindings SHALL require the MCP component and a valid skill name. Locking SHALL package each bound skill and record its owning extension. Ship and pull-request CI SHALL verify bindings against that record without fetching extensions. The MCP image build SHALL verify the archives from its installed packages before replacing the running server.
 
 #### Scenario: An extension drops a skill file
 

@@ -29,7 +29,7 @@ from vecten_shared import git_sources
 from vecten_shared.apps import GROUP as APPS_GROUP
 from vecten_shared.apps import AppDeclaration, colliding_service, parse_app, principal_name
 from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
-from vecten_shared.consumer_skills import skill_packages
+from vecten_shared.consumer_skills import installed_skills, locked_skill_owners
 from vecten_shared.declarations import (
     Manifest,
     check_settings,
@@ -646,9 +646,14 @@ def _lock_project(
     manifests = load_manifests(config)
     services = load_services(config)
     apps = load_apps(config)
+    skills = {}
+    if config.consumer_skills:
+        for name, owner, _ in installed_skills(config, config.consumer_skills):
+            skills.setdefault(owner, []).append(name)
     record = {
         name: replace(
             entry,
+            consumer_skills=tuple(skills.get(name, ())),
             secrets=manifests[name].secrets if name in manifests else (),
             settings=manifests[name].settings if name in manifests else None,
             services={s: d.service for s, d in services.get(name, {}).items()},
@@ -667,8 +672,6 @@ def _lock_project(
     for env in environments_named(config):
         check_settings(config, record, env)
     check_bindings(config, record)
-    if config.consumer_skills:
-        skill_packages(config, config.consumer_skills)
     from vecten.extension_skills import skill_artifacts
 
     files = {
@@ -879,14 +882,11 @@ def prepare_declaration_check(root: Path) -> None:
     record = locking.read_record(root) or {}
     paths = [entry.source_path for entry in record.values() if entry.source_path]
     config = load_config(root)
-    if (paths or config.consumer_skills) and not locking.lock_problems(root, config):
-        if config.consumer_skills:
-            sync(root)
-            return
+    if paths and not locking.lock_problems(root, config):
         install_lock((root / locking.LOCK_FILES["cli"]).read_text(), root, paths)
 
 
-def check_declarations(root: Path) -> list[str]:
+def check_declarations(root: Path, *, project_ci: bool = False) -> list[str]:
     config = load_config(root)
     record = locking.read_record(root) or {}
     registered = {normalize_name(requirement(r).name) for r in config.extensions}
@@ -897,16 +897,30 @@ def check_declarations(root: Path) -> list[str]:
         stale.append(locking.RECORD_FILE)
     if stale:
         raise Failure(ExitCode.CONFIG, f"stale or missing {', '.join(stale)}; run `vecten lock`")
-    if config.consumer_skills:
-        skill_packages(config, config.consumer_skills)
-    if not local:
-        return []
+    owners = locked_skill_owners(config, record) if config.consumer_skills else {}
     for name in sorted(local):
         entry = record.get(name)
         if not entry or entry.source_path != f"extensions/{name}":
             raise Failure(
                 ExitCode.CONFIG, f"extension {name}: missing local record; run `vecten lock`"
             )
+    if project_ci:
+        # Project PRs have no private index credentials. The protected MCP build checks the
+        # installed packages, including local packages with private build dependencies.
+        if owners and config.packages.private_index:
+            return []
+        prepare_declaration_check(root)
+    names = [name for name, owner in owners.items() if not project_ci or owner in local]
+    if names:
+        for name, owner, _ in installed_skills(config, names):
+            if owner != owners[name]:
+                raise Failure(
+                    ExitCode.CONFIG, f"consumer skill {name} changed owner; run `vecten lock`"
+                )
+    if not local:
+        return []
+    for name in sorted(local):
+        entry = record[name]
         if not installed_from(name, root / entry.source_path):
             raise Failure(
                 ExitCode.PREREQUISITE,

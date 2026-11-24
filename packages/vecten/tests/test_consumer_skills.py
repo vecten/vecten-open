@@ -1,7 +1,11 @@
 import io
 import json
+import os
+import subprocess
+import sys
 import zipfile
 from importlib.metadata import Distribution, EntryPoint
+from pathlib import Path
 
 import pytest
 
@@ -46,6 +50,37 @@ def test_cli_packages_only_declared_files_from_a_listed_extension(invoke, tmp_pa
     assert (tmp_path / "orders.zip").read_bytes() == original
     assert invoke("extension", "pack-skill", "orders", "--output", "again.zip").exit_code == 0
     assert (tmp_path / "again.zip").read_bytes() == original
+
+
+def test_mcp_image_check_packages_the_installed_extension(tmp_path):
+    import vecten_shared.consumer_skills as packer
+
+    dist = tmp_path / "example-1.0.dist-info"
+    dist.mkdir()
+    (dist / "METADATA").write_text("Name: example\nVersion: 1.0\n")
+    (dist / "entry_points.txt").write_text("[vecten.consumer_skills]\norders = example:orders\n")
+    (tmp_path / "example.py").write_text(
+        "from pathlib import Path\norders = {'directory': Path(__file__).parent}\n"
+    )
+    skill = tmp_path / "SKILL.md"
+    skill.write_text("Summarize orders.")
+    config = tmp_path / "consumer-skills.json"
+    config.write_text(
+        json.dumps(
+            {
+                "users": 1,
+                "project": {"name": "demo", "scaffold_version": "0.1.2"},
+                "extensions": ["example==1.0"],
+                "consumer_skills": {"orders": {"groups": ["sales"]}},
+            }
+        )
+    )
+    env = dict(os.environ, PYTHONPATH=str(Path(packer.__file__).resolve().parents[1]))
+    command = [sys.executable, "-m", packer.__name__, str(config)]
+    subprocess.run(command, cwd=tmp_path, env=env, check=True)
+    skill.unlink()
+    bad = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert bad.returncode and "SKILL.md must be a regular file" in bad.stderr
 
 
 @pytest.mark.parametrize(
