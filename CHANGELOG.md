@@ -5,13 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Fixed
-
-- `vecten connector run <source> --record` saves each object's dlt schema beside its fixture.
-  The connector test and `vecten dbt-build-local` preserve JSON columns, nesting and merge keys
-  on replay. Existing JSON Lines fixtures still load with dlt's default inference.
-  ([#45](https://github.com/vecten/vecten-open/issues/45))
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
