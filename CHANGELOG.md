@@ -5,11 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Fixed
-
-- The shared-account Snowflake teardown instructions drop the environment’s MCP sign-in policy
-  before the security integration it references ([#122](https://github.com/vecten/vecten-open/issues/122)).
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
