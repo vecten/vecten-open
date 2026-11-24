@@ -24,6 +24,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   ([#135](https://github.com/vecten/vecten-open/issues/135)). On Snowflake, opting in needs
   version 9 of the access procedures: rerun the provisioner script, and again whenever the
   opted-in areas change.
+- The service login gate can verify the original host, URI and method supplied by a forward-auth proxy and redirect browsers to sign-in ([#101](https://github.com/vecten/vecten-open/issues/101)).
 - Deployment plans name the bound service volumes that will be lost when an AWS or Scaleway
   host is removed or replaced. The apply workflow also prints the warning before applying
   ([#129](https://github.com/vecten/vecten-open/issues/129)).

@@ -187,6 +187,20 @@ session for that hostname and the person's sign-ins on the MCP's own browser pag
 sign-in asks for credentials again. Gate sessions on other service hostnames stay until they
 end on their own. A WebSocket opened before a session ends stays open until it reconnects.
 
+A proxy can check a login route by sending a GET to the MCP at
+`/gate/verify?forwarded=1`. Set `X-Forwarded-Host`, `X-Forwarded-Uri` (including the
+query), and `X-Forwarded-Method` from the request the proxy received. Overwrite incoming
+copies of those headers and remove any incoming `X-Vecten-Gate-Host` and
+`X-Vecten-Gate-Route` headers, including on the browser sign-in endpoints. Send the service hostname's `__Host-vecten-gate` cookie to the gate.
+A successful check returns 200 with the person's identity headers. A missing session
+returns 401, and a route outside that person's groups returns 403. To send a browser
+directly to the sign-in page on a GET or HEAD, use `/gate/verify?forwarded=1&redirect=1`.
+
+The gate matches the longest route declared for that hostname. The proxy still enforces
+IP allow-lists, forwards public routes, serves the gate's browser endpoints, and strips
+gate cookies and client-supplied identity headers before forwarding to the application.
+The generated NGINX configuration uses its internal route names for the same access check.
+
 The gate depends on the MCP server: while it is down, `login` routes are down too, and `public`
 routes keep working. Under `standard` the platform host's NGINX asks the MCP over HTTPS at
 `mcp.<domain>`, with its certificate checked, which adds a round trip between the two VMs to

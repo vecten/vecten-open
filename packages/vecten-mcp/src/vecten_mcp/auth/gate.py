@@ -12,10 +12,11 @@ import hmac
 import re
 import secrets
 from dataclasses import dataclass
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, unquote, urlencode, urlsplit
 
 from vecten_mcp.auth.identity import challenge, digest
 from vecten_mcp.auth.service import SESSION_SECONDS
+from vecten_shared.services import RESERVED_PREFIX, route_prefix
 
 GATE_COOKIE = "__Host-vecten-gate"
 # __Host- keeps a sibling hostname from setting it for the whole domain; NGINX strips it from
@@ -50,16 +51,19 @@ def header_value(value: str) -> str:
 
 
 class GateService:
-    def __init__(self, oauth, routes: dict[str, GateRoute], *, port: str = "", apps=None):
+    def __init__(
+        self, oauth, routes: dict[str, GateRoute], *, port: str = "", apps=None, paths=None
+    ):
         self.oauth, self.state = oauth, oauth.state
         self.routes = dict(routes)
         self.hosts = frozenset(route.host for route in self.routes.values())
         self.port = port
+        self.paths = paths or {}
         # The AppScopes whose admission decides an app route; without it no app route admits.
         self.apps = apps
 
     @classmethod
-    def from_config(cls, oauth, config, apps=None):
+    def from_config(cls, oauth, config, apps=None, *, record=None):
         """Every `login` route vecten.toml binds, and the route of each bound container app in
         `apps` (AppScopes), at its hostname below the issuer's domain."""
         from vecten_shared.apps import ROUTE, app_service_name
@@ -71,11 +75,19 @@ class GateService:
             return cls(oauth, {}, apps=apps)
         domain = name.removeprefix("mcp.")
         routes = {}
+        paths = {}
         for extension, bindings in config.services.items():
             for service, binding in bindings.items():
                 if binding.hostname is None:
                     continue
                 host = service_hostname(binding.hostname, domain)
+                entry = (record or {}).get(extension)
+                declared = entry.services.get(service) if entry else None
+                if declared and (domain != "localhost" or binding.local):
+                    paths[host] = {
+                        route_prefix(route.path): f"{extension}.{service}.{name}"
+                        for name, route in declared.routes.items()
+                    }
                 for route, bound in binding.routes.items():
                     if bound.access == "login":
                         routes[f"{extension}.{service}.{route}"] = GateRoute(
@@ -86,10 +98,56 @@ class GateService:
                 continue
             # The key NGINX names: the app runs as the service `app-<app>` with one route.
             key = f"{app.extension}.{app_service_name(app.name)}.{ROUTE}"
-            routes[key] = GateRoute(
-                service_hostname(app.hostname, domain), tuple(app.groups), app=app.name
-            )
-        return cls(oauth, routes, port=colon + port, apps=apps)
+            host = service_hostname(app.hostname, domain)
+            routes[key] = GateRoute(host, tuple(app.groups), app=app.name)
+            binding = config.apps.get(app.extension, {}).get(app.name)
+            if domain != "localhost" or binding is None or binding.local is not False:
+                paths[host] = {"/": key}
+        return cls(oauth, routes, port=colon + port, apps=apps, paths=paths)
+
+    def forwarded_host(self, authority):
+        if not authority:
+            return None
+        authority = authority.lower()
+        host, sep, port = authority.partition(":")
+        expected_port = self.port.removeprefix(":") or "443"
+        if host not in self.hosts or (sep and port != expected_port):
+            return None
+        return host
+
+    def forwarded_route(self, host, uri, method):
+        """Resolve the longest declared prefix, including public and unbound routes."""
+        if not method or not re.fullmatch(r"[A-Z]+", method):
+            return None
+        if not uri or not RETURN_PATH.fullmatch(uri) or "#" in uri:
+            return None
+        raw = uri.partition("?")[0]
+        if re.search(r"%(?![0-9a-fA-F]{2})|%(?:2f|5c|25|3f|23)", raw, re.I):
+            return None
+        try:
+            path = unquote(raw, errors="strict")
+        except UnicodeDecodeError:
+            return None
+        if (
+            any(c in path for c in ("//", ";", "\\"))
+            or any(ord(c) < 32 or ord(c) == 127 for c in path)
+            or any(s in (".", "..") for s in path.split("/"))
+            or path.lower().split("/", 2)[1] == RESERVED_PREFIX[1:]
+        ):
+            return None
+        prefixes = self.paths.get(host, {})
+        # The nearest declared ancestor shadows broader routes even if it is unbound
+        # or its spelling differs only in case from the request.
+        by_case = path.lower()
+        for prefix in sorted(prefixes, key=lambda p: (len(p), path.startswith(p)), reverse=True):
+            lower = prefix.lower()
+            if prefix != "/" and by_case != lower and not by_case.startswith(lower + "/"):
+                continue
+            if not path.startswith(prefix):
+                return None
+            key = prefixes[prefix]
+            return key if key in self.routes else None
+        return None
 
     def origin(self, host):
         return f"https://{host}{self.port}"
