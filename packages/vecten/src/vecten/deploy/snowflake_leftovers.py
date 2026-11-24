@@ -52,10 +52,16 @@ class Leftovers:
     def statements(self) -> list[str]:
         """What an ACCOUNTADMIN runs before data deletion, in order."""
         names = self.names
+        assert names.authentication_policy is not None  # Only shared layouts have leftovers.
+        policy = ".".join(
+            _quoted(part)
+            for part in (names.database.upper(), names.access_schema, names.authentication_policy)
+        )
         return [
             *(f"DROP {kind} {_quoted(name)};" for kind, name in self.owned),
             f"ALTER USER IF EXISTS {names.provisioner_user} UNSET AUTHENTICATION POLICY;",
             f"DROP USER IF EXISTS {names.provisioner_user};",
+            f"DROP AUTHENTICATION POLICY IF EXISTS {policy};",
             f"DROP SECURITY INTEGRATION IF EXISTS {names.integration};",
         ]
 
