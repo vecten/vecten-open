@@ -74,6 +74,8 @@ class GateService:
             # Service hostnames sit beside mcp.<domain>; without that name none can be known.
             return cls(oauth, {}, apps=apps)
         domain = name.removeprefix("mcp.")
+        if record is None:
+            record = getattr(oauth, "record", {})
         routes = {}
         paths = {}
         for extension, bindings in config.services.items():
