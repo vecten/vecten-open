@@ -1,0 +1,2 @@
+- [x] Report active components’ base references and image sources in both forms of CLI output.
+- [x] Compare the output with the generated Dockerfile for local, published and custom registry references and single-component stacks.
