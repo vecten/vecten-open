@@ -26,7 +26,7 @@ from pydantic import (
 from vecten_shared.airflow_resources import AirflowResources
 from vecten_shared.apps import APP_CREDENTIAL, principal_name
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
-from vecten_shared.declarations import is_toml_time, secret_problem
+from vecten_shared.declarations import component_for, is_toml_time, secret_problem
 from vecten_shared.names import (
     SKILL_NAME,
     area_name_problem,
@@ -226,6 +226,9 @@ class McpSection(Strict):
 class AirflowSection(AirflowResources):
     # The networks that may reach a deployed `airflow.<domain>`; empty leaves it public.
     allow: list[str] = Field(default_factory=list)
+    auth: Literal["password", "oidc"] = "password"
+    oidc_client_id: str | None = None
+    oidc_client_secret_name: str | None = None
 
     @field_validator("allow")
     @classmethod
@@ -617,6 +620,33 @@ class VectenConfig(Strict):
 
     @model_validator(mode="after")
     def _airflow_needs_platform(self) -> VectenConfig:
+        airflow = self.airflow
+        if airflow.auth == "oidc":
+            issuer = urlsplit(self.mcp.oidc_issuer or "")
+            if not self.has("platform") or self.mcp.auth != "oidc":
+                raise ValueError("[airflow] auth = oidc needs platform and [mcp] auth = oidc")
+            if (
+                issuer.scheme != "https"
+                or not issuer.hostname
+                or issuer.username is not None
+                or issuer.query
+                or issuer.fragment
+            ):
+                raise ValueError("Airflow OIDC needs an HTTPS [mcp] oidc_issuer")
+            if not (airflow.oidc_client_id or self.mcp.oidc_client_id) or not self.mcp.admins:
+                raise ValueError("Airflow OIDC needs a client ID and [mcp] admins")
+            if (
+                airflow.oidc_client_secret_name
+                and airflow.oidc_client_secret_name not in self.secrets
+            ):
+                raise ValueError("declare the airflow oidc_client_secret_name in project secrets")
+            if (
+                airflow.oidc_client_secret_name
+                and component_for(airflow.oidc_client_secret_name) != "platform"
+            ):
+                raise ValueError("the airflow OIDC client secret must belong to the platform scope")
+        elif airflow.oidc_client_id or airflow.oidc_client_secret_name:
+            raise ValueError("Airflow OIDC client settings require [airflow] auth = oidc")
         # Without the platform no host serves Airflow, so the list would restrict nothing.
         if self.airflow.allow and not self.has("platform"):
             raise ValueError("[airflow] allow needs the platform component")
