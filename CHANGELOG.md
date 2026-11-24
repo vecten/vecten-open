@@ -7,8 +7,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
-- Service login checks run in an isolated gate container and existing sessions remain usable while the MCP process restarts ([#102](https://github.com/vecten/vecten-open/issues/102)).
-
 - A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help ([#131](https://github.com/vecten/vecten-open/issues/131)).
 - Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
 - Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
@@ -26,6 +24,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   ([#135](https://github.com/vecten/vecten-open/issues/135)). On Snowflake, opting in needs
   version 9 of the access procedures: rerun the provisioner script, and again whenever the
   opted-in areas change.
+- Service login checks run in an isolated gate container and existing sessions remain usable while the MCP process restarts ([#102](https://github.com/vecten/vecten-open/issues/102)).
 - Deployment plans name the bound service volumes that will be lost when an AWS or Scaleway
   host is removed or replaced. The apply workflow also prints the warning before applying
   ([#129](https://github.com/vecten/vecten-open/issues/129)).
