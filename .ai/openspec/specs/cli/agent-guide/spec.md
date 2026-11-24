@@ -7,9 +7,10 @@ The agent-facing surface of the product: the intake `next` runs before a project
 
 ### Requirement: Guide starts with an available CLI
 
-Before intake the guide SHALL check whether its shell can run the CLI. If absent the guide
-SHALL tell the person what it will install, install Vecten with uv and Python 3.14, and verify
-the installed command. When uv is missing it SHALL give the person uv installation instructions.
+Before intake the guide SHALL check the CLI version. It SHALL accept the plugin release
+and newer patch versions in the same minor release line. For a missing or incompatible CLI,
+the guide SHALL announce the compatible version constraint, install it with uv and Python
+3.14, and verify and use the installed executable by absolute path across shell commands. When uv is missing it SHALL give the person uv installation instructions.
 
 #### Scenario: Plugin installed on a fresh machine
 

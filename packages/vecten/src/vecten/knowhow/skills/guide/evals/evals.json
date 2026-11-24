@@ -71,7 +71,7 @@
       "files": [],
       "expectations": [
         "The command log shows the agent checked for vecten before trying intake, and told the person what it was about to install before invoking uv.",
-        "uv installed the vecten tool using Python 3.14, vecten version succeeded, and then vecten next --json succeeded.",
+        "uv installed the vecten tool with the guide’s compatible release constraint using Python 3.14. The command log shows the installed executable’s absolute path for vecten version and the first successful vecten next --json.",
         "The agent asked the first item's title verbatim and stopped without recording an answer or starting the local stack."
       ]
     }
