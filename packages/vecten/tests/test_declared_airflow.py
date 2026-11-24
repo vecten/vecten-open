@@ -42,9 +42,10 @@ def test_declared_resources_reach_both_stack_modes_and_the_local_seed(tmp_path):
         services = doc["services"]
         api = services["airflow-api-server"]
         assert "vecten_platform.airflow_resources" in api["command"][-1]
-        assert (
-            api["environment"]["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"]
-            == "${AIRFLOW_ADMIN_USER}:admin,monitor:viewer"
+        assert api["environment"][
+            "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"
+        ] == "${AIRFLOW_ADMIN_USER}:admin" + (
+            ",monitor:viewer" if mode == "local" else "${VECTEN_AIRFLOW_VIEWERS:-}"
         )
         if mode == "local":
             refs = json.loads(

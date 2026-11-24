@@ -106,7 +106,7 @@ LEGACY_HOST_DEFAULTS = {
     "service_network": "",
 }
 LEGACY_OUTPUT_KEYS = ("bucket", "secret_prefix")
-# Present only when the project declares an area, so a project without one ships unchanged.
+# Omitted from host records when the project has no corresponding declaration.
 OPTIONAL_HOST_KEYS = {"areas": [], "source_layer_areas": [], "airflow_api_accounts": {}}
 _AREA = re.compile(r"[a-z][a-z0-9]{0,56}")
 # What the watcher needs before any release exists on the host; user data writes it.
@@ -1214,23 +1214,33 @@ def _write_private(path: Path, text: str, owner: tuple) -> None:
         os.chown(str(path), *owner)
 
 
-def write_run_files(host: dict, env: dict[str, str], run_dir: Path) -> None:
+def write_run_files(
+    host: dict, env: dict[str, str], run_dir: Path, *, skip_missing_accounts: bool = False
+) -> str:
+    """Write runtime credentials and return the matching viewer roles for Compose."""
     if run_dir.is_file() or run_dir.is_symlink():
         run_dir.unlink()
     run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     run_dir.chmod(0o700)
     if "platform" not in host["components"]:
-        return
+        return ""
     users = {AIRFLOW_ADMIN_USER: env["AIRFLOW_ADMIN_PASSWORD"]}
     for name, secret in host.get("airflow_api_accounts", {}).items():
         if not env.get(secret):
-            raise AgentError(f"Airflow API account {name} needs the declared secret {secret}")
+            message = f"Airflow API account {name} needs the declared secret {secret}"
+            if skip_missing_accounts:
+                print(
+                    f"Skipping Airflow API account {name}: missing secret {secret}", file=sys.stderr
+                )
+                continue
+            raise AgentError(message)
         users[name] = env[secret]
     passwords = json.dumps(users)
     _write_private(run_dir / "airflow_passwords.json", passwords, (AIRFLOW_UID, AIRFLOW_GID))
     digest = hashlib.sha1(env["AIRFLOW_BASIC_AUTH_PASSWORD"].encode("utf-8")).digest()
     line = f"{AIRFLOW_BASIC_AUTH_USER}:{{SHA}}{base64.b64encode(digest).decode()}\n"
     _write_private(run_dir / "htpasswd", line, (NGINX_UID, NGINX_GID))
+    return "".join(f",{name}:viewer" for name in sorted(users) if name != AIRFLOW_ADMIN_USER)
 
 
 def _real(path: Path) -> Path:
@@ -1414,7 +1424,7 @@ def _start(
                 backend = backend_for(host, run, http)
                 env = secret_env(host, outputs, run, backend)
             with step("run files"):
-                write_run_files(host, env, run_dir)
+                viewers = write_run_files(host, env, run_dir, skip_missing_accounts=True)
             break
         except AgentError:
             if attempt == attempts:
@@ -1425,7 +1435,14 @@ def _start(
     try:
         with step("compose up"):
             stack = stack_env(host, backend.container_key)
-            compose_up(release, host, {**stack, **env}, run, force_recreate, injected)
+            compose_up(
+                release,
+                host,
+                {**stack, **env, "VECTEN_AIRFLOW_VIEWERS": viewers},
+                run,
+                force_recreate,
+                injected,
+            )
     except AgentError as exc:
         raise AgentError(str(exc), (list(exc.log) + log)[:LOG_EXCERPT_MAX]) from None
     return log
@@ -1459,7 +1476,7 @@ def ship(
         ensure_certificates(host, outputs, run, sleep, resolve)
     try:
         with step("run files"):
-            write_run_files(host, env, run_dir or RUN_DIR)
+            viewers = write_run_files(host, env, run_dir or RUN_DIR)
         with step("service isolation"):
             isolate_services(host, run)
             if host["service_network"]:
@@ -1478,10 +1495,11 @@ def ship(
             swap(releases, release)
         with step("compose up"):
             stack = stack_env(host, backend.container_key)
+            compose_env = {**stack, **env, "VECTEN_AIRFLOW_VIEWERS": viewers}
             compose_up(
                 release,
                 host,
-                {**stack, **env},
+                compose_env,
                 run,
                 force_recreate=reshipped,
                 secrets=_injected(env, backend),
@@ -1493,7 +1511,7 @@ def ship(
         raise AgentError(f"{exc}; {outcome}", log[:LOG_EXCERPT_MAX]) from None
     with contextlib.suppress(FileNotFoundError):
         (_real(release) / NEVER_STARTED).unlink()
-    return orphaned_volumes(release, host, {**stack, **env}, run)
+    return orphaned_volumes(release, host, compose_env, run)
 
 
 def _ensure_nginx(host: dict, run: Run) -> None:

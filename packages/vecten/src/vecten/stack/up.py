@@ -172,6 +172,17 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
             ExitCode.REFUSED, f"{SNOWFLAKE_MCP_NOTE}, so there is no local stack to start"
         )
     env = ensure_local_env(project_root, config)
+    if "platform" in components:
+        declared = effective_resources(config, record)
+        for username, secret in declared.api_accounts.items():
+            if not env.get(secret):
+                raise Failure(
+                    ExitCode.REFUSED, f"Airflow API account {username} needs secret {secret}"
+                )
+            if username == env["AIRFLOW_ADMIN_USER"]:
+                raise Failure(
+                    ExitCode.REFUSED, f"Airflow API account {username} uses the admin username"
+                )
     stack_dir = project_root / STACK_DIR
     write_compose(project_root, config)
     running = services_to_run(config, "local", components, stack_dir)
@@ -227,7 +238,6 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
             message += f"; {NO_LOCAL_IMAGES_HINT}"
         raise Failure(ExitCode.TOOL_FAILED, message)
     if "platform" in components:
-        declared = effective_resources(config, record)
         if declared.pools or declared.variables:
             # An unchanged local stack keeps its API process across repeated up commands.
             sync = runner.compose(

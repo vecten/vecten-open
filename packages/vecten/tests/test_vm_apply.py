@@ -963,6 +963,42 @@ def test_boot_rebuilds_run_files_from_current_release(agent, tmp_path):
     assert run.created() == [] and not psql_runs(run) and not run.argv("docker", "run")
 
 
+def test_missing_viewer_password_refuses_ship_but_allows_boot(agent, tmp_path, capsys):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    first = stage(releases, out, "platform")
+    ship(agent, first, FakeRun(store=seeded(out)), tmp_path)
+    accounts = {"monitor": "BOT_PASSWORD", "alerts": "ALERT_PASSWORD"}
+    second = stage(
+        releases,
+        out,
+        "platform",
+        commit="c2",
+        connector_secrets=list(accounts.values()),
+        airflow_api_accounts=accounts,
+    )
+    missing = FakeRun(store=seeded(out, extra=["ALERT_PASSWORD"]))
+    with pytest.raises(agent.AgentError, match="monitor needs the declared secret BOT_PASSWORD"):
+        ship(agent, second, missing, tmp_path)
+    assert (releases / "current").resolve() == first.resolve()
+    assert not compose_calls(missing)
+    ready = FakeRun(store=seeded(out, extra=accounts.values()))
+    ship(agent, second, ready, tmp_path)
+    assert (
+        compose_calls(ready)[0]["env"]["VECTEN_AIRFLOW_VIEWERS"] == ",alerts:viewer,monitor:viewer"
+    )
+    agent.boot(releases, missing)
+    assert (
+        "Skipping Airflow API account monitor: missing secret BOT_PASSWORD"
+        in capsys.readouterr().err
+    )
+    assert compose_calls(missing)[0]["env"]["VECTEN_AIRFLOW_VIEWERS"] == ",alerts:viewer"
+    assert set(json.loads((agent.RUN_DIR / "airflow_passwords.json").read_text())) == {
+        "admin",
+        "alerts",
+    }
+
+
 def test_boot_without_a_current_release_fails(agent, tmp_path):
     with pytest.raises(agent.AgentError, match="no current release"):
         agent.boot(tmp_path / "releases", FakeRun())

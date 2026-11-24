@@ -573,9 +573,12 @@ def generate_compose(
         declared = effective_resources(config, project_record(stack_dir))
         accounts = declared.api_accounts
         if accounts:
-            common["environment"]["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] += "".join(
-                f",{name}:viewer" for name in sorted(accounts)
+            viewers = (
+                "".join(f",{name}:viewer" for name in sorted(accounts))
+                if mode == "local"
+                else "${VECTEN_AIRFLOW_VIEWERS:-}"
             )
+            common["environment"]["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] += viewers
         depends = {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
         if mode == "local":
             volumes["airflow-auth"] = {
