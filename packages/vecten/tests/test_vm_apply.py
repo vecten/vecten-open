@@ -774,6 +774,22 @@ def test_write_run_files_formats_and_modes(agent, tmp_path):
     assert mode(passwords) == 0o600 and mode(run_dir / "htpasswd") == 0o600
 
 
+def test_viewer_password_tracks_the_declared_account_and_secret(agent, tmp_path):
+    env = {"AIRFLOW_ADMIN_PASSWORD": "a", "AIRFLOW_BASIC_AUTH_PASSWORD": "b", "BOT_PASSWORD": "c"}
+    host = {"components": ["platform"], "airflow_api_accounts": {"monitor": "BOT_PASSWORD"}}
+    target = tmp_path / "run"
+    agent.write_run_files(host, env, target)
+    path = target / "airflow_passwords.json"
+    assert json.loads(path.read_text()) == {"admin": "a", "monitor": "c"}
+    assert mode(path) == 0o600
+    del env["BOT_PASSWORD"]
+    with pytest.raises(agent.AgentError, match="monitor needs the declared secret BOT_PASSWORD"):
+        agent.write_run_files(host, env, target)
+    host["airflow_api_accounts"] = {}
+    agent.write_run_files(host, env, target)
+    assert json.loads(path.read_text()) == {"admin": "a"}
+
+
 def test_write_run_files_replaces_a_directory_docker_created(agent, tmp_path):
     run_dir = tmp_path / "run" / "vecten"
     (run_dir / "airflow_passwords.json").mkdir(parents=True)

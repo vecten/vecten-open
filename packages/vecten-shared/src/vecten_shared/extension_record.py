@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from vecten_shared.airflow_resources import AirflowResources
 from vecten_shared.apps import App, app_from_json, app_to_json
 from vecten_shared.services import Service, name_problem, service_from_json, service_to_json
 
@@ -62,6 +63,7 @@ class Extension:
     services: dict[str, Service] = field(default_factory=dict, hash=False)
     # The `vecten.apps` declarations, by app name.
     apps: dict[str, App] = field(default_factory=dict, hash=False)
+    airflow: AirflowResources | None = field(default=None, hash=False)
 
 
 def record_text(record: dict[str, Extension]) -> str:
@@ -73,6 +75,11 @@ def record_text(record: dict[str, Extension]) -> str:
                 "extras": sorted(entry.extras),
                 "secrets": sorted(entry.secrets),
                 "settings": entry.settings,
+                **(
+                    {"airflow": entry.airflow.model_dump(exclude_defaults=True)}
+                    if entry.airflow
+                    else {}
+                ),
                 **(
                     {
                         "source": {"path": entry.source_path},
@@ -187,6 +194,9 @@ def parse_record(text: str) -> dict[str, Extension] | None:
                 extras=tuple(sorted(extras)),
                 secrets=tuple(sorted(secrets)),
                 settings=settings,
+                airflow=AirflowResources.model_validate(entry["airflow"])
+                if "airflow" in entry
+                else None,
                 source_path=path,
                 metadata_sha256=digest,
                 build_requires=tuple(build),

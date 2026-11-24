@@ -45,6 +45,7 @@ from vecten.stack.compose import (
 from vecten.stack.images import write_project_layer
 from vecten.stack.nginx import service_site, write_nginx
 from vecten.stack.up import PUBLISHED_REGISTRY
+from vecten_shared.airflow_resources import effective_resources
 from vecten_shared.config import VectenConfig, source_layer_areas
 from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import Extension, read_record
@@ -335,6 +336,10 @@ def host_document(
         "service_secrets": service_secrets,
         "service_network": service_network,
     }
+    if "platform" in components and (
+        accounts := effective_resources(config, record or {}).api_accounts
+    ):
+        doc["airflow_api_accounts"] = accounts
     if config.areas:
         doc["areas"] = sorted(config.areas)
     if restricted := source_layer_areas(config.areas):

@@ -59,6 +59,23 @@ def read(path: Path, name: str) -> str:
         return tar.extractfile(name).read().decode("utf-8")
 
 
+def test_ship_carries_api_account_secret_references_only_on_the_platform(project, tmp_path):
+    path = project / "vecten.toml"
+    path.write_text(
+        'secrets=["MONITOR_PASSWORD"]\n'
+        + path.read_text()
+        + '\n[airflow.api_accounts]\nmonitor="MONITOR_PASSWORD"\n'
+    )
+    for name in ("platform", "mcp"):
+        bundle = build(project, tmp_path / "out", host=name)
+        record = json.loads(read(bundle, ".vecten/ship/host.json"))
+        if name == "platform":
+            assert record["airflow_api_accounts"] == {"monitor": "MONITOR_PASSWORD"}
+            assert "MONITOR_PASSWORD" in record["connector_secrets"]
+        else:
+            assert "airflow_api_accounts" not in record
+
+
 def test_build_lineage_uses_only_git_proven_ancestors(project, monkeypatch):
     from types import SimpleNamespace
 

@@ -374,6 +374,41 @@ project().secret("SLACK_TOKEN")
 to the other component, on the laptop and on every VM alike, even where the host's cloud identity
 could read it. Connector code may keep using `vecten_platform.sync.secret`.
 
+### Airflow pools, variables and API accounts
+
+A project can reserve slots for a DAG, set a default for a run switch, and give a monitoring
+service a read-only Airflow login. Declare them in `vecten.toml`. A service account maps its
+username to a password secret declared by the same project or extension.
+
+```toml
+secrets = ["MONITOR_PASSWORD"]
+
+[airflow.pools]
+paid_search = 2
+
+[airflow.variables]
+pause_searches = "off"
+
+[airflow.api_accounts]
+monitor = "MONITOR_PASSWORD"
+```
+
+An extension can return the same `airflow` mapping and `secrets` list from its
+`vecten.manifest` entry point. Run `vecten lock` after changing the manifest. Set the
+password with `vecten secret set MONITOR_PASSWORD` in each environment before starting or
+shipping the stack. A platform-hosted service in the declaring extension receives that secret
+through its usual environment. When `[airflow] allow` is set, include the service host's
+public address if the service calls Airflow through its public hostname.
+
+At startup the API server applies the pool sizes and creates missing variables before the
+scheduler starts. Existing variable values survive another `up` or `ship`, so operators
+can change a switch at runtime. Removing a declaration leaves its pool or variable in Airflow
+for DAGs that still use it. Removing an API account removes its password and viewer login on
+the next `up` or `ship`. Each account signs in at Airflow's token endpoint with its own
+username and password at `POST /auth/token`. Use the resulting bearer token for
+`GET /api/v2/dags` and other permitted reads. Airflow's viewer role can inspect DAG runs
+and pools.
+
 ### Dependencies per component
 
 The CLI, the Airflow image and the MCP server all install the same version of an extension,

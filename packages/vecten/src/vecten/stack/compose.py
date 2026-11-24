@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 from pathlib import Path
@@ -13,6 +14,7 @@ import yaml
 from vecten.stack import local_components
 from vecten.stack.images import BUILD_DIR, SOURCES_DIR
 from vecten_platform.dbt.artifacts import ARTIFACT_DIR_VAR, DEFAULT_ARTIFACT_DIR
+from vecten_shared.airflow_resources import effective_resources
 from vecten_shared.apps import APP_CREDENTIAL, credential_names
 from vecten_shared.config import (
     APEX,
@@ -568,6 +570,12 @@ def generate_compose(
         common = _airflow_common(
             config, mode, stack_dir, project, hosts, dags_paused_at_creation, account_env
         )
+        declared = effective_resources(config, project_record(stack_dir))
+        accounts = declared.api_accounts
+        if accounts:
+            common["environment"]["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] += "".join(
+                f",{name}:viewer" for name in sorted(accounts)
+            )
         depends = {"postgres": {"condition": "service_healthy"}} if mode == "local" else {}
         if mode == "local":
             volumes["airflow-auth"] = {
@@ -596,6 +604,10 @@ def generate_compose(
                 },
                 "restart": "unless-stopped",
             }
+            if accounts:
+                services["airflow-auth"]["environment"] = {
+                    "VECTEN_AIRFLOW_API_ACCOUNTS": json.dumps(accounts, sort_keys=True),
+                }
             depends["airflow-auth"] = {"condition": "service_healthy"}
         services["airflow-api-server"] = {
             **common,
@@ -614,6 +626,18 @@ def generate_compose(
                 "start_period": "60s",
             },
         }
+        if declared.pools or declared.variables:
+            api = services["airflow-api-server"]
+            api["command"][-1] = (
+                "airflow db migrate && python -m vecten_platform.airflow_resources "
+                "&& exec airflow api-server --proxy-headers"
+            )
+            # A change to mounted declarations must recreate the server during a local up.
+            api["labels"] = {
+                "vecten.airflow-resources": hashlib.sha256(
+                    declared.model_dump_json().encode()
+                ).hexdigest()
+            }
         # Compose builds every service that declares a build, in parallel, and two builds
         # exporting one tag can collide; the others run the image the API server's build made.
         shared = {key: value for key, value in common.items() if key != "build"}

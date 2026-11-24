@@ -107,7 +107,7 @@ LEGACY_HOST_DEFAULTS = {
 }
 LEGACY_OUTPUT_KEYS = ("bucket", "secret_prefix")
 # Present only when the project declares an area, so a project without one ships unchanged.
-OPTIONAL_HOST_KEYS = {"areas": [], "source_layer_areas": []}
+OPTIONAL_HOST_KEYS = {"areas": [], "source_layer_areas": [], "airflow_api_accounts": {}}
 _AREA = re.compile(r"[a-z][a-z0-9]{0,56}")
 # What the watcher needs before any release exists on the host; user data writes it.
 WATCH_KEYS = ("host", "components", "bucket", "region", "project_id", "secret_prefix")
@@ -443,6 +443,15 @@ def load_host(release: Path) -> dict:
         raise AgentError(f"{path} lacks {', '.join(missing)}")
     for key, value in OPTIONAL_HOST_KEYS.items():
         host.setdefault(key, value)
+    accounts = host["airflow_api_accounts"]
+    if not isinstance(accounts, dict) or any(
+        not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}", account)
+        or account.lower() == AIRFLOW_ADMIN_USER
+        or not isinstance(secret, str)
+        or secret not in host["connector_secrets"]
+        for account, secret in accounts.items()
+    ):
+        raise AgentError(f"{path} names an invalid Airflow API account or undeclared password")
     areas = host["areas"]
     if not isinstance(areas, list) or not all(
         isinstance(a, str) and _AREA.fullmatch(a) for a in areas
@@ -1212,7 +1221,12 @@ def write_run_files(host: dict, env: dict[str, str], run_dir: Path) -> None:
     run_dir.chmod(0o700)
     if "platform" not in host["components"]:
         return
-    passwords = json.dumps({AIRFLOW_ADMIN_USER: env["AIRFLOW_ADMIN_PASSWORD"]})
+    users = {AIRFLOW_ADMIN_USER: env["AIRFLOW_ADMIN_PASSWORD"]}
+    for name, secret in host.get("airflow_api_accounts", {}).items():
+        if not env.get(secret):
+            raise AgentError(f"Airflow API account {name} needs the declared secret {secret}")
+        users[name] = env[secret]
+    passwords = json.dumps(users)
     _write_private(run_dir / "airflow_passwords.json", passwords, (AIRFLOW_UID, AIRFLOW_GID))
     digest = hashlib.sha1(env["AIRFLOW_BASIC_AUTH_PASSWORD"].encode("utf-8")).digest()
     line = f"{AIRFLOW_BASIC_AUTH_USER}:{{SHA}}{base64.b64encode(digest).decode()}\n"

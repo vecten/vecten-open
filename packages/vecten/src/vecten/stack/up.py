@@ -27,6 +27,7 @@ from vecten.stack.docker import DockerRunner, SubprocessDocker
 from vecten.stack.env import ensure_local_env
 from vecten.stack.images import RUNTIME, SOURCES_DIR, base_image, write_project_layer
 from vecten.stack.nginx import AIRFLOW_HEALTH_PATH, HOST_KEYS, service_site, write_nginx
+from vecten_shared.airflow_resources import effective_resources
 from vecten_shared.config import load_config
 from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import read_record as read_extension_record
@@ -225,6 +226,27 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
         elif registry == PUBLISHED_REGISTRY and not os.environ.get("VECTEN_IMAGE_REGISTRY"):
             message += f"; {NO_LOCAL_IMAGES_HINT}"
         raise Failure(ExitCode.TOOL_FAILED, message)
+    if "platform" in components:
+        declared = effective_resources(config, record)
+        if declared.pools or declared.variables:
+            # An unchanged local stack keeps its API process across repeated up commands.
+            sync = runner.compose(
+                project_root,
+                _compose_files(project_root),
+                profiles,
+                [
+                    "exec",
+                    "-T",
+                    "airflow-api-server",
+                    "python",
+                    "-m",
+                    "vecten_platform.airflow_resources",
+                ],
+            )
+            if sync.returncode:
+                raise Failure(
+                    ExitCode.TOOL_FAILED, "could not apply the declared Airflow pools and variables"
+                )
     states: dict[str, str] = {}
     if running:
         started = runner.compose(
