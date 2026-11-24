@@ -62,9 +62,33 @@ Any build backend works, including one that writes into the tree it builds, such
 the image builds from a copy of the source. `vecten extension add` pins the backend and its
 dependencies to exact versions, and every build of that commit uses those pins and no other
 extension's, so extensions added at different times may pin different versions of one backend.
-The extension's own dependencies come from PyPI, or from the project's private index when it has
-one; the git host is asked for the extension's repository and nothing else. Scope dependencies to
-a component with the `platform`, `mcp` and `cli` extras, as for any extension.
+Dependencies supplied by another registered extension resolve from that extension’s recorded
+source. Other dependencies come from PyPI or the project's private index. Use the `platform`,
+`mcp` and `cli` extras for dependencies needed only by one component.
+
+### Depend on another registered extension
+
+Suppose `acme-crm` imports `acme_core`. In `acme-crm/pyproject.toml`, put
+`dependencies = ["acme-core==1.2.0"]` under `[project]`. From the Vecten project, add
+the dependency first. Each `extension add` resolves the project immediately, so the recorded
+source for `acme-core` must already be present when you add `acme-crm`. If you reverse
+the order, the resolver looks for `acme-core==1.2.0` on the configured package index.
+A matching name and version there can install an unrelated package. Removing the Git
+source from `vecten.toml` while a consumer still depends on it has the same effect on
+the next lock. Keep the source registered for as long as any consumer needs it.
+
+Add the two extensions in this order:
+
+```sh
+vecten extension add 'acme-core @ git+https://github.com/acme/extensions.git@v1.2.0#subdirectory=extensions/acme-core'
+vecten extension add 'acme-crm @ git+https://github.com/acme/extensions.git@v1.2.0#subdirectory=extensions/acme-crm'
+```
+
+If the project keeps the consuming extension in its own checkout, use
+`vecten extension add ./extensions/acme-crm` for the second command. In either case,
+`vecten lock` keeps the registered Git commit for `acme-core`, and
+`vecten extension sync` installs that source. Both packages must declare a Vecten extension
+point to register this way. A standalone Python library can come from a package index.
 
 The extension is built on each host that installs it, for that host's architecture. An extension
 with C or Rust code needs a compiler in the image: list it in the project's
