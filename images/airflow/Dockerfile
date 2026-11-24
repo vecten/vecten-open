@@ -13,6 +13,11 @@ LABEL org.opencontainers.image.source=https://github.com/vecten/vecten-open \
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends git curl \
     && rm -rf /var/lib/apt/lists/*
+ARG AIRFLOW_IMAGE
+COPY LICENSE NOTICE images/THIRD-PARTY.txt /usr/share/doc/vecten/
+RUN printf '%s\n' "${AIRFLOW_IMAGE}" > /usr/share/doc/vecten/base-image \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\n' \
+        > /usr/share/doc/vecten/debian-packages.tsv
 USER airflow
 # A fresh artifacts volume copies this directory's owner and mode, and Compose runs Airflow as
 # an arbitrary uid in group 0, so the group needs write access.

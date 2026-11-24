@@ -1,0 +1,28 @@
+Third-party notices for the Vecten Open container images
+
+Inside either image, /usr/share/doc/vecten/base-image records the upstream
+image reference used for that build. debian-packages.tsv in the same directory
+lists the installed Debian packages, their versions and their source packages.
+Read each installed package's copyright file under /usr/share/doc/<package>/.
+Debian also publishes package copyright files at https://sources.debian.org/.
+
+Airflow image
+  Apache Airflow, distributed by the Apache Software Foundation.
+  https://github.com/apache/airflow/blob/main/LICENSE
+  https://github.com/apache/airflow/blob/main/NOTICE
+  The upstream image includes uv. See https://github.com/astral-sh/uv#license.
+  Git is installed for extension builds. See https://github.com/git/git/blob/master/COPYING.
+
+MCP image
+  The official Python image is built from the Docker Library Python packaging.
+  https://github.com/docker-library/python/blob/master/LICENSE
+  The MCP panel bundles Geist fonts under the SIL Open Font License 1.1.
+  See vecten_mcp/assets/static/fonts/OFL.txt in the installed Python package.
+
+Both images
+  Python and its included software carry the notices in the Python distribution.
+  https://docs.python.org/3/license.html
+  curl and libcurl carry the curl copyright and permission notice.
+  https://curl.se/docs/copyright.html
+  Installed Python distributions also carry their own metadata and licence
+  files. Run "python -m pip show -f PACKAGE" in the image to locate them.

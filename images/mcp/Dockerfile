@@ -11,6 +11,11 @@ LABEL org.opencontainers.image.source=https://github.com/vecten/vecten-open \
       org.opencontainers.image.version=${VECTEN_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
+ARG BASE_IMAGE
+COPY LICENSE NOTICE images/THIRD-PARTY.txt /usr/share/doc/vecten/
+RUN printf '%s\n' "${BASE_IMAGE}" > /usr/share/doc/vecten/base-image \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\n' \
+        > /usr/share/doc/vecten/debian-packages.tsv
 # The uv cache mounts below are created for uid 1000, so app must be that uid.
 RUN useradd --create-home --uid 1000 app \
     && python -m venv /opt/venv \
