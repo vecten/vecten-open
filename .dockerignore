@@ -3,3 +3,6 @@
 !uv.lock
 !pyproject.toml
 !packages/*/pyproject.toml
+!LICENSE
+!NOTICE
+!images/THIRD-PARTY.txt

@@ -119,6 +119,15 @@ def test_dbt_dag_tests_pass_inside_the_airflow_image():
     assert built.stdout == upstream.stdout
     assert "/home/airflow/.local/bin/uv" in built.stdout.split()
 
+    notices = in_image(
+        image,
+        "cd /usr/share/doc/vecten && test -s LICENSE && test -s NOTICE && "
+        "test -s THIRD-PARTY.txt && grep -q '^git[[:space:]]' debian-packages.tsv && "
+        "cat base-image",
+    )
+    assert notices.returncode == 0, notices.stderr
+    assert notices.stdout.strip() == VERSIONS.airflow_image
+
     # Compose runs Airflow as the host uid in group 0, and a fresh volume copies the image
     # directory's owner and mode.
     volume = in_image(

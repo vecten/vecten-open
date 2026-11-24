@@ -13,7 +13,7 @@ from vecten.stack.images import write_project_layer
 from vecten_shared.config import VectenConfig
 from vecten_shared.versions import VERSIONS
 
-from .docker_util import LOCK_INPUTS, REPO, docker_available, ensure_mcp_image
+from .docker_util import MCP_CONTEXT_INPUTS, REPO, docker_available, ensure_mcp_image
 
 pytestmark = pytest.mark.docker
 SECRET_NAME = re.compile(r"\w*(?:PASSWORD|SECRET|TOKEN|PRIVATE|_KEY)\w*", re.IGNORECASE)
@@ -81,6 +81,17 @@ def test_base_image_holds_the_server_packages_and_never_the_cli():
     assert absent == "True True"
 
 
+def test_base_image_bundles_current_notices():
+    image = ensure_mcp_image()
+    directory = "/usr/share/doc/vecten"
+    for filename in ("LICENSE", "NOTICE", "THIRD-PARTY.txt"):
+        source = REPO / ("images" if filename == "THIRD-PARTY.txt" else "") / filename
+        assert run_in(image, "cat", f"{directory}/{filename}").stdout == source.read_text()
+    assert run_in(image, "cat", f"{directory}/base-image").stdout.strip() == VERSIONS.mcp_base_image
+    packages = run_in(image, "cat", f"{directory}/debian-packages.tsv").stdout.splitlines()
+    assert any(row.startswith("curl\t") for row in packages)
+
+
 def test_base_image_holds_the_versions_the_lock_pins():
     image = ensure_mcp_image()
     probe = run_in(
@@ -124,7 +135,7 @@ def test_base_image_keeps_pip_for_the_project_layer_and_holds_no_uv():
 def test_base_image_build_refuses_a_stale_lock(tmp_path):
     if not docker_available():
         pytest.skip("Docker is not available")
-    for name in LOCK_INPUTS:
+    for name in MCP_CONTEXT_INPUTS:
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO / name, tmp_path / name)
     (tmp_path / "dist").mkdir()

@@ -14,6 +14,7 @@ PACKAGES = ("vecten", "vecten-platform", "vecten-mcp", "vecten-shared")
 ROOT_FILES = {
     "README.md",
     "LICENSE",
+    "NOTICE",
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
     "SECURITY.md",

@@ -121,4 +121,4 @@ Built on [dlt](https://github.com/dlt-hub/dlt), [Apache Airflow](https://airflow
 [dbt](https://github.com/dbt-labs/dbt), the [Model Context Protocol](https://modelcontextprotocol.io/)
 and [Apache Ossie](https://ossie.apache.org/). Apache Airflow and Apache Ossie are trademarks of
 the Apache Software Foundation; dbt is a trademark of dbt Labs; Snowflake is a trademark of
-Snowflake Inc. Licensed under [Apache-2.0](LICENSE). Copyright 2026 Vecten.
+Snowflake Inc. Licensed under [Apache-2.0](LICENSE). Copyright 2026 Vecten. The container images include [third-party notices](images/THIRD-PARTY.txt).

@@ -4,7 +4,7 @@ version = "0.1.1"
 description = "Airflow, dlt and dbt runtime for Vecten Open"
 requires-python = ">=3.14"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 authors = [{ name = "Vecten" }]
 keywords = ["vecten", "dlt", "airflow", "dbt", "data platform"]
