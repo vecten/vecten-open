@@ -374,12 +374,16 @@ def test_guide_dispatches_to_the_vendored_skill_paths():
         assert f"skills/{name}/SKILL.md" in body, name
 
 
-def test_secret_handoff_uses_the_verified_cli_even_outside_the_persons_path():
-    guide = " ".join(skill_body("guide").split())
+def test_terminal_handoffs_use_the_verified_cli_even_outside_the_persons_path():
+    body = skill_body("guide")
+    guide = " ".join(body.split())
     assert (
         "`vecten secret set` command for their terminal, give them the same absolute "
         "executable path, shell-quoted" in guide
     )
+    assert 'export DBT_PATH="$(dirname "$(readlink -f <vecten>)")/dbt"' in body
+    assert "with `<vecten>` as the shell-quoted verified `vecten` path" in guide
+    assert "command -v vecten)" not in body
 
 
 def test_guide_names_every_post_deploy_answer_key():
