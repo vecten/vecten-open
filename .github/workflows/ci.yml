@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
@@ -23,6 +25,18 @@ jobs:
       - run: uv sync --locked --all-packages
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - name: lint comments introduced by this change
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="$BASE_SHA"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="HEAD^1"
+          fi
+          scratch="$RUNNER_TEMP/windbag"
+          git worktree add --detach --no-checkout "$scratch" "$base"
+          git -C "$scratch" read-tree --reset -u "$GITHUB_SHA"
+          (cd "$scratch" && "$GITHUB_WORKSPACE/.venv/bin/windbag" check --staged)
       - name: extension contracts and edition boundary in release wheels
         run: |
           uv build --all-packages --wheel --out-dir /tmp/vecten-extension-wheels
@@ -88,10 +102,10 @@ jobs:
       - run: uv sync --locked --all-packages
       - name: Read pinned Terraform version
         id: terraform
-        run: echo "version=$(uv run python -c 'from vecten_shared.versions import VERSIONS; print(VERSIONS.terraform)')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: ~${{ steps.terraform.outputs.version }}.0
+          terraform_version: ${{ steps.terraform.outputs.version }}
           terraform_wrapper: false
       # The unmarked tests of these modules run in the test shards. Each terraform test inits
       # its own root and downloads its providers, so the tests wait on the network side by side.

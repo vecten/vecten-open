@@ -61,8 +61,17 @@ No pull request may require a real cloud account to review or merge. Terraform c
 checked with `terraform fmt`, `terraform validate` and the `terraform test` suites under each
 module's `tests/`; real deploys happen on the maintainers' sandboxes before a release.
 
-Comments in code state the constraint that makes the code correct, never the change history;
-a hook lints them.
+Write comments that explain the constraint that makes the code correct. Keep change history
+in Git. The dev group includes
+the windbag comment linter. Run `uv run windbag check --staged` before committing. CI uses the same staged check for the comments introduced by the entire
+pull request. To audit existing comments too, run `uv run windbag check --all`. Both checks use
+windbag's default rules.
+
+To enable the supplied pre-commit hook in a fresh clone, run
+`git config --local core.hooksPath .githooks`. If you already use hooks, add
+`uv run --locked windbag check --staged` to your existing pre-commit hook.
+
+The root `.terraform-version` pins the exact Terraform version used by tfenv, tenv and repository CI.
 
 ## Specs
 
