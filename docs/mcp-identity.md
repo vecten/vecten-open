@@ -12,6 +12,11 @@ Postgres connections under each principal's warehouse role. A principal is a per
 record in `mcp_state`, the server's private PostgreSQL database. The HTTP admin API and CLI use
 the same identity and access services. No admin mutation is exposed as an MCP tool.
 
+Public OAuth clients can identify themselves with an HTTPS URL serving their client metadata
+document. The document names the client and its redirect URIs. The consent screen shows the
+client and callback hosts separately. Redirect URIs must match exactly, except that a native
+client using HTTP on 127.0.0.1 or ::1 may choose its listener port at startup. Dynamic registration remains available for clients that use it.
+
 The `provisioner` is the warehouse login used by MCP to create
 principals and manage their role memberships and data grants. Its allowed privileges are
 specified in the [identity contract](../.ai/openspec/specs/shared/identity-contract/spec.md).

@@ -4,11 +4,12 @@ import base64
 import logging
 import secrets
 from html import escape
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from vecten_mcp.auth.client_metadata import ClientMetadata
 from vecten_mcp.auth.gate import (
     GATE_COOKIE,
     HOST_HEADER,
@@ -55,6 +56,21 @@ BROWSER = frozenset(
 
 def auth_routes(service, gate=None):
     state = service.state
+    documents = ClientMetadata()
+
+    def consent_for(flow, csrf, pending):
+        client_id = pending["client_id"]
+        name = service.client(client_id)["client_name"]
+        if client_id.startswith("https://"):
+            redirect_host = urlsplit(pending["redirect_uri"]).netloc
+            return consent_page(
+                flow,
+                csrf,
+                name,
+                client_host=urlsplit(client_id).netloc,
+                redirect_host=redirect_host,
+            )
+        return consent_page(flow, csrf, name)
 
     def loopback_origin(request):
         url = request.url
@@ -126,6 +142,7 @@ def auth_routes(service, gate=None):
                 issuer=service.issuer,
                 authorization_endpoint=service.issuer + "/authorize",
                 token_endpoint=service.issuer + "/token",
+                client_id_metadata_document_supported=True,
                 registration_endpoint=service.issuer + "/register",
                 revocation_endpoint=service.issuer + "/revoke",
                 device_authorization_endpoint=service.issuer + "/device",
@@ -166,13 +183,18 @@ def auth_routes(service, gate=None):
         q = request.query_params
         if q.get("response_type") != "code":
             raise ValueError("unsupported_response_type")
+        client_id = q.get("client_id", "")
+        document = None
+        if client_id.startswith("https://"):
+            document = await documents.get(client_id, service.registration_limit, address(request))
         flow = service.authorize(
-            q.get("client_id"),
+            client_id,
             q.get("redirect_uri"),
             q.get("code_challenge", ""),
             q.get("code_challenge_method"),
             q.get("resource"),
             q.get("state", ""),
+            document=document,
         )
         return begin_browser(request, flow)
 
@@ -198,9 +220,7 @@ def auth_routes(service, gate=None):
             return browser_session(request, finish_gate(form["flow"], principal), principal)
         return browser_session(
             request,
-            consent_page(
-                form["flow"], form["csrf"], service.client(pending["client_id"])["client_name"]
-            ),
+            consent_for(form["flow"], form["csrf"], pending),
             principal,
         )
 
@@ -265,7 +285,7 @@ def auth_routes(service, gate=None):
             return browser_session(request, RedirectResponse(url, status_code=303), principal)
         return browser_session(
             request,
-            consent_page(flow, csrf, service.client(pending["client_id"])["client_name"]),
+            consent_for(flow, csrf, pending),
             principal,
         )
 

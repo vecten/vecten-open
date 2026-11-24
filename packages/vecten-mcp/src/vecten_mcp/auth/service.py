@@ -4,8 +4,9 @@ import re
 import secrets
 import time
 from dataclasses import dataclass
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
+from vecten_mcp.auth.client_metadata import metadata_redirect_matches, redirect_allowed
 from vecten_mcp.auth.identity import challenge, digest
 from vecten_mcp.auth.limits import RateLimiter
 
@@ -59,20 +60,7 @@ class OAuthService:
         if not isinstance(redirects, list) or len(redirects) > 10:
             raise RegistrationError("invalid_redirect_uri", "redirect_uris must list at most 10")
         for uri in redirects:
-            parsed = urlparse(uri)
-            if (
-                parsed.fragment
-                or parsed.username
-                or parsed.password
-                or not parsed.hostname
-                or not (
-                    parsed.scheme == "https"
-                    or (
-                        parsed.scheme == "http"
-                        and parsed.hostname in {"127.0.0.1", "::1", "localhost"}
-                    )
-                )
-            ):
+            if not redirect_allowed(uri):
                 raise RegistrationError(
                     "invalid_redirect_uri",
                     f"{uri} must be HTTPS, or HTTP on a loopback address, without a fragment",
@@ -117,14 +105,37 @@ class OAuthService:
             raise ValueError("invalid_client")
         return client
 
-    def authorize(self, client_id, redirect_uri, code_challenge, method, resource, state):
-        client = self.client(client_id)
-        if client.get("principal_id") or redirect_uri not in client["redirect_uris"]:
+    def authorize(
+        self, client_id, redirect_uri, code_challenge, method, resource, state, *, document=None
+    ):
+        client = document if document is not None else self.client(client_id)
+        allowed = client["redirect_uris"]
+        matches = (
+            metadata_redirect_matches(redirect_uri, allowed)
+            if document is not None
+            else redirect_uri in allowed
+        )
+        if client.get("principal_id") or not matches:
             raise ValueError("invalid redirect URI or client")
         if method != "S256" or not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
             raise ValueError("PKCE S256 is required")
         if resource != self.resource:
             raise ValueError("invalid_target")
+        if document is not None:
+            # Session listings retain only a display name. Each new authorization must
+            # obtain current redirect URIs through the bounded document cache.
+            prior = self.state.get("clients", client_id) or {}
+            self.state.put(
+                "clients",
+                client_id,
+                {
+                    "client_name": document["client_name"],
+                    "redirect_uris": [],
+                    "metadata_document": True,
+                    "used": prior.get("used", False),
+                    "created_at": self.clock(),
+                },
+            )
         flow = secrets.token_urlsafe(32)
         self.state.put(
             "flows",
@@ -133,6 +144,7 @@ class OAuthService:
                 client_id=client_id,
                 redirect_uri=redirect_uri,
                 challenge=code_challenge,
+                refresh=document is None or "refresh_token" in document["grant_types"],
                 resource=resource,
                 state=state,
             ),
@@ -276,7 +288,7 @@ class OAuthService:
             ):
                 raise ValueError("invalid_grant")
             sid, session = self._session(pending["principal_id"], client_id, conn)
-            return self._tokens(sid, session, conn)
+            return self._tokens(sid, session, conn, refresh=pending.get("refresh", True))
 
     def refresh(self, token, client_id, secret=""):
         self._authenticate(client_id, secret)
@@ -393,7 +405,11 @@ class OAuthService:
 
     def device(self, client_id, resource):
         client = self.client(client_id)
-        if client.get("principal_id") or resource != self.resource:
+        if (
+            client.get("principal_id")
+            or client.get("metadata_document")
+            or resource != self.resource
+        ):
             raise ValueError("invalid_client or invalid_target")
         code = secrets.token_urlsafe(32)
         user_code = secrets.token_hex(4).upper()

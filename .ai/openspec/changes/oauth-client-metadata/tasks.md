@@ -1,0 +1,3 @@
+- [x] Resolve and validate bounded public client metadata during authorization.
+- [x] Show the client and callback hosts on consent.
+- [x] Cover discovery, caching, refusal and token exchange alongside dynamic clients.

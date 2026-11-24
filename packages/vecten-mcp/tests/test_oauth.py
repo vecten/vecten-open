@@ -169,18 +169,28 @@ def test_device_polling_consent_and_expiry(auth):
         service.device_token(device["device_code"], client["client_id"])
 
 
-def test_http_flow_requires_cookie_csrf_and_consent(auth):
+@pytest.mark.parametrize("metadata", [False, True])
+def test_http_flow_requires_cookie_csrf_and_consent(auth, metadata, monkeypatch):
     service, _, p = auth
     with TestClient(
         Starlette(routes=auth_routes(service)), base_url="https://mcp.example"
     ) as client:
-        registration = client.post(
-            "/register",
-            json={
-                "client_name": "<script>bad</script>",
-                "redirect_uris": ["http://127.0.0.1:9000/callback"],
-            },
-        ).json()
+        details = {
+            "client_name": "<script>bad</script>",
+            "redirect_uris": ["http://127.0.0.1:9000/callback"],
+        }
+        if metadata:
+            from vecten_mcp.auth.client_metadata import ClientMetadata
+
+            registration = details | {"client_id": "https://clients.example/software.json"}
+
+            async def fetch(self, client_id):
+                assert client_id == registration["client_id"]
+                return details | {"grant_types": ["authorization_code"]}, 60
+
+            monkeypatch.setattr(ClientMetadata, "fetch", fetch)
+        else:
+            registration = client.post("/register", json=details).json()
         page = client.get(
             "/authorize",
             params=dict(
@@ -206,6 +216,9 @@ def test_http_flow_requires_cookie_csrf_and_consent(auth):
             data=dict(flow=flow, csrf=csrf, email=p["email"], password="long-fixture-password"),
         )
         assert "Approve" in consent.text and "<script>bad</script>" not in consent.text
+        if metadata:
+            assert "<dt>Client host</dt><dd>clients.example</dd>" in consent.text
+            assert "<dt>Redirect host</dt><dd>127.0.0.1:9000</dd>" in consent.text
         redir = client.post(
             "/consent", data=dict(flow=flow, csrf=csrf, decision="approve"), follow_redirects=False
         )
@@ -220,7 +233,12 @@ def test_http_flow_requires_cookie_csrf_and_consent(auth):
             code_verifier="a" * 43,
             resource=service.resource,
         )
-        assert client.post("/token", data=payload).status_code == 200
+        issued = client.post("/token", data=payload)
+        assert issued.status_code == 200
+        assert ("refresh_token" in issued.json()) == (not metadata)
+        assert client.get("/.well-known/oauth-authorization-server").json()[
+            "client_id_metadata_document_supported"
+        ]
         assert client.post("/token", data=payload).status_code == 400
         assert (
             client.get("/.well-known/oauth-authorization-server").json()["issuer"] == service.issuer

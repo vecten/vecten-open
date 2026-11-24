@@ -16,6 +16,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - Projects and extensions can declare Airflow pools, variable defaults and viewer API accounts ([#42](https://github.com/vecten/vecten-open/issues/42)).
 - Extension settings support nested object schemas, array, string and numeric constraints, and
   constant values ([#139](https://github.com/vecten/vecten-open/issues/139)).
+- OAuth accepts HTTPS client metadata documents for public clients using authorization code and PKCE ([#41](https://github.com/vecten/vecten-open/issues/41)).
 - Connector recording bounds extraction per object and supports redaction and a recording
   opt-out. Hand-written fixtures can be checked offline against declared objects
   ([#46](https://github.com/vecten/vecten-open/issues/46)).
