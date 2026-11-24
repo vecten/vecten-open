@@ -635,8 +635,6 @@ bundled. A test in this repository's CI (`scripts/check_extension_wheels.py`) ex
 shipped Python for prohibited licence-gating and telemetry symbols/imports. This automated
 scan is a regression guard; code review remains necessary for behavior it cannot recognize.
 
-Back to the [docs index](README.md).
-
 ## Skills for data users
 
 An extension can give analysts a reusable set of instructions for their own assistant. For
@@ -684,3 +682,8 @@ then use the project’s ship workflow for the target environment. After the new
 shown by `vecten mcp connection --env <env>`. A member signs in and chooses **monthly-orders** under
 **Skills for your assistant**. The server checks current membership on each download.
 Removing a member stops future downloads. Copies already downloaded stay with their recipients.
+The access log records successful and denied download attempts by signed-in users. Run
+`vecten lock --check` with the project extensions installed to verify that each configured
+skill can be packaged before shipping.
+
+Back to the [docs index](README.md).

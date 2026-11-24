@@ -2,7 +2,7 @@
 
 ### Requirement: Skills for people who use the data
 
-A listed extension SHALL be able to export a directory containing SKILL.md and an explicit list of supporting files through a named vecten.consumer_skills entry point. The CLI SHALL package those files in a ZIP under the skill name. The MCP SHALL list and serve the same archive to signed-in members of the skill’s configured groups, checking current membership for every download.
+A listed extension SHALL be able to export a directory containing SKILL.md and an explicit list of supporting files through a named vecten.consumer_skills entry point. The CLI SHALL package those files in a ZIP under the skill name. The MCP SHALL list and serve the same archive to signed-in members of the skill’s configured groups, checking current membership for every download. Every authenticated download attempt SHALL record the skill name and the access decision. Skill bindings SHALL require the MCP component and a valid skill name. Both locking and checking the project SHALL refuse a bound skill whose installed extension cannot produce its archive.
 
 #### Scenario: A skill author packages a release
 

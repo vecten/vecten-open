@@ -35,6 +35,9 @@ def test_cli_packages_only_declared_files_from_a_listed_extension(invoke, tmp_pa
     result = invoke("extension", "pack-skill", "orders", "--output", "orders.zip", "--json")
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["path"] == "orders.zip"
+    assert (tmp_path / "orders.zip").stat().st_mode & 0o777 == (
+        skill / "SKILL.md"
+    ).stat().st_mode & 0o777
     original = (tmp_path / "orders.zip").read_bytes()
     with zipfile.ZipFile(io.BytesIO(original)) as archive:
         assert archive.namelist() == ["orders/SKILL.md", "orders/guide.md"]

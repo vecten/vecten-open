@@ -84,7 +84,11 @@ def people_routes(runtime):
         caller, _ = current
         name = request.path_params["name"]
         item = runtime.extensions.consumer_skills.get(name)
-        if item is None or not item.groups.intersection(caller.groups):
+        allowed = item is not None and bool(item.groups.intersection(caller.groups))
+        runtime.oauth.event(
+            caller.principal["id"], "apps/skill", name, "allowed" if allowed else "denied"
+        )
+        if not allowed:
             return Response(status_code=404, headers=headers)
         return Response(
             item.archive,

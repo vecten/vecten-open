@@ -29,6 +29,7 @@ from vecten_shared import git_sources
 from vecten_shared.apps import GROUP as APPS_GROUP
 from vecten_shared.apps import AppDeclaration, colliding_service, parse_app, principal_name
 from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
+from vecten_shared.consumer_skills import skill_packages
 from vecten_shared.declarations import (
     Manifest,
     check_settings,
@@ -666,6 +667,8 @@ def _lock_project(
     for env in environments_named(config):
         check_settings(config, record, env)
     check_bindings(config, record)
+    if config.consumer_skills:
+        skill_packages(config, config.consumer_skills)
     from vecten.extension_skills import skill_artifacts
 
     files = {
@@ -875,7 +878,11 @@ def prepare_declaration_check(root: Path) -> None:
     """Install the checkout's local packages into the disposable project CI environment."""
     record = locking.read_record(root) or {}
     paths = [entry.source_path for entry in record.values() if entry.source_path]
-    if paths and not locking.lock_problems(root, load_config(root)):
+    config = load_config(root)
+    if (paths or config.consumer_skills) and not locking.lock_problems(root, config):
+        if config.consumer_skills:
+            sync(root)
+            return
         install_lock((root / locking.LOCK_FILES["cli"]).read_text(), root, paths)
 
 
@@ -890,6 +897,8 @@ def check_declarations(root: Path) -> list[str]:
         stale.append(locking.RECORD_FILE)
     if stale:
         raise Failure(ExitCode.CONFIG, f"stale or missing {', '.join(stale)}; run `vecten lock`")
+    if config.consumer_skills:
+        skill_packages(config, config.consumer_skills)
     if not local:
         return []
     for name in sorted(local):

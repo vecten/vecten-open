@@ -27,6 +27,7 @@ from vecten_shared.apps import APP_CREDENTIAL, principal_name
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
 from vecten_shared.declarations import is_toml_time, secret_problem
 from vecten_shared.names import (
+    SKILL_NAME,
     area_name_problem,
     connector_name_problem,
     env_name_problem,
@@ -701,6 +702,15 @@ class VectenConfig(Strict):
                             f"{where}.routes.{route_name}.access: a login route needs the mcp "
                             "component, whose sign-in admits people"
                         )
+        return self
+
+    @model_validator(mode="after")
+    def _consumer_skill_bindings(self) -> VectenConfig:
+        for name in self.consumer_skills:
+            if not SKILL_NAME.fullmatch(name):
+                raise ValueError(f"consumer_skills: invalid consumer skill name {name!r}")
+            if not self.has("mcp"):
+                raise ValueError(f"consumer_skills.{name}: downloads need the mcp component")
         return self
 
     @model_validator(mode="after")

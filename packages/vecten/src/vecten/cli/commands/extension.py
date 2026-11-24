@@ -94,7 +94,7 @@ def pack_skill(
 ) -> None:
     """Package a data-user skill from an installed project extension."""
     import os
-    from tempfile import NamedTemporaryFile
+    from tempfile import TemporaryDirectory
 
     from vecten_shared.config import load_config
     from vecten_shared.consumer_skills import skill_packages
@@ -103,10 +103,10 @@ def pack_skill(
     def run(ctx: CliContext) -> Result:
         archive = skill_packages(load_config(ctx.require_project()), [name])[name]
         try:
-            with NamedTemporaryFile(dir=output.parent) as handle:
-                handle.write(archive)
-                handle.flush()
-                os.link(handle.name, output)
+            with TemporaryDirectory(dir=output.parent) as directory:
+                staged = Path(directory) / "skill.zip"
+                staged.write_bytes(archive)
+                os.link(staged, output)
         except OSError as exc:
             raise Failure(ExitCode.REFUSED, f"cannot write {output}: {exc.strerror}") from exc
         return Result(data={"skill": name, "path": str(output)}, message=f"wrote {output}")

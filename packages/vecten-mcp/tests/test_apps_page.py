@@ -336,7 +336,10 @@ def test_public_http_host_starts_panel_login_with_a_secure_cookie(page, base, fo
 
 
 def test_consumer_skill_visibility_and_download_follow_current_membership(page):
+    from sqlalchemy import select
+
     from vecten_mcp.extensions import SkillDownload
+    from vecten_mcp.state import access_events
 
     page.runtime.extensions.consumer_skills = {
         "monthly-orders": SkillDownload(frozenset({"sales"}), b"sales package"),
@@ -362,3 +365,18 @@ def test_consumer_skill_visibility_and_download_follow_current_membership(page):
         == page.http.get("/apps/skills/unknown.zip").status_code
         == 404
     )
+    with page.runtime.state.transaction() as conn:
+        attempts = set(
+            conn.execute(
+                select(access_events.c.subject, access_events.c.outcome).where(
+                    access_events.c.operation == "apps/skill",
+                    access_events.c.principal_id == page.analyst["id"],
+                )
+            )
+        )
+    assert attempts == {
+        ("monthly-orders", "allowed"),
+        ("monthly-orders", "denied"),
+        ("payroll", "denied"),
+        ("unknown", "denied"),
+    }

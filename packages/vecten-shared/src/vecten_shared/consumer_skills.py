@@ -1,16 +1,15 @@
 """Package files an installed extension explicitly offers to a data user's assistant."""
 
 import io
-import re
 import stat
 import zipfile
 from pathlib import Path
 
 from vecten_shared.extensions import load_group
+from vecten_shared.names import SKILL_NAME
 from vecten_shared.output import ExitCode, Failure
 
 GROUP = "vecten.consumer_skills"
-SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
 
 def package_skill(name: str, declaration: object) -> bytes:
