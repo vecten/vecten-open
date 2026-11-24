@@ -448,3 +448,56 @@ def test_record_and_replay_midstream_table_hint(variant, duckdb_dest, tmp_path, 
             for name in counts:
                 rows = conn.execute(f"select id from raw_crm.{name} order by id").fetchall()
                 assert rows == [(i,) for i, table in enumerate(expected, start=1) if table == name]
+
+
+def test_paid_units_commit_before_next_read_and_resume_in_a_fresh_directory(duckdb_dest, tmp_path):
+    from vecten_platform.sync import finish_unit, unit_cursor
+
+    billed = []
+    deny_last = True
+
+    @dlt.resource(name="searches", write_disposition="append")
+    def searches():
+        index = unit_cursor(0)
+        if index == 2 and deny_last:
+            raise RuntimeError("credits exhausted before request")
+        if index < 3:
+            billed.append(index)
+            yield {"id": index}
+            finish_unit(index + 1, more=index < 2)
+
+    @dlt.source(name="metered")
+    def source():
+        return [searches]
+
+    first = run_object("demo", source, "searches", duckdb_dest, tmp_path / "before")
+    assert not first.ok and first.rows == 2
+    assert [r[0] for r in rows(tmp_path / "wh.duckdb", "searches")] == [0, 1]
+    deny_last = False
+    second = run_object("demo", source, "searches", duckdb_dest, tmp_path / "after")
+    assert second.ok and second.rows == 1
+    assert [r[0] for r in rows(tmp_path / "wh.duckdb", "searches")] == [0, 1, 2]
+    assert billed == [0, 1, 2]
+
+
+@pytest.mark.parametrize(
+    ("disposition", "cursor", "reason"),
+    [("replace", 1, "append or merge"), ("append", None, "new cursor")],
+)
+def test_invalid_unit_fails_before_loading_its_rows(
+    duckdb_dest, tmp_path, disposition, cursor, reason
+):
+    from vecten_platform.sync import finish_unit
+
+    @dlt.resource(name="orders", write_disposition=disposition)
+    def orders():
+        yield {"id": 0}
+        finish_unit(cursor, more=True)
+
+    @dlt.source
+    def source():
+        return [orders]
+
+    result = run_object("demo", source, "orders", duckdb_dest, tmp_path / "dlt")
+    assert not result.ok and reason in result.error
+    assert result.rows == 0

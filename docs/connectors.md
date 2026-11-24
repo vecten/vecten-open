@@ -42,6 +42,27 @@ from an HTTP error, the alert and `vecten issues` use the terminal exception’s
 message, so you can distinguish exhausted credits from an HTTP error that Airflow retried.
 Raise ordinary exceptions for temporary failures so Airflow can retry.
 
+For a source billed per page or saved search, have the resource read one unit of work each
+time it is called. Read its starting position with `unit_cursor(default)`. Yield the rows,
+then call `finish_unit(next_cursor, more=...)` and return. The next call starts only after
+dlt loads both the rows and their cursor into the warehouse. In this example, the upstream
+supplies the next offset even on the last page, so tomorrow's run can resume there.
+
+```python
+from vecten_platform.sync import finish_unit, unit_cursor
+
+@dlt.resource(write_disposition="append")
+def purchases():
+    page = api.read_purchases(offset=unit_cursor(0))
+    yield from page.rows
+    finish_unit(page.next_offset, more=page.has_more)
+```
+
+Use an append or merge resource. The cursor is a string, integer, or null. Requesting
+another unit requires a changed cursor. A failure can repeat the unit in progress, so size
+units to match the upstream's billing granularity. A recording samples the first unit
+within the usual row limit. Airflow publishes the group's asset after its object tasks finish.
+
 ### Record a sample or supply invented rows
 
 `vecten connector run shop --object orders --record --limit 3` restarts the selected local

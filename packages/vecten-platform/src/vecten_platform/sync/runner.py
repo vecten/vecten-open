@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,6 +99,7 @@ def run_object(
     limit: int = RECORD_LIMIT,
     redact_fixture: Callable | None = None,
     record_inputs: bool = False,
+    single_unit: bool = False,
 ) -> ObjectOutcome:
     pipeline = dlt.pipeline(
         pipeline_name(connector, object_name),
@@ -106,7 +108,14 @@ def run_object(
         pipelines_dir=str(dlt_dir),
     )
     recording = None
+    landed = Counter()
     try:
+        if pipeline.has_pending_data:
+            # dlt otherwise consumes pending packages instead of extracting the supplied source.
+            recovered = pipeline.run()
+            if recovered:
+                recovered.raise_on_failed_jobs()
+
         sample = InputSample(limit=limit) if record_inputs else None
         if sample is not None and record_dir is None:
             raise ValueError("--record-inputs requires --record")
@@ -128,7 +137,8 @@ def run_object(
             resource.add_map(recording)
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
             # recording truncates the object's tables, resets its state and loads the sample.
-            pipeline.run(selected, refresh="drop_data")
+            pipeline.run(selected, refresh="drop_data").raise_on_failed_jobs()
+            landed.update(_landed(pipeline))
             nesting = resource.max_table_nesting
             recording.commit(
                 pipeline.default_schema,
@@ -136,7 +146,17 @@ def run_object(
                 input_document=sample.document() if sample is not None else None,
             )
         else:
-            pipeline.run(selected)
+            previous = None
+            while True:
+                pipeline.run(selected).raise_on_failed_jobs()
+                landed.update(_landed(pipeline))
+                unit = selected.resources[object_name].state.get("vecten_unit", {})
+                if single_unit or not unit.get("more"):
+                    break
+                if unit["cursor"] == previous:
+                    raise ValueError("checkpointed resource finished without advancing its cursor")
+                previous = unit["cursor"]
+                selected = make_source().with_resources(object_name)
     except Exception as exc:
         if recording is not None:
             recording.discard()
@@ -154,12 +174,18 @@ def run_object(
         terminal = next((e for e in chain if isinstance(e, TerminalConnectorError)), None)
         reason = terminal if terminal is not None else chain[-1]
         message = " ".join(f"{type(reason).__name__}: {reason}".split())
-        return ObjectOutcome(object_name, False, 0, message, terminal=terminal is not None)
+        return ObjectOutcome(
+            object_name,
+            False,
+            sum(landed.values()),
+            message,
+            tuple(sorted(landed)),
+            terminal is not None,
+        )
     except BaseException:
         if recording is not None:
             recording.discard()
         raise
-    landed = _landed(pipeline)
     return ObjectOutcome(object_name, True, sum(landed.values()), tables=tuple(sorted(landed)))
 
 

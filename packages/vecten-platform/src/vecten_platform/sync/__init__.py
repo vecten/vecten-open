@@ -17,4 +17,35 @@ class TerminalConnectorError(Exception):
     """Raise during an object load when another attempt cannot succeed."""
 
 
-__all__ = ["RuntimeContext", "TerminalConnectorError", "runtime", "secret", "set_runtime"]
+def unit_cursor(default=None):
+    """Read this resource's last committed cursor inside a dlt resource generator."""
+    import dlt
+
+    return dlt.current.resource_state().get("vecten_unit", {}).get("cursor", default)
+
+
+def finish_unit(cursor: str | int | None, *, more: bool) -> None:
+    """Commit the next cursor with this load and request another unit after it succeeds."""
+    import dlt
+
+    disposition = dlt.current.resource().write_disposition
+    if isinstance(disposition, dict):
+        disposition = disposition.get("disposition")
+    if disposition not in ("append", "merge"):
+        raise ValueError("checkpointed units need an append or merge resource")
+    if not isinstance(more, bool) or (cursor is not None and type(cursor) not in (int, str)):
+        raise ValueError("finish_unit needs a string, integer, or null cursor and boolean more")
+    if more and (cursor is None or cursor == unit_cursor()):
+        raise ValueError("another unit needs a new cursor")
+    dlt.current.resource_state()["vecten_unit"] = {"cursor": cursor, "more": more}
+
+
+__all__ = [
+    "finish_unit",
+    "unit_cursor",
+    "RuntimeContext",
+    "TerminalConnectorError",
+    "runtime",
+    "secret",
+    "set_runtime",
+]
