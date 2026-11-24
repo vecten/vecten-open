@@ -353,7 +353,9 @@ def up(
                 time.sleep(0.1)
             if server.started:
                 print(
-                    f"serving {names} on 127.0.0.1:{port}; Ctrl-C stops and cleans up", flush=True
+                    f"serving {names} on 127.0.0.1:{port}. Stop with Ctrl-C or "
+                    f"kill -INT {os.getpid()} to clean up.",
+                    flush=True,
                 )
 
         threading.Thread(target=announce, daemon=True).start()

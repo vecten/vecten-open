@@ -1350,6 +1350,8 @@ def cmd_pr(ctx: Context, args: list[str]) -> tuple[str, int]:
             valued |= {
                 "--title": "title",
                 "-t": "title",
+                "--base": "base",
+                "-B": "base",
                 "--add-label": "label",
                 "--remove-label": "unlabel",
             }
@@ -1371,6 +1373,13 @@ def cmd_pr(ctx: Context, args: list[str]) -> tuple[str, int]:
             pull = _find_pull(ctx, repo, positional[0] if positional else None)
             body = _body(ctx, found)
             if sub == "edit":
+                base = last(found, "base")
+                if base is not None:
+                    if pull["state"] != "open" or base == pull["head"]:
+                        raise GhError("base must differ from the head of an open pull request")
+                    if not _git_head(ctx.store.bare(name), f"refs/heads/{base}"):
+                        raise GhError(f"unknown base branch {base}")
+                    pull["base"] = base
                 if last(found, "title") is not None:
                     pull["title"] = last(found, "title")
                 if body is not None:
@@ -1441,6 +1450,14 @@ def cmd_pr(ctx: Context, args: list[str]) -> tuple[str, int]:
                 merge_commit_sha=merge_commit,
                 merged_by=ctx.user,
             )
+            if found.get("delete") and stored["head"] != repo["default_branch"]:
+                _run(
+                    ["git", "update-ref", "-d", f"refs/heads/{stored['head']}"],
+                    cwd=ctx.store.bare(name),
+                )
+                for child in repo["pulls"].values():
+                    if child["state"] == "open" and child["base"] == stored["head"]:
+                        child["base"] = stored["base"]
         sys.stderr.write(f"✓ Merged pull request #{pull['number']} ({pull['title']})\n")
         return "", 0
     if sub == "checks":
