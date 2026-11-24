@@ -641,8 +641,9 @@ Back to the [docs index](README.md).
 
 An extension can give analysts a reusable set of instructions for their own assistant. For
 example, a finance analyst can download a monthly-orders skill that uses the analyst’s MCP
-connection to summarize completed orders. Downloading the instructions grants no warehouse
-permissions.
+connection to summarize completed orders. `vecten mcp connection --env <env>` prints the
+warehouse server’s URL and instructions for connecting an assistant. Downloading the
+instructions grants no warehouse permissions.
 
 In the extension’s `pyproject.toml`, declare the skill by name:
 
@@ -663,19 +664,23 @@ monthly_orders = {
 }
 ```
 
-From a project that has the extension installed and listed in `vecten.toml`, run
+Install the extension in the project using its distribution name with
+[`vecten extension add`](#install-and-update). From that project, run
 `vecten extension pack-skill monthly-orders --output monthly-orders.zip` to inspect the
 archive locally. The destination must be a new file. The ZIP contains
 `monthly-orders/SKILL.md` and the listed files under the same folder.
 
 To make the ZIP available to the finance group, add the following to the project’s
-`vecten.toml` and ship the project through its usual workflow:
+`vecten.toml`. Use the MCP group name shown by `vecten group list`. Administrators manage
+membership through [MCP identity and access](mcp-identity.md).
 
 ```toml
 [consumer_skills.monthly-orders]
 groups = ["finance"]
 ```
 
-A member signs in at `https://mcp.<domain>/apps` and chooses **monthly-orders** under
+Commit `vecten.toml` and the [files written by `vecten extension add`](#dependencies-and-locks),
+then use the project’s ship workflow for the target environment. After the new MCP container starts, open `/apps` on the host
+shown by `vecten mcp connection --env <env>`. A member signs in and chooses **monthly-orders** under
 **Skills for your assistant**. The server checks current membership on each download.
 Removing a member stops future downloads. Copies already downloaded stay with their recipients.
