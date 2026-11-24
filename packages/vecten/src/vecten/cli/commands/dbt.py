@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import click
@@ -77,15 +78,16 @@ def register(app: typer.Typer) -> None:
             # The convention tests read the declared areas from this var.
             args = with_area_vars(args, config.areas)
             if target_env is None:
-                env = _dbt_env(root, config)
+                environment = nullcontext(_dbt_env(root, config))
                 write_packages_yml(root / "dbt", config)
             else:
-                env = environment_dbt_env(root, config, target_env, args)
+                environment = environment_dbt_env(root, config, target_env, args)
+            with environment as env:
+                run = run_dbt(args, project_dir=root / "dbt", env=env, capture=False)
         except Failure as failure:
             text, code = render(failure, as_json=False)
             print(text, file=sys.stderr)
             raise typer.Exit(code) from None
-        run = run_dbt(args, project_dir=root / "dbt", env=env, capture=False)
         raise typer.Exit(run.returncode)
 
     @app.command(
