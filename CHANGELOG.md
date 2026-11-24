@@ -27,6 +27,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - Deployment plans name the bound service volumes that will be lost when an AWS or Scaleway
   host is removed or replaced. The apply workflow also prints the warning before applying
   ([#129](https://github.com/vecten/vecten-open/issues/129)).
+- Deployed Airflow can sign administrators in with the MCP’s OpenID Connect provider and shared administrator list ([#5](https://github.com/vecten/vecten-open/issues/5)).
 - `vecten up` reports each active component’s base image and how to select published images when a local build was chosen ([#21](https://github.com/vecten/vecten-open/issues/21)).
 
 ### Fixed

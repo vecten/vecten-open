@@ -78,6 +78,7 @@ def test_dbt_dag_tests_pass_inside_the_airflow_image():
         # dag.test() runs a DAG against Airflow's metadata database.
         "airflow db migrate >/dev/null && "
         "cd /tmp && python -m pytest -p no:cacheprovider -q "
+        "/src/packages/vecten-platform/tests/test_airflow_oidc.py "
         "/src/packages/vecten-platform/tests/test_dbt_airflow_dag.py "
         "-o 'filterwarnings=ignore' --import-mode=importlib --tb=short --show-capture=no"
     )

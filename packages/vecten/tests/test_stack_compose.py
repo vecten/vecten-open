@@ -186,6 +186,29 @@ def test_airflow_env_is_three_x_local_executor_and_hostname_base_url(tmp_path):
     assert command == "airflow db migrate && exec airflow api-server --proxy-headers"
 
 
+def test_airflow_oidc_manager_only_on_opted_in_deployments(tmp_path):
+    raw = cfg(["platform", "mcp"], deploy=DEPLOY).model_dump()
+    raw["mcp"] = {
+        "oidc_issuer": "https://id.example",
+        "oidc_client_id": "mcp",
+        "admins": ["a@example.org"],
+    }
+    raw["airflow"] = {"auth": "oidc"}
+    config = VectenConfig.model_validate(raw)
+    for mode in ("local", "vm"):
+        doc = generate_compose(config, mode, ["platform"], tmp_path, hosts=VM_HOSTS)
+        env = doc["services"]["airflow-api-server"]["environment"]
+        assert ("AIRFLOW__CORE__AUTH_MANAGER" in env) == (mode == "vm")
+    raw["airflow"]["oidc_client_secret_name"] = "SSO_AIRFLOW_CLIENT_SECRET"
+    with pytest.raises(ValueError, match="declare"):
+        VectenConfig.model_validate(raw)
+    raw["secrets"] = ["SSO_AIRFLOW_CLIENT_SECRET"]
+    VectenConfig.model_validate(raw)
+    raw["mcp"]["admins"] = []
+    with pytest.raises(ValueError, match="admins"):
+        VectenConfig.model_validate(raw)
+
+
 def test_postgres_init_and_log_prefix(tmp_path, monkeypatch):
     monkeypatch.delenv(LOCAL_PG_PORT_ENV, raising=False)
     doc = generate_compose(cfg(["platform", "mcp"]), "local", ["platform", "mcp"], tmp_path)

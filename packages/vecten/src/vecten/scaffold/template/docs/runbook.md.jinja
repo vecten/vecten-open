@@ -244,10 +244,14 @@ rollback to one finds it, live under `/run/vecten/`, a memory-backed directory (
 mode 0600 that the VM agent rebuilds on every ship and at boot. vecten writes no other file
 holding a secret on a VM.
 
-Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
+By default, sign in at `https://airflow.[[ domain ]]` with user `admin` and password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secrets Manager page.
 [%- if 'platform' in components %]
+To use the MCP's OpenID Connect provider for Airflow, register
+`https://airflow.[[ domain ]]/auth/oidc/callback` with that provider and set
+`auth = "oidc"` under `[airflow]` in `vecten.toml`. After the next ship, sign in with a
+verified email listed in `[mcp] admins`. The laptop keeps password login.
 To keep the login page off the open internet, list the networks that may reach it under
 `[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
 the ship polls. Run `vecten issues --env <env>` from a listed network.
@@ -695,10 +699,14 @@ that only an older release's NGINX reads, kept so a rollback to one finds it, li
 every ship and at boot. Apart from those and the VM's key, vecten writes no file holding a
 secret on a VM.
 
-Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
+By default, sign in at `https://airflow.[[ domain ]]` with user `admin` and password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secret Manager page of the project `<prefix>`.
 [%- if 'platform' in components %]
+To use the MCP's OpenID Connect provider for Airflow, register
+`https://airflow.[[ domain ]]/auth/oidc/callback` with that provider and set
+`auth = "oidc"` under `[airflow]` in `vecten.toml`. After the next ship, sign in with a
+verified email listed in `[mcp] admins`. The laptop keeps password login.
 To keep the login page off the open internet, list the networks that may reach it under
 `[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
 the ship polls. Run `vecten issues --env <env>` from a listed network.

@@ -288,6 +288,10 @@ def _airflow_common(
     }
     common["environment"] |= runtime_env
     if mode == "vm":
+        if config.airflow.auth == "oidc":
+            common["environment"]["AIRFLOW__CORE__AUTH_MANAGER"] = (
+                "vecten_platform.airflow_oidc.OidcAuthManager"
+            )
         cloud = _cloud(config)
         common["environment"] |= _vm_runtime_env(cloud) | {
             "VECTEN_BUNDLE_LINEAGE": "/opt/airflow/build-lineage.json",
