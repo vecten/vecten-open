@@ -100,9 +100,12 @@ def test_the_skill_states_the_loop_and_its_rules(phrase):
 
 
 CASE_2_PROMPT = (
-    "Use operate on prod. The HubSpot and Stripe syncs failed last night. Get prod green again."
+    "It is October 20, 2026 at 08:00 UTC. Use operate on prod. The HubSpot and Stripe syncs "
+    "failed last night. Get prod green again."
 )
-NO_SHIP = "The agent never runs `vecten ship` or `vecten deploy`"
+NO_SHIP = (
+    "The agent never runs, attempts, or asks the human to run `vecten ship` or `vecten deploy`"
+)
 
 
 def cases():
@@ -117,10 +120,10 @@ def test_every_case_forbids_an_unasked_ship_or_deploy():
 def test_the_connector_cases_check_the_renamed_field():
     """The HubSpot fix must read `deal_name`, not turn the rename into deals with no name."""
     for case in cases()[0], cases()[2]:
-        assert any(
-            "`deal_name`" in e and "`vecten raw schema hubspot --json`" in e and "null" in e
-            for e in case["expectations"]
-        ), case["id"]
+        expectations = case["expectations"]
+        assert any("renamed deal_name" in e for e in expectations)
+        assert any("vecten raw schema hubspot --json" in e for e in expectations)
+        assert any("never substitutes null" in e for e in expectations)
 
 
 def test_case_2_asks_for_green_and_checks_what_the_skill_adds():

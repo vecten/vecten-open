@@ -66,8 +66,9 @@ GUIDE_SIGN_IN = (
     f"{GRACE_PASSWORD}; she signs in with it when her client connects.",
 )
 OPERATE_NOTES = (
-    "`vecten issues --env prod` and `vecten issues show` answer from the case's fixture; an "
-    "issue leaves the list once a merged pull request names its id or gap id.",
+    "`vecten issues --env prod` and `vecten issues show` answer from the case's fixture; a "
+    "default-branch merge names one issue. For connector and model issues its fix must "
+    "pass the replay check.",
     "The project holds its local stack's secrets, so the agent can start the stack with "
     "`vecten up`. Every project's stack publishes the same ports: keep one operate run at a "
     "time, and run `vecten down` in its project when the run ends.",

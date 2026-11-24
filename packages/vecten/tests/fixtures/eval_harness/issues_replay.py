@@ -5,9 +5,10 @@ reproduces the fixture's failures through them. This wrapper, first on the PATH,
 `vecten issues --env <env>` and `vecten issues show <id> --env <env>` from the fixture, in the
 command's own output contract, and hands every other command to the real `vecten`.
 
-An issue leaves the list once a merged pull request in the gh stand-in names its id (in the
-head branch or the body) or, for a gap, its gap id; that stands for the fix shipping and the
-next run going green. When every issue has left, the list is the fixture's `after_merges`.
+A default-branch merge must name one issue. For connector and model fixes the replay also
+checks the merged code against the case before simulating the next green run.
+When every issue has left, the list is the
+fixture's `after_merges`.
 """
 
 from __future__ import annotations
@@ -58,27 +59,28 @@ def install(
     }
 
 
-def merged_texts(gh_dir: Path) -> list[str]:
-    from eval_harness.gh_standin import Store
-
-    store = Store(gh_dir)
-    texts = []
-    for name in store.names():
-        for pull in (store.read(name) or {}).get("pulls", {}).values():
-            if pull["state"] == "merged":
-                texts.append(f"{pull['head']}\n{pull['title']}\n{pull['body']}")
-    return texts
-
-
 def open_issues(doc: dict, gh_dir: Path | None) -> dict:
+    from eval_harness.gh_standin import Store
+    from eval_harness.operate_fixes import verifies
+    from eval_harness.projects import REPOSITORY
+
     listed = doc["issues"]
-    texts = merged_texts(gh_dir) if gh_dir else []
-
-    def fixed(issue: dict) -> bool:
-        names = [issue["id"], issue["evidence"].get("gap_id")]
-        return any(name and name in text for name in names for text in texts)
-
-    remaining = [i for i in listed["issues"] if not fixed(i)]
+    store = Store(gh_dir) if gh_dir else None
+    repo = (store.read(REPOSITORY) or {}) if store else {}
+    closed = set()
+    for pull in repo.get("pulls", {}).values():
+        if pull["state"] != "merged" or pull["base"] != repo["default_branch"]:
+            continue
+        names = f"{pull['head']}\n{pull['title']}\n{pull['body']}"
+        matched = [
+            issue
+            for issue in listed["issues"]
+            if issue["id"] in names
+            or (issue["evidence"].get("gap_id") and issue["evidence"]["gap_id"] in names)
+        ]
+        if len(matched) == 1 and verifies(store, REPOSITORY, pull, matched[0]):
+            closed.add(matched[0]["id"])
+    remaining = [issue for issue in listed["issues"] if issue["id"] not in closed]
     if not remaining and listed["issues"] and "after_merges" in doc:
         return doc["after_merges"]
     return {**listed, "issues": remaining}
