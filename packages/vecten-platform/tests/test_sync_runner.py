@@ -481,22 +481,31 @@ def test_paid_units_commit_before_next_read_and_resume_in_a_fresh_directory(duck
 
 
 @pytest.mark.parametrize(
-    ("disposition", "cursor", "reason"),
+    ("disposition", "hints", "cursor", "reason"),
     [
-        ("replace", 1, "append or merge"),
-        ({"disposition": "merge", "strategy": "scd2"}, 1, "append or merge"),
-        ({"disposition": "merge", "strategy": "cdc"}, 1, "append or merge"),
-        ("append", None, "new cursor"),
+        ("replace", {}, 1, "append or merge"),
+        ({"disposition": "merge", "strategy": "scd2"}, {"primary_key": "id"}, 1, "append or merge"),
+        ({"disposition": "merge", "strategy": "cdc"}, {"primary_key": "id"}, 1, "append or merge"),
+        ("merge", {}, 1, "primary key"),
+        ("merge", {"primary_key": "id", "merge_key": "day"}, 1, "merge key"),
+        ("merge", {"primary_key": "id", "columns": {"day": {"merge_key": True}}}, 1, "merge key"),
+        (
+            {"disposition": "merge", "strategy": "delete-insert", "destination_scope": "day = 1"},
+            {"primary_key": "id"},
+            1,
+            "destination scope",
+        ),
+        ("append", {}, None, "new cursor"),
     ],
 )
 def test_invalid_unit_fails_before_loading_its_rows(
-    duckdb_dest, tmp_path, disposition, cursor, reason
+    duckdb_dest, tmp_path, disposition, hints, cursor, reason
 ):
     from vecten_platform.sync import finish_unit
 
-    @dlt.resource(name="orders", write_disposition=disposition)
+    @dlt.resource(name="orders", write_disposition=disposition, **hints)
     def orders():
-        yield {"id": 0}
+        yield {"id": 0, "day": 1}
         finish_unit(cursor, more=True)
 
     @dlt.source
@@ -561,3 +570,46 @@ def test_counts_recovered_package_and_new_tables(duckdb_dest, tmp_path, normaliz
     assert result.ok, result.error
     assert result.rows == 2
     assert result.tables == ("new_table", "old_table")
+
+
+@pytest.mark.parametrize("strategy", [None, "delete-insert", "upsert", "insert-only"])
+def test_checkpointed_primary_key_merges_preserve_earlier_units(strategy, duckdb_dest, tmp_path):
+    from vecten_platform.sync import finish_unit, unit_cursor
+
+    disposition = {"disposition": "merge", "strategy": strategy} if strategy else "merge"
+
+    @dlt.resource(name="orders", write_disposition=disposition, primary_key="id")
+    def orders():
+        index = unit_cursor(0)
+        yield {"id": index, "day": 1}
+        finish_unit(index + 1, more=index == 0)
+
+    @dlt.source
+    def source():
+        return [orders]
+
+    result = run_object("demo", source, "orders", duckdb_dest, tmp_path / "dlt")
+    assert result.ok, result.error
+    assert [r[0] for r in rows(tmp_path / "wh.duckdb", "orders")] == [0, 1]
+
+
+def test_checkpoint_refuses_a_routed_table_with_a_column_merge_key(duckdb_dest, tmp_path):
+    from vecten_platform.sync import finish_unit
+
+    @dlt.resource(
+        name="orders",
+        table_name=lambda row: "routed",
+        write_disposition="merge",
+        primary_key="id",
+        columns=lambda row: {"day": {"merge_key": True}},
+    )
+    def orders():
+        yield {"id": 1, "day": 1}
+        finish_unit(1, more=False)
+
+    @dlt.source
+    def source():
+        return [orders]
+
+    result = run_object("demo", source, "orders", duckdb_dest, tmp_path / "dlt")
+    assert not result.ok and "merge key" in result.error and result.rows == 0

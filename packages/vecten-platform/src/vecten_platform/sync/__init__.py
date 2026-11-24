@@ -28,18 +28,26 @@ def finish_unit(cursor: str | int | None, *, more: bool) -> None:
     """Commit the next cursor with this load and request another unit after it succeeds."""
     import dlt
 
-    disposition = dlt.current.resource().write_disposition
-    strategy = None
-    if isinstance(disposition, dict):
-        strategy = disposition.get("strategy")
-        disposition = disposition.get("disposition")
-    if disposition not in ("append", "merge") or strategy not in (
-        None,
-        "delete-insert",
-        "upsert",
-        "insert-only",
-    ):
-        raise ValueError("checkpointed units need an append or merge-by-key resource")
+    resource = dlt.current.resource()
+    tables = [
+        t for t in dlt.current.source_schema().tables.values() if t.get("resource") == resource.name
+    ]
+    if not resource.has_dynamic_table_name:
+        tables.append(resource.compute_table_schema())
+    for table in tables:
+        disposition = table.get("write_disposition", "append")
+        columns = table["columns"].values()
+        if (
+            disposition not in ("append", "merge")
+            or table.get("x-merge-strategy") not in (None, "delete-insert", "upsert", "insert-only")
+            or table.get("x-merge-destination-scope") is not None
+            or any(col.get("merge_key") for col in columns)
+            or (disposition == "merge" and not any(col.get("primary_key") for col in columns))
+        ):
+            raise ValueError(
+                "checkpointed units need an append or merge by primary key "
+                "without a merge key or destination scope"
+            )
     if not isinstance(more, bool) or (cursor is not None and type(cursor) not in (int, str)):
         raise ValueError("finish_unit needs a string, integer, or null cursor and boolean more")
     previous = unit_cursor()

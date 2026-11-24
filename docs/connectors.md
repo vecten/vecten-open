@@ -59,10 +59,11 @@ def purchases():
     finish_unit(page.next_offset, more=page.has_more)
 ```
 
-Use append, or merge by key with the default strategy, `delete-insert`, `upsert`, or
-`insert-only`. The `scd2` and `cdc` strategies can retire or delete rows from earlier units. The cursor is a string, integer, or null. Requesting
-another unit requires a cursor the run has not already visited. A failure can repeat the unit in progress, so size
-units to match the upstream's billing granularity. A recording samples the first unit
+Use append, or merge by primary key with the default strategy, `delete-insert`, `upsert`,
+or `insert-only`. A merge key, a destination scope, or the `scd2` and `cdc` strategies
+can remove rows from earlier units. The cursor is a string, integer, or null. Requesting
+another unit requires a cursor the run has not already visited. A failure can repeat the
+unit in progress, so size units to match the upstream's billing granularity. A recording samples the first unit
 within the usual row limit. Airflow publishes the group's asset after its object tasks finish.
 
 ### Record a sample or supply invented rows
