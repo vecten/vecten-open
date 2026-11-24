@@ -12,9 +12,9 @@
         "title": "hubspot object deals fails with KeyError",
         "resolution": "connector",
         "occurrences": 1,
-        "first_seen": "2026-10-20T02:00:00Z",
-        "last_seen": "2026-10-20T02:00:00Z",
-        "evidence": {"untrusted": true, "run_id": "scheduled__2026-10-20T02:00:00+00:00", "error_class": "KeyError"}
+        "first_seen": "2026-10-20T00:00:00Z",
+        "last_seen": "2026-10-20T00:00:00Z",
+        "evidence": {"untrusted": true, "run_id": "scheduled__2026-10-20T00:00:00+00:00", "error_class": "KeyError"}
       }
     ]
   },
