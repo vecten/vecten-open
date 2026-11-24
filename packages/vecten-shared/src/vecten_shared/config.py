@@ -23,6 +23,7 @@ from pydantic import (
     model_validator,
 )
 
+from vecten_shared.airflow_resources import AirflowResources
 from vecten_shared.apps import APP_CREDENTIAL, principal_name
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
 from vecten_shared.declarations import is_toml_time, secret_problem
@@ -221,7 +222,7 @@ class McpSection(Strict):
         return self
 
 
-class AirflowSection(Strict):
+class AirflowSection(AirflowResources):
     # The networks that may reach a deployed `airflow.<domain>`; empty leaves it public.
     allow: list[str] = Field(default_factory=list)
 

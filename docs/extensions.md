@@ -246,7 +246,7 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
 | `vecten.services` | A dictionary, or zero-argument factory returning one, declaring one long-running process and its HTTP routes. The entry name is the service's name. `vecten lock` records it; it runs once `vecten.toml` binds it (see [services](#services)). |
 | `vecten.apps` | A dictionary, or zero-argument factory returning one, declaring one analytics app: `title`, `description`, `kind` (`container` or `snowflake`), the Ossie `datasets` it reads and suggested `groups`; a `container` app gives `runtime = "streamlit"` with `entry`, or `command` and `port`. `vecten lock` records it; `extension add` binds it in `[apps.<extension>.<app>]`. See [analytics apps](analytics-apps.md). |
-| `vecten.manifest` | A dictionary, or zero-argument factory returning one, with `secrets` and `settings`: what the extension needs, not a part it contributes (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
+| `vecten.manifest` | A dictionary, or zero-argument factory returning one, declaring its `secrets`, `settings` and `airflow` resources (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
 
 MCP means Model Context Protocol, the client/server interface for warehouse tools. OAuth login,
 the authenticated transport, warehouse identity services, the [tool audit](mcp-audit.md) and the
@@ -373,6 +373,45 @@ project().secret("SLACK_TOKEN")
 `secret()` refuses a name its extension, or the project, did not declare, and a name delivered
 to the other component, on the laptop and on every VM alike, even where the host's cloud identity
 could read it. Connector code may keep using `vecten_platform.sync.secret`.
+
+### Airflow pools, variables and API accounts
+
+A project can reserve slots for a DAG, set a default for a run switch, and give a monitoring
+service a read-only Airflow login. Declare them in `vecten.toml`. A service account maps its
+username to a password secret declared by the same project or extension.
+
+```toml
+secrets = ["MONITOR_PASSWORD"]
+
+[airflow.pools]
+paid_search = 2
+
+[airflow.variables]
+pause_searches = "off"
+
+[airflow.api_accounts]
+monitor = "MONITOR_PASSWORD"
+```
+
+An extension can return the same `airflow` mapping and `secrets` list from its
+`vecten.manifest` entry point. Run `vecten lock` after changing the manifest. Set the
+password with `vecten secret set MONITOR_PASSWORD` in each environment before starting or
+shipping the stack. If the password is missing, `vecten up` and `vecten ship` report the
+account and secret name and stop. A failed ship keeps the previous release serving. On an
+unattended VM start, the agent logs the missing secret, skips that account and starts the stack.
+A platform-hosted service in the declaring extension receives that secret
+through its usual environment. When `[airflow] allow` is set, include the service host's
+public address if the service calls Airflow through its public hostname.
+
+At startup the API server applies the pool sizes and creates missing variables before the
+scheduler starts. Existing variable values survive another `up` or `ship`, so operators
+can change a switch at runtime. Removing a declaration leaves its pool or variable in Airflow
+for DAGs that still use it. Removing an API account prevents new logins on the next `up` or `ship`. Tokens already
+issued remain valid until they expire. Each account signs in at Airflow's token endpoint with its own
+username and password at `POST /auth/token`. Use the resulting bearer token for
+`GET /api/v2/dags` and other permitted reads. Airflow's viewer role can read pools and DAG resources including runs, task
+logs, DAG source and XCom values (data passed between tasks). Logs and XComs can contain
+warehouse data. Grant a viewer account only to a service that may read those records.
 
 ### Dependencies per component
 

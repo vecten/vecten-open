@@ -142,6 +142,7 @@ def test_dbt_dag_tests_pass_inside_the_airflow_image():
         "airflow db migrate >/dev/null && "
         "cd /tmp && python -m pytest -p no:cacheprovider -q "
         "/src/packages/vecten-platform/tests/test_dbt_airflow_dag.py "
+        "/src/packages/vecten-platform/tests/test_declared_airflow_resources.py "
         "-o 'filterwarnings=ignore' --import-mode=importlib --tb=short --show-capture=no"
     )
     proc = in_image(image, script, "-v", f"{REPO}:/src:ro")

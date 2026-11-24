@@ -15,6 +15,7 @@ from fractions import Fraction
 from functools import cache
 from typing import TYPE_CHECKING, Any
 
+from vecten_shared.airflow_resources import AirflowResources
 from vecten_shared.apps import APP_CREDENTIAL
 from vecten_shared.names import secret_name_problem
 from vecten_shared.output import ExitCode, Failure
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 PROJECT = "project"
 LOCAL = "local"
 ENV_KEY = "env"
-MANIFEST_KEYS = ("secrets", "settings")
+MANIFEST_KEYS = ("secrets", "settings", "airflow")
 SETTING_TYPES = ("string", "integer", "number", "boolean", "array", "object")
 PROPERTY_KEYS = frozenset(
     {
@@ -65,6 +66,7 @@ class Manifest:
     secrets: tuple[str, ...]
     settings: dict[str, Any] | None
     unknown: tuple[str, ...]
+    airflow: AirflowResources | None = None
 
 
 def secret_problem(name: str) -> str | None:
@@ -189,7 +191,11 @@ def parse_manifest(extension: str, value: object) -> Manifest:
     if settings is not None:
         settings = check_schema(extension, settings)
     unknown = tuple(sorted(k for k in value if k not in MANIFEST_KEYS))
-    return Manifest(secrets=tuple(sorted(set(secrets))), settings=settings, unknown=unknown)
+    try:
+        airflow = AirflowResources.model_validate(value["airflow"]) if "airflow" in value else None
+    except ValueError as exc:
+        raise _manifest_failure(extension, "airflow", str(exc)) from None
+    return Manifest(tuple(sorted(set(secrets))), settings, unknown, airflow)
 
 
 def is_toml_time(value: object) -> bool:

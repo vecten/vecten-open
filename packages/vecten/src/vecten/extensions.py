@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from vecten import git_extensions, in_repo, locking
 from vecten.stack.images import BASE_CONSTRAINTS_SCRIPT, base_image
 from vecten_shared import git_sources
+from vecten_shared.airflow_resources import effective_resources
 from vecten_shared.apps import GROUP as APPS_GROUP
 from vecten_shared.apps import AppDeclaration, colliding_service, parse_app, principal_name
 from vecten_shared.config import VectenConfig, label_problem, load_config, service_hostname
@@ -650,6 +651,7 @@ def _lock_project(
             entry,
             secrets=manifests[name].secrets if name in manifests else (),
             settings=manifests[name].settings if name in manifests else None,
+            airflow=manifests[name].airflow if name in manifests else None,
             services={s: d.service for s, d in services.get(name, {}).items()},
             apps={a: d.app for a, d in apps.get(name, {}).items()},
         )
@@ -663,6 +665,7 @@ def _lock_project(
                 f"extension {name}: service {clash} has the name of app "
                 f"{clash.removeprefix('app-')}'s own service; rename the service",
             )
+    effective_resources(config, record)
     for env in environments_named(config):
         check_settings(config, record, env)
     check_bindings(config, record)
@@ -906,7 +909,11 @@ def check_declarations(root: Path) -> list[str]:
     manifests = load_manifests(config, only=local)
     for name in sorted(local):
         manifest = manifests.get(name, Manifest((), None, ()))
-        if (manifest.secrets, manifest.settings) != (record[name].secrets, record[name].settings):
+        if (manifest.secrets, manifest.settings, manifest.airflow) != (
+            record[name].secrets,
+            record[name].settings,
+            record[name].airflow,
+        ):
             raise Failure(
                 ExitCode.CONFIG,
                 f"extension {name}: manifest differs from {locking.RECORD_FILE}; run `vecten lock`",

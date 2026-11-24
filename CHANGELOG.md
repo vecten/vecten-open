@@ -12,6 +12,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
 - Both runtime images include third-party notices, the base image reference and an inventory of installed Debian packages ([#24](https://github.com/vecten/vecten-open/issues/24)).
 - Project CI runs `vecten lock --check` to catch changed in-repo manifests, services, and apps ([#113](https://github.com/vecten/vecten-open/issues/113)).
+- Projects and extensions can declare Airflow pools, variable defaults and viewer API accounts ([#42](https://github.com/vecten/vecten-open/issues/42)).
 - Extension settings support nested object schemas, array, string and numeric constraints, and
   constant values ([#139](https://github.com/vecten/vecten-open/issues/139)).
 - Connector recording bounds extraction per object and supports redaction and a recording

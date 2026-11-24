@@ -73,6 +73,22 @@ def fake(monkeypatch):
     return f
 
 
+def test_up_refuses_missing_viewer_password_before_compose(invoke, workdir, fake, monkeypatch):
+    invoke("init", "p", *LOCAL, "--json")
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    p = root / "vecten.toml"
+    p.write_text(
+        'secrets=["BOT_PASSWORD"]\n'
+        + p.read_text()
+        + '\n[airflow.api_accounts]\nmonitor="BOT_PASSWORD"\n'
+    )
+    result = invoke("up", "--json")
+    assert result.exit_code == ExitCode.REFUSED, result.output
+    assert "Airflow API account monitor needs secret BOT_PASSWORD" in result.output
+    assert not fake.calls
+
+
 def test_up_generates_stack_and_prints_urls(invoke, workdir, fake, monkeypatch):
     invoke("init", "p", *LOCAL, "--json")
     monkeypatch.chdir(workdir / "p")
