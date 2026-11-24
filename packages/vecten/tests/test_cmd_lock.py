@@ -506,6 +506,45 @@ def test_extension_add_registers_an_in_repo_extension_by_its_path(invoke, projec
     assert fakes["inspected"] == []
 
 
+def test_install_with_required_settings_is_atomic(invoke, project, fakes, monkeypatch):
+    from vecten_shared.declarations import parse_manifest
+
+    make(project)
+    assert invoke("lock").exit_code == 0
+    files = ["vecten.toml", "requirements.txt", locking.RECORD_FILE, *locking.LOCK_FILES.values()]
+    before = {name: (project / name).read_bytes() for name in files}
+    schema = {
+        "properties": {"cap": {"type": "integer"}, "label": {"type": "string"}},
+        "required": ["cap"],
+    }
+    monkeypatch.setattr(
+        extensions,
+        "load_manifests",
+        lambda config: {"acme-portal": parse_manifest("acme-portal", {"settings": schema})},
+    )
+    args = ["extension", "add", "./extensions/acme-portal"]
+    for options in ([], ["--set", "cap=wrong"]):
+        result = invoke(*args, *options)
+        assert result.exit_code == ExitCode.CONFIG, result.output
+        assert "settings.acme-portal.cap" in result.output
+        assert {name: (project / name).read_bytes() for name in files} == before
+    invalid = invoke(*args, "--set", "cap=2026-01-01")
+    assert invalid.exit_code == ExitCode.CONFIG
+    assert "settings.acme-portal" in invalid.output and "pydantic.dev" not in invalid.output
+    assert {name: (project / name).read_bytes() for name in files} == before
+    result = invoke(*args, "--set", "cap = 12", "--set", 'label = "1.0"')
+    assert result.exit_code == 0, result.output
+    config = load_config(project)
+    assert config.extensions == ["acme-portal"]
+    assert config.settings["acme-portal"] == {"cap": 12, "label": "1.0"}
+    assert fakes["installed"][-1][1] == ("extensions/acme-portal",)
+    assert locking.lock_problems(project, config) == []
+    result = invoke(*args, "--set", "label=one=two")
+    assert (
+        result.exit_code == 0 and load_config(project).settings["acme-portal"]["label"] == "one=two"
+    )
+
+
 def test_each_lock_is_resolved_with_the_extension_as_input_and_holds_no_path(
     invoke, project, fakes
 ):
@@ -1002,3 +1041,83 @@ def test_a_snowflake_app_takes_no_hostname_label():
     }
     data = {"apps": {"acme-demo": {"finance": {"groups": ["f"]}, "overview": {"groups": ["d"]}}}}
     assert _taken_labels(data, record) == {"overview"}
+
+
+@pytest.mark.parametrize(
+    "group,setting",
+    [
+        ("vecten.manifest", {"secrets": ["MCP_API_KEY"]}),
+        ("vecten.services", {"port": 8123}),
+        ("vecten.apps", {"title": "Updated dashboard"}),
+    ],
+)
+def test_check_detects_changed_local_declarations_without_resolving(
+    invoke, project, fakes, monkeypatch, group, setting
+):
+    from .services_fixtures import OVERVIEW
+
+    _register(project)
+    value = {"vecten.manifest": {}, "vecten.services": BOT, "vecten.apps": OVERVIEW}[group]
+    path = project / "extensions/acme-portal/declaration.json"
+    path.write_text(json.dumps(value))
+    point = SimpleNamespace(
+        dist=SimpleNamespace(name="acme-portal"),
+        name="example",
+        load=lambda: json.loads(path.read_text()),
+    )
+    original = extensions.metadata.entry_points
+
+    def points(**kwargs):
+        if kwargs.get("group") == group:
+            return [point]
+        return original(**kwargs)
+
+    monkeypatch.setattr(extensions.metadata, "entry_points", points)
+    monkeypatch.setattr(
+        extensions, "installed_from", lambda name, directory: directory == path.parent
+    )
+    assert invoke("lock").exit_code == 0
+    assert invoke("lock", "--check").exit_code == 0
+    path.write_text(json.dumps({**value, **setting}))
+    records = [
+        project / name
+        for name in (
+            "vecten.toml",
+            locking.PINS_FILE,
+            locking.RECORD_FILE,
+            *locking.LOCK_FILES.values(),
+        )
+    ]
+    before = [file.read_bytes() for file in records]
+    with monkeypatch.context() as m:
+        m.setattr(extensions, "lock_project", lambda *a, **kw: pytest.fail("resolved locks"))
+        r = invoke("lock", "--check")
+        assert r.exit_code == ExitCode.CONFIG, r.output
+        assert "acme-portal" in r.output and "run `vecten lock`" in r.output
+        assert [file.read_bytes() for file in records] == before
+    assert invoke("lock").exit_code == 0
+    assert invoke("lock", "--check").exit_code == 0
+
+
+def test_check_without_local_extensions_reports_stale_locks(invoke, project, fakes):
+    assert invoke("lock").exit_code == 0
+    assert invoke("lock", "--check").exit_code == 0
+    _edit_config(project, lambda doc: doc.update(dependencies={"cli": {"python": ["example==1"]}}))
+    result = invoke("lock", "--check")
+    assert result.exit_code == ExitCode.CONFIG, result.output
+    assert "requirements.lock" in result.output and "run `vecten lock`" in result.output
+
+
+def test_ci_preparation_uses_local_lock_and_leaves_missing_files_to_check(invoke, project, fakes):
+    _register(project)
+    assert invoke("lock").exit_code == 0
+    fakes["installed"].clear()
+    extensions.prepare_declaration_check(project)
+    assert fakes["installed"] == [
+        ((project / "requirements.lock").read_text(), ("extensions/acme-portal",))
+    ]
+    (project / "requirements.lock").unlink()
+    extensions.prepare_declaration_check(project)
+    result = invoke("lock", "--check")
+    assert result.exit_code == ExitCode.CONFIG and "requirements.lock" in result.output
+    assert len(fakes["installed"]) == 1

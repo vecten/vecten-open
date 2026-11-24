@@ -2,6 +2,7 @@
 
 import json
 import re
+from uuid import uuid4
 
 from vecten.deploy.snowflake import environment_names, identity_ship_command, owed_ship_record
 from vecten.mcp_url import mcp_url
@@ -109,6 +110,7 @@ def setup_script(root, env, confirm=False, public_key=None):
             and before.deployed_commit
             and not before.provisioner_script_run
         ):
+            before.mcp_ship_generation = uuid4().hex
             write_record(root, owed_ship_record(env), {"command": then})
         if env != "local":
             facts = config.environments.setdefault(env, EnvironmentFacts())

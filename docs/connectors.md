@@ -37,6 +37,14 @@ source that needs extra Python packages lists them in the declaration's `depende
 installs them, and on the laptop install them where the CLI runs, for example
 `uv tool install vecten --with <package>`.
 
+Airflow runs a separate sync task for each object (a named dlt resource in the source).
+For example, if a metered API reports that the account has exhausted its credits,
+raise `TerminalConnectorError` from `vecten_platform.sync` inside that resource.
+Its task fails on that attempt and sends its configured failure alert. If you raise it
+from an HTTP error, the alert and `vecten issues` use the terminal exception’s class and
+message, so you can distinguish exhausted credits from an HTTP error that Airflow retried.
+Raise ordinary exceptions for temporary failures so Airflow can retry.
+
 ## Extensions
 
 A connector that several projects share, or that a company keeps private, is an extension: a

@@ -1,6 +1,5 @@
 import json
 import socket
-import stat
 import subprocess
 from pathlib import Path
 
@@ -104,7 +103,6 @@ def test_up_generates_stack_and_prints_urls(invoke, workdir, fake, monkeypatch):
         "build/airflow.Dockerfile",
         "build/mcp.Dockerfile",
         "build/requirements.txt",
-        "airflow_passwords.json",
         "pg-init/vecten/warehouse_setup.sql",
         "pg-init/10-vecten.sh",
     ):
@@ -114,6 +112,40 @@ def test_up_generates_stack_and_prints_urls(invoke, workdir, fake, monkeypatch):
     assert (workdir / "p" / ".vecten" / "records" / "up.json").is_file()
     assert "AIRFLOW_BASIC_AUTH_PASSWORD=" not in (workdir / "p" / ".env").read_text()
     assert not (stack / "nginx" / "htpasswd").exists()
+
+
+@pytest.mark.parametrize(
+    "available, override, prefix, source",
+    [
+        (True, None, "", "local"),
+        (False, None, "ghcr.io/vecten/", "registry"),
+        (True, "mirror.example/team/", "mirror.example/team/", "registry"),
+    ],
+)
+def test_up_names_the_images_used_in_the_project_dockerfiles(
+    invoke, workdir, fake, monkeypatch, available, override, prefix, source
+):
+    from vecten_shared.versions import VERSIONS
+
+    monkeypatch.setattr(fake, "image_exists", lambda tag: available)
+    if override:
+        monkeypatch.setenv("VECTEN_IMAGE_REGISTRY", override)
+    else:
+        monkeypatch.delenv("VECTEN_IMAGE_REGISTRY", raising=False)
+    invoke("init", "p", *LOCAL)
+    root = workdir / "p"
+    monkeypatch.chdir(root)
+    data = json.loads(invoke("up", "--json").stdout)
+    human = invoke("up").stdout
+    for component, kind in (("platform", "airflow"), ("mcp", "mcp")):
+        image = f"{prefix}vecten-{kind}:{VERSIONS.vecten}"
+        assert data["base_images"][component] == {"image": image, "source": source}
+        assert f"{component} base image: {image} ({source})" in human
+        dockerfile = root / ".vecten/stack/build" / f"{kind}.Dockerfile"
+        assert dockerfile.read_text().splitlines()[0] == f"FROM {image}"
+    override_hint = "VECTEN_IMAGE_REGISTRY=ghcr.io/vecten"
+    assert (override_hint in human) == (source == "local")
+    assert (override_hint in data.get("base_image_hint", "")) == (source == "local")
 
 
 def test_up_mcp_only(invoke, workdir, fake, monkeypatch):
@@ -136,6 +168,7 @@ def test_up_mcp_only(invoke, workdir, fake, monkeypatch):
         "mcp",
         "local",
     ]
+    assert set(doc["base_images"]) == {"mcp"}
     assert fake.profiles[0] == ["mcp", "local"]
     assert "airflow_api" not in doc and "airflow_user" not in doc
 
@@ -149,11 +182,16 @@ def test_up_docker_daemon_down(invoke, workdir, monkeypatch):
 
 
 def test_up_compose_failure_is_tool_failed(invoke, workdir, monkeypatch):
+    monkeypatch.delenv("VECTEN_IMAGE_REGISTRY", raising=False)
     invoke("init", "p", *LOCAL, "--json")
     monkeypatch.chdir(workdir / "p")
     monkeypatch.setattr(up_mod, "get_runner", lambda: FakeDocker(fail_up=True))
     r = invoke("up", "--json")
-    assert r.exit_code == 5 and "nginx" in json.loads(r.stdout)["error"]
+    assert r.exit_code == 5
+    error = json.loads(r.stdout)["error"]
+    assert "nginx" in error
+    assert "vecten-airflow:" in error and "vecten-mcp:" in error
+    assert "VECTEN_IMAGE_REGISTRY=ghcr.io/vecten" in error
 
 
 def test_down_stops_running_stack(invoke, workdir, fake, monkeypatch):
@@ -187,12 +225,15 @@ def test_up_outside_project_refused(invoke):
     assert invoke("up", "--json").exit_code == 4
 
 
-def test_up_writes_the_airflow_passwords_file_owner_only(invoke, workdir, fake, monkeypatch):
+@pytest.mark.parametrize("command", ["up", "down"])
+def test_removes_legacy_password_file(invoke, workdir, fake, monkeypatch, command):
     invoke("init", "p", *LOCAL, "--json")
     monkeypatch.chdir(workdir / "p")
-    assert invoke("up", "--json").exit_code == 0
     passwords = workdir / "p" / ".vecten" / "stack" / "airflow_passwords.json"
-    assert stat.S_IMODE(passwords.stat().st_mode) == 0o600
+    passwords.parent.mkdir(parents=True, exist_ok=True)
+    passwords.write_text("legacy")
+    assert invoke(command, "--json").exit_code == 0
+    assert not passwords.exists()
 
 
 def test_down_keeps_volumes_by_default(invoke, workdir, fake, monkeypatch):
@@ -366,8 +407,8 @@ def test_build_context_holds_only_the_project_layer(invoke, workdir, fake, monke
         "mcp.Dockerfile",
         "requirements.txt",
     ]
-    for secret in ("airflow_passwords.json", "certs"):
-        assert (stack / secret).exists() and stack / "build" not in (stack / secret).parents
+    assert (stack / "certs").is_dir()
+    assert not (stack / "airflow_passwords.json").exists()
 
 
 def test_up_failure_without_local_base_images_says_how_to_build_them(invoke, workdir, monkeypatch):
@@ -399,6 +440,7 @@ def test_up_on_snowflake_leaves_the_mcp_out(invoke, workdir, fake, monkeypatch):
     assert doc["profiles"] == ["platform", "local"]
     assert doc["urls"] == {"airflow": "https://airflow.localhost:8443"}
     assert doc["left_out"] == ["mcp"]
+    assert set(doc["base_images"]) == {"platform"}
     stack_dir = workdir / "p" / ".vecten" / "stack"
     services = yaml.safe_load((stack_dir / "docker-compose.yml").read_text())["services"]
     assert "mcp-server" not in services

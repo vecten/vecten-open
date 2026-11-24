@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 import yaml
@@ -251,13 +252,83 @@ def test_failed_render_keeps_directory_that_existed(invoke, workdir, monkeypatch
     assert (workdir / "p").is_dir()
 
 
+def test_guide_initializes_in_the_session_directory(invoke, workdir):
+    claude = workdir / ".claude"
+    (claude / ".cc-writes").mkdir(parents=True)
+    settings = claude / "settings.local.json"
+    settings.write_text('{"permissions": {}}')
+    finder = workdir / ".DS_Store"
+    finder.write_bytes(b"finder metadata")
+    for key, value in (
+        ("has_warehouse", "no"),
+        ("sources", "start empty"),
+        ("warehouse", "postgres"),
+        ("name", "acme-data-warehouse"),
+        ("users", "4"),
+    ):
+        (item,) = json.loads(invoke("next", "--json").stdout)["items"]
+        assert item["answer_keys"] == [key]
+        if key == "name":
+            assert all(
+                word in item["title"] for word in ("lowercase", "63", "starting with a letter")
+            )
+            assert invoke("answer", key, "Acme Data Warehouse").exit_code == 2
+            assert json.loads(invoke("next", "--json").stdout)["items"] == [item]
+        assert invoke("answer", key, value).exit_code == 0
+
+    answers = workdir / "vecten-answers.yml"
+    recorded = answers.read_bytes()
+    (item,) = json.loads(invoke("next", "--json").stdout)["items"]
+    assert item["resolution"] == "vecten init"
+    result = invoke("init", "--json")
+    assert result.exit_code == 0, result.stdout
+    doc = json.loads(result.stdout)
+    assert doc["project_dir"] == str(workdir.resolve())
+    assert load_config(workdir).project.name == "acme-data-warehouse"
+    assert (workdir / ".mcp.json").is_file() and (workdir / "CLAUDE.md").is_file()
+    assert {p.name for p in claude.iterdir()} == {".cc-writes", "settings.local.json"}
+    assert not list((claude / ".cc-writes").iterdir())
+    assert settings.read_text() == '{"permissions": {}}'
+    assert finder.read_bytes() == b"finder metadata"
+    assert answers.read_bytes() == recorded
+    expected = sum(
+        p.is_file()
+        for p in workdir.rglob("*")
+        if p.relative_to(workdir).parts[0] not in {".claude", ".DS_Store", ".vecten", answers.name}
+    )
+    assert doc["files"] == expected
+
+    (claude / ".cc-writes" / "session.log").touch()
+    (claude / "settings.json").write_text("{}")
+    subprocess.run(["git", "init", "-q"], cwd=workdir, check=True)
+    git = ["git", "-c", "core.excludesFile=/dev/null"]
+    subprocess.run([*git, "add", "-A"], cwd=workdir, check=True)
+    staged = subprocess.check_output([*git, "ls-files"], cwd=workdir, text=True).splitlines()
+    assert ".claude/settings.json" in staged
+    local_files = {".DS_Store", ".claude/settings.local.json", ".claude/.cc-writes/session.log"}
+    assert local_files.isdisjoint(staged)
+
+
 def test_init_refuses_non_empty_target(invoke, workdir):
-    (workdir / "p").mkdir()
-    (workdir / "p" / "notes.txt").write_text("x")
-    r = invoke("init", "p", *LOCAL, "--json")
-    assert r.exit_code == 4 and "p" in json.loads(r.stdout)["error"]
-    assert (workdir / "p" / "notes.txt").read_text() == "x"
-    assert not (workdir / "p" / "vecten.toml").exists()
+    target = workdir / "p"
+    (target / ".git").mkdir(parents=True)
+    (target / ".claude").mkdir()
+    (target / "notes.txt").write_text("x")
+    result = invoke("init", "p", *LOCAL, "--json")
+    assert result.exit_code == 4, result.stdout
+    error = json.loads(result.stdout)["error"]
+    assert "notes.txt" in error and ".git" in error and ".claude" not in error
+    assert (target / "notes.txt").read_text() == "x"
+    assert not (target / "vecten.toml").exists()
+
+
+def test_init_only_allows_metadata_with_the_expected_file_type(invoke, workdir):
+    (workdir / ".claude").touch()
+    (workdir / ".DS_Store").mkdir()
+    result = invoke("init", *LOCAL, "--json")
+    assert result.exit_code == 4, result.stdout
+    error = json.loads(result.stdout)["error"]
+    assert ".claude" in error and ".DS_Store" in error
 
 
 @pytest.mark.parametrize(

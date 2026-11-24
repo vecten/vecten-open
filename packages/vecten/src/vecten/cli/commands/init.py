@@ -36,15 +36,20 @@ def collect_params(
 
 
 def _refuse_non_empty(target: Path) -> None:
-    # The recorded answers file is what `init` reads in place, so it does not make the target busy.
     if not target.exists():
         return
     if not target.is_dir():
         raise Failure(ExitCode.REFUSED, f"{target} is not a directory")
-    if any(p.name != ANSWERS_FILE for p in target.iterdir()):
-        raise Failure(
-            ExitCode.REFUSED, f"{target} is not empty; init renders into an empty directory"
-        )
+    blockers = []
+    for entry in target.iterdir():
+        if entry.name in {ANSWERS_FILE, ".DS_Store"} and entry.is_file(follow_symlinks=False):
+            continue
+        if entry.name == ".claude" and entry.is_dir(follow_symlinks=False):
+            continue
+        blockers.append(entry.name)
+    if blockers:
+        names = ", ".join(repr(name) for name in sorted(blockers))
+        raise Failure(ExitCode.REFUSED, f"{target} is not empty. Blocking entries: {names}")
 
 
 def register(app: typer.Typer) -> None:

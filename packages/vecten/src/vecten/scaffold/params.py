@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator
 
-from vecten.intake.answers import DECLINED, SOURCES_NEED_PLATFORM
+from vecten.intake.answers import DECLINED, SOURCES_NEED_PLATFORM, check_project_name
 from vecten.intake.sizing import size_for_users
 from vecten_shared.config import (
     Cloud,
@@ -31,7 +30,6 @@ ALLOWED = {
     "size": ("small", "medium", "large"),
 }
 DEPLOY_FIELDS = ("cloud", "region", "domain", "dns_zone", "github_repository")
-PROJECT_NAME = re.compile(r"[a-z][a-z0-9_-]{0,62}")
 HAS_WAREHOUSE_YES = ("yes", "true", "1")
 HAS_WAREHOUSE_NO = ("no", "false", "0")
 HAS_WAREHOUSE_ANSWERS = ("yes", "no", "true", "false", "1", "0")
@@ -168,12 +166,7 @@ class ScaffoldParams(BaseModel):
                 f"missing intake answers: {', '.join(missing)}",
                 details={"missing": missing},
             )
-        if not PROJECT_NAME.fullmatch(str(merged["name"])):
-            raise Failure(
-                ExitCode.USAGE,
-                "name must be lowercase letters, digits, hyphens or underscores, start with a "
-                "letter and be at most 63 characters",
-            )
+        check_project_name(str(merged["name"]))
         if has_warehouse:
             if merged.get("sources"):
                 raise Failure(ExitCode.USAGE, SOURCES_NEED_PLATFORM)
