@@ -136,6 +136,7 @@ CASES: dict[str, Case] = {
         **DEPLOY,
     ),
     "guide-3": Case("guide", 3, domain="sandbox.acme.test", **DEPLOY),
+    "guide-4": Case("guide", 4),
     "operate-1": Case("operate", 1, issues="three-failures", notes=OPERATE_NOTES, **DEPLOY),
     "operate-2": Case(
         "operate",

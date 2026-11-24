@@ -59,6 +59,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - The first guided project now initializes in the folder where Claude Code started, even
   when it contains `.claude/` or Finder's `.DS_Store`. If other entries block initialization,
   the CLI lists them. The guide explains the project name format and checks it when you answer.
+- The guide checks for the CLI before intake and installs a missing copy with uv and Python 3.14 ([#20](https://github.com/vecten/vecten-open/issues/20)).
 - Airflow syncs and dbt builds use the release's locked Snowflake connector. Syncs now skip
   dlt's Airflow Variable lookups by default. Set `PROVIDERS__ENABLE_AIRFLOW_SECRETS=true`
   to read dlt configuration from Airflow Variables
