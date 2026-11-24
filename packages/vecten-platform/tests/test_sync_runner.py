@@ -170,6 +170,24 @@ def test_record_of_a_failing_object_writes_no_fixture(demo, duckdb_dest, tmp_pat
     assert sorted(p.name for p in record_dir.iterdir()) == ["good_b.jsonl", "good_b.schema.json"]
 
 
+def test_a_schema_recording_error_reports_the_fixture_it_was_writing(
+    demo, duckdb_dest, tmp_path, monkeypatch
+):
+    from vecten_platform.sync import recording
+
+    def broken(*args, **kwargs):
+        raise KeyError("good_b")
+
+    monkeypatch.setattr(recording, "recorded_schema", broken)
+    record_dir = tmp_path / "fixtures"
+    outcome = run_object(
+        "demo", demo.source, "good_b", duckdb_dest, tmp_path / "dlt", record_dir=record_dir
+    )
+    assert not outcome.ok
+    assert outcome.error.startswith("ValueError: recording schema for ")
+    assert str(record_dir / "good_b.jsonl") in outcome.error
+
+
 @dlt.resource(name="lazy")
 def _lazy_secret_resource():
     yield {"token": context.secret("MISSING")}
