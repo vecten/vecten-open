@@ -187,25 +187,38 @@ session for that hostname and the person's sign-ins on the MCP's own browser pag
 sign-in asks for credentials again. Gate sessions on other service hostnames stay until they
 end on their own. A WebSocket opened before a session ends stays open until it reconnects.
 
-A proxy can check a login route by sending a GET to the MCP at
-`/gate/verify?forwarded=1`. Set `X-Forwarded-Host`, `X-Forwarded-Uri` (including the
-query), and `X-Forwarded-Method` from the request the proxy received. Overwrite incoming
-copies of those headers and remove any incoming `X-Vecten-Gate-Host` and
-`X-Vecten-Gate-Route` headers, including on the browser sign-in endpoints. Send the service hostname's `__Host-vecten-gate` cookie to the gate.
-A successful check returns 200 with the person's identity headers. A missing session
-returns 401, and a route outside that person's groups returns 403. To send a browser
-directly to the sign-in page on a GET or HEAD, use `/gate/verify?forwarded=1&redirect=1`.
-
-The gate matches the longest route declared for that hostname. The proxy still enforces
-IP allow-lists, forwards public routes, serves the gate's browser endpoints, and strips
-gate cookies and client-supplied identity headers before forwarding to the application.
-The generated NGINX configuration uses its internal route names for the same access check.
-
 The gate depends on the MCP server: while it is down, `login` routes are down too, and `public`
 routes keep working. Under `standard` the platform host's NGINX asks the MCP over HTTPS at
 `mcp.<domain>`, with its certificate checked, which adds a round trip between the two VMs to
 every request on a `login` route there. On the laptop, `login` routes use the laptop's MCP at
 `https://mcp.localhost:8443`, its password sign-in, and the laptop's own people and groups.
+
+### Checking service requests with a forward-auth proxy
+
+For a service route bound with `access = "login"` in `vecten.toml`, send a GET to
+`https://mcp.<domain>/gate/verify?forwarded=1`. Use the MCP host for the environment
+serving the app. Copy the `__Host-vecten-gate` cookie from the browser’s request to
+the application hostname into the verification request to the MCP host. Set
+`X-Forwarded-Host`, `X-Forwarded-Uri` (including the query), and `X-Forwarded-Method`
+from the original request. The proxy must overwrite incoming copies and strip
+`X-Vecten-Gate-Host` and `X-Vecten-Gate-Route` so clients cannot select the route being checked.
+
+For a successful check, forward the five identity headers listed [below](#identity-headers-which-to-trust-and-why)
+from the 200 response. Remove client-supplied identity headers and both gate cookies
+(`__Host-vecten-gate` and `__Host-vecten-gate-state`) before forwarding to the application.
+A missing session returns 401. A person outside the route’s groups receives 403.
+Add `&redirect=1` to have the gate send a browser visiting by GET or HEAD to sign-in.
+
+On the **service hostname**, forward `/_vecten/gate/start`, `/_vecten/gate/callback`
+and `/_vecten/gate/logout` to `/gate/start`, `/gate/callback` and `/gate/logout` on the MCP
+host. Let browsers reach these paths before checking their login. Forward the browser's
+gate cookies to these endpoints and supply the service hostname in `X-Forwarded-Host`.
+Pass the gate’s redirects and cookie responses back to the browser.
+
+The gate checks the longest declared path on the service hostname. The proxy enforces
+the route's IP allow-list and forwards public routes itself. The generated NGINX
+configuration in `.vecten/stack/nginx/conf.d/default.conf` illustrates these rules on
+the laptop. It identifies the route by extension, service and route name.
 
 ### Identity headers: which to trust and why
 
