@@ -422,10 +422,12 @@ and the gate, so that `ship` can reach it from a GitHub Actions runner. It admit
 `HEAD` only, answering 403 to anything else, and forwards exactly the declared path. Anyone can
 read the answer, so put nothing private in it.
 
-Opening Analytics in the MCP admin panel also checks this path for bound container apps.
+Opening Analytics in the MCP admin panel also checks this path for container apps listed
+under `[apps.<extension>.<app>]` in `vecten.toml` (see [analytics apps](analytics-apps.md)).
 On a deployed stack the MCP uses the app’s public HTTPS hostname. On a laptop it calls
 NGINX over plain HTTP with the app’s hostname. NGINX serves the health path on port 80
-before redirecting other requests to HTTPS. A command-only check runs inside Docker.
+before redirecting other requests to HTTPS. If the app declares a health command alone,
+Docker runs it and Analytics displays `command check only`.
 
 After it has checked Airflow and the MCP, `ship` polls each served service's health address,
 one after another, for up to 60 seconds each, and reports one state per bound service, under
