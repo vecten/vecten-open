@@ -218,8 +218,8 @@ stored under in AWS Secrets Manager, as `vecten/[[ project_name ]]/<env>/<scope>
 | any other name | `platform` | the platform VM |
 
 When upgrading an existing MCP environment to the standalone login gate, apply the updated
-AWS Terraform configuration with `vecten deploy --env <env>` before shipping. It lets the
-setup host generate the gate’s database password. The ship then creates the database login.
+AWS Terraform configuration with `vecten deploy --env <env>` before shipping. It lets the MCP VM (the `main` VM in the
+`minimal` profile) generate the gate’s database password. The ship then creates the database login.
 
 Under `minimal` the one VM reads both `platform` and `mcp`. The deploy role reads and writes
 all four scopes, as does an administrator's own AWS login. `vecten secret set <NAME> --env
@@ -568,8 +568,8 @@ hands to Terraform. When no project of the organization holds the zone, bootstra
 nothing and exits naming the zone.
 
 When upgrading an existing MCP environment to the standalone login gate, run
-`vecten bootstrap --env <env>` to refresh the key’s permissions, then `vecten deploy --env <env>`
-to create the entry for the gate’s password in Secret Manager. The ship then creates the
+`vecten bootstrap --env <env>` to let the MCP VM’s API key write the new password (`main` VM
+in the `minimal` profile). Then run `vecten deploy --env <env>` to create the entry for the gate’s password in Secret Manager. The ship then creates the
 database login.
 
 Run `vecten bootstrap --env <env>` again after changing `components` or `profile`, then
