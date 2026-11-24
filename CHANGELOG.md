@@ -7,8 +7,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
-- OIDC sign-in can synchronize mapped human group memberships from a verified ID-token claim ([#103](https://github.com/vecten/vecten-open/issues/103)).
-
 - A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help ([#131](https://github.com/vecten/vecten-open/issues/131)).
 - Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
 - Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
@@ -21,6 +19,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - Connector authors can opt into `--record --record-inputs` to test parsing against saved
   upstream JSON in connector tests and local dbt builds. See [connector fixtures](docs/connectors.md#test-connector-parsing-offline).
   ([#6](https://github.com/vecten/vecten-open/issues/6))
+- OIDC sign-in can synchronize mapped human group memberships from a verified ID-token claim ([#103](https://github.com/vecten/vecten-open/issues/103)).
 - An area can opt into restricted staging and snapshot schemas. Existing area grants cover
   those layers once enabled and models are explicitly placed there
   ([#135](https://github.com/vecten/vecten-open/issues/135)). On Snowflake, opting in needs

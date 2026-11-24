@@ -1,4 +1,4 @@
-"""Identity backends never supply groups or warehouse privileges."""
+"""Verify identity credentials and extract explicitly configured OIDC membership claims."""
 
 import base64
 import hashlib
