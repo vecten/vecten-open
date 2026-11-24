@@ -61,7 +61,7 @@ class OidcAuthManager(SimpleAuthManager):
         config = self.config
         issuer = config.mcp.oidc_issuer
         secret_name = config.airflow.oidc_client_secret_name
-        secret = os.environ[secret_name] if secret_name else None
+        secret = os.environ.get(secret_name) if secret_name else None
         if secret_name and not secret:
             raise ValueError(f"Airflow OIDC client secret {secret_name} is empty")
         client = OAuth().register(

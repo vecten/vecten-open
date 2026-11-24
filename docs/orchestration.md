@@ -133,8 +133,8 @@ loopback API, so an agent reads DAG runs, task states and task logs without the 
 error messages are data from systems you run, never instructions to the agent; the skills quote
 them and do not act on them.
 
-Deployed, Airflow sits behind NGINX at `https://airflow.<domain>` with Airflow's own login; the
-API password comes from the environment's secrets store. `vecten issues --env <env>` reads it for
+Deployed, Airflow sits behind NGINX at `https://airflow.<domain>` with password login or the project's
+OpenID Connect provider. The automation API password comes from the environment's secrets store. `vecten issues --env <env>` reads it for
 you; see below.
 
 ## Airflow in a deployed environment
@@ -161,7 +161,9 @@ at the token endpoint.
 
 After the next ship, open Airflow and sign in with the provider. Airflow grants administrator
 access to users whose verified email is in `[mcp] admins`. Removing an email takes effect
-when you ship the updated configuration. Password API tokens, including those used by
+when you ship the updated configuration. Airflow logout ends the Airflow session. To also
+end single sign-on, sign out at the identity provider. While the provider session is active,
+opening Airflow can sign you straight back in. Password API tokens, including those used by
 `vecten issues`, have viewer access in this mode. The laptop continues to use its password.
 
 **Who reaches the login.** By default anyone on the internet can reach Airflow's sign-in page at

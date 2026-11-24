@@ -76,7 +76,12 @@ def flow(monkeypatch, tmp_path):
         }
         signed = jwt.encode({"alg": "RS256", "kid": "mock-issuer"}, claims, provider["signed_by"])
         return httpx2.Response(
-            200, json={"access_token": "unused", "token_type": "Bearer", "id_token": signed}
+            200,
+            json={
+                "access_token": "unused",
+                "token_type": "Bearer",
+                "id_token": provider.get("id_token", signed),
+            },
         )
 
     register = OAuth.register
@@ -154,6 +159,42 @@ def test_provider_must_identify_the_configured_issuer(flow):
     browser, provider, _ = flow
     provider["metadata"] = {"issuer": "https://other.example"}
     assert browser.get("/auth/login").status_code == 503
+
+
+def test_provider_offering_only_symmetric_signatures_is_unavailable(flow):
+    browser, provider, _ = flow
+    provider["metadata"]["id_token_signing_alg_values_supported"] = ["HS256"]
+    assert browser.get("/auth/login").status_code == 503
+    assert COOKIE_NAME_JWT_TOKEN not in browser.cookies
+
+
+def test_symmetric_id_token_is_refused_even_with_a_valid_session(flow):
+    import jwt as pyjwt
+
+    browser, provider, _ = flow
+    provider["id_token"] = pyjwt.encode(
+        {"sub": "test-subject"}, "fixture-client-secret-" * 3, algorithm="HS256"
+    )
+    response = browser.get("/auth/oidc/callback", params=start(browser, provider))
+    assert response.status_code == 401
+    assert COOKIE_NAME_JWT_TOKEN not in browser.cookies
+
+
+def test_reloaded_admin_list_applies_to_existing_browser_tokens(flow):
+    import jwt as pyjwt
+    from fastapi import HTTPException
+
+    browser, provider, manager = flow
+    response = browser.get(
+        "/auth/oidc/callback", params=start(browser, provider), follow_redirects=False
+    )
+    claims = pyjwt.decode(
+        response.cookies[COOKIE_NAME_JWT_TOKEN], options={"verify_signature": False}
+    )
+    manager.admins = {"replacement@example.org"}
+    with pytest.raises(HTTPException) as denied:
+        manager.deserialize_user(claims)
+    assert denied.value.status_code == 403
 
 
 def test_password_tokens_are_read_only_and_require_credentials(flow, monkeypatch):

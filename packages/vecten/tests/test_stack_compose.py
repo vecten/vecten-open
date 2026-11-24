@@ -204,6 +204,10 @@ def test_airflow_oidc_manager_only_on_opted_in_deployments(tmp_path):
         VectenConfig.model_validate(raw)
     raw["secrets"] = ["SSO_AIRFLOW_CLIENT_SECRET"]
     VectenConfig.model_validate(raw)
+    raw["airflow"]["oidc_client_secret_name"] = "MCP_AIRFLOW_CLIENT_SECRET"
+    raw["secrets"].append("MCP_AIRFLOW_CLIENT_SECRET")
+    with pytest.raises(ValueError, match="platform scope"):
+        VectenConfig.model_validate(raw)
     raw["mcp"]["admins"] = []
     with pytest.raises(ValueError, match="admins"):
         VectenConfig.model_validate(raw)
