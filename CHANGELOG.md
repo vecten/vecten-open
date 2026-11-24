@@ -5,12 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Fixed
-
-- Group bindings in shared Snowflake accounts check inherited grants before binding or
-  confirming a role. Access health reports bindings that later reach another environment or
-  cannot be verified. Rerun the environment's provisioner script to install the check.
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
