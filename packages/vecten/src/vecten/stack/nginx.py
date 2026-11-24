@@ -405,6 +405,8 @@ def _gate_locations(site: ServiceSite, gate: GateUpstream) -> list[str]:
 
 
 def _health_location(site: ServiceSite) -> str:
+    # Ship probes from CI and the MCP probes through the app hostname, including laptop HTTP.
+    # Both need access from any address. Forward only the declared path for every matching URI.
     if site.health_path is None:
         return ""
     return _location(
