@@ -96,7 +96,7 @@ with tempfile.TemporaryDirectory() as project:
         assert "saml" in exc.message and "not installed" in exc.message
     else:
         raise AssertionError("missing SAML extension accepted")
-print("five wheels checked; all extension groups reached their owning layers")
+print("five wheels checked; extension groups reached their owning layers")
 """
         subprocess.run(
             [sys.executable, "-c", program],
