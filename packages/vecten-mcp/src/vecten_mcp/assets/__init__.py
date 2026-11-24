@@ -1,49 +1,48 @@
-"""The Vecten design system's stylesheet, fonts and logo, served by the MCP itself.
-
-The browser pages' CSP admits styles and fonts from this origin only, so nothing here comes
-from a CDN. The assets live outside /admin because the sign-in pages need them even where the
-panel is off or limited to some addresses.
-"""
+"""Same-origin browser assets for the MCP and its service-host login gate."""
 
 from importlib import resources
 
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import Response
 from starlette.routing import Route
 
-ASSETS = {
-    "favicon.png": "image/png",
-    "vecten.css": "text/css; charset=utf-8",
-    "fonts/Geist-Variable.ttf": "font/ttf",
-    "fonts/GeistMono-Variable.ttf": "font/ttf",
-    "fonts/OFL.txt": "text/plain; charset=utf-8",
-}
+from vecten_shared.page_assets import PAGE_ASSET_PATH, PAGE_ASSET_TYPES
+
+_STATIC = resources.files(__name__).joinpath("static")
+_ASSET_BYTES = {name: _STATIC.joinpath(name).read_bytes() for name in PAGE_ASSET_TYPES}
 PAGE_ASSETS = (
-    '<link rel="stylesheet" href="/assets/vecten.css">'
-    '<link rel="icon" type="image/png" href="/assets/favicon.png">'
+    f'<link rel="stylesheet" href="{PAGE_ASSET_PATH}/vecten.css">'
+    f'<link rel="icon" type="image/png" href="{PAGE_ASSET_PATH}/favicon.png">'
 )
-# Inline, so it needs no img-src and takes the text colour of the surface it sits on.
-LOGO = resources.files(__name__).joinpath("static/logo.svg").read_text().strip()
+ASSET_CSP = "style-src 'self'; font-src 'self'; img-src 'self';"
+# Inline so the logo takes the text colour of its surface.
+LOGO = _STATIC.joinpath("logo.svg").read_text().strip()
 
 
-async def _serve(request):
-    name = request.path_params["name"]
-    media_type = ASSETS.get(name)
-    if media_type is None:
+def _asset(name):
+    if name not in _ASSET_BYTES:
         return Response(status_code=404)
-    body = resources.files(__name__).joinpath("static", name).read_bytes()
     return Response(
-        body,
-        media_type=media_type,
+        _ASSET_BYTES[name],
+        media_type=PAGE_ASSET_TYPES[name],
         headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"},
     )
 
 
+async def _serve(request):
+    return _asset(request.path_params["name"])
+
+
 async def _favicon(request):
-    return RedirectResponse("/assets/favicon.png", status_code=308)
+    return _asset("favicon.png")
+
+
+def page_asset_route():
+    return Route(f"{PAGE_ASSET_PATH}/{{name:path}}", _serve, methods=["GET"])
 
 
 def asset_routes():
     return [
+        page_asset_route(),
         Route("/assets/{name:path}", _serve, methods=["GET"]),
         Route("/favicon.ico", _favicon, methods=["GET"]),
     ]

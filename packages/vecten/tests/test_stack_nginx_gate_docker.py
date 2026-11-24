@@ -55,6 +55,8 @@ class Gate(BaseHTTPRequestHandler):
                 status = 403
             else:
                 status = 401
+        elif self.path == "/_vecten/assets/favicon.png":
+            status, extra = 200, {"Content-Type": "image/png"}
         elif self.path.startswith("/gate/"):
             status, extra = 303, {"Location": "https://" + headers.get("host", "") + "/next"}
         self.send_response(status)
@@ -188,6 +190,12 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
         status, headers, _ = head(port, ca, "GET", "/docs?x=1&y=%2Fz")
         assert status == 302
         assert headers["location"] == "/_vecten/gate/start?rd=/docs?x=1&y=%2Fz"
+
+        status, headers, _ = head(
+            port, ca, "GET", "/_vecten/assets/favicon.png", "Cookie: app=1\r\n"
+        )
+        assert status == 200 and headers["content-type"] == "image/png"
+        assert "cookie" not in seen(gate)[-1]["headers"]
 
         # A plain-named state cookie, as a sibling hostname could plant it, comes first.
         cookies = (

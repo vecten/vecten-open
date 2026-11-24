@@ -137,12 +137,14 @@ def test_every_location_of_a_service_hostname_sets_the_identity_headers_itself(c
             expected = variable if login else '""'
             assert f"proxy_set_header {header} {expected};" in body, (key, header)
             assert body.count(f"proxy_set_header {header} ") == 1, (key, header)
-        if "proxy_pass $vecten_gate_upstream/gate/" not in body and "proxy_pass" in body:
-            assert "proxy_set_header Cookie $vecten_service_cookie;" in body, key
-        elif "proxy_pass" in body:
+        if key.startswith("= /_vecten/assets/"):
+            assert 'proxy_set_header Cookie "";' in body, key
+        elif "proxy_pass $vecten_gate_upstream/gate/" in body:
             # The gate's own paths forward the gate's cookies alone, to the MCP.
             assert "proxy_set_header Cookie $vecten_service_cookie;" not in body, key
             assert '"__Host-vecten-gate=$vecten_gate_session' in body, key
+        elif "proxy_pass" in body:
+            assert "proxy_set_header Cookie $vecten_service_cookie;" in body, key
 
 
 def test_the_gate_cookies_are_stripped_by_maps_that_keep_every_other_cookie():

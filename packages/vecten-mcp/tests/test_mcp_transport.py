@@ -123,6 +123,16 @@ def test_sdk_serves_authenticated_calls_and_current_groups(client):
     assert denied.json()["result"]["isError"] and calls == ["hello"]
 
 
+def test_signed_out_browser_receives_the_favicon_directly(client):
+    http, *_ = client
+    for path in ("/favicon.ico", "/_vecten/assets/favicon.png", "/assets/favicon.png"):
+        icon = http.get(path, follow_redirects=False)
+        assert icon.status_code == 200
+        assert icon.headers["content-type"] == "image/png"
+        assert icon.headers["cache-control"] == "public, max-age=86400"
+        assert icon.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_auth_fails_before_tool_runs_and_sse_is_absent(client):
     http, oauth, p, token, calls = client
     assert rpc(http, None, "tools/list").status_code == 401

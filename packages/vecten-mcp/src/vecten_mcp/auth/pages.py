@@ -4,7 +4,7 @@ from html import escape
 
 from starlette.responses import HTMLResponse
 
-from vecten_mcp.assets import LOGO, PAGE_ASSETS
+from vecten_mcp.assets import ASSET_CSP, LOGO, PAGE_ASSETS
 
 
 def page(title, body, status=200, *, head=""):
@@ -17,8 +17,8 @@ def page(title, body, status=200, *, head=""):
         status_code=status,
         headers={
             "Cache-Control": "no-store",
-            "Content-Security-Policy": "default-src 'none'; style-src 'self'; font-src 'self'; "
-            "img-src 'self'; form-action 'self'; frame-ancestors 'none'",
+            "Content-Security-Policy": f"default-src 'none'; {ASSET_CSP} "
+            "form-action 'self'; frame-ancestors 'none'",
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
         },

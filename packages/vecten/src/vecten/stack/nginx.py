@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.page_assets import PAGE_ASSET_PATH, PAGE_ASSET_TYPES
 from vecten_shared.records import write_text_atomic
 from vecten_shared.services import Bound, route_prefix
 
@@ -372,6 +373,19 @@ def _gate_locations(site: ServiceSite, gate: GateUpstream) -> list[str]:
         )
         for path in GATE_PATHS
     ]
+    # A service may own /assets. Only fixed package paths go to the gate, including after logout.
+    for name in PAGE_ASSET_TYPES:
+        path = f"{PAGE_ASSET_PATH}/{name}"
+        out.append(
+            _location(
+                f"= {path}",
+                "        limit_except GET { deny all; }\n"
+                + "        proxy_pass_request_headers off;\n"
+                + "        proxy_pass_request_body off;\n"
+                + '        proxy_set_header Content-Length "";\n'
+                + _gate_proxy(gate, site, path, ""),
+            )
+        )
     for route in sorted(logins, key=lambda r: r.key):
         out.append(
             _location(

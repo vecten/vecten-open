@@ -5,12 +5,12 @@ from urllib.parse import urlencode
 
 from starlette.responses import HTMLResponse, RedirectResponse
 
-from vecten_mcp.assets import LOGO, PAGE_ASSETS
+from vecten_mcp.assets import ASSET_CSP, LOGO, PAGE_ASSETS
 
 HEADERS = {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'none'; style-src 'self'; font-src 'self'; "
-    "img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "Content-Security-Policy": f"default-src 'none'; {ASSET_CSP} "
+    "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
 }
