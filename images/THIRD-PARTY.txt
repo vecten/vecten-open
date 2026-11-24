@@ -2,14 +2,15 @@ Third-party notices for the Vecten Open container images
 
 Inside either image, /usr/share/doc/vecten/base-image records the upstream
 image reference used for that build. debian-packages.tsv in the same directory
-lists the installed Debian packages, their versions and their source packages.
+lists the Debian packages installed in the Vecten base image, their versions
+and their source packages. Project images may install additional packages.
 Read each installed package's copyright file under /usr/share/doc/<package>/.
 Debian also publishes package copyright files at https://sources.debian.org/.
 
 Airflow image
   Apache Airflow, distributed by the Apache Software Foundation.
-  https://github.com/apache/airflow/blob/main/LICENSE
-  https://github.com/apache/airflow/blob/main/NOTICE
+  Its installed apache_airflow_core-*.dist-info/licenses/ directory contains
+  LICENSE and NOTICE. Run "python -m pip show -f apache-airflow-core" to locate them.
   The upstream image includes uv. See https://github.com/astral-sh/uv#license.
   Git is installed for extension builds. See https://github.com/git/git/blob/master/COPYING.
 
