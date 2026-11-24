@@ -159,6 +159,7 @@ def _replay(path: Path, connector_dir: Path, connector: str, temp: Path) -> None
             path.stem,
             dlt.destinations.duckdb(str(temp / "replay.duckdb")),
             temp / "dlt",
+            single_unit=True,
         )
     if not result.ok:
         raise ValueError(result.error)

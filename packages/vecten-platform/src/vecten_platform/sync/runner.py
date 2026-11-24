@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,6 +73,30 @@ def _landed(pipeline) -> dict[str, int]:
     return top_level_counts(info.row_counts if info else {})
 
 
+def _recover_pending(pipeline) -> Counter:
+    # A destination with no first load can wipe the local package when run() restores state.
+    # Finish outstanding normalization and loads before requesting any new data.
+    counts = Counter()
+    pending = set(pipeline.list_normalized_load_packages())
+    trace = pipeline.last_trace
+    normalized = trace.last_normalize_info if trace else None
+    if normalized:
+        for load_id in pending.intersection(normalized.metrics):
+            for step in normalized.metrics[load_id]:
+                counts.update(
+                    top_level_counts(
+                        {
+                            table: metric.items_count
+                            for table, metric in step["table_metrics"].items()
+                        }
+                    )
+                )
+    if pipeline.list_extracted_load_packages():
+        counts.update(top_level_counts(pipeline.normalize().row_counts))
+    pipeline.load().raise_on_failed_jobs()
+    return counts
+
+
 def _chain(exc: BaseException) -> list[BaseException]:
     """The exception and what it was raised from, outermost first, honouring `from None`."""
     chain: list[BaseException] = []
@@ -98,6 +123,7 @@ def run_object(
     limit: int = RECORD_LIMIT,
     redact_fixture: Callable | None = None,
     record_inputs: bool = False,
+    single_unit: bool = False,
 ) -> ObjectOutcome:
     pipeline = dlt.pipeline(
         pipeline_name(connector, object_name),
@@ -106,7 +132,11 @@ def run_object(
         pipelines_dir=str(dlt_dir),
     )
     recording = None
+    landed = Counter()
     try:
+        if pipeline.has_pending_data:
+            landed.update(_recover_pending(pipeline))
+
         sample = InputSample(limit=limit) if record_inputs else None
         if sample is not None and record_dir is None:
             raise ValueError("--record-inputs requires --record")
@@ -128,7 +158,8 @@ def run_object(
             resource.add_map(recording)
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
             # recording truncates the object's tables, resets its state and loads the sample.
-            pipeline.run(selected, refresh="drop_data")
+            pipeline.run(selected, refresh="drop_data").raise_on_failed_jobs()
+            landed.update(_landed(pipeline))
             nesting = resource.max_table_nesting
             recording.commit(
                 pipeline.default_schema,
@@ -136,7 +167,22 @@ def run_object(
                 input_document=sample.document() if sample is not None else None,
             )
         else:
-            pipeline.run(selected)
+            seen_cursors = set()
+            while True:
+                loaded = pipeline.run(selected)
+                loaded.raise_on_failed_jobs()
+                landed.update(_landed(pipeline))
+                unit = selected.resources[object_name].state.get("vecten_unit", {})
+                if not unit.get("more"):
+                    break
+                if unit.get("load_id") not in loaded.loads_ids:
+                    raise ValueError("checkpointed resource finished without calling finish_unit")
+                seen_cursors.add(unit["previous"])
+                if unit["cursor"] in seen_cursors:
+                    raise ValueError("checkpointed resource repeated a cursor")
+                if single_unit:
+                    break
+                selected = make_source().with_resources(object_name)
     except Exception as exc:
         if recording is not None:
             recording.discard()
@@ -154,12 +200,18 @@ def run_object(
         terminal = next((e for e in chain if isinstance(e, TerminalConnectorError)), None)
         reason = terminal if terminal is not None else chain[-1]
         message = " ".join(f"{type(reason).__name__}: {reason}".split())
-        return ObjectOutcome(object_name, False, 0, message, terminal=terminal is not None)
+        return ObjectOutcome(
+            object_name,
+            False,
+            sum(landed.values()),
+            message,
+            tuple(sorted(landed)),
+            terminal is not None,
+        )
     except BaseException:
         if recording is not None:
             recording.discard()
         raise
-    landed = _landed(pipeline)
     return ObjectOutcome(object_name, True, sum(landed.values()), tables=tuple(sorted(landed)))
 
 
