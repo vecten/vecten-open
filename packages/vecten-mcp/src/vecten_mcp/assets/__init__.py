@@ -7,16 +7,20 @@ panel is off or limited to some addresses.
 
 from importlib import resources
 
-from starlette.responses import Response
+from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
 ASSETS = {
+    "favicon.png": "image/png",
     "vecten.css": "text/css; charset=utf-8",
     "fonts/Geist-Variable.ttf": "font/ttf",
     "fonts/GeistMono-Variable.ttf": "font/ttf",
     "fonts/OFL.txt": "text/plain; charset=utf-8",
 }
-STYLESHEET = '<link rel="stylesheet" href="/assets/vecten.css">'
+PAGE_ASSETS = (
+    '<link rel="stylesheet" href="/assets/vecten.css">'
+    '<link rel="icon" type="image/png" href="/assets/favicon.png">'
+)
 # Inline, so it needs no img-src and takes the text colour of the surface it sits on.
 LOGO = resources.files(__name__).joinpath("static/logo.svg").read_text().strip()
 
@@ -34,5 +38,12 @@ async def _serve(request):
     )
 
 
+async def _favicon(request):
+    return RedirectResponse("/assets/favicon.png", status_code=308)
+
+
 def asset_routes():
-    return [Route("/assets/{name:path}", _serve, methods=["GET"])]
+    return [
+        Route("/assets/{name:path}", _serve, methods=["GET"]),
+        Route("/favicon.ico", _favicon, methods=["GET"]),
+    ]

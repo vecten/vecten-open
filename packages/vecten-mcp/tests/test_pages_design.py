@@ -12,7 +12,7 @@ from vecten_mcp.auth.pages import consent_page, login_page, page, redirect_page
 from vecten_mcp.panel.html import layout
 
 SIGN_IN_CSP = (
-    "default-src 'none'; style-src 'self'; font-src 'self'; form-action 'self'; "
+    "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'"
 )
 
@@ -37,6 +37,14 @@ def test_the_stylesheet_and_fonts_are_served_from_the_mcp(client):
 @pytest.mark.parametrize("path", ["/assets/nothing.css", "/assets/../app.py", "/assets/fonts"])
 def test_only_the_listed_assets_are_served(client, path):
     assert client.get(path).status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/assets/favicon.png", "/favicon.ico"])
+def test_favicon_resolves_without_sign_in(client, path):
+    icon = client.get(path)
+    assert icon.status_code == 200
+    assert icon.headers["content-type"] == "image/png"
+    assert icon.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_every_font_the_stylesheet_names_is_served(client):
@@ -73,6 +81,7 @@ def test_sign_in_pages_take_the_shared_stylesheet_under_a_same_origin_csp(respon
     assert response.headers["content-security-policy"] == SIGN_IN_CSP
     assert '<link rel="stylesheet" href="/assets/vecten.css">' in html
     assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+    assert '<link rel="icon" type="image/png" href="/assets/favicon.png">' in html
     assert LOGO in html
     _no_inline_style_or_script(html)
 
@@ -88,7 +97,8 @@ def test_the_admin_panel_takes_the_shared_stylesheet_and_fonts():
     html = response.body.decode()
     csp = response.headers["content-security-policy"]
     assert "style-src 'self'" in csp and "font-src 'self'" in csp
-    assert "default-src 'none'" in csp
+    assert "default-src 'none'" in csp and "img-src 'self'" in csp
     assert '<link rel="stylesheet" href="/assets/vecten.css">' in html
+    assert '<link rel="icon" type="image/png" href="/assets/favicon.png">' in html
     assert LOGO in html
     _no_inline_style_or_script(html)
