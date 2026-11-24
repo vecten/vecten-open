@@ -1,6 +1,7 @@
 """The bound apps on the admin API, the admin tool and the panel, and their principals'
 connection through `apps/connect`."""
 
+import asyncio
 import importlib.util
 import re
 from dataclasses import replace
@@ -382,6 +383,21 @@ def test_panel_probes_http_health_without_forwarding_credentials(apps, health_ht
     assert re.search(r"Health\s+" + re.escape(label), page)
     assert [str(req.url) for req in requests] == ["https://sales.example/_vecten/health"]
     assert "cookie" not in requests[0].headers and "authorization" not in requests[0].headers
+
+
+def test_api_can_check_live_health_off_the_event_loop(apps, health_http, monkeypatch):
+    scopes = apps.runtime.apps
+    listing = scopes.listing
+
+    def worker_listing(*args, **kwargs):
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        return listing(*args, **kwargs)
+
+    monkeypatch.setattr(scopes, "listing", worker_listing)
+    rows = api_read(apps, "apps", check_health="true")
+    assert listed(rows, "overview")["health"] == "healthy"
+    assert len(health_http[0]) == 1
 
 
 def test_local_health_checks_only_running_apps_with_an_http_check(apps, health_http):
