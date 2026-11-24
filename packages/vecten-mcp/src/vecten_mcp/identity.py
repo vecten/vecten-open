@@ -24,6 +24,7 @@ class Identity:
     subject: str
     email: str
     name: str
+    group_claim: frozenset[str] | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "email", self.email.strip().lower())

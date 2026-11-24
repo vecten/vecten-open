@@ -97,10 +97,21 @@ class Undeclared(ValueError):
 
 
 class AccessService:
-    def __init__(self, state, adapter, *, invalidate=None, areas=(), source_areas=(), built=None):
+    def __init__(
+        self,
+        state,
+        adapter,
+        *,
+        invalidate=None,
+        areas=(),
+        source_areas=(),
+        built=None,
+        oidc_groups=None,
+    ):
         self.state, self.adapter = state, adapter
         self.invalidate = invalidate or (lambda pid: None)
         self.datasets = {}
+        self.oidc_groups = oidc_groups
         self.areas = frozenset(areas)
         self.source_areas = frozenset(source_areas)
         # What the dbt DAG's last full build made, or None without a current record; None
@@ -445,11 +456,31 @@ class AccessService:
             raise ValueError("unknown group")
         return group
 
+    def sync_oidc_groups(self, principal, values):
+        # Delete before adding so a failed update never adds the new access while
+        # retaining the access that the provider removed. Each completed step is retryable.
+        with self.lock:
+            known = {row["name"] for row in self.list_groups()}
+            mapped = known.intersection(self.oidc_groups.bindings)
+            desired = {g for g in mapped if self.oidc_groups.bindings[g] in values}
+            held = self.state.groups_for(principal["id"])
+            for group in sorted((held & mapped) - desired):
+                self._membership(group, principal, False)
+            for group in sorted(desired - held):
+                self._membership(group, principal, True)
+            self.state.put("oidc_memberships", principal["id"], {"groups": sorted(desired)})
+
     def membership(self, group, principal_id, grant=True):
-        role = self.require_group(group)["warehouse_role"]
         principal = self.state.principal(principal_id)
         if not principal or not principal["provisioned"]:
             raise ValueError("principal is not provisioned")
+        if principal["kind"] == "human" and self.oidc_groups and group in self.oidc_groups.bindings:
+            raise ValueError("the identity provider manages human membership of this group")
+        return self._membership(group, principal, grant)
+
+    def _membership(self, group, principal, grant):
+        role = self.require_group(group)["warehouse_role"]
+        principal_id = principal["id"]
         marked, app = self.apps.app_of(principal_id) if self.apps else (False, None)
         if marked:
             if grant and (app is None or group not in app.groups):
@@ -1129,6 +1160,28 @@ class AccessService:
             "unbound_roles": [],
             "unbuilt": [],
         }
+        if self.oidc_groups is not None:
+            origins = dict(self.state.scan("oidc_memberships"))
+            with self.state.transaction() as conn:
+                rows = conn.execute(
+                    select(memberships).order_by(
+                        memberships.c.principal_id, memberships.c.group_name
+                    )
+                )
+                health = {
+                    **health,
+                    "membership_sources": [
+                        {
+                            "principal_id": pid,
+                            "group": name,
+                            "source": "oidc"
+                            if name in self.oidc_groups.bindings
+                            and name in origins.get(pid, {}).get("groups", ())
+                            else "local",
+                        }
+                        for pid, name in rows
+                    ],
+                }
         if self.apps is not None and self.apps.apps:
             health = {**health, "apps": self.apps.health() + self.app_role_health()}
         return health

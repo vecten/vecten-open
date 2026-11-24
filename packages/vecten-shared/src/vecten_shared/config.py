@@ -201,11 +201,27 @@ def allow_networks(value: list[str]) -> list[str]:
     return [str(ipaddress.ip_network(item, strict=True)) for item in value]
 
 
+class OidcGroups(Strict):
+    claim: str = Field(min_length=1)
+    bindings: dict[str, str] = Field(min_length=1)
+    scope: str | None = Field(default=None, pattern=r"^[!-~]+$")
+
+    @field_validator("bindings")
+    @classmethod
+    def _bindings(cls, values: dict[str, str]) -> dict[str, str]:
+        for group, provider_value in values.items():
+            _checked(group_name_problem(group), group)
+            if group == "default" or not provider_value.strip():
+                raise ValueError("map a named group to a nonempty identity provider value")
+        return values
+
+
 class McpSection(Strict):
     admins: list[str] = Field(default_factory=list)
     auth: str = Field(default="oidc", pattern=r"^[a-z][a-z0-9_-]*$")
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
+    oidc_groups: OidcGroups | None = None
     admin_panel: Literal["public", "off"] = "public"
     admin_allow: list[str] = Field(default_factory=list)
 
@@ -216,6 +232,8 @@ class McpSection(Strict):
 
     @model_validator(mode="after")
     def _exposure(self) -> McpSection:
+        if self.oidc_groups and self.auth != "oidc":
+            raise ValueError("oidc_groups requires the oidc backend")
         if self.admin_panel == "off" and self.admin_allow:
             raise ValueError("admin_allow applies only while admin_panel is public")
         return self

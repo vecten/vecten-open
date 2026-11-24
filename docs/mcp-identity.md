@@ -72,6 +72,23 @@ query, discovery and feedback tools are in the [tool reference](mcp-tools.md), a
 [admin panel](admin-panel.md) manages the same identities, groups and grants from a browser.
 Installed tool extensions use the same transport and its audited query execution service.
 
+## Groups from the identity provider
+
+To manage membership of a Vecten group through OIDC, create the group, configure the provider to put its group values into a signed ID-token claim, and add the mapping to the project's `vecten.toml`.
+
+```toml
+[mcp.oidc_groups]
+claim = "groups"
+scope = "groups"
+
+[mcp.oidc_groups.bindings]
+finance = "department-73"
+```
+
+The binding key is the Vecten group. Its value is the exact string the provider emits. Set `scope` only when the provider requires an additional scope. The provider must return a complete list, including an empty list for a person in none of its groups. A missing or malformed claim stops sign-in.
+
+On each sign-in, the MCP grants and revokes mapped groups for that provisioned person in the warehouse and in its own state. Membership changes reach Vecten at the person's next sign-in. Unknown groups are ignored. Service accounts, the default group and unmapped groups retain their local membership rules. Access health lists each active membership and its source. Removing a binding returns the group to local management with its current members.
+
 ## First administrator and login
 
 On the laptop, the default is password login. In a cloud environment, the default is OIDC;
