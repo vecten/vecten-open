@@ -4,7 +4,7 @@ locals {
   generated_secrets = concat(
     local.has_platform ? ["platform/AIRFLOW_DB_PASSWORD"] : [],
     local.managed_warehouse ? ["platform/LOADER_PASSWORD"] : [],
-    local.has_mcp ? ["mcp/MCP_STATE_DB_PASSWORD"] : [],
+    local.has_mcp ? ["mcp/MCP_STATE_DB_PASSWORD", "mcp/MCP_GATE_DB_PASSWORD"] : [],
     local.has_mcp && local.managed_warehouse ? ["mcp/MCP_PROVISIONER_PASSWORD", "mcp/MCP_IMPERSONATOR_PASSWORD"] : [],
   )
   airflow_app_secrets = local.has_platform ? [

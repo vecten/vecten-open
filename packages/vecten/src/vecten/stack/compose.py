@@ -353,14 +353,34 @@ def service_secret_names(bound: Bound, record: dict[str, Extension]) -> list[str
     return names
 
 
+def needs_gate(config, record, mode):
+    return any(
+        any(route.access == "login" for route in bound.route_bindings.values())
+        for bound in bound_services(config, record)
+        if mode == "vm" or bound.binding.local
+    )
+
+
 def host_services(
-    config: VectenConfig, record: dict[str, Extension], components: list[str]
+    config: VectenConfig,
+    record: dict[str, Extension],
+    components: list[str],
+    *,
+    setup_host: bool = False,
 ) -> tuple[list[str], str]:
     """What a VM's agent needs for the services it runs: the secret names it reads and hands
     to Compose, and the interface match for its metadata firewall rule, or empty for no service."""
     placed = [b for b in bound_services(config, record) if b.host in components]
-    names = sorted({n for bound in placed for n in service_secret_names(bound, record)})
-    return names, SERVICE_BRIDGE_PREFIX + "+" if placed else ""
+    names = {n for bound in placed for n in service_secret_names(bound, record)}
+    gate = (
+        config.has("mcp")
+        and ("mcp" in components or setup_host)
+        and needs_gate(config, record, "vm")
+    )
+    if gate:
+        names.add("MCP_GATE_DB_PASSWORD")
+    guarded = placed or ("mcp" in components and gate)
+    return sorted(names), SERVICE_BRIDGE_PREFIX + "+" if guarded else ""
 
 
 def _literal(value: str) -> str:
@@ -489,7 +509,7 @@ def services_to_run(
     ]
 
 
-def _postgres(config: VectenConfig) -> dict:
+def _postgres(config: VectenConfig, *, gate: bool) -> dict:
     with_mcp = config.has("mcp")
     environment = {
         "POSTGRES_USER": "postgres",
@@ -499,6 +519,9 @@ def _postgres(config: VectenConfig) -> dict:
         "LOADER_PASSWORD": "${LOADER_PASSWORD}",
         "VECTEN_WITH_MCP": "true" if with_mcp else "false",
     }
+    if gate:
+        environment["VECTEN_WITH_GATE"] = "true"
+        environment["MCP_GATE_DB_PASSWORD"] = "${MCP_GATE_DB_PASSWORD}"
     if config.areas:
         environment["VECTEN_AREAS"] = ",".join(sorted(config.areas))
     if restricted := source_layer_areas(config.areas):
@@ -558,12 +581,13 @@ def generate_compose(
     volumes: dict[str, dict] = {}
     with_platform = "platform" in host_components
     with_mcp = "mcp" in host_components
+    gate = with_mcp and needs_gate(config, project_record(stack_dir), mode)
     if project is None:
         # PROJECT_MOUNTS already fixes the stack directory two levels below the project root.
         project = compose_project_name(stack_dir.parent.parent, config)
 
     if mode == "local":
-        services["postgres"] = _postgres(config)
+        services["postgres"] = _postgres(config, gate=gate)
         volumes["postgres-data"] = {}
 
     if with_platform:
@@ -748,10 +772,42 @@ def generate_compose(
             "/etc/letsencrypt:/etc/letsencrypt:ro",
             "/var/www/certbot:/var/www/certbot:ro",
         ]
+    if gate:
+        services["login-gate"] = {
+            "image": services["mcp-server"]["image"],
+            "command": ["python", "-m", "vecten_mcp.gate_server"],
+            "profiles": ["mcp"],
+            "environment": {
+                key: services["mcp-server"]["environment"][key]
+                for key in (
+                    "VECTEN_MCP_PUBLIC_URL",
+                    "VECTEN_PROVIDER",
+                    "VECTEN_ENV",
+                    "VECTEN_PROJECT_ROOT",
+                )
+            }
+            | {"MCP_GATE_DB_PASSWORD": "${MCP_GATE_DB_PASSWORD}"},
+            "volumes": ["../../vecten.toml:/app/vecten.toml:ro", *_record_mount(stack_dir, "/app")],
+            "networks": ["login-gate"],
+            "cap_drop": ["ALL"],
+            "security_opt": ["no-new-privileges:true"],
+            "restart": "unless-stopped",
+            "healthcheck": {
+                "test": ["CMD", "curl", "--fail", "http://localhost:8002/health"],
+                "interval": "5s",
+                "timeout": "5s",
+                "retries": 30,
+            },
+        }
+        if mode == "vm":
+            services["login-gate"]["environment"]["VECTEN_ENVIRONMENT_FILE"] = VM_ENVIRONMENT_FILE
+            services["login-gate"]["volumes"].append(VM_ENVIRONMENT_MOUNT)
+        else:
+            services["postgres"]["networks"] = ["default", "login-gate"]
     nginx_depends = {}
     if with_platform:
         nginx_depends["airflow-api-server"] = {"condition": "service_healthy"}
-    if with_mcp:
+    if with_mcp and not gate:
         nginx_depends["mcp-server"] = {"condition": "service_healthy"}
     services["nginx"] = {
         "image": VERSIONS.nginx_image,
@@ -776,6 +832,16 @@ def generate_compose(
         if bound.service.volume is not None:
             volumes[f"{name}-data"] = {}
     document = {"name": project, "services": services, "volumes": volumes}
+    if gate:
+        networks["login-gate"] = (
+            {
+                "driver_opts": {
+                    "com.docker.network.bridge.name": service_bridge(project, "login-gate")
+                }
+            }
+            if mode == "vm"
+            else {}
+        )
     if networks:
         services["nginx"]["networks"] = ["default", *networks]
         document["networks"] = networks

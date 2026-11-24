@@ -264,9 +264,4 @@ class GateService:
             return
         if not hmac.compare_digest(str(token), self.logout_token(sid)):
             raise ValueError("invalid browser state")
-        session = self.state.gate_session(digest(sid), now=self.oauth.clock())
-        self.state.end_gate_session(digest(sid))
-        if session:
-            for key, row in self.state.scan("browser_sessions"):
-                if row.get("principal_id") == session["principal_id"]:
-                    self.state.remove("browser_sessions", key)
+        self.state.logout_gate_session(digest(sid), now=self.oauth.clock())

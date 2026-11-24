@@ -12,7 +12,7 @@ HOME = ServiceRoute("/", "login", groups=("default",), key="acme-portal.web.home
 BOOKS = ServiceRoute("/books", "login", groups=("finance",), key="acme-portal.web.books")
 HOOK = ServiceRoute("/hook", "public", key="acme-portal.web.hook")
 PORTAL = "portal.data.acme.com"
-COMPOSE_MCP = "set $vecten_gate_upstream http://mcp-server:8001;"
+COMPOSE_MCP = "set $vecten_gate_upstream http://login-gate:8002;"
 PUBLIC_MCP = "set $vecten_gate_upstream https://mcp.data.acme.com;"
 
 

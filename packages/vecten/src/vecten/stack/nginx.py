@@ -237,7 +237,7 @@ def gate_upstream(
     host_components: list[str], hosts: dict[str, str], mode: str
 ) -> GateUpstream | None:
     if "mcp" in host_components:
-        return GateUpstream("http://mcp-server:8001", _bare(hosts["mcp"]), False)
+        return GateUpstream("http://login-gate:8002", _bare(hosts["mcp"]), False)
     if mode == "vm" and hosts.get("mcp"):
         name = _bare(hosts["mcp"])
         return GateUpstream(f"https://{name}", name, True)
@@ -502,6 +502,7 @@ def generate_nginx_conf(
     admin_allow: list[str] | tuple[str, ...] = (),
     airflow_allow: list[str] | tuple[str, ...] = (),
     services: Sequence[ServiceSite] = (),
+    standalone_gate: bool = False,
 ) -> str:
     unknown = [c for c in host_components if c not in HOST_KEYS]
     if unknown:
@@ -536,6 +537,16 @@ def generate_nginx_conf(
         out.append(
             f"server {{\n    listen 443 ssl;\n    server_name {host};\n"
             + _tls(host, mode)
+            + (
+                "".join(
+                    _location(
+                        f"= /gate/{path}", _upstream("http://login-gate:8002") + PROXY_HEADERS
+                    )
+                    for path in (*GATE_PATHS, "verify")
+                )
+                if standalone_gate or gated
+                else ""
+            )
             + _admin_location(admin_panel, list(admin_allow))
             + "    location / {\n"
             + MCP_PROXY
@@ -556,6 +567,7 @@ def write_nginx(
     admin_allow: list[str] | tuple[str, ...] = (),
     airflow_allow: list[str] | tuple[str, ...] = (),
     services: Sequence[ServiceSite] = (),
+    standalone_gate: bool = False,
 ) -> None:
     conf_dir = stack_dir / "nginx" / "conf.d"
     conf_dir.mkdir(parents=True, exist_ok=True)
@@ -567,5 +579,6 @@ def write_nginx(
         admin_allow=admin_allow,
         airflow_allow=airflow_allow,
         services=services,
+        standalone_gate=standalone_gate,
     )
     write_text_atomic(conf_dir / "default.conf", conf)

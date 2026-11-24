@@ -39,6 +39,12 @@ A service on the MCP host holds no more access than one on the platform host (se
 [isolation](#isolation-what-a-service-can-reach)), but it shares the VM's memory and CPU with
 the MCP server, which every person's question goes through.
 
+## Where login checks run
+
+A project with a bound login route runs `login-gate` from its MCP image on the MCP host. The gate checks service cookies against sessions, group memberships and app admission in the state database. It has its own network, and its container receives only the dedicated `mcp_gate` login for the state database. A split platform host reaches the gate through the MCP host’s HTTPS proxy.
+
+Existing service sessions keep working through an MCP process outage. New sign-ins use the MCP issuer on its own hostname and require that process. The state database and the NGINX proxies must remain available for either path.
+
 ## Hostnames and `vecten deploy`
 
 Each service with a bound route gets a hostname of its own: `<label>.<domain>`, or `<domain>`
@@ -126,6 +132,11 @@ paths cannot be routed.
   (see [webhooks](#webhooks-and-signature-checks)).
 - **`login`**: only people signed in to the MCP who belong to one of the route's `groups`,
   through [the gate](#the-gate-signing-in-for-login-routes). It needs the `mcp` component.
+  An environment's first `login` route also needs the gate's database password,
+  `MCP_GATE_DB_PASSWORD`, which the setup host can create only once its permissions cover it:
+  on Scaleway run `vecten bootstrap --env <env>` and then `vecten deploy --env <env>` before
+  the ship that adds the route, on AWS `vecten deploy --env <env>`. Without them that ship
+  stops at its generated secrets step, before any container changes, and names those commands.
 - **`allow`** narrows either mode to the listed networks: on a deployed host NGINX answers 403 to
   every other address before any sign-in. `vecten up` ignores it, because the laptop's NGINX
   sees every request as coming from Docker's own address.
@@ -148,12 +159,12 @@ the identity provider: it only ever returns to the MCP.
 
 The sign-in flow:
 
-1. A browser asks for a `login` route. For every such request NGINX first asks the MCP server
+1. A browser asks for a `login` route. For every such request NGINX first asks the login gate
    whether the request's gate cookie belongs to an active person in one of the route's groups.
    Without a valid gate session, NGINX redirects the browser to
    `https://<hostname>/_vecten/gate/start` on the service's own hostname, carrying the path the
    person asked for.
-2. `start`, answered by the MCP server through NGINX, sets the state cookie
+2. `start`, answered by the login gate through NGINX, sets the state cookie
    `__Host-vecten-gate-state` on the service's hostname, holding a random value for 600
    seconds (HTTPS only, hidden from scripts, sent to that hostname only, `SameSite=Lax`). It
    then redirects to the MCP's
@@ -163,7 +174,7 @@ The sign-in flow:
    in to the MCP's browser pages passes straight through, so one sign-in covers every service.
 3. The MCP redirects back to `https://<hostname>/_vecten/gate/callback` with a one-time code,
    valid for at most 60 seconds and only for that hostname and that hash. The callback, again
-   answered by the MCP, accepts the code only together with the state cookie's value, so a
+   answered by the login gate, accepts the code only together with the state cookie's value, so a
    callback address leaked through a log is useless without the browser that started the
    sign-in. It creates a gate session, sets the cookie `__Host-vecten-gate` (with the same
    attributes) holding the session's id, clears the state cookie, and returns the browser to
@@ -187,8 +198,8 @@ session for that hostname and the person's sign-ins on the MCP's own browser pag
 sign-in asks for credentials again. Gate sessions on other service hostnames stay until they
 end on their own. A WebSocket opened before a session ends stays open until it reconnects.
 
-The gate depends on the MCP server: while it is down, `login` routes are down too, and `public`
-routes keep working. Under `standard` the platform host's NGINX asks the MCP over HTTPS at
+Existing gate sessions keep working when the MCP server restarts. New sign-ins need the MCP
+issuer. Under `standard` the platform host's NGINX asks the gate over HTTPS at
 `mcp.<domain>`, with its certificate checked, which adds a round trip between the two VMs to
 every request on a `login` route there. On the laptop, `login` routes use the laptop's MCP at
 `https://mcp.localhost:8443`, its password sign-in, and the laptop's own people and groups.

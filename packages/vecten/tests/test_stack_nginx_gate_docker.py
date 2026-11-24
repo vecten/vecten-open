@@ -149,8 +149,8 @@ def gate_behind_nginx(tmp_path, *, cross_vm: bool, trusted: bool = True):
         else:
             util.docker(
                 "run", "-d", "--name", gate, "--network", network,
-                "--network-alias", "mcp-server", VERSIONS.mcp_base_image, "python", "-c", GATE,
-                "8001",
+                "--network-alias", "login-gate", VERSIONS.mcp_base_image, "python", "-c", GATE,
+                "8002",
             )  # fmt: skip
         util.docker(
             "run", "-d", "--name", front, "--network", network,

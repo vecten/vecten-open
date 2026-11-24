@@ -1,0 +1,6 @@
+- [x] Separate issuer and service-host routes, and start a state-only gate process.
+- [x] Render the isolated container and route same-host and split-host requests.
+- [x] Exercise authorization through an MCP pause in the Docker integration suite.
+- [x] Create and deliver a separate state login and restrict its writes to gate data.
+- [x] Verify forbidden principal, membership, browser and panel writes using a real gate connection.
+- [x] Apply setup to existing laptop volumes and document cloud upgrade prerequisites.

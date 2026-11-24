@@ -260,6 +260,7 @@ def _render_stack(
         components,
         hosts,
         "vm",
+        standalone_gate="login-gate" in doc["services"],
         admin_panel=config.mcp.admin_panel,
         admin_allow=config.mcp.admin_allow,
         airflow_allow=config.airflow.allow,
@@ -306,7 +307,9 @@ def host_document(
     cloud = config.deploy.cloud
     sizing = _host_tier(host, cloud, tfvars)
     components = list(outputs.hosts[host].components)
-    service_secrets, service_network = host_services(config, record or {}, components)
+    service_secrets, service_network = host_services(
+        config, record or {}, components, setup_host=outputs.setup_host == host
+    )
     served = _served(config, record or {}, outputs, host)
     doc = {
         "host": host,

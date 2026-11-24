@@ -19,6 +19,7 @@ from vecten.stack.compose import (
     STACK_DIR,
     compose_project_name,
     local_hostnames,
+    needs_gate,
     service_host_name,
     services_to_run,
     write_compose,
@@ -221,6 +222,18 @@ def up(project_root: Path, runner: DockerRunner, wait_seconds: int = 240) -> UpR
     git_extensions.write_sources(project_root, config, stack_dir / SOURCES_DIR, keep=True)
     write_project_layer(stack_dir, config, registry)
     profiles = [*components, "local"]
+    if "mcp" in components and needs_gate(config, record, "local"):
+        # Postgres only runs initdb scripts on an empty volume. Upgrade existing volumes
+        # before the gate starts, using the setup credentials already scoped to Postgres.
+        for prepare in (
+            ["up", "-d", "--wait", "--wait-timeout", str(wait_seconds), "postgres"],
+            ["exec", "-T", "postgres", "/docker-entrypoint-initdb.d/10-vecten.sh", "--ensure-gate"],
+        ):
+            result = runner.compose(project_root, _compose_files(project_root), profiles, prepare)
+            if result.returncode != 0:
+                raise Failure(
+                    ExitCode.TOOL_FAILED, "could not prepare the login gate database role"
+                )
     # A restarting container resets its health check, so an unbounded --wait can block forever.
     args = ["up", "-d", "--build", "--wait", "--wait-timeout", str(wait_seconds)]
     if running:

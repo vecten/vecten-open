@@ -446,6 +446,15 @@ def test_a_person_signs_in_once_and_the_service_sees_who_they_are(tmp_path, monk
             assert echoed["x-vecten-admin"] == "true"
             assert echoed["x-vecten-principal"] and echoed["x-vecten-name"]
             assert "vecten-gate" not in echoed.get("cookie", "")
+
+            # A signed-in service request only needs the gate and its state store.
+            mcp_container = service_container(project, "mcp-server")
+            subprocess.run(["docker", "pause", mcp_container], check=True, timeout=15)
+            try:
+                assert browser.go("GET", f"https://{WEB_HOST}/docs").status_code == 200
+            finally:
+                subprocess.run(["docker", "unpause", mcp_container], check=True, timeout=15)
+
             browser.jars[WEB_HOST].pop("__Host-vecten-gate-state")
 
             refused = browser.go("GET", f"https://{WEB_HOST}/books")

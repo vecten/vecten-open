@@ -54,7 +54,7 @@ BROWSER = frozenset(
 )
 
 
-def auth_routes(service, gate=None):
+def auth_routes(service, gate=None, *, surface="combined"):
     state = service.state
     documents = ClientMetadata()
 
@@ -107,7 +107,10 @@ def auth_routes(service, gate=None):
         state.put(
             "browser_sessions",
             digest(token),
-            {"principal_id": principal["id"]},
+            {
+                "principal_id": principal["id"],
+                "gate_logout": state.get("gate_logouts", principal["id"]),
+            },
             expires_at=service.clock() + 3600,
         )
         response.set_cookie(
@@ -354,7 +357,9 @@ def auth_routes(service, gate=None):
             digest(held(request, "vecten_browser")),
             now=service.clock(),
         )
-        principal = state.principal(row["principal_id"]) if row else None
+        if not row or row.get("gate_logout") != state.get("gate_logouts", row["principal_id"]):
+            return None
+        principal = state.principal(row["principal_id"])
         return principal if principal and principal["enabled"] else None
 
     def current_browser(request):
@@ -621,10 +626,13 @@ def auth_routes(service, gate=None):
         ("/set-password", password_setup, ["GET", "POST"]),
         ("/jwks", jwks, ["GET"]),
     ]
-    if gate is not None:
+    if surface == "service":
+        endpoints = []
+    elif gate is not None:
+        endpoints.append(("/gate/authorize", gate_authorize, ["GET"]))
+    if gate is not None and surface != "issuer":
         endpoints += [
             ("/gate/start", gate_start, ["GET"]),
-            ("/gate/authorize", gate_authorize, ["GET"]),
             ("/gate/callback", gate_callback, ["GET"]),
             ("/gate/logout", gate_logout, ["GET", "POST"]),
         ]
@@ -632,7 +640,7 @@ def auth_routes(service, gate=None):
         Route(path, safe(handler, browser=path in BROWSER), methods=methods)
         for path, handler, methods in endpoints
     ]
-    if gate is not None:
+    if gate is not None and surface != "issuer":
         # NGINX asks on every request of a login route, all from one address per host, so no
         # per-address limit applies; an unknown session gets 401 and nothing else.
         routes.append(Route("/gate/verify", gate_verify, methods=["GET"]))
