@@ -5,13 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Fixed
-
-- Airflow syncs and dbt builds use the release's locked Snowflake connector. Syncs now skip
-  dlt's Airflow Variable lookups by default. Set `PROVIDERS__ENABLE_AIRFLOW_SECRETS=true`
-  to read dlt configuration from Airflow Variables
-  ([#136](https://github.com/vecten/vecten-open/issues/136), [#137](https://github.com/vecten/vecten-open/issues/137)).
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
