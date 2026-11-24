@@ -29,6 +29,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   host is removed or replaced. The apply workflow also prints the warning before applying
   ([#129](https://github.com/vecten/vecten-open/issues/129)).
 - `vecten up` reports each active component’s base image and how to select published images when a local build was chosen ([#21](https://github.com/vecten/vecten-open/issues/21)).
+- The Analytics screen checks each bound container app’s HTTP health when opened ([#115](https://github.com/vecten/vecten-open/issues/115)).
 
 ### Fixed
 

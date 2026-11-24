@@ -1,7 +1,9 @@
 """Administrative HTTP surface: a human bearer identity and an access event per call."""
 
 import logging
+from functools import partial
 
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
@@ -45,7 +47,9 @@ def admin_routes(runtime):
             if not isinstance(data, dict):
                 return failure("invalid operation or request", 400)
             recorded = True
-            result = service.call(caller, operation, data, surface="api", write=write)
+            call = partial(service.call, caller, operation, data, surface="api", write=write)
+            # A live app listing can wait for remote health endpoints.
+            result = await run_in_threadpool(call) if operation == "apps" else call()
             return JSONResponse({"ok": True, "data": result}, headers={"Cache-Control": "no-store"})
         except AdminRefused as exc:
             return failure(str(exc), 403)

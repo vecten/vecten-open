@@ -40,7 +40,7 @@ Terms used on this page:
 | `vecten ship` listing a `snowflake` app as not published | Specified, not built; the Analytics screen lists it as not published |
 | `USAGE` grants on a Streamlit object for the admitted groups | Specified, not built (with #40) |
 | Restricted-area grants ([#51](https://github.com/vecten/vecten-open/issues/51)) counted by admission | Specified, not built; only dataset and schema grants count |
-| A service's health shown on the Analytics screen | Not built: `vecten ship` prints it, and nothing passes it to the MCP |
+| A service's health shown on the Analytics screen | Built: opening Analytics checks each container app’s HTTP health endpoint |
 | A laptop app reading data | Not built: see [On the laptop](#on-the-laptop) |
 | Snowflake's own grammar refusing `LATERAL TABLE('<relation>')` | The app SQL check refuses it either way; the test that checks Snowflake itself (`test_app_sql_snowflake_live.py`) needs a live account and has not run |
 | A viewer mode, where an app reads as the viewing person | Not built; a later option (see [Every viewer sees the same data](#every-viewer-sees-the-same-data)) |

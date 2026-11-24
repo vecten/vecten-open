@@ -404,18 +404,20 @@ def _gate_locations(site: ServiceSite, gate: GateUpstream) -> list[str]:
     return out
 
 
+def _health_location(site: ServiceSite) -> str:
+    # Ship probes from CI and the MCP probes through the app hostname, including laptop HTTP.
+    # Both need access from any address. Forward only the declared path for every matching URI.
+    if site.health_path is None:
+        return ""
+    return _location(
+        f"= {SERVICE_HEALTH_PATH}",
+        "        limit_except GET {\n            deny all;\n        }\n"
+        + _service_proxy(site.upstream, site.health_path),
+    )
+
+
 def _service_locations(site: ServiceSite, mode: str, gate: GateUpstream | None) -> str:
-    out = []
-    if site.health_path is not None:
-        # Open to every address, as `ship` polls it from CI; the declared path is forwarded
-        # whatever form of the URI matched.
-        out.append(
-            _location(
-                f"= {SERVICE_HEALTH_PATH}",
-                "        limit_except GET {\n            deny all;\n        }\n"
-                + _service_proxy(site.upstream, site.health_path),
-            )
-        )
+    out = [_health_location(site)]
     reserved = IDENTITY_CLEARED + "        return 404;\n"
     out += [_location("= /_vecten", reserved), _location("/_vecten/", reserved)]
     if gate is not None:
@@ -472,7 +474,7 @@ def _service_servers(
     case_check = f"    if ({variable}) {{\n        return 404;\n    }}\n" if case_map else ""
     return [
         *([case_map] if case_map else []),
-        _redirect_server(site.host),
+        _redirect_server(site.host, _health_location(site) if mode == "local" else ""),
         f"server {{\n    listen 443 ssl;\n    server_name {host};\n"
         + _tls(host, mode)
         + case_check
@@ -481,13 +483,13 @@ def _service_servers(
     ]
 
 
-def _redirect_server(host: str) -> str:
+def _redirect_server(host: str, health: str = "") -> str:
     # $host drops the published port, so a host value carrying one names the target itself.
     target = f"https://{host}" if ":" in host else "https://$host"
     return (
         f"server {{\n    listen 80;\n    server_name {_bare(host)};\n"
         "    location /.well-known/acme-challenge/ { root /var/www/certbot; }\n"
-        f"    location / {{ return 301 {target}$request_uri; }}\n}}\n"
+        f"{health}    location / {{ return 301 {target}$request_uri; }}\n}}\n"
     )
 
 
