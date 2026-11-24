@@ -38,7 +38,7 @@ ExecStart=/bin/true
 """
 FAILING_IPTABLES = "#!/bin/sh\nexit 4\n"
 BOOT_SECONDS = 60
-RULE = ["DOCKER-USER", "-i", "vecten-services", "-d", "169.254.169.254", "-j", "DROP"]
+RULE = ["DOCKER-USER", "-i", "vecten-+", "-d", "169.254.169.254", "-j", "DROP"]
 
 
 def docker(*args, input=None, check=True):
@@ -62,7 +62,7 @@ def host_json() -> str:
             "env": "prod",
             "connector_secrets": [],
             "service_secrets": [],
-            "service_network": "vecten-services",
+            "service_network": "vecten-+",
         }
     )
     return json.dumps(doc)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -318,9 +319,8 @@ def _airflow_common(
     return common
 
 
-SERVICES_NETWORK = "vecten-services"
-# The VM agent's DOCKER-USER rules match this interface name; Linux caps one at 15 characters.
-SERVICES_BRIDGE = "vecten-services"
+# The prefix also covers the bridge named in earlier host records during an upgrade.
+SERVICE_BRIDGE_PREFIX = "vecten-"
 SERVICE_ROOTS = {"platform": "/opt/airflow", "mcp": "/app"}
 SERVICE_IMAGES = {"platform": "airflow", "mcp": "mcp"}
 # Processes and threads together; it bounds a fork loop, not a threaded server's pool.
@@ -348,10 +348,10 @@ def host_services(
     config: VectenConfig, record: dict[str, Extension], components: list[str]
 ) -> tuple[list[str], str]:
     """What a VM's agent needs for the services it runs: the secret names it reads and hands
-    to Compose, and the bridge it keeps off the metadata address, or empty for no service."""
+    to Compose, and the interface match for its metadata firewall rule, or empty for no service."""
     placed = [b for b in bound_services(config, record) if b.host in components]
     names = sorted({n for bound in placed for n in service_secret_names(bound, record)})
-    return names, SERVICES_BRIDGE if placed else ""
+    return names, SERVICE_BRIDGE_PREFIX + "+" if placed else ""
 
 
 def _literal(value: str) -> str:
@@ -396,6 +396,12 @@ def served_services(
         if name in listed:
             served.append((bound, name))
     return served
+
+
+def service_bridge(project: str, service: str) -> str:
+    # Linux interface names have at most 15 bytes. Compose names can be longer.
+    suffix = hashlib.sha256(f"{project}/{service}".encode()).hexdigest()[:8]
+    return SERVICE_BRIDGE_PREFIX + suffix
 
 
 def _service(
@@ -450,7 +456,7 @@ def _service(
         # Both images run as a non-root user, which holds no effective capability anyway.
         "cap_drop": ["ALL"],
         "security_opt": ["no-new-privileges:true"],
-        "networks": [SERVICES_NETWORK],
+        "networks": [bound.compose_name],
         "healthcheck": {
             "test": test,
             "interval": "10s",
@@ -722,20 +728,21 @@ def generate_compose(
         "depends_on": nginx_depends,
         "restart": "unless-stopped",
     }
-    running = services_to_run(config, mode, host_components, stack_dir)
-    for bound in running:
-        services[bound.compose_name] = _service(bound, mode, project, hosts, stack_dir)
-        if bound.service.volume is not None:
-            volumes[f"{bound.compose_name}-data"] = {}
-    document = {"name": project, "services": services, "volumes": volumes}
-    if running:
-        services["nginx"]["networks"] = ["default", SERVICES_NETWORK]
-        network = (
-            {"driver_opts": {"com.docker.network.bridge.name": SERVICES_BRIDGE}}
+    networks = {}
+    for bound in services_to_run(config, mode, host_components, stack_dir):
+        name = bound.compose_name
+        services[name] = _service(bound, mode, project, hosts, stack_dir)
+        networks[name] = (
+            {"driver_opts": {"com.docker.network.bridge.name": service_bridge(project, name)}}
             if mode == "vm"
             else {}
         )
-        document["networks"] = {SERVICES_NETWORK: network}
+        if bound.service.volume is not None:
+            volumes[f"{name}-data"] = {}
+    document = {"name": project, "services": services, "volumes": volumes}
+    if networks:
+        services["nginx"]["networks"] = ["default", *networks]
+        document["networks"] = networks
     if config.packages.private_index:
         secrets = {}
         for name, service in services.items():
