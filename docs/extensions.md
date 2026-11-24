@@ -528,7 +528,7 @@ first to install the local packages in the CLI environment. The check compares t
 secret names, settings schemas, service and app declarations with `extensions.lock.json`.
 If they differ, run `vecten lock` and commit the updated record with the code. Project CI
 normally runs this check by installing the in-repo extensions and their locked index dependencies.
-Projects with both a private index and a bound consumer skill use the committed record in PR CI. It does not fetch registered Git
+Projects with both a private index and a bound consumer skill use the committed record in PR CI. PR CI does not fetch registered Git
 extensions. Keep imports of those packages inside the runtime code that uses them so CI
 can load your manifest, service and app declarations. On the laptop, `vecten up` also
 checks services and apps before starting containers.
@@ -677,21 +677,20 @@ membership through [MCP identity and access](mcp-identity.md).
 groups = ["finance"]
 ```
 
-Commit `vecten.toml` and the [files written by `vecten extension add`](#dependencies-and-locks),
-then use the project’s ship workflow for the target environment. After the new MCP container starts, open `/apps` on the host
+Run `vecten lock` to record which extension packaged each bound skill. Run it once on upgrade
+if the project already binds skills and its `extensions.lock.json` predates skill records.
+Commit `vecten.toml`, `extensions.lock.json` and the other [dependency files](#dependencies-and-locks)
+together, then use the project’s ship workflow for the target environment. After the new MCP container starts, open `/apps` on the host
 shown by `vecten mcp connection --env <env>`. A member signs in and chooses **monthly-orders** under
 **Skills for your assistant**. The server checks current membership on each download.
 Removing a member stops future downloads. Copies already downloaded stay with their recipients.
 The MCP access log records successful and denied download attempts by signed-in users.
-After adding or changing a skill binding, run `vecten lock` and commit `extensions.lock.json`.
-The lock records which extension successfully packaged each skill. With the extensions installed,
-`vecten lock --check` checks their files again.
 
-Pull-request CI checks bindings against the committed record. It checks installed in-repo skills
-when their dependencies are public. For a project with bound skills and a private package index,
-CI checks the records only. Use `vecten lock --check` in your authenticated development environment
-after editing a local declaration. Ship checks the recorded bindings before contacting a host.
-The project MCP image build packages the archives again from the installed wheels before the
-new server starts. This build check also runs on the laptop and needs no network access.
+Pull-request CI checks bindings against the committed record. It also packages in-repo skills
+unless the project configures a private package index. With a private index and bound skills,
+run `vecten lock --check` in your authenticated development environment after changing a local
+declaration. Ship checks the recorded bindings before contacting the host. On the host and
+on the laptop, the MCP image build first installs the wheels, then packages their skill archives
+with network access disabled. A packaging error stops the build before the new MCP server starts.
 
 Back to the [docs index](README.md).
