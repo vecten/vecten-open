@@ -14,7 +14,13 @@ from vecten_shared.records import write_text_atomic
 
 DISTRIBUTIONS = ("vecten", "vecten-platform", "vecten-mcp", "vecten-shared")
 VERSIONS_TOML = "packages/vecten-shared/src/vecten_shared/versions.toml"
+GUIDE_FILES = (
+    "packages/vecten/src/vecten/knowhow/skills/guide/SKILL.md",
+    "plugins/vecten/skills/guide/SKILL.md",
+    "docs/agent-guide.md",
+)
 VERSION_FILES = (
+    *GUIDE_FILES,
     *(f"packages/{d}/pyproject.toml" for d in DISTRIBUTIONS),
     *(f"packages/{d}/src/{d.replace('-', '_')}/__init__.py" for d in DISTRIBUTIONS),
     VERSIONS_TOML,
@@ -41,6 +47,8 @@ class Edit:
 def _rewrites(rel: str, old: str, new: str) -> list[tuple[str, str, bool]]:
     """(pattern, replacement, required) for one file; a required pattern matches exactly once."""
     o = re.escape(old)
+    if rel in GUIDE_FILES:
+        return [(rf"vecten~={o}(?=')", f"vecten~={new}", True)]
     if rel.endswith("pyproject.toml"):
         return [
             (rf'^version = "{o}"$', f'version = "{new}"', True),

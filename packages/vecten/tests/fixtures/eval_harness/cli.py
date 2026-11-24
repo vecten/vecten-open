@@ -162,8 +162,12 @@ def unresolved(names: list[str]) -> list[str]:
 def print_instructions(case: Case, paths: Paths, port: int = 443) -> None:
     say = print
     say(f"\n== vecten eval harness: {paths.case} ({case.skill} eval {case.eval_id}) ==\n")
-    say("1. In the terminal that starts Claude Code, and in the one where you type secrets:")
-    say(f"     . {paths.env_file}")
+    if case.skill == "guide" and case.eval_id == 4:
+        say("Start Claude Code in your normal terminal. Each project command must run in a")
+        say(f"fresh shell that sources {paths.env_file}; the run wrapper does this for you.")
+    else:
+        say("1. In the terminal that starts Claude Code, and in the one where you type secrets:")
+        say(f"     . {paths.env_file}")
     names = case.hostnames()
     if names:
         sed = "sed -i ''" if host_platform.system() == "Darwin" else "sed -i"

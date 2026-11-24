@@ -60,7 +60,7 @@ in a terminal that stays open for the run:
 
     uv run python packages/vecten/tests/fixtures/eval_harness up <case>
 
-The cases are `connector`, `model`, `guide-1`, `guide-2`, `guide-3`, `operate-1` to
+The cases are `connector`, `model`, `guide-1` to `guide-4`, `operate-1` to
 `operate-3` and `semantic-1` to `semantic-3`, one per evaluation case. `up` writes
 `~/.vecten-eval/<case>/env.sh` (`--dir` moves it), prints what the person does for that case,
 serves the case's hostnames until Ctrl-C, then removes its containers.
@@ -74,10 +74,13 @@ logs in `github/runs/`, and the mocked cloud account in `cloud/`.
 | `connector`, `model` | the demo API at `api.demo.test` | the CA bundle |
 | `guide-1` | the demo API; the MCP at `mcp.data.acme.test` | `gh` stand-in, `MockCloud`, CA bundle |
 | `guide-2` | the MCP; Postgres at `warehouse.acme.test:5432` | `gh` stand-in, `MockCloud`, CA bundle |
-| `guide-4` | nothing | isolated uv tool directory and PATH for the first-install case |
 | `guide-3` | nothing; `up` exits after writing `env.sh` | `gh` stand-in, `MockCloud`, CA bundle |
+| `guide-4` | no local services; uv needs PyPI access to install the compatible published CLI | a private uv tool directory and a restricted PATH for project commands |
 | `semantic-<n>` | the case's project and its MCP; semantic-3 also the provisioned warehouse | `gh` stand-in, `MockCloud`, CA bundle |
 | `operate-<n>` | nothing; `up` builds the case's project and exits | the `vecten issues` replay, `gh` stand-in, `MockCloud`, CA bundle |
+
+Guide-4 exercises the published CLI rather than a wheel built from the checkout. Start Claude Code
+in your usual terminal. The run wrapper sources the restricted environment for each project command.
 
 What needs the person, each printed by `up` as one command:
 

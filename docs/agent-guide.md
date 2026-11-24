@@ -86,14 +86,20 @@ you act on all of it.
 
 ### Before the first intake
 
-Run `command -v vecten` in the shell you will use for the project. If it finds the CLI,
-continue with `vecten next --json`. If it is missing, tell the person that you will install
-the Vecten CLI as a user tool with uv. Check for `uv` with `command -v uv`. If uv is
-missing, give the person the [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/)
-and resume when uv is available. Run `uv tool install --python 3.14 vecten`; uv can supply
-a stable Python 3.14. Older uv versions may offer only a prerelease. If so, update uv using its original installation method and retry with stable Python 3.14. If the installed executable directory is outside your PATH, add the directory
-printed by `uv tool dir --bin` to the command shell's PATH. Verify `vecten version` before
-starting intake. If installation or verification fails, report the error and stop there.
+Run `command -v vecten` in the project shell. If it prints an absolute path, run that
+executable with `version --json`. Check the `vecten` version against the requirement in
+the install command below. `~=` accepts the named release and newer patch releases with
+the same major and minor version. If it matches, use that executable for `next --json`.
+
+If the CLI is missing or incompatible, tell the person you will install a compatible
+copy as a user tool with uv. Run `command -v uv`. If it is missing, give the person the
+[uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/)
+and resume once uv is available. Run `uv tool install --upgrade --python 3.14 'vecten~=0.1.1'`.
+If uv offers only a Python prerelease, update uv using its original installation method
+and retry with stable Python 3.14. Run `uv tool dir --bin` and append `/vecten` to the
+printed directory. Use that absolute path for `version --json` and every subsequent
+Vecten command, including `next --json`, even in a fresh shell. Check the version again
+before intake. If installation fails or the version is incompatible, report the error and stop.
 The local stack also needs a running Docker daemon when the guide reaches `vecten up`.
 
 ### Ground rules
