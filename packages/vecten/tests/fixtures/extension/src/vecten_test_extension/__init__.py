@@ -70,3 +70,10 @@ warehouse = {
     "datasets": ["fixture_dataset"],
     "groups": ["analyst"],
 }
+
+
+def sign_in(*, config):
+    def verified(*, identity, verified_claims, set_membership):
+        return identity.email
+
+    return {"groups": [], "handler": verified}

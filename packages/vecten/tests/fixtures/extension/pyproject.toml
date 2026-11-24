@@ -20,6 +20,8 @@ fixture = "vecten_test_extension:skill"
 fixture = "vecten_test_extension:tool"
 [project.entry-points."vecten.mcp.auth"]
 fixture = "vecten_test_extension:identity"
+[project.entry-points."vecten.mcp.sign_in"]
+fixture = "vecten_test_extension:sign_in"
 [project.entry-points."vecten.mcp.provisioning"]
 fixture = "vecten_test_extension:provision"
 [project.entry-points."vecten.mcp.audit_sinks"]

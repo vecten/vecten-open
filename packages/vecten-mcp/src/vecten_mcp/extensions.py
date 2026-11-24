@@ -25,23 +25,6 @@ class McpExtensions:
             for name in ("tools", "auth", "provisioning", "audit_sinks")
         ]
         instance = cls(*groups)
-        owned = {"default"}
-        for name, factory in load_group(config, "vecten.mcp.sign_in").items():
-            hook = factory(config=config) if callable(factory) else None
-            if not isinstance(hook, dict) or not callable(hook.get("handler")):
-                raise Failure(ExitCode.CONFIG, f"sign-in extension {name} needs a handler")
-            names = hook.get("groups")
-            if not isinstance(names, list) or any(
-                not isinstance(group, str) or group_name_problem(group) for group in names
-            ):
-                raise Failure(ExitCode.CONFIG, f"sign-in extension {name} needs a group list")
-            if name == "local" or owned.intersection(names):
-                raise Failure(
-                    ExitCode.CONFIG,
-                    f"sign-in extension {name} claims a reserved name or an owned group",
-                )
-            owned.update(names)
-            instance.sign_in_hooks[name] = hook
         instance.tool_plugins = {
             point.name: point.dist.name
             for point in selected_entry_points(config, "vecten.mcp.tools")
@@ -61,6 +44,23 @@ class McpExtensions:
             for name, hook in entries.items():
                 if not callable(hook):
                     raise Failure(ExitCode.CONFIG, f"{label} extension {name} must be callable")
+        owned = {"default"}
+        for name, factory in load_group(config, "vecten.mcp.sign_in").items():
+            hook = factory(config=config) if callable(factory) else None
+            if not isinstance(hook, dict) or not callable(hook.get("handler")):
+                raise Failure(ExitCode.CONFIG, f"sign-in extension {name} needs a handler")
+            names = hook.get("groups")
+            if not isinstance(names, list) or any(
+                not isinstance(group, str) or group_name_problem(group) for group in names
+            ):
+                raise Failure(ExitCode.CONFIG, f"sign-in extension {name} needs a group list")
+            if name == "local" or owned.intersection(names):
+                raise Failure(
+                    ExitCode.CONFIG,
+                    f"sign-in extension {name} claims a reserved name or an owned group",
+                )
+            owned.update(names)
+            instance.sign_in_hooks[name] = hook
         if set(instance.auth) & {"password", "oidc"}:
             raise Failure(ExitCode.CONFIG, "extension cannot replace a built-in identity backend")
         if config.mcp.auth not in {"password", "oidc"}:
