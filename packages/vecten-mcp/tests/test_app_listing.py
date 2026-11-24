@@ -3,8 +3,10 @@ connection through `apps/connect`."""
 
 import importlib.util
 import re
+from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pytest
 
 from vecten_mcp.apps import APP_PRINCIPALS, AppScopes, BoundApp, app_url
@@ -349,7 +351,59 @@ def test_connecting_is_not_an_agent_operation(apps):
     assert "apps" in TOOL_OPERATIONS
 
 
-def test_the_analytics_screen_lists_both_apps_read_only_and_names_the_binding(apps):
+@pytest.fixture(autouse=True)
+def health_http(monkeypatch):
+    requests = []
+    outcome = [200]
+
+    def dispatch(request):
+        requests.append(request)
+        if outcome[0] is None:
+            raise httpx.ReadTimeout("health check timed out", request=request)
+        return httpx.Response(outcome[0], headers={"Location": "https://elsewhere.example/"})
+
+    with httpx.Client(transport=httpx.MockTransport(dispatch)) as client:
+
+        def stream(method, url, *, headers, timeout, follow_redirects, trust_env):
+            assert not trust_env and not follow_redirects and timeout <= 2
+            return client.stream(method, url, headers=headers, follow_redirects=follow_redirects)
+
+        monkeypatch.setattr(httpx, "stream", stream)
+        yield requests, outcome
+
+
+@pytest.mark.parametrize(
+    ("status", "label"), [(204, "healthy"), (503, "unhealthy (HTTP 503)"), (None, "unreachable")]
+)
+def test_panel_probes_http_health_without_forwarding_credentials(apps, health_http, status, label):
+    requests, outcome = health_http
+    outcome[0] = status
+    page = screens.text(apps.http.get("/admin/apps"))
+    assert re.search(r"Health\s+" + re.escape(label), page)
+    assert [str(req.url) for req in requests] == ["https://sales.example/_vecten/health"]
+    assert "cookie" not in requests[0].headers and "authorization" not in requests[0].headers
+
+
+def test_local_health_checks_only_running_apps_with_an_http_check(apps, health_http):
+    scopes = apps.runtime.apps
+
+    def status():
+        return listed(scopes.listing("https://mcp.localhost:8443", check_health=True), "overview")[
+            "health"
+        ]
+
+    assert status() == "healthy"
+    requests, _ = health_http
+    assert str(requests[0].url) == "http://nginx/_vecten/health"
+    assert requests[0].headers["Host"] == "sales.localhost"
+    scopes.apps["overview"] = replace(OVERVIEW, http_health=False)
+    assert status() == "command check only"
+    scopes.apps["overview"] = replace(OVERVIEW, runs_locally=False)
+    assert status() == "disabled locally"
+    assert len(requests) == 1
+
+
+def test_the_analytics_screen_lists_both_apps_read_only_and_names_the_binding(apps, health_http):
     response = apps.http.get("/admin/apps")
     assert response.status_code == 200, response.text
     page = screens.text(response)
@@ -365,7 +419,7 @@ def test_the_analytics_screen_lists_both_apps_read_only_and_names_the_binding(ap
     assert forms == ["/admin/logout"]
 
 
-def test_the_analytics_screen_is_in_the_menu(apps):
+def test_the_analytics_screen_is_in_the_menu(apps, health_http):
     assert '<a href="/admin/apps">Analytics</a>' in apps.http.get("/admin").text
 
 

@@ -903,7 +903,7 @@ def principal_state(app):
 
 
 def apps(ctx):
-    listed = ctx.call("apps")
+    listed = ctx.call("apps", {"check_health": True})
     parts = [
         hint(
             "Who may open an app is its binding in vecten.toml: change it in a pull request and "
@@ -933,7 +933,7 @@ def apps(ctx):
             ("Datasets", ", ".join(app["datasets"])),
         ]
         if app["kind"] == "container":
-            rows.append(("Health", "not reported to the MCP; `vecten ship` prints it"))
+            rows.append(("Health", app["health"]))
         rows += [
             ("Principal", principal_state(app)),
             ("Binding", app["binding"]),

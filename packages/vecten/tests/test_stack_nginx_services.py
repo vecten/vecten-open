@@ -190,6 +190,20 @@ def test_the_health_path_is_exact_reads_only_and_forwards_the_declared_path():
     assert "proxy_pass $upstream/healthz;" in body
 
 
+def test_local_nginx_serves_only_health_before_its_https_redirect():
+    text = conf(site(host="bot.localhost:8443"), mode="local")
+    plain = next(
+        b for b in servers(text) if "server_name bot.localhost;" in b and "listen 80;" in b
+    )
+    assert "proxy_pass $upstream/healthz;" in locations(plain)["= /_vecten/health"]
+    assert "return 301 https://bot.localhost:8443$request_uri;" in plain
+    assert "= /_vecten/health" not in next(
+        b
+        for b in servers(conf(site()))
+        if "server_name bot.data.acme.com;" in b and "listen 80;" in b
+    )
+
+
 def test_a_health_command_gives_no_health_location():
     found = locations(tls(conf(site(health=None)), "bot.data.acme.com"))
     assert "= /_vecten/health" not in found
