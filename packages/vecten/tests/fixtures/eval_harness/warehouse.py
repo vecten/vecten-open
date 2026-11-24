@@ -64,6 +64,8 @@ GUIDE_SEED = Seed(
 
 
 def _literal(value) -> str:
+    if value is None:
+        return "NULL"
     if isinstance(value, bool) or not isinstance(value, int | float | Decimal):
         return "'" + str(value).replace("'", "''") + "'"
     return str(value)

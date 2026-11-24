@@ -234,7 +234,11 @@ def build(case, case_dir: Path, without_skill: str | None = None) -> Built | Non
     if not (root / ".git").is_dir():
         root = seed_deployed_repo(case, case_dir, builder, without_skill)
     fixture = semantic_fixture(builder.grader) if builder.grader else {}
-    gaps = {fixture["gap"]["id"]: gap_record(fixture["gap"])} if "gap" in fixture else {}
+    gaps = (
+        {fixture["gap"]["id"]: gap_record(fixture["gap"], fixture["adversarial_question"])}
+        if "gap" in fixture
+        else {}
+    )
     warehouse = warehouse_seed(fixture) if "rows" in fixture else None
     return Built(root, builder.environ(case_dir), gaps, warehouse)
 
@@ -243,7 +247,7 @@ def semantic_fixture(scenario: str) -> dict:
     return json.loads((SEMANTIC_GRADER / f"{scenario}.json").read_text())
 
 
-def gap_record(gap: dict) -> dict:
+def gap_record(gap: dict, hostile: str) -> dict:
     """The gap as the feedback loop stores one after a person's report."""
     from vecten_mcp.tool_service import evidence
 
@@ -259,7 +263,7 @@ def gap_record(gap: dict) -> dict:
         "last_seen": now,
         "status": "open",
         "reporters": [],
-        "evidence": evidence(gap["evidence"]),
+        "evidence": evidence({**gap["evidence"], "tool_calls": [{"question": hostile}]}),
     }
 
 
@@ -272,11 +276,12 @@ def warehouse_seed(fixture: dict):
     columns = [(first, "integer PRIMARY KEY")]
     for name in rest:
         kind = "text" if isinstance(sample[name], str) else "numeric(12, 2)"
-        columns.append((name, f"{kind} NOT NULL"))
+        nullable = any(row[name] is None for row in fixture["rows"])
+        columns.append((name, kind if nullable else f"{kind} NOT NULL"))
     rows = tuple(
         tuple(row[name] for name in fixture["warehouse_fields"]) for row in fixture["rows"]
     )
-    return Seed(fixture["dataset"], tuple(columns), rows, f"One row per {fixture['primary_key']}.")
+    return Seed(fixture["dataset"], tuple(columns), rows, fixture["adversarial_question"])
 
 
 # --- the cases ----------------------------------------------------------------------------

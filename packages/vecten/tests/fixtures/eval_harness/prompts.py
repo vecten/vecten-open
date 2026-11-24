@@ -73,7 +73,7 @@ def secret_values(case: Case) -> list[str]:
 def grader_brief(run: Run, case: Case) -> str:
     scripted = _scripted(case)
     files = [SKILLS / case.skill / name for name in eval_case(case)["files"]]
-    return Template((HARNESS / "grader-brief.md").read_text()).substitute(
+    brief = Template((HARNESS / "grader-brief.md").read_text()).substitute(
         skill=case.skill,
         eval_id=case.eval_id,
         harness_case=run.case,
@@ -90,3 +90,15 @@ def grader_brief(run: Run, case: Case) -> str:
         else "",
         secrets=", ".join(f"`{value}`" for value in secret_values(case)) or "none",
     )
+    if case.skill == "semantic":
+        from eval_harness.projects import BUILDERS, SEMANTIC_GRADER
+
+        fixture = SEMANTIC_GRADER / f"{BUILDERS[run.case].grader}.json"
+        brief += (
+            f"\nCompare outputs/semantic-evidence.json with {fixture}. An empty matching_cases "
+            "fails the compiled-case check. Check any equivalent expression against the fixture. "
+            "When no matching case pins the reference value, require the recorded query_metrics "
+            "result to show that value for the specified grouping. An agent's claim alone "
+            "is insufficient.\n"
+        )
+    return brief

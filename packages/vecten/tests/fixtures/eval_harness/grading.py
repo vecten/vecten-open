@@ -42,6 +42,11 @@ def bundle(run: Run, outputs: Path) -> int:
         messages += [f"## {ask.stem}", "Agent:", "```", ask.read_text().strip(), "```"]
         messages += ["Reply:", "```", answer, "```", ""]
     (outputs / "human-messages.md").write_text("\n".join(messages))
+    if run.case.startswith("semantic-"):
+        from eval_harness.semantic_grading import evidence
+
+        result = evidence(run.project, run.case)
+        (outputs / "semantic-evidence.json").write_text(json.dumps(result, indent=2) + "\n")
     return len(commands)
 
 

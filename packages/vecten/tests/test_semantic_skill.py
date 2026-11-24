@@ -129,13 +129,54 @@ def test_semantic_worked_examples_validate_and_detect_regression(
     monkeypatch.chdir(root)
     result = invoke("mcp", "validate", "--evals", "--json")
     assert result.exit_code == 0, result.stdout
+    if scenario == "empty-model":
+        from pathlib import Path
+
+        monkeypatch.syspath_prepend(str(Path(__file__).parent / "fixtures"))
+        from eval_harness.semantic_grading import evidence
+
+        case["expect"]["value"] = {"metric": "total_revenue", "equals": fixture["expected_revenue"]}
+        (root / "evals/semantic.yaml").write_text(yaml.safe_dump({"cases": [case]}))
+        (entry,) = evidence(root, "semantic-3")["matching_cases"]
+        assert entry["matches_reference_expression"] and entry["pins_reference_value"]
+        (root / "evals/semantic.yaml").write_text("cases: []")
+        assert evidence(root, "semantic-3")["matching_cases"] == []
+        (root / "evals/semantic.yaml").write_text(yaml.safe_dump({"cases": [case]}))
     # Reverting the definition must fail the case, naming the gap where there is one.
     metric["expression"]["dialects"][0]["expression"] = fixture["gross_expression"]
     path.write_text(json.dumps(doc))
     result = invoke("mcp", "validate", "--evals", "--json")
     assert result.exit_code == 6
     assert ("gap-refunds" in result.stdout) is ("gap" in fixture)
+    if scenario == "empty-model":
+        wrong_model = SemanticModel.load(root / "osi", kind="postgres")
+        case["expect"]["sql_sha256"] = sql_sha256(wrong_model.compile(request)["sql"])
+        (root / "evals/semantic.yaml").write_text(yaml.safe_dump({"cases": [case]}))
+        assert invoke("mcp", "validate", "--evals", "--json").exit_code == 0
+        (wrong,) = evidence(root, "semantic-3")["matching_cases"]
+        assert not wrong["matches_reference_expression"]
 
 
 def test_semantic_says_next_keeps_refine_until_described_and_keyed():
     assert "until every dataset has a description and a primary key" in load_skill("semantic")
+
+
+def test_warehouse_seed_distinguishes_aggregate_and_row_subtraction():
+    import sqlite3
+    from contextlib import closing
+
+    fixture = grader_fixture("empty-model")
+    with closing(sqlite3.connect(":memory:")) as conn:
+        conn.execute(
+            "create table orders(order_id integer, total_amount numeric, "
+            "refund_amount numeric, country text)"
+        )
+        conn.executemany(
+            "insert into orders values(:order_id, :total_amount, :refund_amount, :country)",
+            fixture["rows"],
+        )
+        reference, wrong = conn.execute(
+            "select sum(total_amount) - sum(refund_amount), "
+            "sum(total_amount - refund_amount) from orders"
+        ).fetchone()
+    assert reference == fixture["expected_revenue"] and wrong != reference
