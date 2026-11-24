@@ -378,6 +378,12 @@ def auth_routes(service, gate=None):
     def gate_cookie_cleared(response, name):
         response.delete_cookie(name, path="/", secure=True, httponly=True, samesite="lax")
 
+    def gate_host(request):
+        if HOST_HEADER in request.headers:
+            return request.headers[HOST_HEADER]
+        values = request.headers.getlist("x-forwarded-host")
+        return gate.forwarded_host(values[0]) if len(values) == 1 else ""
+
     async def gate_start(request):
         # NGINX appends the visited $request_uri after `rd=` unencoded, so the rest of the
         # query string is the return path, `&` and `?` included.
@@ -388,9 +394,7 @@ def auth_routes(service, gate=None):
         # Always a new verifier: one the browser sent may have been planted by whoever wants
         # their own code redeemed here.
         verifier = secrets.token_urlsafe(32)
-        response = RedirectResponse(
-            gate.start(request.headers.get(HOST_HEADER, ""), rd, verifier), status_code=303
-        )
+        response = RedirectResponse(gate.start(gate_host(request), rd, verifier), status_code=303)
         gate_cookie(response, STATE_COOKIE, verifier, max_age=STATE_SECONDS)
         return response
 
@@ -405,7 +409,7 @@ def auth_routes(service, gate=None):
     async def gate_callback(request):
         sid, rd = gate.redeem(
             request.query_params.get("code", ""),
-            request.headers.get(HOST_HEADER, ""),
+            gate_host(request),
             cookie_value(request, STATE_COOKIE),
         )
         response = RedirectResponse(rd, status_code=303)
@@ -432,11 +436,39 @@ def auth_routes(service, gate=None):
 
     async def gate_verify(request):
         try:
-            status, headers = gate.verify(
-                cookie_value(request, GATE_COOKIE),
-                request.headers.get(HOST_HEADER, ""),
-                request.headers.get(ROUTE_HEADER, ""),
+            values = request.headers
+            sid = cookie_value(request, GATE_COOKIE)
+            forwarded = request.query_params.get("forwarded") == "1" or (
+                HOST_HEADER not in values
+                and ROUTE_HEADER not in values
+                and "x-forwarded-host" in values
             )
+            if forwarded:
+
+                def single(name):
+                    fields = values.getlist("x-forwarded-" + name)
+                    return fields[0] if len(fields) == 1 else ""
+
+                host = gate.forwarded_host(single("host"))
+                uri, method = single("uri"), single("method")
+                route = gate.forwarded_route(host, uri, method)
+                if route is None:
+                    status, headers = 403, {}
+                else:
+                    status, headers = gate.verify(sid, host, route)
+                if (
+                    status == 401
+                    and method in ("GET", "HEAD")
+                    and request.query_params.get("redirect") == "1"
+                ):
+                    status, headers = (
+                        303,
+                        {"Location": gate.origin(host) + "/_vecten/gate/start?rd=" + uri},
+                    )
+            else:
+                status, headers = gate.verify(
+                    sid, values.get(HOST_HEADER, ""), values.get(ROUTE_HEADER, "")
+                )
         except Exception as exc:
             # NGINX answers 500 for any status but 2xx, 401 and 403, so nobody is admitted.
             logger.error("gate verify failed: %s", describe_error(exc))

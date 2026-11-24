@@ -341,8 +341,11 @@ def configured_runtime(root, config, extensions):
     )
     access.apps = runtime.apps
     from vecten_mcp.auth.gate import GateService
+    from vecten_shared.extension_record import read_record
 
-    runtime.gate = GateService.from_config(oauth, config, apps=runtime.apps)
+    runtime.gate = GateService.from_config(
+        oauth, config, apps=runtime.apps, record=read_record(root)
+    )
     pools.validate = session_validator(state, oauth.clock, narrow=runtime.apps.query_groups)
     runtime.queries.narrow = runtime.apps.query_groups
     from vecten_mcp.model import ModelService

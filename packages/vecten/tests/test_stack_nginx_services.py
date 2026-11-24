@@ -514,3 +514,31 @@ def test_an_unbound_route_at_the_root_leaves_one_fallback():
     found = locations(block)
     assert "return 404;" in found["/"] and "proxy_pass" not in found["/"]
     assert "proxy_pass $upstream;" in found["/hook/"]
+
+
+def test_rendered_locations_enforce_the_declared_route_contract():
+    model = bound_site(
+        {"home": HOME, "admin": ADMIN, "reports": {"path": "/reports", "access": "public"}},
+        {"home": {"access": "public"}, "admin": {"access": "login", "groups": ["default"]}},
+    )
+    text = conf(model)
+    rendered = locations(tls(text, model.host))
+    for route in model.routes:
+        body = rendered["/" if route.path == "/" else "= " + route.path]
+        if route.access == "login":
+            assert f"auth_request /_vecten/gate/verify/{route.key};" in body
+        else:
+            assert "auth_request " not in body
+        for name in (*IDENTITY_HEADERS, "X-Vecten-On-Behalf-Of"):
+            headers = re.findall(rf"proxy_set_header {name} (.*?);", body)
+            expected = (
+                '""'
+                if route.access == "public" or name.endswith("On-Behalf-Of")
+                else "$vecten_gate_" + name.removeprefix("X-Vecten-").lower()
+            )
+            assert headers == [expected]
+        assert "proxy_set_header Cookie $vecten_service_cookie;" in body
+        assert "proxy_set_header Upgrade $websocket_upgrade;" in body
+    for path in model.unbound:
+        body = rendered["= " + path]
+        assert "return 404;" in body and "proxy_pass" not in body

@@ -193,6 +193,33 @@ routes keep working. Under `standard` the platform host's NGINX asks the MCP ove
 every request on a `login` route there. On the laptop, `login` routes use the laptop's MCP at
 `https://mcp.localhost:8443`, its password sign-in, and the laptop's own people and groups.
 
+### Checking service requests with a forward-auth proxy
+
+For a service route bound with `access = "login"` in `vecten.toml`, send a GET to
+`https://mcp.<domain>/gate/verify?forwarded=1`. Use the MCP host for the environment
+serving the app. Copy the `__Host-vecten-gate` cookie from the browser’s request to
+the application hostname into the verification request to the MCP host. Set
+`X-Forwarded-Host`, `X-Forwarded-Uri` (including the query), and `X-Forwarded-Method`
+from the original request. The proxy must overwrite incoming copies and strip
+`X-Vecten-Gate-Host` and `X-Vecten-Gate-Route` so clients cannot select the route being checked.
+
+For a successful check, forward the five identity headers listed [below](#identity-headers-which-to-trust-and-why)
+from the 200 response. Remove client-supplied identity headers and both gate cookies
+(`__Host-vecten-gate` and `__Host-vecten-gate-state`) before forwarding to the application.
+A missing session returns 401. A person outside the route’s groups receives 403.
+Add `&redirect=1` to have the gate send a browser visiting by GET or HEAD to sign-in.
+
+On the **service hostname**, forward `/_vecten/gate/start`, `/_vecten/gate/callback`
+and `/_vecten/gate/logout` to `/gate/start`, `/gate/callback` and `/gate/logout` on the MCP
+host. Let browsers reach these paths before checking their login. Forward the browser's
+gate cookies to these endpoints and supply the service hostname in `X-Forwarded-Host`.
+Pass the gate’s redirects and cookie responses back to the browser.
+
+The gate checks the longest declared path on the service hostname. The proxy enforces
+the route's IP allow-list and forwards public routes itself. The generated NGINX
+configuration in `.vecten/stack/nginx/conf.d/default.conf` illustrates these rules on
+the laptop. It identifies the route by extension, service and route name.
+
 ### Identity headers: which to trust and why
 
 On a `login` route NGINX passes the service who is asking:
