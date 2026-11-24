@@ -9,6 +9,7 @@ from pathlib import Path
 import dlt
 
 from vecten_platform.sync import TerminalConnectorError
+from vecten_platform.sync.input_fixtures import InputSample
 from vecten_platform.sync.recording import RECORD_LIMIT, record_to
 from vecten_platform.sync.sampling import bound_recording
 from vecten_shared.output import Failure
@@ -96,6 +97,7 @@ def run_object(
     *,
     limit: int = RECORD_LIMIT,
     redact_fixture: Callable | None = None,
+    record_inputs: bool = False,
 ) -> ObjectOutcome:
     pipeline = dlt.pipeline(
         pipeline_name(connector, object_name),
@@ -105,7 +107,10 @@ def run_object(
     )
     recording = None
     try:
-        source = make_source()
+        sample = InputSample(limit=limit) if record_inputs else None
+        if sample is not None and record_dir is None:
+            raise ValueError("--record-inputs requires --record")
+        source = sample.source(make_source, object_name) if sample is not None else make_source()
         if object_name not in source.resources:
             known = ", ".join(source.resources.keys())
             return ObjectOutcome(object_name, False, 0, f"unknown object; the source has: {known}")
@@ -126,7 +131,9 @@ def run_object(
             pipeline.run(selected, refresh="drop_data")
             nesting = resource.max_table_nesting
             recording.commit(
-                pipeline.default_schema, selected.max_table_nesting if nesting is None else nesting
+                pipeline.default_schema,
+                selected.max_table_nesting if nesting is None else nesting,
+                input_document=sample.document() if sample is not None else None,
             )
         else:
             pipeline.run(selected)
@@ -166,6 +173,7 @@ def run_objects(
     *,
     limit: int = RECORD_LIMIT,
     redact_fixture: Callable | None = None,
+    record_inputs: bool = False,
 ) -> list[ObjectOutcome]:
     return [
         run_object(
@@ -177,6 +185,7 @@ def run_objects(
             record_dir,
             limit=limit,
             redact_fixture=redact_fixture,
+            record_inputs=record_inputs,
         )
         for name in objects
     ]

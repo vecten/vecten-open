@@ -145,3 +145,29 @@ def test_schema_recording_error_identifies_the_object_and_preserves_rows(tmp_pat
         tee.commit(Schema("demo"))
     assert path.read_text() == '{"old": true}\n'
     assert set(tmp_path.iterdir()) == {path}
+
+
+def test_output_write_failure_preserves_paired_inputs_and_rows(tmp_path, monkeypatch):
+    import pytest
+
+    from vecten_platform.sync import recording
+
+    path = tmp_path / "orders.jsonl"
+    path.write_text('{"id": 1}\n')
+    inputs = tmp_path / "inputs" / "orders.json"
+    inputs.parent.mkdir()
+    inputs.write_text('{"old": true}\n')
+    write = recording.write_text_atomic
+
+    def fail_output(target, text):
+        if target == path:
+            raise OSError("output unavailable")
+        write(target, text)
+
+    monkeypatch.setattr(recording, "write_text_atomic", fail_output)
+    tee = record_to(path)
+    tee({"id": 2})
+    with pytest.raises(OSError, match="output unavailable"):
+        tee.commit(input_document='{"new": true}\n')
+    assert inputs.read_text() == '{"old": true}\n'
+    assert path.read_text() == '{"id": 1}\n'

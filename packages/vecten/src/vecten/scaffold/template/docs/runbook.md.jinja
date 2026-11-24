@@ -29,11 +29,13 @@ inference. If replay reports an incompatible schema, run
 `vecten connector run <source> --object <object> --record` to refresh both files.
 
 The test `connectors/<source>/test_<source>.py` replays fixtures into DuckDB with the network
-blocked and is skipped until fixtures exist. That test and
-`vecten dbt-build-local` load the fixtures straight into the raw tables and never run `connector.py`,
-so a code change that breaks every live sync still passes CI while the fixtures are unchanged; after
-changing `connector.py`, run `vecten connector run <source> --json` and check for `"ok": true` under
-each changed object's name in `objects`. Fixtures hold real records from the source (up to 200 per
+blocked and is skipped until fixtures exist. With output fixtures alone, that test and
+`vecten dbt-build-local` load the rows straight into the raw tables and never run `connector.py`,
+so a code change that breaks every live sync still passes CI while the fixtures are unchanged. To
+check connector parsing as well, save upstream JSON with `--record --record-inputs` for a source
+that supports `inputs(fetch)`. After changing `connector.py`, run
+`vecten connector run <source> --json` and check for `"ok": true` under each changed object's name
+in `objects`. Fixtures hold real records from the source (up to 200 per
 object) and are committed to the project, so check them for personal data before the repository is
 shared. To avoid recording, set `record = false` in the connector declaration in `vecten.toml`,
 write invented JSON objects one per line under `connectors/<source>/fixtures/<object>.jsonl` and

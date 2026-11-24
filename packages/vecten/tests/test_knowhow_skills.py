@@ -579,10 +579,10 @@ def test_semantic_refines_introspected_datasets_before_any_metric():
     assert "Refine the drafted datasets before adding any metric" in flat("semantic")
 
 
-def test_connector_skill_says_fixture_replays_never_run_the_connector_code():
+def test_connector_skill_distinguishes_input_replay_and_live_sync():
     body = flat("connector")
-    assert "never runs `connector.py`" in body
-    assert "`vecten connector run <name> --json` is the live proof" in body
+    assert "--record-inputs" in body
+    assert "`vecten connector run <name> --json` for a live sync" in body
 
 
 def test_plugin_icon_meets_the_directory_rules():

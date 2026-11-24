@@ -79,8 +79,8 @@ def test_add_verified_source(invoke, project):
     test_py = (project / "connectors" / "hubspot" / "test_hubspot.py").read_text()
     assert "replay_connector_test" in test_py and "vecten connector run hubspot --record" in test_py
     flat = " ".join(test_py.split())
-    assert "never runs connector.py" in flat
-    assert "`vecten connector run hubspot --json` is the live proof" in flat
+    assert "--record-inputs" in flat
+    assert "`vecten connector run hubspot --json` for a live sync" in flat
     dag = (project / "orchestration" / "dags" / "sync_hubspot_default.py").read_text()
     assert dag.endswith(
         'build_sync_dag(connector="hubspot", group="default", objects=[], schedule="@daily")\n'

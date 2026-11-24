@@ -97,9 +97,10 @@ source; that is why it is the fallback.
 Read the JSON the command prints:
 
 - `files`: what it wrote under `connectors/<name>/`, including `test_<name>.py`, which replays
-  the fixtures offline, and an empty `fixtures/` directory. The replay loads the fixtures
-  straight into the raw tables and never runs `connector.py`, so it does not catch a code
-  change that breaks a live sync: `vecten connector run <name> --json` is the live proof;
+  the fixtures offline, and an empty `fixtures/` directory. Output fixtures load directly into raw
+  tables. A source with an injectable reader can also test its parsing with saved input JSON
+  (`--record --record-inputs`). Check with the human that upstream fields are safe to save
+  before enabling input recording. Run `vecten connector run <name> --json` for a live sync;
 - `dags`: the sync DAG, `orchestration/dags/sync_<name>_default.py`;
 - `secrets`: the secret names the code reads, used in step 3;
 - `dependencies`: Python packages a verified source needs; `locked` says whether the command
@@ -197,8 +198,8 @@ data in git. Commit each `<object>.schema.json` beside its rows so replay preser
 table names and merge keys. Ask which objects hold personal data they do not want there.
 
 After any later change to `connector.py`, run `vecten connector run <name> --json` again before
-calling the change done. Neither the connector test nor `vecten dbt-build-local` runs the code,
-so a green CI says nothing about it.
+calling the change done. Output fixtures load saved rows directly. An input fixture also checks the
+transformation, while a live sync exercises credentials, fetching and pagination.
 
 Each object needs a fixture for offline builds. For sensitive or billed sources, set
 `record = false` in the connector's `[[connectors]]` entry in `vecten.toml`. Supply invented
@@ -215,8 +216,8 @@ return a sanitized row before the sample reaches the local warehouse or fixture 
 Ask before the first run, because a table a sync has landed stays declared in
 `dbt/models/staging/sources.yml`, a file the CLI writes and you never edit. When an object the
 human now wants out was already synced or recorded, drop it from `connector.py`, delete its
-`connectors/<name>/fixtures/<object>.jsonl` and its companion `<object>.schema.json`, then run
-`vecten connector run <name> --record --json`
+`connectors/<name>/fixtures/<object>.jsonl`, its companion `<object>.schema.json` and any
+`inputs/<object>.json` beside the output fixtures, then run `vecten connector run <name> --record --json`
 again, and tell the human that its table entry stays in `sources.yml` until they remove it by
 hand.
 

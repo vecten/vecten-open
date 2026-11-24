@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -62,34 +63,46 @@ class Recording:
                 self.row_tables.append(table_name or self.path.stem)
         return item
 
-    def commit(self, schema: Schema | None = None, source_nesting: int | None = None) -> bool:
+    def commit(
+        self,
+        schema: Schema | None = None,
+        source_nesting: int | None = None,
+        *,
+        input_document: str | None = None,
+    ) -> bool:
         """Replace the fixture; an object that yielded nothing leaves no fixture behind."""
         self._file.close()
         try:
-            if not self.written:
+            # A previous row fixture survives an empty load, together with its companions.
+            if not self.written and self.path.is_file():
                 return False
-            rows = self._staging.read_text(encoding="utf-8")
-            if schema is None:
-                write_text_atomic(self.path, rows)
-                return True
-            try:
-                hints = recorded_schema(schema, self.row_tables, source_nesting)
-            except (DltException, ValueError, KeyError, TypeError) as exc:
-                # The runner reports the innermost exception of a chain, so a chained cause
-                # would hide the fixture path this message names.
-                raise ValueError(f"recording schema for {self.path}: {exc}") from None
-            hints_path = self.path.with_suffix(".schema.json")
-            previous = hints_path.read_text(encoding="utf-8") if hints_path.exists() else None
-            write_text_atomic(hints_path, json.dumps(hints, indent=2, default=str) + "\n")
-            try:
-                write_text_atomic(self.path, rows)
-            except BaseException:
-                if previous is None:
-                    hints_path.unlink()
-                else:
-                    write_text_atomic(hints_path, previous)
-                raise
-            return True
+            updates = {}
+            if input_document is not None:
+                input_dir = self.path.parent / "inputs"
+                input_dir.mkdir(exist_ok=True)
+                updates[input_dir / f"{self.path.stem}.json"] = input_document
+            if self.written:
+                if schema is not None:
+                    try:
+                        hints = recorded_schema(schema, self.row_tables, source_nesting)
+                    except (DltException, ValueError, KeyError, TypeError) as exc:
+                        # The runner reports the innermost exception of a chain, so a chained
+                        # cause would hide the fixture path this message names.
+                        raise ValueError(f"recording schema for {self.path}: {exc}") from None
+                    updates[self.path.with_suffix(".schema.json")] = (
+                        json.dumps(hints, indent=2, default=str) + "\n"
+                    )
+                updates[self.path] = self._staging.read_text(encoding="utf-8")
+            with ExitStack() as rollback:
+                for path, contents in updates.items():
+                    previous = path.read_text(encoding="utf-8") if path.exists() else None
+                    write_text_atomic(path, contents)
+                    if previous is None:
+                        rollback.callback(path.unlink, missing_ok=True)
+                    else:
+                        rollback.callback(write_text_atomic, path, previous)
+                rollback.pop_all()
+            return bool(self.written)
         finally:
             self._staging.unlink(missing_ok=True)
 

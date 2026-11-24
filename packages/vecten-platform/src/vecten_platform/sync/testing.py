@@ -11,6 +11,7 @@ import pytest
 
 from vecten_platform.sync.fixture_schema import fixture_table_counts
 from vecten_platform.sync.fixtures import fixture_files
+from vecten_platform.sync.input_fixtures import verify_input_fixtures
 from vecten_platform.sync.recording import replay_source
 
 
@@ -28,8 +29,11 @@ def replay_connector_test(
     connector_dir: Path, connector: str, tmp_path: Path, monkeypatch
 ) -> dict[str, int]:
     fixtures_dir = connector_dir / "fixtures"
+    verified_inputs = verify_input_fixtures(connector_dir, connector, tmp_path)
     files = fixture_files(fixtures_dir)
     if not files:
+        if verified_inputs:
+            return {}
         pytest.skip(
             f"no fixtures under {fixtures_dir}; record them with "
             f"`vecten connector run {connector} --record`"

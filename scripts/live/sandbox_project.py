@@ -40,9 +40,10 @@ REWRITE = "removing the file is not enough: rewrite the history or render the pr
 
 PIN = re.compile(r'vecten==([^"\s]+)')
 INSTALL = re.compile(rf'(uv tool install "vecten==[^"\s]+")(?: {re.escape(FIND_LINKS)})?')
-UVX = re.compile(rf'uvx (?:{re.escape(FIND_LINKS)} )?(--with "vecten==[^"\s]+")')
+RUNNER = r"(uvx|uv run --no-project)"
+UV_WITH = re.compile(rf'{RUNNER} (?:{re.escape(FIND_LINKS)} )?(--with "vecten==[^"\s]+")')
 INSTALL_PATCHED = re.compile(rf'(uv tool install "vecten==[^"\s]+") {re.escape(FIND_LINKS)}')
-UVX_PATCHED = re.compile(rf'uvx {re.escape(FIND_LINKS)} (--with "vecten==[^"\s]+")')
+UV_WITH_PATCHED = re.compile(rf'{RUNNER} {re.escape(FIND_LINKS)} (--with "vecten==[^"\s]+")')
 
 
 class Refused(Exception):
@@ -54,10 +55,10 @@ def patch(text: str, candidate: str) -> str:
         if version not in VERSION_VARIABLES and version != candidate:
             raise Refused(f"pins vecten=={version}, not the candidate {candidate}")
     text = INSTALL.sub(lambda m: f"{m.group(1)} {FIND_LINKS}", text)
-    text = UVX.sub(lambda m: f"uvx {FIND_LINKS} {m.group(1)}", text)
+    text = UV_WITH.sub(lambda m: f"{m.group(1)} {FIND_LINKS} {m.group(2)}", text)
     # A pin written in a form the patterns miss would install from the production index.
     for number, line in enumerate(text.splitlines(), 1):
-        patched = len(INSTALL_PATCHED.findall(line)) + len(UVX_PATCHED.findall(line))
+        patched = len(INSTALL_PATCHED.findall(line)) + len(UV_WITH_PATCHED.findall(line))
         if patched != line.count("vecten=="):
             raise Refused(
                 f"line {number} pins vecten in a form that cannot be patched: {line.strip()}"
@@ -67,7 +68,7 @@ def patch(text: str, candidate: str) -> str:
 
 def unpatch(text: str) -> str:
     text = INSTALL_PATCHED.sub(r"\1", text)
-    return UVX_PATCHED.sub(r"uvx \1", text)
+    return UV_WITH_PATCHED.sub(r"\1 \2", text)
 
 
 def workflow_files(project: Path) -> list[Path]:
