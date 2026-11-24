@@ -1,0 +1,4 @@
+- [x] Render and verify network membership for services, apps and NGINX.
+- [x] Update the VM and boot guard interface match and check legacy host records.
+- [x] Strip incoming viewer attribution and verify service and MCP route configuration.
+- [x] Update operator documentation and validate the release changes.

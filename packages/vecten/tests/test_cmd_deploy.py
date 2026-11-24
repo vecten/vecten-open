@@ -207,6 +207,32 @@ def _remove_line(root: Path, key: str) -> None:
 # Inside GitHub Actions
 
 
+@pytest.mark.parametrize("fail_at", ["lookup", "missing_branch", "fetch"])
+def test_actions_deploy_stops_before_using_an_unverified_head(
+    invoke, no_cloud, bootstrapped, monkeypatch, fail_at
+):
+    actions_without_cloud(monkeypatch)
+    gh = FakeGh(
+        failing=("repo",) if fail_at == "lookup" else (),
+        default_branch=None if fail_at == "missing_branch" else "trunk",
+    )
+    fetch = ["fetch", "origin", "refs/heads/trunk"]
+    git = FakeGit(answers={tuple(fetch): (128, "")})
+    monkeypatch.setattr(gh_mod, "get_gh", lambda: gh)
+    monkeypatch.setattr(gh_mod, "get_git", lambda: git)
+    result = invoke("deploy", "--env", "prod", "--json")
+    assert result.exit_code == (3 if fail_at == "lookup" else 5), result.stdout
+    assert gh.named("repo", "view") == [
+        ["repo", "view", "acme/data", "--json", "nameWithOwner,defaultBranchRef"]
+    ]
+    assert git.named("fetch") == ([fetch] if fail_at == "fetch" else [])
+    assert ("git fetch origin refs/heads/trunk" if fail_at == "fetch" else "gh repo view") in doc(
+        result
+    )["error"]
+    assert git.named("rev-parse", "FETCH_HEAD") == []
+    assert FakeTerraform.calls == []
+
+
 def test_actions_deploy_applies_the_saved_plan_then_ships_every_host(invoke, actions, project):
     before = (project / "vecten.toml").read_text()
     r = invoke("deploy", "--env", "prod", "--json")
@@ -370,6 +396,7 @@ def test_snowflake_project_plans_both_roots_then_applies_cloud_first(
         ("init", "snowflake"),
         ("plan", "snowflake"),
         ("show", "snowflake"),
+        ("show", "snowflake"),
         ("apply", "aws"),
         ("output", "aws"),
         ("apply", "snowflake"),
@@ -384,6 +411,74 @@ def test_snowflake_project_plans_both_roots_then_applies_cloud_first(
         "-backend-config=key=prod/aws.tfstate",
         "-backend-config=key=prod/snowflake.tfstate",
     ]
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "settings"),
+    [
+        ("LOADER_ACME_PROD", "LOADER", 'snowflake_base = "ACME"'),
+        ("LOADER_ACME_PROD", "LOADER_NEW_PROD", "snowflake_shared_account = true"),
+        ("LOADER", "LOADER_ACME_PROD", "snowflake_shared_account = false"),
+    ],
+)
+def test_ci_refuses_a_layout_rename_from_terraform_state(
+    invoke, deploy_secrets, snowflake, monkeypatch, before, after, settings
+):
+    monkeypatch.setattr(
+        FakeTerraform,
+        "changes",
+        [
+            {
+                "address": 'module.reporting.snowflake_account_role.this["LOADER"]',
+                "type": "snowflake_account_role",
+                "change": {
+                    "actions": ["no-op"],
+                    "before": {"name": "LOADER_WRONG_PROD"},
+                    "after": {"name": "LOADER_WRONG_PROD"},
+                },
+            },
+            {
+                "address": 'module.snowflake.snowflake_account_role.this["LOADER"]',
+                "type": "snowflake_account_role",
+                "change": {
+                    "actions": ["update"],
+                    "before": {"name": before},
+                    "after": {"name": after},
+                },
+            },
+        ],
+    )
+    result = invoke("deploy", "--env", "prod", "--json")
+    assert result.exit_code == 4, result.stdout
+    assert before in doc(result)["error"]
+    assert settings in doc(result)["error"]
+    assert "[environments.prod]" in doc(result)["error"] and "push" in doc(result)["error"]
+    assert "apply" not in FakeTerraform.commands()
+
+
+def test_ci_applies_project_snowflake_renames_alongside_first_deploy(
+    invoke, deploy_secrets, snowflake, monkeypatch
+):
+    changes = [
+        {
+            "address": "module.snowflake.snowflake_database.this",
+            "type": "snowflake_database",
+            "change": {"actions": ["create"], "before": None, "after": {"name": "ACME"}},
+        },
+        {
+            "address": "module.reporting.snowflake_database.this",
+            "type": "snowflake_database",
+            "change": {
+                "actions": ["update"],
+                "before": {"name": "REPORT"},
+                "after": {"name": "BI"},
+            },
+        },
+    ]
+    monkeypatch.setattr(FakeTerraform, "changes", changes)
+    result = invoke("deploy", "--env", "prod", "--json")
+    assert result.exit_code == 0, result.stdout
+    assert "apply" in FakeTerraform.commands()
 
 
 def test_snowflake_terraform_authenticates_from_the_deploy_secrets(
@@ -691,15 +786,17 @@ def test_a_snowflake_deploy_records_the_layout_it_was_first_deployed_with(
     assert facts.deployed_commit == COMMIT
 
 
-def test_a_failed_first_run_records_the_layout_it_tried(invoke, laptop, snowflake, monkeypatch):
+def test_a_failed_first_run_does_not_guess_whether_objects_were_created(
+    invoke, laptop, snowflake, monkeypatch
+):
     _share_account(snowflake)
     laptop.watch_code = 1
     monkeypatch.setattr(gh_mod, "get_git", lambda: FakeGit())
     r = invoke("deploy", "--env", "prod", "--json")
     assert r.exit_code != 0, r.stdout
     facts = load_config(snowflake).environments["prod"]
-    # The run may have created Snowflake objects under these names before it failed.
-    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME"
+    # CI checks the saved plan against any objects the failed run actually created.
+    assert facts.snowflake_shared_account is None and facts.snowflake_base is None
     assert facts.deployed_commit is None
 
 
@@ -774,7 +871,8 @@ def test_a_promoted_first_deploy_records_the_layout_of_the_commit_it_deploys(
     assert (r.exit_code == 0) is (watch_code == 0), r.stdout
     facts = load_config(snowflake).environments["prod"]
     # The run named the objects by SHIPPED's vecten.toml, which keeps the fixed layout.
-    assert facts.snowflake_shared_account is False and facts.snowflake_base is None
+    assert facts.snowflake_shared_account is (None if watch_code else False)
+    assert facts.snowflake_base is None
 
 
 def test_a_promoted_first_deploy_records_the_base_of_the_commit_it_deploys(
@@ -816,7 +914,8 @@ def test_a_first_deploy_records_the_base_of_the_fetched_head(
     assert (r.exit_code == 0) is (watch_code == 0), r.stdout
     facts = load_config(snowflake).environments["prod"]
     # CI deployed the default branch's head, whose vecten.toml names the base ACME_DW.
-    assert facts.snowflake_shared_account is True and facts.snowflake_base == "ACME_DW"
+    assert facts.snowflake_shared_account is (None if watch_code else True)
+    assert facts.snowflake_base == (None if watch_code else "ACME_DW")
 
 
 def test_a_first_deploy_records_the_layout_the_fetched_head_records(
@@ -1411,6 +1510,93 @@ def test_a_scaleway_plan_passes_the_bound_hostnames(invoke, scw):
     assert r.exit_code == 0, r.stdout
     plan = FakeTerraform.call("plan")
     assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
+
+
+def _bind_volumes(root):
+    from .services_fixtures import BOT, locked, with_services
+
+    with_services(
+        root,
+        {"bot": {}, "portal": {"host": "mcp"}, "worker": {}},
+        declared={
+            "bot": {**BOT, "volume": "/var/lib/bot"},
+            "portal": {**BOT, "components": ["mcp"], "volume": "/var/lib/portal"},
+            "worker": BOT,
+        },
+    )
+    locked(root)
+
+
+def _host_change(host, kind, actions):
+    return {
+        "type": kind,
+        "address": f'module.environment.module.host["{host}"].{kind}.this',
+        "change": {"actions": actions},
+    }
+
+
+@pytest.mark.parametrize("actions_list", [["delete", "create"], ["create", "delete"], ["delete"]])
+def test_host_loss_warning_names_only_affected_volumes_in_plan(
+    invoke, actions, project, monkeypatch, actions_list
+):
+    _bind_volumes(project)
+    changes = [
+        _host_change("platform", "aws_instance", actions_list),
+        _host_change("mcp", "aws_instance", ["update"]),
+    ]
+    monkeypatch.setattr(FakeTerraform, "changes", changes)
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    (warning,) = doc(r)["warnings"]
+    assert "platform host in prod" in warning
+    assert "vecten-acme-prod_svc-acme-bot-data" in warning
+    assert "portal-data" not in warning and "worker-data" not in warning
+    assert warning in Path(doc(r)["plan_file"]).read_text()
+    assert "apply" not in FakeTerraform.commands()
+
+
+def test_scaleway_shared_host_loss_covers_both_components(invoke, scw, monkeypatch):
+    _bind_volumes(scw.root)
+    monkeypatch.setattr(
+        FakeTerraform,
+        "changes",
+        [
+            _host_change("main", "scaleway_instance_server", ["delete"]),
+            _host_change("platform", "scaleway_instance_server", ["create"]),
+        ],
+    )
+    r = invoke("deploy", "--env", "prod", "--plan-only")
+    assert r.exit_code == 0, r.stdout
+    assert "main host in prod" in r.stdout
+    assert "svc-acme-bot-data" in r.stdout and "svc-acme-portal-data" in r.stdout
+
+
+def test_volume_warning_reaches_operator_before_a_failing_apply(
+    invoke, actions, project, monkeypatch
+):
+    _bind_volumes(project)
+    monkeypatch.setattr(
+        FakeTerraform, "changes", [_host_change("platform", "aws_instance", ["delete", "create"])]
+    )
+    monkeypatch.setattr(FakeTerraform, "failing", {"apply": 1})
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code != 0 and "apply" in FakeTerraform.commands()
+    assert "svc-acme-bot-data" in r.stderr
+
+
+def test_no_volume_warning_for_an_update_or_first_deploy(invoke, actions, project, monkeypatch):
+    _bind_volumes(project)
+    monkeypatch.setattr(
+        FakeTerraform,
+        "changes",
+        [
+            _host_change("platform", "aws_instance", ["update"]),
+            _host_change("mcp", "aws_instance", ["create"]),
+        ],
+    )
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert "warnings" not in doc(r)
 
 
 def test_a_deploy_reports_its_services_after_shipping(invoke, actions, project, monkeypatch):

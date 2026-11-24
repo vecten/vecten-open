@@ -335,15 +335,23 @@ manifest's default. An override replaces the whole value, with no merge of neste
 `[settings.project]` holds the project's own values the same way, without a schema: they are
 checked only for having a JSON type. TOML dates and times are refused; use strings.
 
+To install with required settings, run for example
+`vecten extension add ./extensions/acme-resolution --set daily_cap=10 --set dry_run=false`.
+Each option sets one base value. Spaces around a TOML literal are allowed, so
+`--set 'daily_cap = 10'` sets an integer. Quote strings that look like TOML literals.
+For example, `--set 'version="1.0"'` sets a string and `--set version=1.0` sets a float.
+Unquoted text such as `label=one=two` stays text.
+
 **Checks.** Values are checked against the manifest's schema, which may use `properties` typed
 `string`, `integer`, `number`, `boolean`, `array` or `object`, with `default`, `description`,
 `enum` and `const`. Arrays accept `items`, `minItems`, `maxItems` and `uniqueItems`. Strings
 accept `minLength`, `maxLength` and `pattern`. Numbers accept `minimum`, `maximum`,
 `exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`. For example, a price with
 `multipleOf: 0.01` accepts `19.99`. Declare defaults on top-level settings. To supply
-nested values by default, put the complete object in the top-level setting's `default`. Nested objects accept `properties`,
-`required` and `additionalProperties` (a boolean or a typed schema). The top level accepts
-only declared settings and reserves `env` for overrides. `vecten lock` checks the laptop and every environment an
+nested values by default, put the complete object in the top-level setting's `default`.
+Nested objects accept `properties`, `required` and `additionalProperties` (a boolean or a
+typed schema). The top level accepts only declared settings and reserves `env` for
+overrides. `vecten extension add` and `vecten lock` check the laptop and every environment an
 override names, `vecten up` the laptop, `vecten ship` and `ship --check` the environment
 shipped, and the MCP server every extension's settings before it starts serving. An error
 names `settings.<namespace>.<key>` and the environment, before anything starts. On a VM a change
@@ -511,12 +519,18 @@ extension's manifest does not declare.
 example `extension acme-bot: service bot: routes.webhook.path: /_vecten/ is reserved for Vecten`;
 a key this release does not know is reported and ignored.
 
-For an [in-repo extension](#extensions-in-the-project), a declaration is code, so editing it
-makes no lock stale: run `vecten lock` after changing it and commit `extensions.lock.json`
-with the change. `vecten up` compares the declarations of the in-repo extensions installed
-from this checkout with the record, and refuses a difference, naming the service and
-`vecten lock`, before any container starts. Nothing in CI makes that comparison: a commit that changes a declaration without
-`vecten lock` ships the new code with the recorded command, routes and limits.
+Run `vecten lock --check` to verify the committed component locks, including projects
+with no local extensions. It names each stale or missing file. For an
+[in-repo extension](#extensions-in-the-project), run `vecten lock --check` after
+editing its manifest, services or apps. On a fresh laptop checkout, run `vecten extension sync`
+first to install the local packages in the CLI environment. The check compares their current
+secret names, settings schemas, service and app declarations with `extensions.lock.json`.
+If they differ, run `vecten lock` and commit the updated record with the code. Project CI
+runs the same check on pull requests. Its declaration check installs the in-repo
+extensions and their locked index dependencies. It does not fetch registered Git
+extensions. Keep imports of those packages inside the runtime code that uses them so CI
+can load your manifest, service and app declarations. On the laptop, `vecten up` also
+checks services and apps before starting containers.
 
 **Binding a service.** A declared service runs only while `vecten.toml` binds it, and a route
 is served only while its own table is there:

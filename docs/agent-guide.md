@@ -86,8 +86,9 @@ you act on all of it.
 
 ### Ground rules
 
-- Work in the folder the human chose for the project. At the start it is empty;
-  `vecten init` renders the project into it, and every later command runs there.
+- Work in the folder the human chose for the project. Before the first render, the folder
+  may contain `.claude/`, `.DS_Store` and the answers saved in `vecten-answers.yml`.
+  `vecten init` renders the project there, and every later command runs in that folder.
 - Act on the project only through `vecten` commands run in a shell. With `--json`, a
   command prints one JSON document: `"ok": true` with its data, or `"ok": false` with
   `error`, `code` and `code_name`. The exit code says how to react:

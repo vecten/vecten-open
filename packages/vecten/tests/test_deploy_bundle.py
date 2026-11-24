@@ -599,7 +599,6 @@ def test_a_host_without_services_carries_empty_isolation_keys(project, tmp_path)
 
 
 def test_a_host_running_a_service_names_its_bridge_and_its_secrets(project, tmp_path):
-    from vecten.stack.compose import SERVICES_BRIDGE
 
     from .services_fixtures import with_services
 
@@ -607,7 +606,7 @@ def test_a_host_running_a_service_names_its_bridge_and_its_secrets(project, tmp_
     locked(project)
     bundle = build(project, tmp_path / "platform")
     host = host_json(bundle)
-    assert host["service_network"] == SERVICES_BRIDGE
+    assert host["service_network"] == "vecten-+"
     # Only the names the platform host may read; MCP_ names belong to the MCP host's scope.
     assert host["service_secrets"] == ["ACME_BOT_TOKEN"]
     compose = yaml.safe_load(read(bundle, ".vecten/stack/docker-compose.yml"))
@@ -627,7 +626,7 @@ def test_a_service_on_the_mcp_host_gets_its_mcp_secrets_there(project, tmp_path)
     )
     locked(project)
     mcp = host_json(build(project, tmp_path / "mcp", host="mcp"))
-    assert mcp["service_network"] == "vecten-services"
+    assert mcp["service_network"] == "vecten-+"
     assert mcp["service_secrets"] == ["MCP_ACME_TOKEN"]
     platform = host_json(build(project, tmp_path / "platform"))
     assert platform["service_secrets"] == [] and platform["service_network"] == ""
@@ -644,7 +643,7 @@ def test_one_vm_under_minimal_reads_each_service_secret_from_its_hosts_scope(tmp
         secrets=("ACME_BOT_TOKEN", "MCP_ACME_TOKEN"),
     )
     host = host_json(build(locked(root), tmp_path / "out", host="main", outputs=minimal_outputs()))
-    assert host["service_network"] == "vecten-services"
+    assert host["service_network"] == "vecten-+"
     assert host["service_secrets"] == ["ACME_BOT_TOKEN", "MCP_ACME_TOKEN"]
 
 

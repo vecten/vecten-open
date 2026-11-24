@@ -51,6 +51,7 @@ def cfg(components, warehouse="postgres", profile="standard", deploy=None):
 
 EXPECTED_PROFILES = {
     "postgres": ["local"],
+    "airflow-auth": ["platform"],
     "airflow-api-server": ["platform"],
     "airflow-scheduler": ["platform"],
     "airflow-dag-processor": ["platform"],

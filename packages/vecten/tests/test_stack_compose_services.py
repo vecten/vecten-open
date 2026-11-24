@@ -4,9 +4,8 @@ import pytest
 
 from vecten.stack.compose import (
     SERVICE_PIDS_LIMIT,
-    SERVICES_BRIDGE,
-    SERVICES_NETWORK,
     generate_compose,
+    service_bridge,
 )
 from vecten_shared.config import VectenConfig
 from vecten_shared.extension_record import Extension, record_text
@@ -83,7 +82,7 @@ def test_a_bound_service_runs_from_its_host_components_project_image(tmp_path):
     assert svc["security_opt"] == ["no-new-privileges:true"]
     assert svc["cap_drop"] == ["ALL"]
     assert "cap_add" not in svc and "privileged" not in svc
-    assert svc["networks"] == [SERVICES_NETWORK]
+    assert svc["networks"] == ["svc-acme-bot"]
     assert "ports" not in svc and "depends_on" not in svc
     assert svc["environment"] == {
         "VECTEN_ENV": "local",
@@ -113,9 +112,9 @@ def test_nothing_waits_for_a_service_and_only_nginx_joins_its_network(tmp_path):
         assert "svc-acme-bot" not in svc.get("depends_on", {}), name
         if name not in ("nginx", "svc-acme-bot"):
             assert "networks" not in svc, name
-    assert doc["services"]["nginx"]["networks"] == ["default", SERVICES_NETWORK]
+    assert doc["services"]["nginx"]["networks"] == ["default", "svc-acme-bot"]
     # Two laptop projects would collide on one fixed bridge name; only a VM pins it.
-    assert doc["networks"] == {SERVICES_NETWORK: {}}
+    assert doc["networks"] == {"svc-acme-bot": {}}
 
 
 def test_on_a_vm_the_bridge_name_is_fixed_and_no_cloud_key_reaches_the_service(tmp_path):
@@ -123,9 +122,13 @@ def test_on_a_vm_the_bridge_name_is_fixed_and_no_cloud_key_reaches_the_service(t
         config(BOUND), "vm", ["platform", "mcp"], stack(tmp_path), hosts=VM_HOSTS
     )
     assert doc["networks"] == {
-        SERVICES_NETWORK: {"driver_opts": {"com.docker.network.bridge.name": SERVICES_BRIDGE}}
+        "svc-acme-bot": {
+            "driver_opts": {
+                "com.docker.network.bridge.name": service_bridge(doc["name"], "svc-acme-bot")
+            }
+        }
     }
-    assert len(SERVICES_BRIDGE) <= 15
+    assert len(service_bridge(doc["name"], "svc-acme-bot")) <= 15
     env = doc["services"]["svc-acme-bot"]["environment"]
     assert env["VECTEN_ENV"] == "${VECTEN_ENV}"
     assert env["VECTEN_PUBLIC_URL"] == "https://bot.data.acme.example"
@@ -246,3 +249,28 @@ def test_a_record_naming_a_stack_secret_is_refused_for_a_service(tmp_path):
     record = read_record(stack_dir.parent.parent)
     with pytest.raises(Failure, match="acme.*AIRFLOW_FERNET_KEY"):
         host_services(config(BOUND), record, ["platform"])
+
+
+@pytest.mark.parametrize("mode", ["local", "vm"])
+def test_each_service_shares_its_network_only_with_nginx(tmp_path, mode):
+    worker = {"command": ["run"], "health": {"command": ["check"]}}
+    doc = generate_compose(
+        config({**BOUND, "worker": {}}),
+        mode,
+        ["platform", "mcp"],
+        stack(tmp_path, {"bot": BOT, "worker": worker}),
+        hosts=VM_HOSTS if mode == "vm" else None,
+    )
+    networks = doc["networks"]
+    assert len(networks) == 2
+    assert set(doc["services"]["nginx"]["networks"]) == {"default", *networks}
+    for name in ("svc-acme-bot", "svc-acme-worker"):
+        [network] = doc["services"][name]["networks"]
+        members = {
+            key for key, svc in doc["services"].items() if network in svc.get("networks", [])
+        }
+        assert members == {name, "nginx"}
+    if mode == "vm":
+        bridges = {n["driver_opts"]["com.docker.network.bridge.name"] for n in networks.values()}
+        assert len(bridges) == 2
+        assert all(b.startswith("vecten-") and len(b) <= 15 for b in bridges)
