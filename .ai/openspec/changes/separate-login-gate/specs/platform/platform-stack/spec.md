@@ -19,6 +19,13 @@ A project with a bound login route SHALL run the service-host gate in a separate
 - **WHEN** the browser starts a service login
 - **THEN** the gate hands it to the issuer and redeems the resulting one-time code at the service hostname
 
+#### Scenario: Upgrade a deployed environment
+
+- **WHEN** a project has no bound login route, including an older release with no gate declaration
+- **THEN** its VM agent SHALL neither access the gate password nor provision its database role
+- **WHEN** a platform service has a login route and the MCP runs on a separate VM
+- **THEN** the setup host SHALL provision the gate login only on the MCP state database instance, and only the MCP host SHALL pass its password to the gate
+
 ## MODIFIED Requirements
 
 ### Requirement: Compose services are grouped into profiles
@@ -53,6 +60,7 @@ NGINX SHALL route the Airflow hostname to Airflow and the MCP hostname to the MC
 
 - **WHEN** a client requests `https://airflow.<domain>/`
 - **THEN** the Airflow UI is served
+- **AND** service routes SHALL never be served on `airflow.<domain>` or `mcp.<domain>`
 
 #### Scenario: MCP host
 

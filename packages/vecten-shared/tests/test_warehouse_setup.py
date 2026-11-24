@@ -68,7 +68,7 @@ def role_names(connect) -> set[str]:
 def test_laptop_upgrades_an_existing_state_volume_for_the_gate(init_dir):
     script = init_dir / "10-vecten.sh"
     script.rename(init_dir / "vecten" / "setup.sh")
-    with pg_container(init_dir, ENV) as (connect, name):
+    with pg_container(init_dir, ENV | {"VECTEN_WITH_GATE": "true"}) as (connect, name):
         with connect("postgres", "master", "postgres") as c:
             c.autocommit = True
             c.execute("CREATE ROLE mcp_state LOGIN PASSWORD 'm1'")
@@ -293,3 +293,18 @@ def test_with_mcp_must_be_exactly_true_or_false(init_dir):
         assert rerun.returncode != 0
         assert "VECTEN_WITH_MCP must be exactly true or false" in rerun.stderr
         assert not {"provisioner", "impersonator", "mcp_state"} & role_names(connect)
+
+
+def test_mcp_without_a_gate_sets_up_state_without_a_gate_secret(init_dir):
+    env = {name: value for name, value in ENV.items() if name != "MCP_GATE_DB_PASSWORD"}
+    with pg_container(init_dir, env) as (connect, name):
+        assert "mcp_state" in role_names(connect) and "mcp_gate" not in role_names(connect)
+        with connect("postgres", "master", "postgres") as c:
+            c.autocommit = True
+            c.execute("CREATE ROLE mcp_gate NOLOGIN")
+        rerun = rerun_init(name)
+        assert rerun.returncode == 0, rerun.stderr
+        with connect("postgres", "master", "mcp_state") as c:
+            assert not c.execute(
+                "SELECT has_database_privilege('mcp_gate', 'mcp_state', 'CONNECT')"
+            ).fetchone()[0]

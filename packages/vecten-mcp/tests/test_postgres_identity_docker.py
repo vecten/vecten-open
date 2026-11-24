@@ -265,6 +265,8 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
                 "-v",
                 "with_mcp_state=true",
                 "-v",
+                "with_gate=true",
+                "-v",
                 "with_warehouse=false",
                 "-v",
                 "with_mcp=false",

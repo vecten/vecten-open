@@ -346,7 +346,7 @@ def test_put_object_signs_the_body_hash(agent):
 # ---------------------------------------------------------------- ship on Scaleway
 
 
-def scw_store(fake, out):
+def scw_store(fake, out, *, with_gate=False):
     """Every secret a standard or minimal Scaleway environment holds once it has shipped."""
     for key in out["postgres"]:
         fake.add_secret(
@@ -361,7 +361,7 @@ def scw_store(fake, out):
             "AIRFLOW_DB_PASSWORD",
             "LOADER_PASSWORD",
             "MCP_STATE_DB_PASSWORD",
-            "MCP_GATE_DB_PASSWORD",
+            *(["MCP_GATE_DB_PASSWORD"] if with_gate else []),
             "MCP_PROVISIONER_PASSWORD",
             "MCP_IMPERSONATOR_PASSWORD",
             "AIRFLOW_FERNET_KEY",
@@ -390,14 +390,24 @@ def ship_scaleway(agent, release, run, fake, monkeypatch):
     )
 
 
-def test_minimal_ship_on_scaleway_generates_sets_up_and_starts(agent, tmp_path, monkeypatch):
+@pytest.mark.parametrize("gate", [False, True])
+def test_minimal_ship_on_scaleway_generates_sets_up_and_starts(agent, tmp_path, monkeypatch, gate):
     out = scw_outputs("minimal")
     release = stage_scaleway(tmp_path / "releases", out, "main")
     fake = FakeScaleway()
-    scw_store(fake, out)
+    if gate:
+        path = release / ".vecten/ship/host.json"
+        host = json.loads(path.read_text())
+        host["service_secrets"] = ["MCP_GATE_DB_PASSWORD"]
+        path.write_text(json.dumps(host))
+    scw_store(fake, out, with_gate=gate)
     write_key(agent)
     run = FakeRun()
     ship_scaleway(agent, release, run, fake, monkeypatch)
+    if gate:
+        assert fake.value("MCP_GATE_DB_PASSWORD")
+    else:
+        assert not any("MCP_GATE_DB_PASSWORD" in url for url in fake.urls())
     assert not run.argv("aws")
     for name in ("AIRFLOW_DB_PASSWORD", "MCP_IMPERSONATOR_PASSWORD", "AIRFLOW_FERNET_KEY"):
         assert fake.value(name), name

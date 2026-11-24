@@ -145,7 +145,12 @@ class StateStore:
 
             if (
                 self.engine.dialect.name == "postgresql"
-                and conn.execute(text("SELECT to_regrole('mcp_gate') IS NOT NULL")).scalar_one()
+                and conn.execute(
+                    text(
+                        "SELECT EXISTS (SELECT FROM pg_roles WHERE rolname='mcp_gate' AND "
+                        "shobj_description(oid, 'pg_authid') = 'Vecten service login: MCP gate')"
+                    )
+                ).scalar_one()
             ):
                 self._grant_gate_access(conn)
 

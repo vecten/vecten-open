@@ -59,5 +59,3 @@ The standalone gate SHALL verify the service cookie and bound route against the 
 
 - **WHEN** a ship changes a route's `groups` from `["default"]` to `["finance"]`
 - **THEN** the next request of a person outside `finance` on that route is answered 403
-
-## MODIFIED Requirements

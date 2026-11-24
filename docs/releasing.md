@@ -1349,7 +1349,27 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
     ```sh
     vecten update
     ~/vecten-live-tools/scripts/live/live project candidate <project> <candidate>
-    # the check of step 4, then:
+    # Run the check of step 4 before pushing.
+    ```
+
+    For an existing environment with a bound login route (including a container app), the
+    upgrade must grant the setup host access to `MCP_GATE_DB_PASSWORD` before its first new
+    ship. On Scaleway run `vecten bootstrap --env prod` now to update the host key's policy.
+    On either cloud, pause the automatic push-triggered ship while updating the default branch.
+    Run from the project checkout:
+
+    ```sh
+    gh workflow disable ship.yml
+    vecten github push --no-wait
+    vecten deploy --env prod
+    gh workflow enable ship.yml
+    ```
+
+    Deploy applies the new infrastructure permissions and ships that commit. Re-enable the
+    push workflow after a successful deploy. Environments without a bound login route use the
+    ordinary sequence:
+
+    ```sh
     vecten github push
     vecten deploy --env prod
     ```

@@ -188,10 +188,8 @@ NGINX_UID, NGINX_GID = 101, 101
 # The setup SQL reads these names through \getenv; the store holds the cloud names.
 SETUP_PASSWORDS = {
     "with_airflow": (("AIRFLOW_DB_PASSWORD", "AIRFLOW_DB_PASSWORD"),),
-    "with_mcp_state": (
-        ("MCP_STATE_DB_PASSWORD", "MCP_STATE_DB_PASSWORD"),
-        ("MCP_GATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"),
-    ),
+    "with_mcp_state": (("MCP_STATE_DB_PASSWORD", "MCP_STATE_DB_PASSWORD"),),
+    "with_gate": (("MCP_GATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"),),
     "with_warehouse": (("LOADER_PASSWORD", "LOADER_PASSWORD"),),
     "with_mcp": (
         ("PROVISIONER_PASSWORD", "MCP_PROVISIONER_PASSWORD"),
@@ -406,7 +404,9 @@ def scope_for(name: str) -> str:
     return "platform"
 
 
-def setup_flags(instance_databases: list[str], with_mcp: bool) -> dict[str, str]:
+def setup_flags(
+    instance_databases: list[str], with_mcp: bool, with_gate: bool = False
+) -> dict[str, str]:
     unknown = sorted(set(instance_databases) - set(SETUP_DATABASES))
     if unknown:
         raise AgentError(f"no setup for database(s): {', '.join(unknown)}")
@@ -418,6 +418,7 @@ def setup_flags(instance_databases: list[str], with_mcp: bool) -> dict[str, str]
     return {
         "with_airflow": flag("airflow" in instance_databases),
         "with_mcp_state": flag("mcp_state" in instance_databases),
+        "with_gate": flag(with_gate and "mcp_state" in instance_databases),
         "with_warehouse": flag(with_warehouse),
         "with_mcp": flag(with_mcp and with_warehouse),
     }
@@ -476,7 +477,7 @@ def _holds(outputs: dict, database: str) -> bool:
     return any(database in p["databases"] for p in outputs["postgres"].values())
 
 
-def generated_names(outputs: dict) -> list[str]:
+def generated_names(outputs: dict, with_gate: bool = False) -> list[str]:
     """The credentials the setup host creates; the IAM role grants exactly these names."""
     components = project_components(outputs)
     warehouse = _holds(outputs, "warehouse")
@@ -486,7 +487,9 @@ def generated_names(outputs: dict) -> list[str]:
     if warehouse:
         names.append("LOADER_PASSWORD")
     if "mcp" in components:
-        names += ["MCP_STATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"]
+        names.append("MCP_STATE_DB_PASSWORD")
+        if with_gate:
+            names.append("MCP_GATE_DB_PASSWORD")
         if warehouse:
             names += ["MCP_PROVISIONER_PASSWORD", "MCP_IMPERSONATOR_PASSWORD"]
     return names
@@ -800,11 +803,16 @@ def _new_value(name: str) -> str:
     return secrets.token_urlsafe(32)
 
 
+def _needs_gate_password(host: dict) -> bool:
+    # Older releases have no standalone gate in their recorded service secrets.
+    return "MCP_GATE_DB_PASSWORD" in host.get("service_secrets", [])
+
+
 def ensure_generated(host: dict, outputs: dict, run: Run, backend: Backend | None = None) -> None:
     backend = backend or backend_for(host, run)
     names = []
     if host["setup_host"]:
-        names += generated_names(outputs)
+        names += generated_names(outputs, _needs_gate_password(host))
     if "platform" in host["components"]:
         names += list(AIRFLOW_APP_SECRETS)
     for name in names:
@@ -858,11 +866,12 @@ def secret_env(
         )
     if "mcp" in components:
         env["MCP_STATE_DB_PASSWORD"] = _required(backend, "MCP_STATE_DB_PASSWORD")
-        env["MCP_GATE_DB_PASSWORD"] = _required(backend, "MCP_GATE_DB_PASSWORD")
+        if _needs_gate_password(host):
+            env["MCP_GATE_DB_PASSWORD"] = _required(backend, "MCP_GATE_DB_PASSWORD")
     requested = set(env) | set(host["connector_secrets"] if "platform" in components else ())
     # Optional like connector secrets: an unset name reaches its service empty.
     for name in host["service_secrets"]:
-        if name not in requested:
+        if name not in requested and name != "MCP_GATE_DB_PASSWORD":
             value = backend.read_secret(name)
             if value is not None:
                 env[name] = value
@@ -1038,7 +1047,7 @@ def run_setup(host: dict, outputs: dict, run: Run, backend: Backend | None = Non
             raise AgentError(
                 f"the {key} instance's master secret is not username/password JSON"
             ) from None
-        flags = setup_flags(instance["databases"], with_mcp)
+        flags = setup_flags(instance["databases"], with_mcp, _needs_gate_password(host))
         env = {"PGPASSWORD": password, "PGSSLMODE": "require", "MASTER_ROLE": user}
         for flag, pairs in SETUP_PASSWORDS.items():
             if flags[flag] == "true":

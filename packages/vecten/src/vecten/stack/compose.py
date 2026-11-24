@@ -360,14 +360,25 @@ def needs_gate(config, record, mode):
 
 
 def host_services(
-    config: VectenConfig, record: dict[str, Extension], components: list[str]
+    config: VectenConfig,
+    record: dict[str, Extension],
+    components: list[str],
+    *,
+    setup_host: bool = False,
 ) -> tuple[list[str], str]:
     """What a VM's agent needs for the services it runs: the secret names it reads and hands
     to Compose, and the interface match for its metadata firewall rule, or empty for no service."""
     placed = [b for b in bound_services(config, record) if b.host in components]
-    names = sorted({n for bound in placed for n in service_secret_names(bound, record)})
-    guarded = placed or ("mcp" in components and needs_gate(config, record, "vm"))
-    return names, SERVICE_BRIDGE_PREFIX + "+" if guarded else ""
+    names = {n for bound in placed for n in service_secret_names(bound, record)}
+    gate = (
+        config.has("mcp")
+        and ("mcp" in components or setup_host)
+        and needs_gate(config, record, "vm")
+    )
+    if gate:
+        names.add("MCP_GATE_DB_PASSWORD")
+    guarded = placed or ("mcp" in components and gate)
+    return sorted(names), SERVICE_BRIDGE_PREFIX + "+" if guarded else ""
 
 
 def _literal(value: str) -> str:
@@ -496,7 +507,7 @@ def services_to_run(
     ]
 
 
-def _postgres(config: VectenConfig) -> dict:
+def _postgres(config: VectenConfig, *, gate: bool) -> dict:
     with_mcp = config.has("mcp")
     environment = {
         "POSTGRES_USER": "postgres",
@@ -506,6 +517,9 @@ def _postgres(config: VectenConfig) -> dict:
         "LOADER_PASSWORD": "${LOADER_PASSWORD}",
         "VECTEN_WITH_MCP": "true" if with_mcp else "false",
     }
+    if gate:
+        environment["VECTEN_WITH_GATE"] = "true"
+        environment["MCP_GATE_DB_PASSWORD"] = "${MCP_GATE_DB_PASSWORD}"
     if config.areas:
         environment["VECTEN_AREAS"] = ",".join(sorted(config.areas))
     if restricted := source_layer_areas(config.areas):
@@ -513,7 +527,6 @@ def _postgres(config: VectenConfig) -> dict:
     if with_mcp:
         environment |= {
             "MCP_STATE_DB_PASSWORD": "${MCP_STATE_DB_PASSWORD}",
-            "MCP_GATE_DB_PASSWORD": "${MCP_GATE_DB_PASSWORD}",
             "PROVISIONER_PASSWORD": "${PROVISIONER_PASSWORD}",
             "IMPERSONATOR_PASSWORD": "${IMPERSONATOR_PASSWORD}",
         }
@@ -566,12 +579,13 @@ def generate_compose(
     volumes: dict[str, dict] = {}
     with_platform = "platform" in host_components
     with_mcp = "mcp" in host_components
+    gate = with_mcp and needs_gate(config, project_record(stack_dir), mode)
     if project is None:
         # PROJECT_MOUNTS already fixes the stack directory two levels below the project root.
         project = compose_project_name(stack_dir.parent.parent, config)
 
     if mode == "local":
-        services["postgres"] = _postgres(config)
+        services["postgres"] = _postgres(config, gate=gate)
         volumes["postgres-data"] = {}
 
     if with_platform:
@@ -731,7 +745,6 @@ def generate_compose(
             "/etc/letsencrypt:/etc/letsencrypt:ro",
             "/var/www/certbot:/var/www/certbot:ro",
         ]
-    gate = with_mcp and needs_gate(config, project_record(stack_dir), mode)
     if gate:
         services["login-gate"] = {
             "image": services["mcp-server"]["image"],

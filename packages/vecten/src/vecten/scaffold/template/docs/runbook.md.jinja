@@ -217,9 +217,11 @@ stored under in AWS Secrets Manager, as `vecten/[[ project_name ]]/<env>/<scope>
 | `ADMIN_*` | `admin` | none: passwords from `vecten user add-admin` |
 | any other name | `platform` | the platform VM |
 
-When upgrading an existing MCP environment to the standalone login gate, apply the updated
-AWS Terraform configuration with `vecten deploy --env <env>` before shipping. It lets the MCP VM (the `main` VM in the
-`minimal` profile) generate the gate’s database password. The ship then creates the database login.
+An existing AWS environment needs the new gate password only if a service or container app
+has a bound login route. For its first upgrade to the standalone gate, run
+`gh workflow disable ship.yml` in the project repository, then `vecten github push --no-wait`.
+Run `vecten deploy --env <env>` to apply the new infrastructure permissions and ship the
+updated commit, then `gh workflow enable ship.yml` to resume shipping on push.
 
 Under `minimal` the one VM reads both `platform` and `mcp`. The deploy role reads and writes
 all four scopes, as does an administrator's own AWS login. `vecten secret set <NAME> --env
@@ -567,10 +569,11 @@ to Domains and DNS there, and records it as `cloud_ids["dns_project"]`, which `v
 hands to Terraform. When no project of the organization holds the zone, bootstrap creates
 nothing and exits naming the zone.
 
-When upgrading an existing MCP environment to the standalone login gate, run
-`vecten bootstrap --env <env>` to let the MCP VM’s API key write the new password (`main` VM
-in the `minimal` profile). Then run `vecten deploy --env <env>` to create the entry for the gate’s password in Secret Manager. The ship then creates the
-database login.
+An existing Scaleway environment needs the new gate password only if a service or container app
+has a bound login route. On Scaleway, run `vecten bootstrap --env <env>` first to update the setup host’s key. For its first upgrade to the standalone gate, run
+`gh workflow disable ship.yml` in the project repository, then `vecten github push --no-wait`.
+Run `vecten deploy --env <env>` to apply the new infrastructure permissions and ship the
+updated commit, then `gh workflow enable ship.yml` to resume shipping on push.
 
 Run `vecten bootstrap --env <env>` again after changing `components` or `profile`, then
 `vecten deploy --env <env>` straight after. Bootstrap gives a new host its application and key

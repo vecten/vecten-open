@@ -43,6 +43,7 @@ LAPTOP_PASSWORDS = {
     "AIRFLOW_DB_PASSWORD": "fixture-airflow",
     "LOADER_PASSWORD": "fixture-loader",
     "MCP_STATE_DB_PASSWORD": "fixture-state",
+    "VECTEN_WITH_GATE": "true",
     "MCP_GATE_DB_PASSWORD": "fixture-gate",
     "PROVISIONER_PASSWORD": "fixture-provisioner",
     "IMPERSONATOR_PASSWORD": "fixture-impersonator",

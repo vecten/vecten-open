@@ -154,6 +154,7 @@ NGINX SHALL route the Airflow hostname to Airflow and the MCP hostname to the MC
 
 - **WHEN** a client requests `https://airflow.<domain>/`
 - **THEN** the Airflow UI is served
+- **AND** service routes SHALL never be served on `airflow.<domain>` or `mcp.<domain>`
 
 #### Scenario: MCP host
 

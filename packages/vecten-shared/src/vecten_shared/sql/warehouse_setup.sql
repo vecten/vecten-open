@@ -12,6 +12,10 @@
 \else
 \set with_mcp_state ''
 \endif
+\if :{?with_gate}
+\else
+\set with_gate 'false'
+\endif
 \if :{?with_warehouse}
 \else
 \set with_warehouse ''
@@ -23,7 +27,7 @@
 SELECT format('DO $check$ BEGIN RAISE EXCEPTION %L; END $check$',
               name || ' must be exactly true or false, got: ' || value)
 FROM (VALUES ('with_airflow', :'with_airflow'), ('with_mcp_state', :'with_mcp_state'),
-             ('with_warehouse', :'with_warehouse'), ('with_mcp', :'with_mcp')) AS flags (name, value)
+             ('with_warehouse', :'with_warehouse'), ('with_mcp', :'with_mcp'), ('with_gate', :'with_gate')) AS flags (name, value)
 WHERE value NOT IN ('true', 'false') \gexec
 -- The declared restricted areas, comma-separated; each becomes core_<area> and marts_<area>.
 \if :{?areas}
@@ -70,6 +74,7 @@ RESET ROLE;
 
 \if :with_mcp_state
 \getenv mcp_state_password MCP_STATE_DB_PASSWORD
+\if :with_gate
 \getenv mcp_gate_password MCP_GATE_DB_PASSWORD
 -- Existing installations could have given the name to a person or a warehouse group.
 -- Never turn that role (or its members) into a reader of MCP identity state.
@@ -88,6 +93,7 @@ $check_gate$;
 SELECT format('CREATE ROLE mcp_gate LOGIN PASSWORD %L; '
               'COMMENT ON ROLE mcp_gate IS %L', :'mcp_gate_password', 'Vecten service login: MCP gate')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mcp_gate') \gexec
+\endif
 SELECT format('CREATE ROLE mcp_state LOGIN PASSWORD %L', :'mcp_state_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mcp_state') \gexec
 SELECT format('GRANT mcp_state TO %I WITH INHERIT FALSE, SET TRUE', :'master_role')
@@ -121,8 +127,10 @@ SET ROLE mcp_state_maintenance;
 GRANT CONNECT ON DATABASE mcp_state TO mcp_state;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO mcp_state;
+\if :with_gate
 GRANT CONNECT ON DATABASE mcp_state TO mcp_gate;
 GRANT USAGE ON SCHEMA public TO mcp_gate;
+\endif
 CREATE SCHEMA IF NOT EXISTS vecten_audit AUTHORIZATION mcp_state_maintenance;
 REVOKE ALL ON SCHEMA vecten_audit FROM PUBLIC;
 GRANT USAGE ON SCHEMA vecten_audit TO mcp_state;

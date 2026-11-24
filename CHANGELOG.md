@@ -74,7 +74,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Security
 
-- Service login checks run in an isolated gate container and existing sessions remain usable while the MCP process restarts ([#102](https://github.com/vecten/vecten-open/issues/102)).
+- Service login checks run in an isolated gate container and existing sessions remain usable while the MCP process restarts ([#102](https://github.com/vecten/vecten-open/issues/102)). Existing deployments with a bound login route need a one-time permissions update before the first upgraded ship. On Scaleway, run `vecten bootstrap --env <env>` first. On both clouds, pause `ship.yml`, push with `vecten github push --no-wait`, run `vecten deploy --env <env>`, then re-enable the workflow. Deploy applies the permissions and ships the commit. Environments without a bound login route upgrade normally.
 - Each running extension service and container app gets a Docker network shared only with
   NGINX. NGINX clears incoming `X-Vecten-On-Behalf-Of` headers so only the app can set
   viewer attribution on its outbound MCP calls.

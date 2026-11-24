@@ -372,7 +372,13 @@ def test_load_host_reads_the_contract_and_names_missing_keys(agent, tmp_path):
 
 def test_secret_values_never_in_argv(agent, tmp_path):
     out = outputs("minimal")
-    release = stage(tmp_path / "releases", out, "main", connector_secrets=["HUBSPOT_API_KEY"])
+    release = stage(
+        tmp_path / "releases",
+        out,
+        "main",
+        service_secrets=["MCP_GATE_DB_PASSWORD"],
+        connector_secrets=["HUBSPOT_API_KEY"],
+    )
     run = FakeRun(store={k: v for k, v in master(out, "state").items()})
     run.store[f"{PREFIX}platform/HUBSPOT_API_KEY"] = "hubspot-secret-value"
     ship(agent, release, run, tmp_path)
@@ -386,7 +392,7 @@ def test_secret_values_never_in_argv(agent, tmp_path):
 
 def test_generated_once(agent, tmp_path):
     out = outputs("standard")
-    release = stage(tmp_path / "releases", out, "mcp")
+    release = stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
     run = FakeRun(store=master(out, "state") | master(out, "warehouse"))
     ship(agent, release, run, tmp_path)
     assert sorted(run.created()) == sorted(
@@ -403,7 +409,9 @@ def test_generated_once(agent, tmp_path):
         assert len(run.store[sid]) >= 43  # 32 random bytes, url-safe base64
     first = dict(run.store)
     again = FakeRun(store=first)
-    release2 = stage(tmp_path / "releases", out, "mcp", commit="c2")
+    release2 = stage(
+        tmp_path / "releases", out, "mcp", commit="c2", service_secrets=["MCP_GATE_DB_PASSWORD"]
+    )
     ship(agent, release2, again, tmp_path)
     assert again.created() == [] and again.argv("aws", "--region") and again.store == first
 
@@ -414,16 +422,22 @@ def test_generated_names_follow_the_configuration(agent):
         "AIRFLOW_DB_PASSWORD",
         "LOADER_PASSWORD",
     ]
-    assert gen(outputs("mcp_only")) == ["MCP_STATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"]
+    assert gen(outputs("mcp_only")) == ["MCP_STATE_DB_PASSWORD"]
+    assert gen(outputs("mcp_only"), with_gate=True) == [
+        "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
+    ]
     assert (
         set(gen(outputs("minimal"))) == set(gen(outputs("standard")))
-        and len(gen(outputs("minimal"))) == 6
+        and len(gen(outputs("minimal"))) == 5
     )
 
 
 def test_existing_secret_without_a_value_gets_put_not_created_twice(agent, tmp_path):
     out = outputs("mcp_only")
-    host = agent.load_host(stage(tmp_path / "releases", out, "mcp"))
+    host = agent.load_host(
+        stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
+    )
     run = FakeRun(store=master(out, "state"))
 
     def answer(args, env=None, input=None):
@@ -545,7 +559,7 @@ def flags(args):
 
 def test_setup_runs_once_per_instance_with_standard_flags(agent, tmp_path):
     out = outputs("standard")
-    release = stage(tmp_path / "releases", out, "mcp")
+    release = stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
     run = FakeRun(store=seeded(out))
     host = agent.load_host(release)
     agent.run_setup(host, out, run)
@@ -554,12 +568,14 @@ def test_setup_runs_once_per_instance_with_standard_flags(agent, tmp_path):
     assert flags(runs["state.rds"]["args"]) == {
         "with_airflow": "true",
         "with_mcp_state": "true",
+        "with_gate": "true",
         "with_warehouse": "false",
         "with_mcp": "false",
     }
     assert flags(runs["wh.rds"]["args"]) == {
         "with_airflow": "false",
         "with_mcp_state": "false",
+        "with_gate": "false",
         "with_warehouse": "true",
         "with_mcp": "true",
     }
@@ -638,7 +654,9 @@ def test_load_host_refuses_an_area_outside_the_name_rule(agent, tmp_path, areas)
 
 def test_setup_under_minimal_is_one_run_with_every_flag(agent, tmp_path):
     out = outputs("minimal")
-    host = agent.load_host(stage(tmp_path / "releases", out, "main"))
+    host = agent.load_host(
+        stage(tmp_path / "releases", out, "main", service_secrets=["MCP_GATE_DB_PASSWORD"])
+    )
     run = FakeRun(store=seeded(out))
     agent.run_setup(host, out, run)
     (only,) = psql_runs(run)
@@ -875,7 +893,7 @@ def test_compose_up_uses_the_host_profiles_and_passes_secrets_by_env(agent, tmp_
 
 def test_minimal_host_starts_both_profiles(agent, tmp_path):
     out = outputs("minimal")
-    release = stage(tmp_path / "releases", out, "main")
+    release = stage(tmp_path / "releases", out, "main", service_secrets=["MCP_GATE_DB_PASSWORD"])
     run = FakeRun(store=seeded(out))
     ship(agent, release, run, tmp_path)
     (up,) = compose_calls(run)
@@ -1695,7 +1713,7 @@ def test_setup_with_agent_verifiers_admits_the_plaintext_passwords(agent, tmp_pa
             cmd += ["-e", f"{key}={agent.scram_verifier(value)}"]
         cmd += [name, "psql", "-h", "127.0.0.1", "-U", "vecten_master", "-d", "postgres"]
         cmd += ["-v", "ON_ERROR_STOP=1"]
-        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp"):
+        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp", "with_gate"):
             cmd += ["-v", f"{flag}=true"]
         cmd += ["-f", "/docker-entrypoint-initdb.d/vecten/warehouse_setup.sql"]
         setup = subprocess.run(cmd, capture_output=True, text=True)
@@ -1753,7 +1771,7 @@ def test_setup_runs_again_after_an_admin_login_on_scaleway(agent, tmp_path):
             cmd += ["-e", f"{key}={agent.scram_verifier(value)}"]
         cmd += [name, "psql", "-h", "127.0.0.1", "-U", "vecten_master", "-d", "postgres"]
         cmd += ["-v", "ON_ERROR_STOP=1"]
-        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp"):
+        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp", "with_gate"):
             cmd += ["-v", f"{flag}=true"]
         cmd += ["-f", "/docker-entrypoint-initdb.d/vecten/warehouse_setup.sql"]
         first = subprocess.run(cmd, capture_output=True, text=True)
@@ -2189,3 +2207,22 @@ def test_main_prints_each_orphaned_volume_after_a_ship(agent, tmp_path, monkeypa
         "vecten agent volume: p_svc-a-data",
         "vecten agent volume: p_svc-b-data",
     ]
+
+
+@pytest.mark.parametrize(
+    "shape,host",
+    [("minimal", "main"), ("standard", "mcp"), ("standard", "platform"), ("mcp_only", "mcp")],
+)
+def test_upgrade_without_a_login_route_never_accesses_the_gate_secret(agent, tmp_path, shape, host):
+    out = outputs(shape)
+    # Older host records have no gate flag and old cloud policies cannot write its password.
+    release = stage(tmp_path / "releases", out, host)
+    store = seeded(out)
+    store.pop(f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD", None)
+    run = FakeRun(store=store)
+    ship(agent, release, run, tmp_path)
+    agent.boot(release.parent, run)
+    assert not any("MCP_GATE_DB_PASSWORD" in arg for call in run.calls for arg in call["args"])
+    assert all("MCP_GATE_DB_PASSWORD" not in call["env"] for call in compose_calls(run))
+    for call in psql_runs(run):
+        assert flags(call["args"])["with_gate"] == "false"

@@ -62,6 +62,8 @@ def database(tmp_path_factory):
                     "-v",
                     "with_mcp_state=true",
                     "-v",
+                    "with_gate=true",
+                    "-v",
                     "with_warehouse=false",
                     "-v",
                     "with_mcp=false",
@@ -417,7 +419,12 @@ def test_gate_role_can_use_gate_state_but_cannot_modify_identity_or_issuer_sessi
         gate.open_gate_session("gate-key", pid, "app.example", now=10, expires_at=30)
         gate.logout_gate_session("gate-key", now=15)
         assert gate.gate_session("gate-key", now=16) is None
-        assert owner.get("gate_logouts", pid)
+        first = owner.get("gate_logouts", pid)
+        gate.open_gate_session("next-gate-key", pid, "app.example", now=16, expires_at=30)
+        gate.logout_gate_session("next-gate-key", now=17)
+        assert gate.gate_session("next-gate-key", now=18) is None
+        second = owner.get("gate_logouts", pid)
+        assert first and second and second["generation"] != first["generation"]
         with database("mcp_gate", "fixture-gate", "mcp_state") as db:
             db.autocommit = True
             for stmt in (

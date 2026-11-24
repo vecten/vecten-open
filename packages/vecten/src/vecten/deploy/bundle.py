@@ -306,7 +306,9 @@ def host_document(
     cloud = config.deploy.cloud
     sizing = _host_tier(host, cloud, tfvars)
     components = list(outputs.hosts[host].components)
-    service_secrets, service_network = host_services(config, record or {}, components)
+    service_secrets, service_network = host_services(
+        config, record or {}, components, setup_host=outputs.setup_host == host
+    )
     served = _served(config, record or {}, outputs, host)
     doc = {
         "host": host,

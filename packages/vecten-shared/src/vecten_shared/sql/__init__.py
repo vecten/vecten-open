@@ -12,7 +12,9 @@ def local_init_script_path() -> Path:
     return Path(str(resources.files("vecten_shared.sql").joinpath("local_init.sh")))
 
 
-def setup_variables(instance_databases: list[str], with_mcp: bool) -> dict[str, str]:
+def setup_variables(
+    instance_databases: list[str], with_mcp: bool, with_gate: bool = False
+) -> dict[str, str]:
     """The psql `-v` map that runs warehouse_setup.sql for one instance.
 
     `with_mcp` is true only on the instance holding `warehouse`: `provisioner` and
@@ -29,6 +31,7 @@ def setup_variables(instance_databases: list[str], with_mcp: bool) -> dict[str, 
     return {
         "with_airflow": flag("airflow" in instance_databases),
         "with_mcp_state": flag("mcp_state" in instance_databases),
+        "with_gate": flag(with_gate and "mcp_state" in instance_databases),
         "with_warehouse": flag(with_warehouse),
         "with_mcp": flag(with_mcp and with_warehouse),
     }
