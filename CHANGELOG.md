@@ -7,8 +7,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
-- The Analytics screen checks each bound container app’s HTTP health when opened ([#115](https://github.com/vecten/vecten-open/issues/115)).
-
 - A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help ([#131](https://github.com/vecten/vecten-open/issues/131)).
 - Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
 - Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
@@ -30,6 +28,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   host is removed or replaced. The apply workflow also prints the warning before applying
   ([#129](https://github.com/vecten/vecten-open/issues/129)).
 - `vecten up` reports each active component’s base image and how to select published images when a local build was chosen ([#21](https://github.com/vecten/vecten-open/issues/21)).
+- The Analytics screen checks each bound container app’s HTTP health when opened ([#115](https://github.com/vecten/vecten-open/issues/115)).
 
 ### Fixed
 
