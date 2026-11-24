@@ -193,8 +193,8 @@ session for that hostname and the person's sign-ins on the MCP's own browser pag
 sign-in asks for credentials again. Gate sessions on other service hostnames stay until they
 end on their own. A WebSocket opened before a session ends stays open until it reconnects.
 
-The gate depends on the MCP server: while it is down, `login` routes are down too, and `public`
-routes keep working. Under `standard` the platform host's NGINX asks the MCP over HTTPS at
+Existing gate sessions keep working when the MCP server restarts. New sign-ins need the MCP
+issuer. Under `standard` the platform host's NGINX asks the gate over HTTPS at
 `mcp.<domain>`, with its certificate checked, which adds a round trip between the two VMs to
 every request on a `login` route there. On the laptop, `login` routes use the laptop's MCP at
 `https://mcp.localhost:8443`, its password sign-in, and the laptop's own people and groups.
