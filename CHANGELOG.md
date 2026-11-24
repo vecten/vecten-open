@@ -7,11 +7,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
-- Both runtime images include third-party notices, the base image reference and an inventory of installed Debian packages ([#24](https://github.com/vecten/vecten-open/issues/24)).
-
 - A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help ([#131](https://github.com/vecten/vecten-open/issues/131)).
 - Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
 - Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
+- Both runtime images include third-party notices, the base image reference and an inventory of installed Debian packages ([#24](https://github.com/vecten/vecten-open/issues/24)).
 - Project CI runs `vecten lock --check` to catch changed in-repo manifests, services, and apps ([#113](https://github.com/vecten/vecten-open/issues/113)).
 - Extension settings support nested object schemas, array, string and numeric constraints, and
   constant values ([#139](https://github.com/vecten/vecten-open/issues/139)).
