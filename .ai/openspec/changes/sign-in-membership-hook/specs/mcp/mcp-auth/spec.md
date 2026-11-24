@@ -25,5 +25,7 @@ The server SHALL resolve a person's identity through an identity backend selecte
 
 #### Scenario: A hook cannot complete the sign-in check
 
-- **WHEN** a hook for a provisioned person raises an exception
-- **THEN** the server refuses that sign-in, returns 503 and records a denied login without disclosing the exception text
+- **WHEN** a hook for a provisioned administrator raises an exception
+- **THEN** the server discards all membership changes requested during that sign-in, records a separate `login` event with outcome `hook_failed`, and allows the administrator to sign in with their existing memberships
+- **AND** if the provisioned person is not an administrator, the server instead refuses sign-in with HTTP 503 and records a denied login
+- **AND** the server logs only the exception type for the hook error and does not disclose its text to the person

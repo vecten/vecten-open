@@ -2,7 +2,7 @@
 
 ### Requirement: Extensions are Python packages with per-layer entry points
 
-An extension SHALL declare a Python entry point for each layer it supplies: `vecten.connectors`, `vecten.dbt_packages`, `vecten.dags`, `vecten.osi`, `vecten.mcp.tools`, `vecten.mcp.auth`, `vecten.mcp.sign_in`, `vecten.mcp.provisioning`, `vecten.mcp.audit_sinks`, `vecten.skills`, `vecten.services` or `vecten.apps`. It MAY declare one `vecten.manifest` for secrets and settings. Services declare their HTTP routes. CLI hooks SHALL be added with their first consumer.
+An extension SHALL be a Python package that declares entry points in one or more of the groups `vecten.connectors`, `vecten.dbt_packages`, `vecten.dags`, `vecten.osi`, `vecten.mcp.tools`, `vecten.mcp.auth`, `vecten.mcp.sign_in`, `vecten.mcp.provisioning`, `vecten.mcp.audit_sinks`, `vecten.skills`, `vecten.services` and `vecten.apps`, and MAY declare one `vecten.manifest` entry point stating the secrets and settings it needs. HTTP routes are declared as part of a service. Hooks for CLI commands are not offered and SHALL be added with their first consumer.
 
 #### Scenario: Multi-layer extension
 

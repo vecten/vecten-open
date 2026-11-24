@@ -7,7 +7,7 @@ How private and Enterprise extensions install into the open product without fork
 
 ### Requirement: Extensions are Python packages with per-layer entry points
 
-An extension SHALL be a Python package that declares entry points in one or more of the groups `vecten.connectors`, `vecten.dbt_packages`, `vecten.dags`, `vecten.osi`, `vecten.mcp.tools`, `vecten.mcp.auth`, `vecten.mcp.sign_in`, `vecten.mcp.provisioning`, `vecten.mcp.audit_sinks` and `vecten.skills`. Hooks for CLI commands and HTTP routes are not offered at v0.1 and SHALL be added with their first consumer.
+An extension SHALL be a Python package that declares entry points in one or more of the groups `vecten.connectors`, `vecten.dbt_packages`, `vecten.dags`, `vecten.osi`, `vecten.mcp.tools`, `vecten.mcp.auth`, `vecten.mcp.provisioning`, `vecten.mcp.audit_sinks` and `vecten.skills`. Hooks for CLI commands and HTTP routes are not offered at v0.1 and SHALL be added with their first consumer.
 
 #### Scenario: Multi-layer extension
 

@@ -165,16 +165,22 @@ warehouse account. People awaiting provisioning, including the first administrat
 in without invoking hooks. The handler receives `identity`, `verified_claims` and
 `set_membership` by keyword. Password sign-in supplies an empty claims dictionary.
 
-Calling `set_membership(group, grant)` updates this person's membership in an owned group.
+Call `set_membership(group, True)` to add the person to a group the extension owns, or
+`set_membership(group, False)` to remove them.
 Create the group first. A write to a missing owned group has no effect. Access health lists
 the managing entry point. Local administrators can delete groups and manage service accounts.
 Removing the extension returns its memberships to local management. Existing members keep
 their warehouse roles until an administrator revokes them.
 
 Hooks run in a worker thread. The sign-in waits for them, so set timeouts on external calls.
-If a hook raises, the server refuses that sign-in with HTTP 503 and records a denied login.
-Earlier successful membership writes remain in effect. The next sign-in runs the hooks
-again, so handlers should tolerate retries.
+For a provisioned administrator, membership changes take effect after every hook returns
+successfully. If any hook raises an exception, the administrator can still open the admin panel
+to investigate. They keep their existing memberships, and the access log records a `hook_failed`
+login event followed by the usual `allowed` event.
+For other provisioned people, the same exception returns HTTP 503 and the access log records
+`denied`. Membership changes completed before the exception stay in effect for those people.
+The server log identifies the failing hook and the exception type. The next sign-in runs
+the hooks again, so handlers should tolerate retries.
 
 Disable a departing person locally to end access when they can no
 longer sign in. Directory synchronization, provider group mapping and SCIM provisioning

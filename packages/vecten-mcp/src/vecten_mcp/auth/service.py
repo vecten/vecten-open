@@ -166,7 +166,13 @@ class OAuthService:
             principal = self.state.update_principal(principal["id"], admin=True)
         if self.on_sign_in and principal["provisioned"]:
             try:
-                self.on_sign_in(identity, principal)
+                if self.on_sign_in(identity, principal) is False:
+                    # An administrator can be demoted or disabled while an external hook is waiting.
+                    current = self.state.principal(principal["id"])
+                    if not current or not current["enabled"] or not current["admin"]:
+                        raise SignInHookUnavailable()
+                    principal = current
+                    self.event(principal["id"], "login", identity.email, "hook_failed")
             except SignInHookUnavailable:
                 self.event(principal["id"], "login", identity.email, "denied")
                 raise

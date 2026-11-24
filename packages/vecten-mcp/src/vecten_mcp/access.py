@@ -461,26 +461,47 @@ class AccessService:
             raise ValueError("unknown group")
         return group
 
-    def on_sign_in(self, identity, principal):
+    def on_sign_in(self, identity, principal) -> bool:
+        """Return False when an admin keeps their prior memberships after a handler fails."""
+        # An admin can continue on a handler failure only if none of the handlers' writes landed.
+        pending = {} if principal["admin"] else None
         for owner, hook in self.sign_in_hooks.items():
             try:
                 hook["handler"](
                     identity=identity,
                     verified_claims=dict(identity.verified_claims),
-                    set_membership=partial(self._owned_membership, owner, principal),
+                    set_membership=partial(self._owned_membership, owner, principal, pending),
                 )
             except Exception as exc:
                 # Hook exceptions can contain verified claims or upstream credentials.
                 logger.error("Sign-in hook %s failed (%s)", owner, type(exc).__name__)
+                if pending is not None:
+                    return False
                 raise SignInHookUnavailable() from None
+        if pending:
+            try:
+                with self.lock:
+                    for group, grant in pending.items():
+                        self._apply_owned_membership(principal, group, grant)
+            except Exception as exc:
+                # A storage failure can follow a successful write. The admin fallback is unsafe.
+                logger.error("Sign-in membership update failed (%s)", type(exc).__name__)
+                raise SignInHookUnavailable() from None
+        return True
 
-    def _owned_membership(self, owner, principal, group, grant):
+    def _owned_membership(self, owner, principal, pending, group, grant):
         if self.membership_owners.get(group) != owner:
             raise ValueError(f"{owner} does not manage membership of {group}")
         if principal["kind"] != "human" or not principal["provisioned"]:
             raise ValueError("managed memberships require a provisioned person")
         if type(grant) is not bool:
             raise ValueError("grant must be a boolean")
+        if pending is None:
+            self._apply_owned_membership(principal, group, grant)
+        else:
+            pending[group] = grant
+
+    def _apply_owned_membership(self, principal, group, grant):
         with self.lock:
             # The extension cannot create a warehouse group on behalf of a signing-in user.
             if self.state.group(group) is None:
