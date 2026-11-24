@@ -5,10 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Fixed
-
-- Deploy checks existing Snowflake object names in the saved Terraform plan before applying either root. A failed first dispatch leaves the layout open for correction (#99).
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
