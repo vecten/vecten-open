@@ -51,6 +51,7 @@ supplies the next offset even on the last page, so tomorrow's run can resume the
 ```python
 from vecten_platform.sync import finish_unit, unit_cursor
 
+
 @dlt.resource(write_disposition="append")
 def purchases():
     page = api.read_purchases(offset=unit_cursor(0))
