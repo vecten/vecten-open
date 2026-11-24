@@ -60,8 +60,9 @@ def _git(*args: str, cwd: Path) -> str:
 
 
 def _token() -> str:
-    # Letters that are no hex digit and no letter of the words a failure prints.
-    return "".join(secrets.choice("GHJKMNPQRSTUVWXYZ") for _ in range(32))
+    # Each four-character probe includes two URL-safe delimiters, so ordinary runner
+    # environment names such as SYSTEM cannot match a fragment of this test credential.
+    return "".join("~" + secrets.choice("GHJKMNPQRSTUVWXYZ") for _ in range(16))
 
 
 def _leaks(token: str, text: str) -> list[str]:

@@ -1439,6 +1439,93 @@ def test_a_scaleway_plan_passes_the_bound_hostnames(invoke, scw):
     assert json.loads(_var(plan, "service_hostnames")) == {"bot": "platform", "@": "mcp"}
 
 
+def _bind_volumes(root):
+    from .services_fixtures import BOT, locked, with_services
+
+    with_services(
+        root,
+        {"bot": {}, "portal": {"host": "mcp"}, "worker": {}},
+        declared={
+            "bot": {**BOT, "volume": "/var/lib/bot"},
+            "portal": {**BOT, "components": ["mcp"], "volume": "/var/lib/portal"},
+            "worker": BOT,
+        },
+    )
+    locked(root)
+
+
+def _host_change(host, kind, actions):
+    return {
+        "type": kind,
+        "address": f'module.environment.module.host["{host}"].{kind}.this',
+        "change": {"actions": actions},
+    }
+
+
+@pytest.mark.parametrize("actions_list", [["delete", "create"], ["create", "delete"], ["delete"]])
+def test_host_loss_warning_names_only_affected_volumes_in_plan(
+    invoke, actions, project, monkeypatch, actions_list
+):
+    _bind_volumes(project)
+    changes = [
+        _host_change("platform", "aws_instance", actions_list),
+        _host_change("mcp", "aws_instance", ["update"]),
+    ]
+    monkeypatch.setattr(FakeTerraform, "changes", changes)
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    (warning,) = doc(r)["warnings"]
+    assert "platform host in prod" in warning
+    assert "vecten-acme-prod_svc-acme-bot-data" in warning
+    assert "portal-data" not in warning and "worker-data" not in warning
+    assert warning in Path(doc(r)["plan_file"]).read_text()
+    assert "apply" not in FakeTerraform.commands()
+
+
+def test_scaleway_shared_host_loss_covers_both_components(invoke, scw, monkeypatch):
+    _bind_volumes(scw.root)
+    monkeypatch.setattr(
+        FakeTerraform,
+        "changes",
+        [
+            _host_change("main", "scaleway_instance_server", ["delete"]),
+            _host_change("platform", "scaleway_instance_server", ["create"]),
+        ],
+    )
+    r = invoke("deploy", "--env", "prod", "--plan-only")
+    assert r.exit_code == 0, r.stdout
+    assert "main host in prod" in r.stdout
+    assert "svc-acme-bot-data" in r.stdout and "svc-acme-portal-data" in r.stdout
+
+
+def test_volume_warning_reaches_operator_before_a_failing_apply(
+    invoke, actions, project, monkeypatch
+):
+    _bind_volumes(project)
+    monkeypatch.setattr(
+        FakeTerraform, "changes", [_host_change("platform", "aws_instance", ["delete", "create"])]
+    )
+    monkeypatch.setattr(FakeTerraform, "failing", {"apply": 1})
+    r = invoke("deploy", "--env", "prod", "--json")
+    assert r.exit_code != 0 and "apply" in FakeTerraform.commands()
+    assert "svc-acme-bot-data" in r.stderr
+
+
+def test_no_volume_warning_for_an_update_or_first_deploy(invoke, actions, project, monkeypatch):
+    _bind_volumes(project)
+    monkeypatch.setattr(
+        FakeTerraform,
+        "changes",
+        [
+            _host_change("platform", "aws_instance", ["update"]),
+            _host_change("mcp", "aws_instance", ["create"]),
+        ],
+    )
+    r = invoke("deploy", "--env", "prod", "--plan-only", "--json")
+    assert r.exit_code == 0, r.stdout
+    assert "warnings" not in doc(r)
+
+
 def test_a_deploy_reports_its_services_after_shipping(invoke, actions, project, monkeypatch):
     from vecten.deploy import shipping
 

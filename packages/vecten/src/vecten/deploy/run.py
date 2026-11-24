@@ -302,6 +302,7 @@ def write_plan_text(project_root: Path, env: str, plans: list[PlannedRoot]) -> P
     """Write the human-readable plan of every root, in plan order, to `plan_path`."""
     sections = []
     for planned in plans:
+        sections.extend(f"Warning: {warning}\n" for warning in planned.warnings)
         where = planned.root.root_dir.relative_to(project_root).as_posix()
         sections.append(f"Terraform root {where}:\n\n{planned.text.rstrip()}\n")
     path = plan_path(project_root, env)
@@ -326,12 +327,14 @@ def _plan_only(
     with tempfile.TemporaryDirectory(prefix="vecten-plan-") as tmp:
         plans = plan_environment(plane, env, terraform, Path(tmp), cloud_only=cloud_only)
         path = write_plan_text(project_root, env, plans)
+        warnings = [warning for plan in plans for warning in plan.warnings]
     return {
         "env": env,
         "plan_only": True,
         "dispatched": False,
         "roots": [p.root.name for p in plans],
         "plan_file": str(path),
+        **({"warnings": warnings} if warnings else {}),
     }
 
 
@@ -572,7 +575,7 @@ def _deploy_in_actions(
             "roots": provisioned["roots"],
             "commit": view.commit,
         }
-        warnings = list(view.warnings)
+        warnings = [*view.warnings, *provisioned.get("warnings", [])]
         if not ships:
             data = {**data, "hosts": [], "ship_skipped": identity_pending_note(config, env)}
         else:
