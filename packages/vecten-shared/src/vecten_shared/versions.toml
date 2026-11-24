@@ -69,4 +69,4 @@ vecten_convention = "0.2.0"
 
 [specs]
 ossie = "0.1.1"
-schema_convention = 2
+schema_convention = 3

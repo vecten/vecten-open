@@ -152,7 +152,11 @@ GATE_STATE_COOKIE = "__Host-vecten-gate-state"
 GATE_COOKIE_NAMES = f"{GATE_COOKIE}(?:-state)?"
 # A header NGINX sets itself is never copied from the client, whatever its letter case, and
 # an empty value sends none; the default ignore_invalid_headers drops underscore spellings.
-IDENTITY_CLEARED = "".join(f'        proxy_set_header {h} "";\n' for h in IDENTITY_HEADERS)
+# Only the app sets viewer attribution on its outbound MCP request.
+CLEAR_VIEWER = '        proxy_set_header X-Vecten-On-Behalf-Of "";\n'
+IDENTITY_CLEARED = CLEAR_VIEWER + "".join(
+    f'        proxy_set_header {h} "";\n' for h in IDENTITY_HEADERS
+)
 # The browser sends the gate's host-only cookies to every path of the service's hostname; a
 # service holding them could replay them to the gate. Cookie names compare case-insensitively
 # for the __Host- prefix. The first map removes the session cookie, the second the sign-in
@@ -206,7 +210,7 @@ GATE_PATHS = ("start", "callback", "logout")
 GATE_IDENTITY = {h: "$vecten_gate_" + h.removeprefix("X-Vecten-").lower() for h in IDENTITY_HEADERS}
 # The verify answer's headers, copied into the request forwarded to the service; NGINX sends
 # no client header of a name it sets itself.
-IDENTITY_FROM_GATE = "".join(
+IDENTITY_FROM_GATE = CLEAR_VIEWER + "".join(
     f"        proxy_set_header {header} {variable};\n" for header, variable in GATE_IDENTITY.items()
 )
 GATE_DENIED_PAGE = (

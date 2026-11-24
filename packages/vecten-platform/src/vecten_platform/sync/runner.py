@@ -8,8 +8,10 @@ from pathlib import Path
 
 import dlt
 
+from vecten_platform.sync import TerminalConnectorError
 from vecten_platform.sync.input_fixtures import InputSample
-from vecten_platform.sync.recording import record_to
+from vecten_platform.sync.recording import RECORD_LIMIT, record_to
+from vecten_platform.sync.sampling import bound_recording
 from vecten_shared.output import Failure
 
 
@@ -21,6 +23,7 @@ class ObjectOutcome:
     error: str | None = None
     # The normalised top-level tables the load wrote to, which `rows` counts.
     tables: tuple[str, ...] = ()
+    terminal: bool = False
 
 
 def pipeline_name(connector: str, object_name: str) -> str:
@@ -84,12 +87,6 @@ def _chain(exc: BaseException) -> list[BaseException]:
     return chain
 
 
-def _describe(exc: BaseException) -> str:
-    """One line naming the innermost exception, beneath dlt's pipeline-step wrappers."""
-    inner = _chain(exc)[-1]
-    return " ".join(f"{type(inner).__name__}: {inner}".split())
-
-
 def run_object(
     connector: str,
     make_source: Callable[[], object],
@@ -98,6 +95,8 @@ def run_object(
     dlt_dir: Path,
     record_dir: Path | None = None,
     *,
+    limit: int = RECORD_LIMIT,
+    redact_fixture: Callable | None = None,
     record_inputs: bool = False,
 ) -> ObjectOutcome:
     pipeline = dlt.pipeline(
@@ -108,7 +107,7 @@ def run_object(
     )
     recording = None
     try:
-        sample = InputSample() if record_inputs else None
+        sample = InputSample(limit=limit) if record_inputs else None
         if sample is not None and record_dir is None:
             raise ValueError("--record-inputs requires --record")
         source = sample.source(make_source, object_name) if sample is not None else make_source()
@@ -117,12 +116,25 @@ def run_object(
             return ObjectOutcome(object_name, False, 0, f"unknown object; the source has: {known}")
         selected = source.with_resources(object_name)
         if record_dir is not None:
-            recording = record_to(record_dir / f"{object_name}.jsonl")
-            selected.resources[object_name].add_map(recording)
+            resource = selected.resources[object_name]
+            bound_recording(resource, limit)
+            if redact_fixture is not None:
+                resource.add_map(lambda row: redact_fixture(object_name, row))
+            recording = record_to(
+                record_dir / f"{object_name}.jsonl",
+                limit=limit,
+                table_name=resource.table_name,
+            )
+            resource.add_map(recording)
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
-            # recording truncates the object's tables, resets its state and reloads everything.
+            # recording truncates the object's tables, resets its state and loads the sample.
             pipeline.run(selected, refresh="drop_data")
-            recording.commit(input_document=sample.document() if sample is not None else None)
+            nesting = resource.max_table_nesting
+            recording.commit(
+                pipeline.default_schema,
+                selected.max_table_nesting if nesting is None else nesting,
+                input_document=sample.document() if sample is not None else None,
+            )
         else:
             pipeline.run(selected)
     except Exception as exc:
@@ -130,15 +142,19 @@ def run_object(
             recording.discard()
         # dlt wraps whatever a resource body raises in PipelineStepFailed, Ctrl-C included;
         # an interrupt must stop the run, not count as one object's failure.
-        interrupt = next((e for e in _chain(exc) if not isinstance(e, Exception)), None)
+        chain = _chain(exc)
+        interrupt = next((e for e in chain if not isinstance(e, Exception)), None)
         if interrupt is not None:
             raise interrupt from None
         # A missing secret or provider problem is a precondition, not a source failure, even
         # when a resource body raised it and dlt wrapped it.
-        failure = next((e for e in _chain(exc) if isinstance(e, Failure)), None)
+        failure = next((e for e in chain if isinstance(e, Failure)), None)
         if failure is not None:
             raise failure from None
-        return ObjectOutcome(object_name, False, 0, _describe(exc))
+        terminal = next((e for e in chain if isinstance(e, TerminalConnectorError)), None)
+        reason = terminal if terminal is not None else chain[-1]
+        message = " ".join(f"{type(reason).__name__}: {reason}".split())
+        return ObjectOutcome(object_name, False, 0, message, terminal=terminal is not None)
     except BaseException:
         if recording is not None:
             recording.discard()
@@ -155,6 +171,8 @@ def run_objects(
     dlt_dir: Path,
     record_dir: Path | None = None,
     *,
+    limit: int = RECORD_LIMIT,
+    redact_fixture: Callable | None = None,
     record_inputs: bool = False,
 ) -> list[ObjectOutcome]:
     return [
@@ -165,6 +183,8 @@ def run_objects(
             destination,
             dlt_dir,
             record_dir,
+            limit=limit,
+            redact_fixture=redact_fixture,
             record_inputs=record_inputs,
         )
         for name in objects

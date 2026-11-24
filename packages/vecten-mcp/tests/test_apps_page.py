@@ -318,3 +318,18 @@ def test_signing_in_and_out_clear_the_host_only_cookies(page, base):
             if line.lower().startswith(cleared + "=")
         )
         assert "max-age=0" in line and "path=/;" in line + ";" and "secure" in line
+
+
+@pytest.mark.parametrize("base", SURFACES)
+@pytest.mark.parametrize(
+    "forwarded", [{}, {"X-Forwarded-Host": "localhost", "Forwarded": "host=127.0.0.1;proto=http"}]
+)
+def test_public_http_host_starts_panel_login_with_a_secure_cookie(page, base, forwarded):
+    response = page.http.get(
+        "http://mcp.example" + base + "/login", headers=forwarded, follow_redirects=False
+    )
+    name = "__Host-" + SURFACES[base] + "_login"
+    assert response.is_redirect
+    assert set(response.cookies) == {name}
+    cookie = response.cookies.jar
+    assert all(c.secure and c.path == "/" and not c.domain_specified for c in cookie)

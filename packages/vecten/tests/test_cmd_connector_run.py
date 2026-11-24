@@ -204,6 +204,155 @@ def test_run_keeps_a_generic_kind_while_the_scaffold_is_untouched(invoke, projec
     assert _connector_decl(project)["source"] == "rest"
 
 
+def test_record_limit_stops_the_meter_and_redacts_before_writing(invoke, project, tmp_path):
+    import duckdb
+
+    directory = project / "connectors/demo"
+    (directory / "connector.py").write_text(
+        """import dlt
+from pathlib import Path
+
+@dlt.resource(name="events")
+def events():
+    for page in range(100):
+        with Path("requests").open("a") as meter:
+            print(page, file=meter)
+        for row in range(2):
+            with Path("consumed").open("a") as meter:
+                print(row, file=meter)
+            yield {"id": page * 2 + row, "email": "private@example.test"}
+
+@dlt.source(name="demo")
+def source():
+    return events
+
+def redact_fixture(object_name, row):
+    assert object_name == "events"
+    return {**row, "email": "sample@example.test"}
+"""
+    )
+    result = invoke("connector", "run", "demo", "--record", "--limit", "3")
+    assert result.exit_code == 0, result.output
+    assert (project / "requests").read_text().splitlines() == ["0", "1"]
+    assert len((project / "consumed").read_text().splitlines()) == 3
+    fixture = directory / "fixtures/events.jsonl"
+    assert [json.loads(line)["email"] for line in fixture.read_text().splitlines()] == [
+        "sample@example.test"
+    ] * 3
+    with duckdb.connect(str(tmp_path / "wh.duckdb"), read_only=True) as warehouse:
+        assert warehouse.execute("select distinct email from raw_demo.events").fetchall() == [
+            ("sample@example.test",)
+        ]
+
+
+def test_synthetic_fixture_check_never_opens_source(invoke, project):
+    from vecten_platform.sync.testing import replay_connector_test
+
+    directory = project / "connectors/demo"
+    (directory / "connector.py").write_text("raise AssertionError('opened source')")
+    config = load_config(project)
+    decl = config.connector("demo")
+    decl.record = False
+    decl.groups = {"daily": ["events"]}
+    save_config(project, config)
+    result = invoke("connector", "run", "demo", "--record")
+    assert result.exit_code == 4 and "synthetic" in result.output
+    fixture = directory / "fixtures/events.jsonl"
+    fixture.write_text('{"id": 1}\n')
+    assert invoke("connector", "check-fixtures", "demo").exit_code == 0
+    with pytest.MonkeyPatch.context() as patch:
+        assert replay_connector_test(directory, "demo", project / "scratch", patch) == {"events": 1}
+    fixture.write_text("42\n")
+    result = invoke("connector", "check-fixtures", "demo")
+    assert result.exit_code == 6 and "events.jsonl:1" in result.output
+    fixture.write_text('{"id": 1}\n')
+    (fixture.parent / "typo.jsonl").write_text('{"id": 2}\n')
+    result = invoke("connector", "check-fixtures", "demo")
+    assert result.exit_code == 6 and "undeclared objects typo" in result.output
+
+
+@pytest.mark.parametrize(("cooperative", "billed"), [(True, 3), (False, 4)])
+def test_paged_recording_trims_last_page(invoke, project, cooperative, billed):
+    directory = project / "connectors/demo"
+    (directory / "connector.py").write_text(
+        """import dlt
+from pathlib import Path
+from vecten_platform.sync import runtime
+
+@dlt.resource(name="events")
+def events():
+    consumed = 0
+    while consumed < 100:
+        size = PAGE_SIZE
+        with Path("meter").open("a") as meter:
+            print(size, file=meter)
+        page = [{"id": n} for n in range(consumed, consumed + size)]
+        consumed += size
+        yield page
+
+@dlt.source(name="demo")
+def source():
+    return events
+""".replace("PAGE_SIZE", "min(2, runtime().record_limit - consumed)" if cooperative else "2")
+    )
+    r = invoke("connector", "run", "demo", "--record", "--limit", "3", "--json")
+    assert r.exit_code == 0, r.output
+    requests = [int(n) for n in (project / "meter").read_text().splitlines()]
+    assert len(requests) == 2 and sum(requests) == billed
+    assert json.loads(r.stdout)["objects"]["events"]["rows"] == 3
+    assert len((directory / "fixtures/events.jsonl").read_text().splitlines()) == 3
+
+
+@pytest.mark.parametrize(
+    "arguments", [["--limit", "2"], ["--record", "--limit", "0"], ["--record", "--limit", "201"]]
+)
+def test_invalid_recording_limits_stop_before_import(invoke, project, arguments):
+    (project / "connectors/demo/connector.py").write_text("raise AssertionError('opened source')")
+    assert invoke("connector", "run", "demo", *arguments).exit_code == 2
+
+
+def test_record_dependent_rest_endpoint_bounds_parent_and_child(invoke, project, monkeypatch):
+    from dlt.sources.helpers.rest_client import RESTClient
+
+    requests = []
+    (project / "connectors/demo/connector.py").write_text(
+        """import dlt
+from dlt.sources.rest_api import rest_api_source
+
+def source():
+    rest = rest_api_source({
+        "client": {"base_url": "https://example.invalid/"},
+        "resources": [
+            {"name": "parents", "endpoint": "parents"},
+            {"name": "children", "endpoint": {"path": "parents/{resources.parents.id}/children"}},
+            {"name": "other", "endpoint": "other"},
+        ]
+    }, name="demo")
+    resources = [rest.resources[name] for name in ("parents", "children", "other")]
+    return dlt.source(lambda: resources, name="demo")()
+"""
+    )
+
+    def paginate(self, path, **kwargs):
+        for start in range(0, 100, 2):
+            requests.append((path, start))
+            yield [{"id": start}, {"id": start + 1}]
+
+    monkeypatch.setattr(RESTClient, "paginate", paginate)
+    result = invoke("connector", "run", "demo", "--record", "--limit", "3", "--json")
+    assert result.exit_code == 0, result.output
+    assert {name: obj["rows"] for name, obj in json.loads(result.stdout)["objects"].items()} == {
+        "parents": 3,
+        "children": 3,
+        "other": 3,
+    }
+    assert [page for path, page in requests if path == "parents"] in ([0, 2, 0], [0, 2, 0, 2])
+    child_requests = [(path, page) for path, page in requests if path.endswith("/children")]
+    assert len(child_requests) == 2
+    assert [page for path, page in requests if path == "other"] == [0, 2]
+    assert requests[-1] == ("other", 2)
+
+
 INPUT_CONNECTOR = """
 import dlt
 from vecten_platform.sync.input_fixtures import live_inputs
@@ -323,6 +472,31 @@ def test_paged_input_budget_preserves_trimmed_pages(invoke, project, tmp_path, m
     assert replay_connector_test(directory, "demo", tmp_path / "work", monkeypatch) == {
         "people": 200
     }
+
+
+@pytest.mark.parametrize("shape", ["pages", "fan-out"])
+def test_limited_input_recording_replays_the_same_rows(
+    invoke, project, tmp_path, monkeypatch, shape
+):
+    from vecten_platform.sync.testing import replay_connector_test
+
+    if shape == "pages":
+        module = INPUT_CONNECTOR.replace(
+            'yield {"userId": 7}', 'yield [{"userId": n} for n in range(100)]'
+        ).replace(
+            "for row in inputs(fetch):", "for page in inputs(fetch):\n          for row in page:"
+        )
+    else:
+        module = INPUT_CONNECTOR.replace("yield row", 'yield [{**row, "n": n} for n in range(10)]')
+    directory = project / "connectors/demo"
+    (directory / "connector.py").write_text(module)
+    command = ("connector", "run", "demo", "--record", "--record-inputs", "--limit", "3", "--json")
+    r = invoke(*command)
+    assert r.exit_code == 0, r.stdout
+    sample = json.loads((directory / "fixtures/inputs/people.json").read_text())
+    assert sample["limit"] == 3 and sample["expected"]["rows"] == 3
+    assert sum(len(v) if isinstance(v, list) else 1 for v in sample["inputs"]) <= 3
+    assert replay_connector_test(directory, "demo", tmp_path / "work", monkeypatch) == {"people": 3}
 
 
 def test_input_reader_shared_by_parent_and_child_reports_supported_scope(invoke, project):

@@ -8,7 +8,7 @@ import pytest
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
 from vecten_shared.config import VectenConfig
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, SOURCE_AREAS_VERSION
 from vecten_shared.provider import snowflake_names
 
 
@@ -187,6 +187,7 @@ def test_snowflake_read_grants_refuses_a_reserved_role_before_any_call():
     ("name", "grant_option", "valid"),
     [
         ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "false", True),
+        ("D.VECTEN_ACCESS.CHECK_BINDING(VARCHAR)", "false", False),
         ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "true", False),
         ("D.VECTEN_ACCESS.READ_GRANTS(VARCHAR, VARCHAR)", "false", False),
         ("OTHER.VECTEN_ACCESS.READ_GRANTS(VARCHAR)", "false", False),
@@ -256,7 +257,7 @@ class PostgresConnection:
 
 
 def test_postgres_reads_the_catalogs_so_no_procedure_version_limits_it():
-    assert PostgresAdapter(None, None).access_version() == ACCESS_VERSION
+    assert PostgresAdapter(None, None).access_version() == SOURCE_AREAS_VERSION
 
 
 def test_postgres_read_grants_reads_the_catalog_acls_of_the_given_roles():

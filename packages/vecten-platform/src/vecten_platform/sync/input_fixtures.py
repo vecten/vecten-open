@@ -21,6 +21,7 @@ from dlt.common.pipeline import PipelineContext
 from vecten_platform.sync import context
 from vecten_platform.sync.loader import load_connector
 from vecten_platform.sync.recording import RECORD_LIMIT
+from vecten_platform.sync.sampling import bound_recording
 from vecten_shared.output import ExitCode, Failure
 
 
@@ -30,8 +31,9 @@ def live_inputs(fetch: Callable[[], Iterable]) -> Iterable:
 
 
 class InputSample:
-    def __init__(self, saved_rows: list | None = None):
+    def __init__(self, saved_rows: list | None = None, limit: int | None = RECORD_LIMIT):
         self.saved_rows = saved_rows
+        self.limit = limit
         self.rows: list = []
         self.used = False
         self.output = hashlib.sha256()
@@ -47,7 +49,7 @@ class InputSample:
         if self.saved_rows is not None:
             yield from self.saved_rows
             return
-        remaining = RECORD_LIMIT
+        remaining = self.limit or RECORD_LIMIT
         for row in fetch():
             if isinstance(row, list):
                 row = row[:remaining]
@@ -83,7 +85,12 @@ class InputSample:
         source = factory(inputs=self.inputs)
         if name not in source.resources:
             raise ValueError(f"connector no longer declares object {name}")
-        source.resources[name].add_map(self.observe)
+        resource = source.resources[name]
+        resource.add_map(self.observe)
+        if self.saved_rows is not None and self.limit is not None:
+            # Recording cut the output at this limit before the connector's maps, so replay
+            # cuts it at the same place for the hash to cover the same rows.
+            bound_recording(resource, self.limit)
         return source
 
     def result(self) -> dict:
@@ -92,7 +99,12 @@ class InputSample:
         return {"rows": self.count, "sha256": self.output.hexdigest()}
 
     def document(self) -> str:
-        document = {"version": 1, "inputs": self.rows, "expected": self.result()}
+        document = {
+            "version": 1,
+            "limit": self.limit,
+            "inputs": self.rows,
+            "expected": self.result(),
+        }
         return json.dumps(document, indent=2) + "\n"
 
 
@@ -117,7 +129,12 @@ def _replay(path: Path, connector_dir: Path, connector: str, temp: Path) -> None
         or not isinstance(doc.get("inputs"), list)
     ):
         raise ValueError("expected a version 1 input fixture with an inputs list")
-    sample = InputSample(doc["inputs"])
+    limit = doc.get("limit")
+    if limit is not None and (
+        isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= RECORD_LIMIT
+    ):
+        raise ValueError(f"the input fixture's limit must be an integer from 1 to {RECORD_LIMIT}")
+    sample = InputSample(doc["inputs"], limit=limit)
     connectors = connector_dir.parent
     runtime = context.RuntimeContext(
         connectors.parent, connectors, "local", _OfflineProvider(), temp

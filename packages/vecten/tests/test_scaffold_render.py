@@ -145,7 +145,7 @@ def test_render_layout(tmp_path, params):
         assert "-backend-config=encrypt=true" in runbook
     convention = (target / "docs" / "schema-convention.md").read_text()
     assert convention.startswith(f"# Schema convention, version {VERSIONS.schema_convention}\n")
-    assert VERSIONS.schema_convention == 2
+    assert VERSIONS.schema_convention == 3
     assert f"Apache Ossie {VERSIONS.ossie_spec}" in convention
     assert len(convention.splitlines()) < 150
     headings = re.findall(r"^## (.+)$", convention, re.M)
@@ -688,10 +688,8 @@ def test_runbook_says_record_reloads_and_fixtures_are_real_data(tmp_path):
     params = ScaffoldParams.from_answers({"name": "acme", "users": 3, "sources": ["hubspot"]}, {})
     render_project(root, params)
     runbook = " ".join((root / "docs" / "runbook.md").read_text().split())
-    assert (
-        "`--record` reloads the object from the start so the fixture is complete; run it on the "
-        "first sync or whenever the fixture should be refreshed."
-    ) in runbook
+    assert "replaces its local raw data with a sample" in runbook
+    assert "vecten connector check-fixtures <source>" in runbook
     for phrase in ("real records", "up to 200 per object", "committed", "personal data"):
         assert phrase in runbook, phrase
 

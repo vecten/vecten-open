@@ -80,7 +80,7 @@ def test_an_unknown_top_level_key_is_reported_not_refused():
         ({"secrets": ["DEPLOY_X"]}, "secrets"),
         ({"settings": {"properties": {"x": {"type": "date"}}}}, "settings"),
         ({"settings": {"properties": {"env": {"type": "string"}}}}, "settings"),
-        ({"settings": {"properties": {"x": {"type": "string", "pattern": "a"}}}}, "settings"),
+        ({"settings": {"properties": {"x": {"type": "string", "format": "hostname"}}}}, "settings"),
         ({"settings": {"properties": {}, "additionalProperties": True}}, "settings"),
         ({"settings": {"properties": {}, "required": ["missing"]}}, "settings"),
         ("not a mapping", "manifest"),
@@ -270,3 +270,54 @@ def test_a_record_whose_in_repo_path_is_not_its_own_folder_reads_as_missing():
     for path in ("../acme", "extensions/other", "extensions/acme/src", "/abs/acme"):
         bad = {"acme": Extension("1.0", (), source_path=path, metadata_sha256="0")}
         assert parse_record(record_text(bad)) is None, path
+
+
+@pytest.mark.parametrize(
+    ("spec", "bad", "good"),
+    [
+        ({"type": "array", "minItems": 1}, [], [1]),
+        ({"type": "array", "maxItems": 1}, [1, 2], [1]),
+        ({"type": "array", "uniqueItems": True}, [1, 1], [1]),
+        ({"type": "string", "minLength": 2}, "x", "xy"),
+        ({"type": "string", "maxLength": 2}, "xyz", "xy"),
+        ({"type": "string", "pattern": "^xy"}, "yx", "xy"),
+        ({"type": "integer", "exclusiveMinimum": 2}, 2, 3),
+        ({"type": "integer", "exclusiveMaximum": 2}, 2, 1),
+        ({"type": "number", "multipleOf": 3}, 4, 6),
+        ({"type": "number", "multipleOf": 0.01, "default": 19.99}, 19.991, 19.99),
+        ({"type": "number", "multipleOf": 0.1, "default": 0.3}, 0.31, 0.3),
+        ({"type": "string", "const": "eu"}, "us", "eu"),
+        (
+            {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"region": {"type": "string"}},
+                    "required": ["region"],
+                    "additionalProperties": False,
+                },
+            },
+            [{}],
+            [{"region": "eu"}],
+        ),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, {"x": "bad"}, {"x": 1}),
+    ],
+)
+def test_setting_constraints_name_the_invalid_value(spec, bad, good):
+    schema = d.check_schema("acme", {"properties": {"option": spec}})
+    d.check_settings(config(settings={"acme": {"option": good}}), record(schema), "local")
+    with pytest.raises(Failure, match=r"settings\.acme\.option"):
+        d.check_settings(config(settings={"acme": {"option": bad}}), record(schema), "local")
+
+
+def test_nested_default_must_be_part_of_top_level_object():
+    price = {"type": "number", "multipleOf": 0.01}
+    option = {"type": "object", "properties": {"price": price}, "default": {"price": 19.99}}
+    schema = {"properties": {"order": option}}
+    assert d.check_schema("acme", schema) == schema
+    option["default"]["price"] = 19.991
+    with pytest.raises(Failure, match="order: default.*multiple"):
+        d.check_schema("acme", schema)
+    price["default"] = 19.99
+    with pytest.raises(Failure, match=r"order\.price: declare default on the top-level"):
+        d.check_schema("acme", schema)

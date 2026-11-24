@@ -104,6 +104,49 @@ def test_replay_source_with_no_files_has_no_resources(tmp_path):
     assert list(replay_source(tmp_path, "x").resources) == []
 
 
+def test_row_write_failure_restores_previous_schema(tmp_path, monkeypatch):
+    import pytest
+    from dlt.common.schema import Schema
+
+    from vecten_platform.sync import recording
+
+    path = tmp_path / "orders.jsonl"
+    schema_path = path.with_suffix(".schema.json")
+    path.write_text('{"old": true}\n')
+    schema_path.write_text('{"old_schema": true}\n')
+    tee = record_to(path)
+    tee({"id": 1})
+    schema = Schema("demo")
+    schema.update_table({"name": "orders", "columns": {}, "write_disposition": "append"})
+    write = recording.write_text_atomic
+
+    def fail_rows(target, text):
+        if target == path:
+            raise OSError("could not replace rows")
+        write(target, text)
+
+    monkeypatch.setattr(recording, "write_text_atomic", fail_rows)
+    with pytest.raises(OSError, match="could not replace rows"):
+        tee.commit(schema)
+    assert path.read_text() == '{"old": true}\n'
+    assert schema_path.read_text() == '{"old_schema": true}\n'
+    assert set(tmp_path.iterdir()) == {path, schema_path}
+
+
+def test_schema_recording_error_identifies_the_object_and_preserves_rows(tmp_path):
+    import pytest
+    from dlt.common.schema import Schema
+
+    path = tmp_path / "orders.jsonl"
+    path.write_text('{"old": true}\n')
+    tee = record_to(path, table_name="missing_table")
+    tee({"id": 1})
+    with pytest.raises(ValueError, match=r"recording schema for .*orders.jsonl"):
+        tee.commit(Schema("demo"))
+    assert path.read_text() == '{"old": true}\n'
+    assert set(tmp_path.iterdir()) == {path}
+
+
 def test_output_write_failure_preserves_paired_inputs_and_rows(tmp_path, monkeypatch):
     import pytest
 

@@ -57,7 +57,18 @@ def model_issue(ctx: IssueContext, health: dict[str, Any]) -> Issue | None:
 
 def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> Issue:
     group, kind, target = (str(failure.get(k, "?")) for k in ("group", "kind", "target"))
-    if kind != "drift":
+    resolution = (
+        f"The warehouse refused to {failure.get('operation', 'apply')} this grant for the "
+        "reason in the evidence. A warehouse administrator fixes that cause; then run "
+        f"`vecten reconcile --env {ctx.env}` to apply it."
+    )
+    if kind == "binding" and failure.get("operation") == "verify":
+        title = f"Check the role {target} bound to group {group}"
+        resolution = (
+            "A warehouse administrator reviews the binding error and corrects the role's "
+            f"grants or the binding check, then runs `vecten reconcile --env {ctx.env}`."
+        )
+    elif kind != "drift":
         title = f"Grant of {kind} {target} to {group} failed"
     elif failure.get("operation") == "read":
         title = f"Reading the read grants of {group} failed"
@@ -68,11 +79,7 @@ def grant_issue(ctx: IssueContext, failure: dict[str, Any], checked_at: Any) -> 
         source="mcp",
         kind="ask",
         title=cap(title, TITLE_LIMIT),
-        resolution=(
-            f"The warehouse refused to {failure.get('operation', 'apply')} this grant for the "
-            "reason in the evidence. A warehouse administrator fixes that cause; then run "
-            f"`vecten reconcile --env {ctx.env}` to apply it."
-        ),
+        resolution=resolution,
         occurrences=1,
         first_seen=None,
         last_seen=iso(checked_at),

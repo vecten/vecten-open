@@ -439,7 +439,7 @@ def access(ctx):
         h2("Grants"),
         hint(
             "Grants are reconciled every fifteen minutes, on model change and on demand. "
-            "An area grant covers both of its schemas, core_<area> and marts_<area>."
+            "An area grant covers core and marts, plus staging and snapshots when enabled."
         ),
         grants_table,
         grant_form,

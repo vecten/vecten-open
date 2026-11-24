@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from vecten.deploy.vm import apply as agent
-from vecten.stack.compose import SERVICES_BRIDGE
+from vecten.stack.compose import service_bridge
 from vecten_shared.versions import VERSIONS
 
 pytestmark = pytest.mark.docker
@@ -120,8 +120,8 @@ def vm(request):
             "network",
             "create",
             "-o",
-            f"com.docker.network.bridge.name={SERVICES_BRIDGE}",
-            "vecten-services",
+            f"com.docker.network.bridge.name={service_bridge(PROJECT, 'svc-acme-bot')}",
+            "svc-acme-bot",
         )
         yield name
     finally:
@@ -205,13 +205,13 @@ def running(vm: str, name: str) -> None:
 
 
 def test_the_agents_rule_drops_the_services_bridge_and_survives_a_dockerd_restart(vm):
-    start(vm, "svc", "svc-acme-bot", "--network", "vecten-services")
+    start(vm, "svc", "svc-acme-bot", "--network", "svc-acme-bot")
     start(vm, "dag", "airflow-scheduler")
     # Without the rule a service reaches the metadata address like any container.
     assert reads_metadata(vm, "svc") and reads_metadata(vm, "dag")
 
     calls = []
-    host = {"cloud": "aws", "service_network": SERVICES_BRIDGE}
+    host = {"cloud": "aws", "service_network": "vecten-+"}
     agent.isolate_services(host, in_vm(vm, calls))
     assert [c[3] for c in calls] == ["-C", "-I"]
     assert dropped(vm, "svc")
@@ -235,7 +235,7 @@ def state(vm: str, name: str) -> str:
 
 
 def test_services_the_rule_cannot_cover_are_stopped_and_the_stack_kept(vm):
-    start(vm, "svc", "svc-acme-bot", "--network", "vecten-services")
+    start(vm, "svc", "svc-acme-bot", "--network", "svc-acme-bot")
     start(vm, "dag", "airflow-scheduler")
     agent.stop_services({"compose_project": PROJECT}, in_vm(vm, []))
     assert state(vm, "svc") == "false"
@@ -243,7 +243,7 @@ def test_services_the_rule_cannot_cover_are_stopped_and_the_stack_kept(vm):
 
 
 def test_the_guard_before_dockerd_starts_covers_the_services_the_daemon_restarts(vm):
-    start(vm, "svc", "svc-acme-bot", "--network", "vecten-services")
+    start(vm, "svc", "svc-acme-bot", "--network", "svc-acme-bot")
     start(vm, "dag", "airflow-scheduler")
     pid = docker("exec", vm, "pidof", "dockerd").stdout.strip()
     docker(
@@ -252,7 +252,7 @@ def test_the_guard_before_dockerd_starts_covers_the_services_the_daemon_restarts
     docker("exec", vm, "sh", "-c", WIPE_IPTABLES)
 
     calls = []
-    host = {"cloud": "aws", "service_network": SERVICES_BRIDGE}
+    host = {"cloud": "aws", "service_network": "vecten-+"}
     agent.isolate_services(host, in_vm(vm, calls), create_chain=True)
     assert [c[3] for c in calls] == ["-N", "-C", "-I"]
     docker("exec", vm, "rm", "/hold")

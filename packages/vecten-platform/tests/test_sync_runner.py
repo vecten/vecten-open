@@ -7,7 +7,7 @@ import pytest
 from vecten_platform.sync import context
 from vecten_platform.sync.loader import load_connector
 from vecten_platform.sync.runner import (
-    _describe,
+    _chain,
     dataset_name,
     ensure_datasets,
     list_objects,
@@ -79,6 +79,21 @@ def test_one_failing_object_does_not_block_or_reset_the_others(demo, duckdb_dest
     assert names == {"demo__good_a", "demo__good_b"}
 
 
+@pytest.mark.parametrize("credits, terminal", [(0, True), (1, False)])
+def test_wrapped_metered_failure(demo, duckdb_dest, tmp_path, credits, terminal):
+    outcome = run_object(
+        "demo", lambda: demo.source(credits=credits), "bad", duckdb_dest, tmp_path / "dlt"
+    )
+    assert not outcome.ok
+    assert outcome.terminal is terminal
+    expected = (
+        "TerminalConnectorError: metered source is out of credits"
+        if terminal
+        else "HTTPError: 503 Service Unavailable"
+    )
+    assert outcome.error == expected
+
+
 def test_checkpoint_survives_a_fresh_dlt_dir(demo, duckdb_dest, tmp_path):
     run_object("demo", demo.source, "good_a", duckdb_dest, tmp_path / "dlt1")
     again = run_object("demo", demo.source, "good_a", duckdb_dest, tmp_path / "dlt2")
@@ -148,11 +163,18 @@ def test_record_skips_a_failing_object_and_keeps_its_earlier_recording(demo, duc
     record_dir = tmp_path / "fixtures"
     record_dir.mkdir()
     (record_dir / "bad.jsonl").write_text('{"kept": true}\n')
+    (record_dir / "bad.schema.json").write_text('{"previous": true}')
     run_objects(
         "demo", demo.source, ["bad", "good_b"], duckdb_dest, tmp_path / "dlt", record_dir=record_dir
     )
+    assert (record_dir / "bad.schema.json").read_text() == '{"previous": true}'
     assert (record_dir / "bad.jsonl").read_text() == '{"kept": true}\n'
-    assert sorted(p.name for p in record_dir.iterdir()) == ["bad.jsonl", "good_b.jsonl"]
+    assert sorted(p.name for p in record_dir.iterdir()) == [
+        "bad.jsonl",
+        "bad.schema.json",
+        "good_b.jsonl",
+        "good_b.schema.json",
+    ]
 
 
 def test_record_of_a_failing_object_writes_no_fixture(demo, duckdb_dest, tmp_path):
@@ -160,7 +182,25 @@ def test_record_of_a_failing_object_writes_no_fixture(demo, duckdb_dest, tmp_pat
     run_objects(
         "demo", demo.source, ["bad", "good_b"], duckdb_dest, tmp_path / "dlt", record_dir=record_dir
     )
-    assert sorted(p.name for p in record_dir.iterdir()) == ["good_b.jsonl"]
+    assert sorted(p.name for p in record_dir.iterdir()) == ["good_b.jsonl", "good_b.schema.json"]
+
+
+def test_a_schema_recording_error_reports_the_fixture_it_was_writing(
+    demo, duckdb_dest, tmp_path, monkeypatch
+):
+    from vecten_platform.sync import recording
+
+    def broken(*args, **kwargs):
+        raise KeyError("good_b")
+
+    monkeypatch.setattr(recording, "recorded_schema", broken)
+    record_dir = tmp_path / "fixtures"
+    outcome = run_object(
+        "demo", demo.source, "good_b", duckdb_dest, tmp_path / "dlt", record_dir=record_dir
+    )
+    assert not outcome.ok
+    assert outcome.error.startswith("ValueError: recording schema for ")
+    assert str(record_dir / "good_b.jsonl") in outcome.error
 
 
 @dlt.resource(name="lazy")
@@ -211,14 +251,14 @@ def _count(dest_path: Path, table: str) -> int:
         con.close()
 
 
-def test_record_caps_the_fixture_but_loads_every_item(duckdb_dest, tmp_path):
+def test_record_caps_the_fixture_and_the_load(duckdb_dest, tmp_path):
     record_dir = tmp_path / "fixtures"
     outcome = run_object(
         "sizes", _sizes_source, "many", duckdb_dest, tmp_path / "dlt", record_dir=record_dir
     )
-    assert outcome.ok and outcome.rows == 300
+    assert outcome.ok and outcome.rows == 200
     assert len((record_dir / "many.jsonl").read_text().splitlines()) == 200
-    assert _count(tmp_path / "wh.duckdb", "many") == 300
+    assert _count(tmp_path / "wh.duckdb", "many") == 200
 
 
 def test_record_of_an_object_with_no_items_leaves_no_fixture(duckdb_dest, tmp_path):
@@ -269,14 +309,14 @@ def test_a_failed_object_lists_no_tables(demo, duckdb_dest, tmp_path):
     assert not outcome.ok and outcome.tables == ()
 
 
-def test_describe_honours_from_none():
+def test_exception_chain_honours_from_none():
     try:
         try:
             raise KeyError("hidden")
         except KeyError:
             raise ValueError("bad config") from None
     except ValueError as exc:
-        assert _describe(exc) == "ValueError: bad config"
+        assert _chain(exc) == [exc]
 
 
 def _schemas(dest_path: Path) -> set[str]:
@@ -301,3 +341,110 @@ def test_ensure_datasets_creates_raw_and_staging_schemas_once(demo, duckdb_dest,
     outcome = run_object("demo", demo.source, "good_a", duckdb_dest, tmp_path / "dlt")
     assert outcome.ok, outcome.error
     assert len(rows(tmp_path / "wh.duckdb", "good_a")) == 2
+
+
+@dlt.source(name="crm", max_table_nesting=0)
+def _json_source():
+    @dlt.resource(
+        name="records",
+        columns={"_raw": {"data_type": "json"}},
+        primary_key="id",
+        write_disposition="merge",
+    )
+    def records():
+        for _ in range(2):
+            yield {"id": 1, "_raw": {"name": "Acme", "tags": ["new"]}, "labels": ["one"]}
+
+    return records
+
+
+def test_recorded_json_column_survives_offline_replay(duckdb_dest, tmp_path, monkeypatch):
+    import duckdb
+
+    from vecten_platform.sync.testing import replay_connector_test
+
+    fixtures = tmp_path / "crm" / "fixtures"
+    outcome = run_object("crm", _json_source, "records", duckdb_dest, tmp_path / "dlt", fixtures)
+    assert outcome.ok, outcome.error
+    work = tmp_path / "work"
+    assert replay_connector_test(fixtures.parent, "crm", work, monkeypatch) == {"records": 2}
+    for database in (tmp_path / "wh.duckdb", work / "replay.duckdb"):
+        with duckdb.connect(str(database), read_only=True) as conn:
+            columns = {
+                row[0]: row[1] for row in conn.execute("describe raw_crm.records").fetchall()
+            }
+            assert columns["_raw"] == columns["labels"] == "JSON", columns
+            assert conn.execute("select _raw->>'name' from raw_crm.records").fetchall() == [
+                ("Acme",)
+            ]
+    replay = dlt.attach("replay__crm", pipelines_dir=str(work / "dlt"))
+    table = replay.default_schema.tables["records"]
+    assert table["columns"]["id"]["primary_key"]
+    assert table["write_disposition"] == "merge"
+    assert table["x-normalizer"]["max_nesting"] == 0
+    assert replay.default_schema.data_table_names() == ["records"]
+
+
+@dlt.source(name="crm", max_table_nesting=2)
+def _routed_source():
+    @dlt.resource(name="events", table_name=lambda row: row["kind"], max_table_nesting=0)
+    def events():
+        yield {"kind": "one", "labels": [1]}
+        yield {"kind": "two", "labels": [2]}
+        yield {"kind": "one", "labels": [3]}
+
+    return events
+
+
+def test_recorded_routes_and_legacy_fixtures_share_a_source(duckdb_dest, tmp_path, monkeypatch):
+    from vecten_platform.sync.testing import replay_connector_test
+
+    fixtures = tmp_path / "crm" / "fixtures"
+    outcome = run_object("crm", _routed_source, "events", duckdb_dest, tmp_path / "dlt", fixtures)
+    assert outcome.ok, outcome.error
+    (fixtures / "legacy.jsonl").write_text('{"labels": [1, 2]}\n')
+    work = tmp_path / "work"
+    assert replay_connector_test(fixtures.parent, "crm", work, monkeypatch) == {
+        "one": 2,
+        "two": 1,
+        "legacy": 1,
+    }
+    schema = dlt.attach("replay__crm", pipelines_dir=str(work / "dlt")).default_schema
+    assert set(schema.data_table_names()) == {"one", "two", "legacy", "legacy__labels"}
+    for name in ("one", "two"):
+        assert schema.tables[name]["x-normalizer"]["max_nesting"] == 0
+
+
+@pytest.mark.parametrize("variant", [False, True])
+def test_record_and_replay_midstream_table_hint(variant, duckdb_dest, tmp_path, monkeypatch):
+    import duckdb
+
+    from vecten_platform.sync.testing import replay_connector_test
+
+    @dlt.resource(name="items")
+    def items():
+        yield dlt.mark.with_hints(
+            {"id": 1}, dlt.mark.make_hints(table_name="renamed"), create_table_variant=variant
+        )
+        yield {"id": 2}
+        yield {"id": 3}
+
+    @dlt.source(name="crm")
+    def source():
+        return items
+
+    fixtures = tmp_path / "crm" / "fixtures"
+    outcome = run_object("crm", source, "items", duckdb_dest, tmp_path / "dlt", fixtures)
+    assert outcome.ok, outcome.error
+    expected = ["renamed", "items", "items"] if variant else ["renamed"] * 3
+    schema = json.loads((fixtures / "items.schema.json").read_text())
+    assert schema.get("row_tables", [schema["tables"][0]["name"]] * 3) == expected
+    work = tmp_path / "replay"
+    counts = {name: expected.count(name) for name in set(expected)}
+    assert set(outcome.tables) == set(counts)
+    assert replay_connector_test(fixtures.parent, "crm", work, monkeypatch) == counts
+    for database in (tmp_path / "wh.duckdb", work / "replay.duckdb"):
+        with duckdb.connect(str(database), read_only=True) as conn:
+            for name in counts:
+                rows = conn.execute(f"select id from raw_crm.{name} order by id").fetchall()
+                assert rows == [(i,) for i, table in enumerate(expected, start=1) if table == name]

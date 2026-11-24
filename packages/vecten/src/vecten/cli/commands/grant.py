@@ -95,7 +95,7 @@ def grant(
     dataset: str | None = typer.Argument(None),
     schema: str | None = typer.Option(None, "--schema"),
     area: str | None = typer.Option(
-        None, "--area", help="A restricted area: both core_<area> and marts_<area>."
+        None, "--area", help="All layers declared for the restricted area."
     ),
     group: str | None = typer.Option(None, "--group"),
     env: str = typer.Option("prod", "--env"),
@@ -108,7 +108,7 @@ def revoke(
     dataset: str | None = typer.Argument(None),
     schema: str | None = typer.Option(None, "--schema"),
     area: str | None = typer.Option(
-        None, "--area", help="A restricted area: both core_<area> and marts_<area>."
+        None, "--area", help="All layers declared for the restricted area."
     ),
     group: str | None = typer.Option(None, "--group"),
     env: str = typer.Option("prod", "--env"),

@@ -59,6 +59,7 @@ ship before areas.
 - [ ] 3.11 deploy: declare an area, ship, grant, rebuild on a sandbox of each cloud
   - Partly run live for 0.1.1 (rc2, AWS): declare, ship, grant and rebuild on AWS with Snowflake. Scaleway not run.
 - [x] 3.13 A marts-only area ([#94](https://github.com/vecten/vecten-open/issues/94)): an area grant covers the area schemas the warehouse finds and names the others, which reconciliation grants once found; the applied record keeps the granted schemas, and a revoke or rollback revokes only those. On a grant `READ_GRANT` answers `absent` when `INFORMATION_SCHEMA` does not list the schema to its owner; a revoke never does, so the access procedures are version 5. The Postgres adapter reads `pg_namespace` and `pg_class`, so a revoke on an object that is gone there is done. Unit: fake adapters, the adapters over recorded answers, the procedure under Node
+  - Live, 2026-11-20 (#116, #117): a restricted procedure owner saw neither the schema nor the reader's SELECT that an administrator saw. UNDROP restored table SELECT and schema USAGE, current SELECT and future SELECT. The version 7 procedure kept the refused revokes pending, and retrying after restoration removed the grants.
 - [x] 3.14 live: `vecten grant --area` on a Snowflake area with `MARTS_<AREA>` only; then dbt creates `CORE_<AREA>` and the next reconciliation grants it
   - Live, 0.1.1rc2 on AWS: `grant --area` waited for `core_<area>`, which the next reconciliation granted once dbt created it.
 - [ ] 3.15 live: `READ_GRANTS` with no target names a view, a materialized view, a dynamic table and an Iceberg table with the type its `DROP` takes, and lists the relations `LOADER` owns in `MARTS` and an area
@@ -79,7 +80,7 @@ ship before areas.
 - [x] 5.1 `AccessService.create_group(name, role=None)`: override, reserved prefixes, refusal on an existing role naming both ways out
 - [x] 5.2 Binding: state for bindings; admin API bind (prints the statement), confirm (checks the grant through `SHOW GRANTS TO ROLE <group role>` or `pg_auth_members`), unbind; access health for missing bindings; delete group leaves the bound role
 - [x] 5.3 Panel and `vecten group add --role`, `vecten group bind|unbind`
-- [ ] 5.4 Under #34's shared layout (if merged first): refuse a bound role holding privileges on another environment's database of the project
+- [x] 5.4 Under #34's shared layout (if merged first): refuse a bound role holding privileges on another environment's database of the project
 - [x] 5.5 `docs/mcp-identity.md`: bound roles, `IS_ROLE_IN_SESSION` rather than `CURRENT_ROLE()`
 - [x] 5.6 unit: name override and refusals; bind, confirm and unbind flows against fake adapters
 - [x] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it

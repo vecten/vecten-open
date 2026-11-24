@@ -9,24 +9,37 @@ Each source lives under `connectors/<source>/` with `connector.py` exposing `sou
 `vecten secret set <NAME>`, read in code with `secret("<NAME>")`; the stack passes every secret the
 declaration names into the Airflow containers on the next `vecten up`. Run locally: `vecten connector run
 <source> [--object <name>]`; record fixtures: `vecten connector run <source> --record`; inspect:
-`vecten raw schema <source> --json`. Each object syncs through its own dlt pipeline, so a failing object
-neither blocks nor resets the others; the sync DAGs are `orchestration/dags/sync_<source>_<group>.py`.
+`vecten raw schema <source> --json`. Each named dlt resource is an object (for example,
+`@dlt.resource(name="tickets")` defines the object `tickets`). The dlt ingestion library loads
+each object through its own pipeline, so a failing object neither blocks nor resets the others; the sync DAGs are `orchestration/dags/sync_<source>_<group>.py`.
 A connector's Python dependencies are installed in the Airflow image from `vecten.toml`; install them
 where `vecten` runs as well, for example `uv tool install vecten --with <package>`. Failures post to
 `ALERT_WEBHOOK_URL` when that secret is set, each with its issue id. `vecten issues` (the laptop) or
 `vecten issues --env <env>` lists every failure that has not run green since, `vecten issues show
 <id>` prints its redacted log excerpt, and `skills/operate/SKILL.md` works through the list.
 
-`--record` reloads the object from the start so the fixture is complete; run it on the first sync or
-whenever the fixture should be refreshed. It writes `connectors/<source>/fixtures/<object>.jsonl` only
-for objects that synced and yielded records; the test `connectors/<source>/test_<source>.py` replays
-them into DuckDB with the network blocked and is skipped until fixtures exist. That test and
-`vecten dbt-build-local` also check connector parsing when you save upstream JSON with
-`--record --record-inputs` for a source that supports `inputs(fetch)`. With output fixtures
-alone they load the rows directly. Run `vecten connector run <source> --json` to check live
-access. Fixtures hold real
-records from the source (up to 200 per object) and are committed to the project, so check them for
-personal data before the repository is shared.
+`--record` reloads the object from the start and replaces its local raw data with a sample; run
+it on the first sync or whenever the fixture should be refreshed. Use `--record --limit 3` for
+three rows per object. For each nonempty recording it writes two files under
+`connectors/<source>/fixtures/`. `<object>.jsonl` holds at most the limit, 200 records by default.
+The companion `<object>.schema.json` tells dlt how to load them, including which columns hold
+JSON, how deeply to expand nested records and which keys to use for merges. Commit both files
+together. A `.jsonl` file without a companion schema still loads with dlt's default type
+inference. If replay reports an incompatible schema, run
+`vecten connector run <source> --object <object> --record` to refresh both files.
+
+The test `connectors/<source>/test_<source>.py` replays fixtures into DuckDB with the network
+blocked and is skipped until fixtures exist. With output fixtures alone, that test and
+`vecten dbt-build-local` load the rows straight into the raw tables and never run `connector.py`,
+so a code change that breaks every live sync still passes CI while the fixtures are unchanged. To
+check connector parsing as well, save upstream JSON with `--record --record-inputs` for a source
+that supports `inputs(fetch)`. After changing `connector.py`, run
+`vecten connector run <source> --json` and check for `"ok": true` under each changed object's name
+in `objects`. Fixtures hold real records from the source (up to 200 per
+object) and are committed to the project, so check them for personal data before the repository is
+shared. To avoid recording, set `record = false` in the connector declaration in `vecten.toml`,
+write invented JSON objects one per line under `connectors/<source>/fixtures/<object>.jsonl` and
+run `vecten connector check-fixtures <source>`.
 
 After changing which secrets a connector reads, update the `secrets` list of its declaration in
 `vecten.toml` and run `vecten up` again.
@@ -1126,8 +1139,12 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
   with the provisioner's user and the integration `EXTERNAL_OAUTH_<BASE>_<ENV>`, as kept.
   With it, destroy refuses while any of them stays, because their sign-in policies live in the
   database it drops, and prints the statements an ACCOUNTADMIN runs: a `DROP` for each user
-  and role the provisioner owns, then the provisioner's user and the integration. Run them,
-  then destroy again.
+  and role the provisioner owns, then the provisioner's user, the environment's
+  `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN` authentication policy and finally the integration
+  that policy references. Run them in order. If an ACCOUNTADMIN has confirmed that the
+  environment database was already dropped, skip only the policy drop and continue with
+  the integration. A permissions error alone does not establish that the database is gone.
+  Then run destroy again.
 [%- endif %]
 - Moving an environment that has fixed names into a shared account is a new deployment of it:
   destroy it with `--delete-data <env>`, keeping its `state` snapshot if you want it, point

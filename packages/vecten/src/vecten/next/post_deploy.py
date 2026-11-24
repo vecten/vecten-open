@@ -176,6 +176,34 @@ def app_connect_items(root: Path, config: VectenConfig, env: str) -> list[Item]:
     return items
 
 
+def _promotion_item(root, config, env):
+    from vecten.deploy.promotion import mcp_ship_receipt, ship_evidence_record
+    from vecten.deploy.snowflake import has_snowflake_root
+
+    if not config.promoted_from(env):
+        return None
+    facts = config.environments[env]
+    owed = read_record(root, owed_ship_record(env)) is not None
+    legacy = has_snowflake_root(config) and facts.provisioner_script_run
+    if not (facts.mcp_ship_generation or legacy or owed):
+        return None
+    receipt = mcp_ship_receipt(config, env)
+    evidence = read_record(root, ship_evidence_record(env)) or {}
+    if evidence.get("repository") != config.deploy.github_repository:
+        evidence = {}
+    if receipt == evidence.get("shipped"):
+        return None
+    if not (facts.mcp_ship_generation or owed) and facts.first_user_added and not evidence:
+        return None
+    if not (owed or evidence):
+        return Item(
+            "command", f"Check whether the MCP settings shipped to {env}", "vecten promote --status"
+        )
+    return Item(
+        "command", f"Ship the confirmed MCP settings to {env}", f"vecten promote --env {env}"
+    )
+
+
 def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState) -> list[Item]:
     facts = config.environments.get(env) or EnvironmentFacts()
     if not facts.deployed_commit:
@@ -194,11 +222,9 @@ def post_deploy_items(root: Path, config: VectenConfig, env: str, git: GitState)
         return [*items, Item("command", title, f"vecten mcp provisioner-script --env {env}")]
     # The push carrying the confirmation ships the order's first environment alone, and the
     # items below reach hosts of this one that its deploy left unshipped.
-    if config.promoted_from(env) and read_record(root, owed_ship_record(env)) is not None:
-        title = (
-            f"Ship {env} now that its MCP has its Snowflake identity; its deploy shipped no host"
-        )
-        return [*items, Item("command", title, f"vecten promote --env {env}")]
+    promotion = _promotion_item(root, config, env)
+    if promotion is not None:
+        return [*items, promotion]
     # The MCP serves with older procedures and refuses only what needs the newer ones.
     rerun = access_rerun_item(root, config, env)
     if rerun is not None:
