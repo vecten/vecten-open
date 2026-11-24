@@ -259,16 +259,19 @@ ALTER USER {user} SET AUTHENTICATION POLICY {service};
 """
 
 
-# The version installed procedures report; one reporting none is version 1. Only the
-# shared layout's script also installs the binding check, at SHARED_ACCESS_VERSION.
+# The version installed procedures report; one reporting none is version 1. A shared
+# layout adds the binding check, and opted-in source areas add their list.
 ACCESS_VERSION = 7
 SHARED_ACCESS_VERSION = 8
+SOURCE_AREAS_VERSION = 9
 # The oldest procedure versions that serve area grants and list modelled relations.
 GRANTS_VERSION = 5
 LISTING_VERSION = 6
 
 
-def snowflake_access_version(shared_account):
+def snowflake_access_version(shared_account, source_areas=()):
+    if source_areas:
+        return SOURCE_AREAS_VERSION
     return SHARED_ACCESS_VERSION if shared_account else ACCESS_VERSION
 
 
@@ -285,7 +288,7 @@ GRANT USAGE ON PROCEDURE {namespace}.CHECK_BINDING(VARCHAR) TO ROLE {provisioner
 """
 
 
-def snowflake_access_helper(names):
+def snowflake_access_helper(names, source_areas=()):
     database = names.database.upper()
     provisioner = _name(names.provisioner_role)
     namespace = f"{_ident(database)}.{_ident(names.access_schema)}"
@@ -299,7 +302,8 @@ def snowflake_access_helper(names):
         f"var provisionerRole = {_baked(provisioner)};\n"
         f"var loaderRole = {_baked(_name(names.loader_role))};\n"
         f"var suffix = {_baked(names.suffix)};\n"
-        f"var version = {snowflake_access_version(bool(names.suffix))};\n"
+        f"var sourceAreas = {_baked([area.upper() for area in source_areas])};\n"
+        f"var version = {snowflake_access_version(bool(names.suffix), source_areas)};\n"
     )
     metadata_query = _baked(
         f"SELECT COUNT(*) FROM {_ident(database)}.INFORMATION_SCHEMA.TABLES "
@@ -342,12 +346,17 @@ _POSTGRES_HEADER = (
 )
 
 
-def provisioner_script(kind, *, issuer, database=None, public_key=None, names=None):
+def provisioner_script(
+    kind, *, issuer, database=None, public_key=None, names=None, source_areas=()
+):
     """The administrator's setup SQL: Postgres takes the warehouse's `database`, Snowflake
     every name from `names`."""
     if urlparse(issuer).scheme != "https" or not urlparse(issuer).hostname:
         raise ValueError("MCP issuer must be an HTTPS URL")
+    if not all(re.fullmatch(r"[a-z][a-z0-9]{0,52}", area) for area in source_areas):
+        raise ValueError("invalid source layer area")
     if kind == "postgres":
+        areas = ",".join(source_areas)
         return (
             _POSTGRES_HEADER
             + f"""\\set ON_ERROR_STOP on
@@ -370,6 +379,7 @@ SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I '
               r.rolname,n.nspname)
 FROM pg_namespace n JOIN pg_roles r ON r.oid=n.nspowner WHERE n.nspname IN ('core','marts') \\gexec
 """
+            + f"SELECT set_config('vecten.source_layer_areas', '{areas}', false);\n"
             + postgres_access_helpers()
         )
     account = names.account if names is not None else None
@@ -417,7 +427,7 @@ ALTER USER {user} SET RSA_PUBLIC_KEY = {_literal(key)};
 GRANT ROLE {provisioner} TO USER {user};
 GRANT USAGE ON DATABASE {database} TO ROLE {provisioner};
 {data_grants}
-{snowflake_access_helper(names)}
+{snowflake_access_helper(names, source_areas)}
 CREATE SECURITY INTEGRATION IF NOT EXISTS {integration}
   TYPE = EXTERNAL_OAUTH
   ENABLED = TRUE

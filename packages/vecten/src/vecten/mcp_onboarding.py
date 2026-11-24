@@ -7,7 +7,7 @@ from uuid import uuid4
 from vecten.deploy.snowflake import environment_names, identity_ship_command, owed_ship_record
 from vecten.mcp_url import mcp_url
 from vecten.secrets import provisioner_secret_names
-from vecten_shared.config import EnvironmentFacts, load_config, save_config
+from vecten_shared.config import EnvironmentFacts, load_config, save_config, source_layer_areas
 from vecten_shared.identity_setup import (
     introspection_document,
     provisioner_script,
@@ -99,12 +99,15 @@ def setup_script(root, env, confirm=False, public_key=None):
         commands = [f"vecten secret set {name}{flag}" for name in provisioner_secret_names(config)]
     if confirm:
         # Only Snowflake's script installs access procedures that report a version.
+        areas = source_layer_areas(config.areas) if config.warehouse.kind == "snowflake" else None
         installed = (
-            snowflake_access_version(shared_layout(config, env))
-            if config.warehouse.kind == "snowflake"
+            snowflake_access_version(shared_layout(config, env), areas)
+            if areas is not None
             else None
         )
         record = {"confirmed": True} | ({"access_version": installed} if installed else {})
+        if installed:
+            record["access_source_areas"] = areas
         write_record(root, f"provisioner-{env}", record)
         # A deploy of a later environment of the order while its identity was pending shipped
         # no host, and `next` walks only the order's environments.
@@ -121,6 +124,7 @@ def setup_script(root, env, confirm=False, public_key=None):
             facts = config.environments.setdefault(env, EnvironmentFacts())
             facts.provisioner_script_run = True
             facts.access_version = installed
+            facts.access_source_areas = areas
             save_config(root, config)
         return {"env": env, "confirmed": True, "commands": commands}
     if platform:
@@ -133,6 +137,7 @@ def setup_script(root, env, confirm=False, public_key=None):
     sql = provisioner_script(
         config.warehouse.kind,
         issuer=issuer,
+        source_areas=source_layer_areas(config.areas),
         database=None if snowflake else config.warehouse.database or config.project.name,
         public_key=public_key,
         names=environment_names(root, config, env) if snowflake else None,

@@ -95,13 +95,17 @@ KINDS = (
         ("FINANCE", "MARTS_", None, True, True, True),
         ("FINANCE", "CORE_2024", None, True, True, True),
         ("FINANCE", "STAGING_FINANCE", None, True, True, True),
+        ("FINANCE", "SNAPSHOTS_PAYROLL", None, True, True, False),
+        ("FINANCE", "STAGING_PAYROLL", None, True, True, False),
     ],
 )
 def test_owner_procedure_enforces_boundaries(target, schema, relation, enabled, owned, error):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to execute the Snowflake JavaScript handler locally")
-    sql = provisioner_script("snowflake", issuer="https://mcp.example", names=names())
+    sql = provisioner_script(
+        "snowflake", issuer="https://mcp.example", names=names(), source_areas=["payroll"]
+    )
     assert "EXECUTE AS OWNER" in sql
     handler = read_grant_body(sql)
     harness = r"""

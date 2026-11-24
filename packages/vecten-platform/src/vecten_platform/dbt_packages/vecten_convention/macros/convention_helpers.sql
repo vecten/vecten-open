@@ -6,13 +6,13 @@
 {%- endmacro %}
 
 {% macro convention_area(schema) -%}
-    {#- The area a `core_<area>` or `marts_<area>` schema belongs to, or none for any other schema. -#}
-    {%- set found = modules.re.match('^(core|marts)_([a-z][a-z0-9]*)$', schema | lower) -%}
+    {#- The area a layer-specific schema belongs to, or none for a shared schema. -#}
+    {%- set found = modules.re.match('^(core|marts|staging|snapshots)_([a-z][a-z0-9]*)$', schema | lower) -%}
     {{- return(found.group(2) if found else none) -}}
 {%- endmacro %}
 
 {% macro convention_layer(schema) -%}
-    {#- The layer whose rules a schema's models follow; an area's schemas follow core's and marts'. Undeclared areas count too, so their other rules still report while the naming test names the missing declaration. -#}
+    {#- The layer whose rules a schema's models follow; an area's schemas follow their layer. Undeclared areas count too, so their other rules still report while the naming test names the missing declaration. -#}
     {%- set name = schema | lower -%}
     {%- if name in ['staging', 'snapshots', 'core', 'marts'] -%}
         {{- return(name) -}}

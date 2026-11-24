@@ -520,6 +520,28 @@ def test_owner_helpers_bound_grants_and_future_objects(warehouse):
     a.schema_grant("analyst", "core", False)
 
 
+def test_source_layer_helpers_refuse_new_grants_after_an_opt_out(warehouse):
+    from vecten_shared.identity_setup import postgres_access_helpers
+
+    a = adapter(warehouse)
+    with warehouse() as c:
+        c.execute("CREATE SCHEMA staging_billing")
+        c.execute("CREATE TABLE staging_billing.invoice (amount int)")
+        c.execute("SET vecten.source_layer_areas = 'billing'")
+        c.execute(postgres_access_helpers())
+    a.schema_grant("analyst", "staging_billing")
+    with warehouse() as c:
+        c.execute("SET vecten.source_layer_areas = ''")
+        c.execute(postgres_access_helpers())
+    a.schema_grant("analyst", "staging_billing", False)
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match="installed source area list"):
+        a.schema_grant("analyst", "staging_billing")
+    with warehouse() as c:
+        assert not c.execute(
+            "SELECT has_table_privilege('analyst', 'staging_billing.invoice', 'SELECT')"
+        ).fetchone()[0]
+
+
 def test_rds_superuser_and_its_members_are_not_creators_needing_a_helper(warehouse):
     # RDS lets rds_superuser and every role inheriting it create in any schema without an ACL
     # entry; an explicit grant stands in for that here.

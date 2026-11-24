@@ -8,7 +8,7 @@ import pytest
 from vecten_mcp.access import AccessService
 from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.base import Absent
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, SOURCE_AREAS_VERSION
 
 
 def full(grant):
@@ -23,7 +23,7 @@ class Adapter:
     """Holds read grants and applies grants to them; a schema-level revoke, like READ_GRANT's,
     reaches only tables and views."""
 
-    def __init__(self, held=(), version=ACCESS_VERSION):
+    def __init__(self, held=(), version=SOURCE_AREAS_VERSION):
         self.held, self.version = set(held), version
         self.ops, self.reads = [], []
 
@@ -68,6 +68,69 @@ def service(adapter, *, seeded=True, areas=()):
     if seeded:
         access.seed_defaults()
     return access
+
+
+def test_existing_area_grant_expands_and_contracts_with_opt_in():
+    adapter = Adapter()
+    access = service(adapter, areas=["finance"])
+    access.grant("default", "area", "finance")
+    with pytest.raises(ValueError, match="restricted_source_layers"):
+        access.grant("default", "schema", "staging_finance")
+    for opted, expected in ((True, True), (False, False)):
+        access = AccessService(
+            access.state, adapter, areas=["finance"], source_areas=["finance"] if opted else []
+        )
+        adapter.ops.clear()
+        assert access.reconcile()["complete"]
+        for schema in ("core_finance", "marts_finance"):
+            assert ("schema", "analyst", schema, False) not in adapter.ops
+        for layer in ("staging", "snapshots"):
+            assert (("analyst", "usage", f"{layer}_finance", None) in adapter.held) == expected
+        assert ("analyst", "usage", "core_finance", None) in adapter.held
+
+
+def test_a_refused_source_layer_revoke_preserves_retained_reads_until_retry():
+    class RestrictedAdapter(Adapter):
+        refuse = True
+
+        def schema_grant(self, role, schema, grant=True):
+            if self.refuse and not grant and schema == "staging_hr":
+                raise ValueError("cannot revoke staging_hr")
+            return super().schema_grant(role, schema, grant)
+
+    adapter = RestrictedAdapter()
+    state = StateStore("sqlite://")
+    expanded = AccessService(state, adapter, areas=["hr"], source_areas=["hr"])
+    expanded.seed_defaults()
+    expanded.grant("default", "area", "hr")
+    contracted = AccessService(state, adapter, areas=["hr"])
+    adapter.ops.clear()
+    assert not contracted.reconcile()["complete"]
+    for schema in ("core_hr", "marts_hr"):
+        assert ("schema", "analyst", schema, False) not in adapter.ops
+        assert ("analyst", "usage", schema, None) in adapter.held
+    adapter.refuse = False
+    assert contracted.reconcile()["complete"]
+    for schema in ("staging_hr", "snapshots_hr"):
+        assert ("analyst", "usage", schema, None) not in adapter.held
+
+
+def test_a_failed_source_layer_expansion_preserves_existing_reads():
+    class InstalledFinanceOnly(Adapter):
+        def schema_grant(self, role, schema, grant=True):
+            if grant and schema == "staging_hr":
+                raise ValueError("outside the installed source area list")
+            return super().schema_grant(role, schema, grant)
+
+    adapter = InstalledFinanceOnly()
+    access = service(adapter, areas=["finance", "hr"])
+    access.grant("default", "area", "hr")
+    expanded = AccessService(access.state, adapter, areas=["finance", "hr"], source_areas=["hr"])
+    adapter.ops.clear()
+    assert not expanded.reconcile()["complete"]
+    for schema in ("core_hr", "marts_hr"):
+        assert ("schema", "analyst", schema, False) not in adapter.ops
+        assert ("analyst", "usage", schema, None) in adapter.held
 
 
 def test_a_revoked_default_schema_restored_by_an_older_deploy_is_revoked_again():

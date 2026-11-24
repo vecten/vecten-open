@@ -15,7 +15,13 @@ from vecten_mcp.failures import describe_error
 from vecten_mcp.identity import RESERVED, warehouse_name
 from vecten_mcp.state import groups, memberships
 from vecten_mcp.warehouse.base import Absent, RoleExists
-from vecten_shared.identity_setup import ACCESS_VERSION, GRANTS_VERSION, LISTING_VERSION
+from vecten_shared.identity_setup import (
+    ACCESS_VERSION,
+    GRANTS_VERSION,
+    LISTING_VERSION,
+    SHARED_ACCESS_VERSION,
+    SOURCE_AREAS_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 # Records kind: app principal id -> {"roles": every warehouse role it may hold, "failed":
@@ -49,24 +55,29 @@ SYSTEM_ROLES = frozenset(
     {"accountadmin", "securityadmin", "sysadmin", "useradmin", "orgadmin", "public"}
 )
 BOUND_ROLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
-AREA_SCHEMA = re.compile(r"(core|marts)_([a-z][a-z0-9]*)")
+AREA_SCHEMA = re.compile(r"(core|marts|staging|snapshots)_([a-z][a-z0-9]*)")
 # The modelled schemas, where dbt leaves a relation in place once no model builds it.
 MODELLED_SCHEMAS = frozenset({"core", "marts"})
 KINDS = ("dataset", "schema", "area")
 
 
-def area_schemas(area):
-    return [f"core_{area}", f"marts_{area}"]
+def area_schemas(area, source_areas=()):
+    layers = ["core", "marts"]
+    if area in source_areas:
+        layers.extend(("staging", "snapshots"))
+    return [f"{layer}_{area}" for layer in layers]
 
 
 def modelled(schema, areas=()):
     """Whether a schema, in any case, holds models only: core, marts or a declared area's."""
     schema = schema.casefold()
     area = AREA_SCHEMA.fullmatch(schema)
-    return schema in MODELLED_SCHEMAS or bool(area and area.group(2) in areas)
+    return schema in MODELLED_SCHEMAS or bool(
+        area and area.group(1) in MODELLED_SCHEMAS and area.group(2) in areas
+    )
 
 
-def in_scope(schema, areas=()):
+def in_scope(schema, areas=(), source_areas=()):
     """The schemas whose read grants the state database owns for every managed role: the
     convention's, every `raw_` schema, a prefix the convention keeps for loaded sources
     and the bound READ_GRANT and the Postgres helpers already accept, and the schemas of the
@@ -75,7 +86,9 @@ def in_scope(schema, areas=()):
     return (
         schema in CONVENTION_SCHEMAS
         or schema.startswith("raw_")
-        or bool(area and area.group(2) in areas)
+        or bool(
+            area and area.group(2) in areas and schema in area_schemas(area.group(2), source_areas)
+        )
     )
 
 
@@ -84,11 +97,12 @@ class Undeclared(ValueError):
 
 
 class AccessService:
-    def __init__(self, state, adapter, *, invalidate=None, areas=(), built=None):
+    def __init__(self, state, adapter, *, invalidate=None, areas=(), source_areas=(), built=None):
         self.state, self.adapter = state, adapter
         self.invalidate = invalidate or (lambda pid: None)
         self.datasets = {}
         self.areas = frozenset(areas)
+        self.source_areas = frozenset(source_areas)
         # What the dbt DAG's last full build made, or None without a current record; None
         # in a project with no dbt DAG.
         self.built = built
@@ -498,13 +512,17 @@ class AccessService:
                     f"no [areas.{target}] in vecten.toml: declare the area {target} and ship "
                     "before granting it"
                 )
-            return area_schemas(target)
+            return area_schemas(target, self.source_areas)
         if kind == "schema":
             area = AREA_SCHEMA.fullmatch(target)
             if area and area.group(2) not in self.areas:
                 raise Undeclared(
                     f"{target} belongs to no declared area: no [areas.{area.group(2)}] in "
                     "vecten.toml"
+                )
+            if area and not in_scope(target, self.areas, self.source_areas):
+                raise Undeclared(
+                    f"{target} needs restricted_source_layers in [areas.{area.group(2)}]"
                 )
             if not area and target not in CONVENTION_SCHEMAS and not target.startswith("raw_"):
                 raise ValueError(
@@ -523,6 +541,10 @@ class AccessService:
                 f"dataset {target} reads {parts[-2]}, which belongs to no declared area: no "
                 f"[areas.{area.group(2)}] in vecten.toml"
             )
+        if area and not in_scope(parts[-2], self.areas, self.source_areas):
+            raise Undeclared(
+                f"{parts[-2]} needs restricted_source_layers in [areas.{area.group(2)}]"
+            )
         return source
 
     def _current(self, kind, source):
@@ -534,14 +556,28 @@ class AccessService:
             schemas = source if kind == "area" else [source]
         return any(AREA_SCHEMA.fullmatch(schema) for schema in schemas)
 
+    def _grant_waits(self, kind, source, outdated):
+        if not outdated or not self._current(kind, source):
+            return False
+        schemas = (
+            source if kind == "area" else [source.split(".")[-2] if kind == "dataset" else source]
+        )
+        return _grants_wait(outdated) or any(
+            s.lower().startswith(("staging_", "snapshots_")) for s in schemas
+        )
+
     def _outdated(self):
         installed = self.adapter.access_version()
         required = getattr(self.adapter, "required_access_version", ACCESS_VERSION)
+        if self.source_areas:
+            required = max(required, SOURCE_AREAS_VERSION)
         if installed < required:
             if installed < GRANTS_VERSION:
                 fix = OUTDATED_FIX
             elif installed < LISTING_VERSION:
                 fix = LISTING_FIX
+            elif self.source_areas:
+                fix = "Rerun the provisioner script and confirm it to grant staging or snapshots."
             elif installed < ACCESS_VERSION:
                 fix = PARTIAL_GRANT_FIX
             else:
@@ -619,8 +655,9 @@ class AccessService:
     def grant(self, group, kind, target):
         self.require_group(group)
         source = self._source(kind, target)
-        if self._current(kind, source) and _grants_wait(self._outdated()):
-            raise ValueError(f"areas need the current access procedures. {OUTDATED_FIX}")
+        outdated = self._outdated() if self._current(kind, source) else None
+        if self._grant_waits(kind, source, outdated):
+            raise ValueError(f"areas need the current access procedures. {outdated['fix']}")
         row = {"group": group, "kind": kind, "target": target}
         key = self._key(group, kind, target)
         with self.lock:
@@ -742,18 +779,36 @@ class AccessService:
                     del desired[key]
                     logger.info("Forgot %s: its area is not declared", row)
             for key, old in applied.items():
-                if self._source_of(desired.get(key)) != old["source"]:
-                    try:
-                        self._apply(old, self._held(old), False)
+                source = self._source_of(desired.get(key))
+                held_source = self._held(old)
+                kept = []
+                if old["kind"] == "area" and source:
+                    # Revoke only removed layers so a refused revoke cannot interrupt
+                    # reads on retained layers. Keep previously unconfirmed grants revocable.
+                    kept = [schema for schema in held_source if schema in source]
+                    removed = [schema for schema in held_source if schema not in source]
+                    if not removed:
+                        continue
+                elif source != old["source"]:
+                    removed = held_source
+                else:
+                    continue
+                try:
+                    self._apply(old, removed, False)
+                    if kept:
+                        confirmed = [s for s in old.get("confirmed", ()) if s in kept]
+                        record = self._record(desired[key], source, kept, confirmed=confirmed)
+                        self.state.put("applied_grants", key, record)
+                    else:
                         self.state.remove("applied_grants", key)
-                    except Exception as exc:
-                        failed(key, old, "revoke", exc)
+                except Exception as exc:
+                    failed(key, old, "revoke", exc)
             held, outdated = self._converge(desired, report, failures)
             for key, row in desired.items():
                 source = self._source_of(row)
                 if key in blocked or source is None:
                     continue
-                if _grants_wait(outdated) and self._current(row["kind"], source):
+                if self._grant_waits(row["kind"], source, outdated):
                     failed(key, row, "grant", outdated["fix"])
                     continue
                 done, missing, confirmed = [], [], []
@@ -807,7 +862,10 @@ class AccessService:
                 continue
             binding = bindings.get(group) or {}
             bound = binding.get("bound_role") if binding.get("confirmed") else None
-            if binding and getattr(self.adapter, "recheck_bindings", False) and not outdated:
+            # A shared install from the binding version on has CHECK_BINDING, even while a
+            # newer source-area list waits for the administrator.
+            checkable = not outdated or outdated["installed"] >= SHARED_ACCESS_VERSION
+            if binding and getattr(self.adapter, "recheck_bindings", False) and checkable:
                 target = binding["bound_role"]
                 try:
                     self._check_bound(target)
@@ -930,7 +988,7 @@ class AccessService:
             if schema is None:
                 report["database_future"].append(_entry(roles, grant, place=False))
                 continue
-            if not in_scope(schema, self.areas) or (role, schema) in whole:
+            if not in_scope(schema, self.areas, self.source_areas) or (role, schema) in whole:
                 continue
             allowed = datasets.get((role, schema), set())
             if (kind == "usage" and allowed) or (kind == "select" and relation.lower() in allowed):

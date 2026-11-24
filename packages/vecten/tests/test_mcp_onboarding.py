@@ -532,15 +532,20 @@ def test_a_confirmed_snowflake_script_records_the_access_version_it_installed(
     platform_snowflake,
 ):
     from vecten.mcp_onboarding import setup_script
-    from vecten_shared.config import load_config
-    from vecten_shared.identity_setup import ACCESS_VERSION
+    from vecten_shared.config import AreaDecl, load_config, save_config
+    from vecten_shared.identity_setup import SOURCE_AREAS_VERSION
     from vecten_shared.records import read_record
 
+    config = load_config(platform_snowflake)
+    config.areas["finance"] = AreaDecl(restricted_source_layers=True)
+    save_config(platform_snowflake, config)
     setup_script(platform_snowflake, "prod", confirm=True)
     facts = load_config(platform_snowflake).environments["prod"]
-    assert facts.access_version == ACCESS_VERSION
+    assert facts.access_source_areas == ["finance"]
+    assert facts.access_version == SOURCE_AREAS_VERSION
     record = read_record(platform_snowflake, "provisioner-prod")
-    assert record["confirmed"] and record["access_version"] == ACCESS_VERSION
+    assert record["confirmed"] and record["access_version"] == SOURCE_AREAS_VERSION
+    assert record["access_source_areas"] == ["finance"]
 
 
 def test_a_confirmed_postgres_script_records_no_access_version(tmp_path):

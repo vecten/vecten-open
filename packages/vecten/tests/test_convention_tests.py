@@ -183,6 +183,36 @@ def test_models_in_declared_areas_pass_every_convention_test(tmp_path):
     }
 
 
+@pytest.mark.parametrize(
+    "enabled,strip,violation",
+    [
+        (True, False, None),
+        (True, True, "lacks column _source"),
+        (False, False, "needs restricted_source_layers"),
+    ],
+)
+def test_area_staging_and_snapshot_placement(tmp_path, enabled, strip, violation):
+    root = render_fixture(tmp_path, "snowflake")
+    config = load_config(root)
+    config.areas["finance"] = AreaDecl(restricted_source_layers=enabled)
+    save_config(root, config)
+    staging = root / "dbt/models/staging/staging_demo_company.sql"
+    _configure(staging, "schema='staging_finance'")
+    snapshot = root / "dbt/snapshots/snapshot_demo_company.sql"
+    snapshot.write_text(
+        snapshot.read_text().replace("schema='snapshots'", "schema='snapshots_finance'")
+    )
+    if strip:
+        _strip_source(staging)
+    runs = build_fixture(root)
+    assert runs[0].returncode == 0
+    failures = runner.failed_nodes(root / "dbt")
+    if violation:
+        assert runs[-1].returncode == 1 and any(violation in f["message"] for f in failures)
+    else:
+        assert runs[-1].returncode == 0, failures
+
+
 def _seed_with_grants(root: Path) -> None:
     seeds = root / "dbt" / "seeds"
     seeds.mkdir(exist_ok=True)

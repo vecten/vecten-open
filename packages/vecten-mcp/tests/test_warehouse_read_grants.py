@@ -8,7 +8,7 @@ import pytest
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
 from vecten_shared.config import VectenConfig
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.identity_setup import ACCESS_VERSION, SOURCE_AREAS_VERSION
 from vecten_shared.provider import snowflake_names
 
 
@@ -257,7 +257,7 @@ class PostgresConnection:
 
 
 def test_postgres_reads_the_catalogs_so_no_procedure_version_limits_it():
-    assert PostgresAdapter(None, None).access_version() == ACCESS_VERSION
+    assert PostgresAdapter(None, None).access_version() == SOURCE_AREAS_VERSION
 
 
 def test_postgres_read_grants_reads_the_catalog_acls_of_the_given_roles():

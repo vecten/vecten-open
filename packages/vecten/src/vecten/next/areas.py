@@ -21,7 +21,13 @@ def area_access_ask_items(config: VectenConfig) -> list[Item]:
             kind="ask",
             title=f"Who may read the {name} area?",
             resolution=(
-                f"Which groups may read the {name} area (schemas core_{name} and marts_{name})? "
+                f"Which groups may read the {name} area (schemas core_{name} and marts_{name}"
+                + (
+                    f", including staging_{name} and snapshots_{name}"
+                    if area.restricted_source_layers
+                    else ""
+                )
+                + ")? "
                 "Name one or more groups, comma-separated."
             ),
             answer_keys=(f"access.{name}",),

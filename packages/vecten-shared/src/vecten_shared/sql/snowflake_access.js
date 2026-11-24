@@ -59,8 +59,13 @@ function readGrant() {
     if (typeof SCHEMA_NAME !== 'string' ||
         (['CORE','MARTS','STAGING','SNAPSHOTS'].indexOf(SCHEMA_NAME) === -1 &&
          !/^RAW_[A-Z0-9_]+$/.test(SCHEMA_NAME) &&
-         !/^(CORE|MARTS)_[A-Z][A-Z0-9]*$/.test(SCHEMA_NAME))) {
+         !/^(CORE|MARTS|STAGING|SNAPSHOTS)_[A-Z][A-Z0-9]*$/.test(SCHEMA_NAME))) {
         throw new Error('schema is outside the approved convention');
+    }
+    // Revocation remains possible after removing an area from the installed list.
+    if (enabled && /^(STAGING|SNAPSHOTS)_/.test(SCHEMA_NAME) &&
+        sourceAreas.indexOf(SCHEMA_NAME.split('_')[1]) === -1) {
+        throw new Error('schema is outside the installed source area list; rerun the provisioner script');
     }
     owned(TARGET);
     if (relation !== null) quoted(relation);

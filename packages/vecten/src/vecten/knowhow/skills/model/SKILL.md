@@ -240,6 +240,13 @@ until an admin grants it, so declaring the area is the human's decision, never y
 still copy restricted rows into an unrestricted schema; never build a `core` or `marts` model
 from an area's models.
 
+If staging rows or snapshot history also need protection, have the owner opt in with
+`restricted_source_layers = true` under the area's declaration. Place the sensitive staging
+models and snapshots explicitly in `staging_<area>` and `snapshots_<area>` using dbt's schema
+configuration. The same area grant covers all four schemas. Preserve and verify existing
+snapshot history before retiring any shared copy. On Snowflake, follow `vecten next` to
+regenerate and confirm the provisioner script when the installed area list changes.
+
 Never set dbt's `grants` config or a granting post-hook: the MCP owns every read grant, and
 `convention_no_grants` fails the build.
 
