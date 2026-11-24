@@ -24,7 +24,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   ([#135](https://github.com/vecten/vecten-open/issues/135)). On Snowflake, opting in needs
   version 9 of the access procedures: rerun the provisioner script, and again whenever the
   opted-in areas change.
-- Service login checks run in an isolated gate container and existing sessions remain usable while the MCP process restarts ([#102](https://github.com/vecten/vecten-open/issues/102)).
 - Deployment plans name the bound service volumes that will be lost when an AWS or Scaleway
   host is removed or replaced. The apply workflow also prints the warning before applying
   ([#129](https://github.com/vecten/vecten-open/issues/129)).
@@ -75,6 +74,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Security
 
+- Service login checks run in an isolated gate container and existing sessions remain usable while the MCP process restarts ([#102](https://github.com/vecten/vecten-open/issues/102)).
 - Each running extension service and container app gets a Docker network shared only with
   NGINX. NGINX clears incoming `X-Vecten-On-Behalf-Of` headers so only the app can set
   viewer attribution on its outbound MCP calls.
