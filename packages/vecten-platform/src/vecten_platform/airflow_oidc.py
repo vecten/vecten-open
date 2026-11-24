@@ -132,7 +132,10 @@ class OidcAuthManager(SimpleAuthManager):
             except (AuthlibBaseError, JoseError, ValueError, TypeError, httpx2.HTTPError) as exc:
                 raise HTTPException(401, "OpenID Connect sign-in failed") from exc
             claims = token.get("userinfo")
-            if not isinstance(claims, UserInfo) or claims.get("email_verified") is not True:
+            if (
+                not isinstance(claims, UserInfo)
+                or claims.get(config.mcp.oidc_email_verified_claim) is not True
+            ):
                 raise HTTPException(403, "A verified administrator email is required")
             email = claims.get("email")
             if not isinstance(email, str) or email.strip().lower() not in self.admins:

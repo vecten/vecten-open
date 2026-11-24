@@ -351,6 +351,14 @@ def test_mcp_section_defaults_and_round_trip(tmp_path):
     assert loaded.environments["prod"].alert_webhook_asked is True
 
 
+@pytest.mark.parametrize("claim", ["email_verifed", "xms_edov ", "phone_number_verified"])
+def test_mcp_refuses_unknown_email_verification_claims(claim):
+    from vecten_shared.config import McpSection
+
+    with pytest.raises(ValidationError, match="oidc_email_verified_claim"):
+        McpSection(oidc_email_verified_claim=claim)
+
+
 def test_mcp_auth_refuses_invalid_plugin_names():
     with pytest.raises(ValidationError):
         VectenConfig.model_validate(

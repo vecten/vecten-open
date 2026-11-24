@@ -311,8 +311,18 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
             return runtime.queries.execute(caller, "SELECT current_user", [], receipt(None))
 
         extensions = McpExtensions({"who": {"handler": who, "groups": ["default"]}}, {}, {}, {})
-        config = VectenConfig(users=5, project={"name": "demo", "scaffold_version": "0.1.0"})
+        config = VectenConfig(
+            users=5,
+            project={"name": "demo", "scaffold_version": "0.1.0"},
+            mcp={
+                "auth": "oidc",
+                "oidc_issuer": "https://idp.example",
+                "oidc_client_id": "demo",
+                "oidc_email_verified_claim": "xms_edov",
+            },
+        )
         runtime = configured_runtime(tmp_path, config, extensions)
+        assert runtime.oauth.backend.email_verified_claim == "xms_edov"
         with connect("postgres", "fixture-master", "mcp_state") as c:
             c.execute("GRANT UPDATE ON audit_log TO mcp_state")
             c.commit()

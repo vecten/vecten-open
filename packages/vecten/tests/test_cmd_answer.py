@@ -145,10 +145,12 @@ def test_mcp_keys_write_vecten_toml(invoke, tmp_path, monkeypatch):
     monkeypatch.chdir(root)
     assert invoke("answer", "mcp.auth", "password").exit_code == 0
     assert invoke("answer", "mcp.oidc_issuer", "https://login.example.com").exit_code == 0
+    assert invoke("answer", "mcp.oidc_email_verified_claim", "xms_edov").exit_code == 0
     assert invoke("answer", "mcp.admins", "jane@acme.com, ola@acme.com").exit_code == 0
     assert invoke("answer", "alert_webhook.prod", "no").exit_code == 0
     cfg = load_config(root)
     assert cfg.mcp.auth == "password" and cfg.mcp.oidc_issuer == "https://login.example.com"
+    assert cfg.mcp.oidc_email_verified_claim == "xms_edov"
     assert cfg.mcp.admins == ["jane@acme.com", "ola@acme.com"]
     assert cfg.environments["prod"].alert_webhook_asked is True
 
@@ -159,6 +161,8 @@ def test_mcp_keys_refused_outside_a_project_and_validated(invoke, tmp_path, monk
     monkeypatch.chdir(root)
     assert invoke("answer", "mcp.auth", "ldap").exit_code == 2
     assert invoke("answer", "mcp.oidc_issuer", "http://insecure").exit_code == 2
+    assert invoke("answer", "mcp.oidc_email_verified_claim", "phone_number_verified").exit_code == 2
+    assert load_config(root).mcp.oidc_email_verified_claim == "email_verified"
     assert invoke("answer", "mcp.admins", "not-an-email").exit_code == 2
     assert invoke("answer", "alert_webhook.prod", "maybe").exit_code == 2
 

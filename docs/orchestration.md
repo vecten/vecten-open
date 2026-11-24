@@ -159,6 +159,12 @@ add that name to the top-level `secrets` list, then run
 Enter the value at the prompt before shipping. The client must support HTTP Basic client authentication
 at the token endpoint.
 
+Airflow uses the same `[mcp] oidc_email_verified_claim` as the MCP. For Microsoft Entra,
+configure the Airflow client to include `email` and `xms_edov` in its ID tokens. Airflow
+checks the current email against the administrator list at every sign-in, so the directory
+must keep each listed address under the intended administrator's control.
+[Single-tenant Entra setup](mcp-identity.md#microsoft-entra-id-workforce-sign-in-for-the-mcp)
+
 After the next ship, open Airflow and sign in with the provider. Airflow grants administrator
 access to users whose verified email is in `[mcp] admins`. Removing an email takes effect
 when you ship the updated configuration. Clicking **Log out** ends the Airflow session and immediately

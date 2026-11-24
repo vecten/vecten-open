@@ -247,7 +247,11 @@ def test_verified_sign_in_hook_owns_only_its_declared_human_memberships():
 def test_unprovisioned_sign_in_skips_membership_hooks(first_admin):
     from vecten_mcp.auth.service import OAuthService
 
-    backend = oidc_fixture({})
+    backend = oidc_fixture(
+        {"email": "Jane@Example.COM"},
+        verification={"xms_edov": True},
+        email_verified_claim="xms_edov",
+    )
     email = "jane@example.com"
     if not first_admin:
         backend.state.invite(email, "Jane", "jane")
@@ -267,6 +271,11 @@ def test_unprovisioned_sign_in_skips_membership_hooks(first_admin):
     backend.last_nonce = started["nonce"]
     identity, _ = backend.callback(started["state"], "code")
     principal = oauth.login_identity(identity)
+    assert (principal["email"], principal["issuer"], principal["subject"]) == (
+        email,
+        identity.issuer,
+        identity.subject,
+    )
     assert not principal["provisioned"]
     assert principal["admin"] == first_admin
 

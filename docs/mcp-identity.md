@@ -166,8 +166,12 @@ Vecten invitation or administrator account to the wrong person.
    oidc_email_verified_claim = "xms_edov"
    ```
 
-The built-in MCP login accepts only the JSON boolean `true` in the selected claim. Other
-providers use `email_verified` by default. Airflow has its own [sign-in configuration](orchestration.md).
+You can also set the claim from the CLI with
+`vecten answer mcp.oidc_email_verified_claim xms_edov`. The supported names are
+`email_verified` (the default) and `xms_edov`. Both the MCP and Airflow require the
+JSON boolean `true` in the selected claim. To enable Airflow sign-in, also register
+its callback and configure its client secret as described in the
+[Airflow sign-in guide](orchestration.md#airflow-in-a-deployed-environment).
 
 ### Browser cookies
 

@@ -4,7 +4,8 @@
 
 The built-in OIDC backend SHALL require the configured top-level ID token claim to equal
 the JSON boolean `true`. The `[mcp] oidc_email_verified_claim` setting SHALL default to
-`email_verified`. The server SHALL continue to validate the ID token and bind the user
+`email_verified`. Only `email_verified` and `xms_edov` SHALL be accepted in project configuration
+and by `vecten answer mcp.oidc_email_verified_claim`. The server SHALL continue to validate the ID token and bind the user
 by issuer and subject.
 
 #### Scenario: A single-tenant provider uses another claim
