@@ -579,7 +579,8 @@ def test_prod_runs_beside_the_convention_packages_grants_check(invoke, snowflake
     assert len(snowflake["runs"]) == 1
 
 
-def test_target_specific_osi_parses_without_a_warehouse(tmp_path):
+@pytest.mark.parametrize("with_metric", [False, True], ids=["dataset-only", "first-metric"])
+def test_target_specific_osi_parses_without_a_warehouse(tmp_path, with_metric):
     from vecten_platform.dbt.runner import run_dbt
 
     dbt_dir = tmp_path / "dbt"
@@ -618,6 +619,23 @@ def test_target_specific_osi_parses_without_a_warehouse(tmp_path):
         {"version": "0.1.1", "semantic_model": [{"name": "shop", "datasets": [dataset]}]}
     )
     path.write_text(original)
+    if with_metric:
+        metric = {
+            "name": "customer_count",
+            "expression": {
+                "dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(customers.customer_id)"}]
+            },
+        }
+        (osi / "metrics.json").write_text(
+            json.dumps(
+                {
+                    "version": "0.1.1",
+                    "semantic_model": [
+                        {"name": "shop_metrics", "datasets": [], "metrics": [metric]}
+                    ],
+                }
+            )
+        )
     args = ["parse", "--no-partial-parse", "--profiles-dir", "."]
     env = dbt_env.base_env(dbt_dir, {})
     failed = run_dbt(args, project_dir=dbt_dir, env=env)
@@ -625,5 +643,9 @@ def test_target_specific_osi_parses_without_a_warehouse(tmp_path):
     with dbt_env.target_osi(tmp_path, "shop", "SHOP_DEV") as overlay:
         result = run_dbt(args, project_dir=dbt_dir, env={**env, **overlay})
         assert result.returncode == 0, result.stdout + result.stderr
+        if with_metric:
+            manifest = json.loads((dbt_dir / "target/manifest.json").read_bytes())
+            assert any(m["name"] == "customer_count" for m in manifest["metrics"].values())
+            assert any(m["name"] == "customers" for m in manifest["semantic_models"].values())
     assert path.read_text() == original
     assert not Path(overlay["VECTEN_OSI_PATH"]).exists()
