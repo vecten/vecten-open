@@ -5,11 +5,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
-### Added
-
-- Extension settings support nested object schemas, array, string and numeric constraints, and
-  constant values ([#139](https://github.com/vecten/vecten-open/issues/139)).
-
 ## [0.1.1] - 2026-11-18
 
 ### Added
