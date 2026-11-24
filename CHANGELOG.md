@@ -7,6 +7,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Added
 
+- Extension MCP tools can publish a title, description and annotations such as a read-only hint to clients ([#52](https://github.com/vecten/vecten-open/issues/52)).
 - A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help. Resources can use `unit_cursor` and `finish_unit` to commit paid work one unit at a time ([#131](https://github.com/vecten/vecten-open/issues/131)).
 - Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
 - Extensions can package skills for data users. Members of the configured groups can download them from the MCP apps page ([#55](https://github.com/vecten/vecten-open/issues/55)).

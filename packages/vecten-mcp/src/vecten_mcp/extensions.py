@@ -2,11 +2,47 @@
 
 from dataclasses import dataclass, field
 
+from mcp.types import ToolAnnotations
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from vecten_shared.config import VectenConfig
 from vecten_shared.consumer_skills import skill_packages
 from vecten_shared.extensions import load_group, selected_entry_points
 from vecten_shared.names import group_name_problem
 from vecten_shared.output import ExitCode, Failure
+
+TOOL_KEYS = frozenset({"handler", "groups", "admin", "title", "description", "annotations"})
+# The SDK's model drops keys it does not know, so a misspelled hint would reach no client.
+ANNOTATION_KEYS = frozenset(f.alias or n for n, f in ToolAnnotations.model_fields.items())
+
+
+class ToolMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None, min_length=1)
+    annotations: ToolAnnotations | None = None
+
+
+def tool_metadata(name: str, tool: dict) -> ToolMetadata:
+    unknown = sorted(map(str, set(tool) - TOOL_KEYS))
+    annotations = tool.get("annotations")
+    if isinstance(annotations, dict):
+        unknown += [
+            f"annotations.{key}"
+            for key in sorted(map(str, annotations))
+            if key not in ANNOTATION_KEYS
+        ]
+    if unknown:
+        raise Failure(ExitCode.CONFIG, f"tool extension {name} has unknown {', '.join(unknown)}")
+    supplied = {key: tool[key] for key in ToolMetadata.model_fields if key in tool}
+    try:
+        return ToolMetadata.model_validate(supplied, strict=True)
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(map(str, error['loc']))} ({error['msg']})" for error in exc.errors()
+        )
+        raise Failure(ExitCode.CONFIG, f"tool extension {name} has invalid {problems}") from None
 
 
 @dataclass(frozen=True)
@@ -54,6 +90,7 @@ class McpExtensions:
                 raise Failure(
                     ExitCode.CONFIG, f"tool extension {name} needs a handler and group list"
                 )
+            tool_metadata(name, tool)
         for label, entries in zip(("auth", "provisioning", "audit_sinks"), groups[1:], strict=True):
             for name, hook in entries.items():
                 if not callable(hook):
