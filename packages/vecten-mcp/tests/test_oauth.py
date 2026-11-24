@@ -217,7 +217,8 @@ def test_http_flow_requires_cookie_csrf_and_consent(auth, metadata, monkeypatch)
         )
         assert "Approve" in consent.text and "<script>bad</script>" not in consent.text
         if metadata:
-            assert "clients.example, redirect to 127.0.0.1:9000" in consent.text
+            assert "<dt>Client host</dt><dd>clients.example</dd>" in consent.text
+            assert "<dt>Redirect host</dt><dd>127.0.0.1:9000</dd>" in consent.text
         redir = client.post(
             "/consent", data=dict(flow=flow, csrf=csrf, decision="approve"), follow_redirects=False
         )

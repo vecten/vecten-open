@@ -63,7 +63,13 @@ def auth_routes(service, gate=None):
         name = service.client(client_id)["client_name"]
         if client_id.startswith("https://"):
             redirect_host = urlsplit(pending["redirect_uri"]).netloc
-            name += f" ({urlsplit(client_id).hostname}, redirect to {redirect_host})"
+            return consent_page(
+                flow,
+                csrf,
+                name,
+                client_host=urlsplit(client_id).netloc,
+                redirect_host=redirect_host,
+            )
         return consent_page(flow, csrf, name)
 
     def loopback_origin(request):

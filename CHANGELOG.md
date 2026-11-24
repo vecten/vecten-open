@@ -13,6 +13,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - Project CI runs `vecten lock --check` to catch changed in-repo manifests, services, and apps ([#113](https://github.com/vecten/vecten-open/issues/113)).
 - Extension settings support nested object schemas, array, string and numeric constraints, and
   constant values ([#139](https://github.com/vecten/vecten-open/issues/139)).
+- OAuth accepts HTTPS client metadata documents for public clients using authorization code and PKCE ([#41](https://github.com/vecten/vecten-open/issues/41)).
 - Connector recording bounds extraction per object and supports redaction and a recording
   opt-out. Hand-written fixtures can be checked offline against declared objects
   ([#46](https://github.com/vecten/vecten-open/issues/46)).
@@ -79,7 +80,6 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   viewer attribution on its outbound MCP calls.
   ([#90](https://github.com/vecten/vecten-open/issues/90), [#118](https://github.com/vecten/vecten-open/issues/118))
 - The local Airflow stack reads its admin password file from tmpfs and removes the old on-disk copy during `up` or `down` ([#33](https://github.com/vecten/vecten-open/issues/33)).
-- OAuth accepts HTTPS client metadata documents for public clients using authorization code and PKCE ([#41](https://github.com/vecten/vecten-open/issues/41)).
 
 ## [0.1.1] - 2026-11-18
 

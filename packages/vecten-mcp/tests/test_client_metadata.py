@@ -121,3 +121,21 @@ def test_checked_ip_receives_one_bounded_request_with_original_tls_name(
         assert "authorization" not in req.headers and "cookie" not in req.headers
 
     asyncio.run(check())
+
+
+@pytest.mark.parametrize(
+    ("registered", "requested", "expected"),
+    [
+        ("http://127.0.0.1/cb", "http://127.0.0.1:53124/cb", True),
+        ("http://[::1]:8888/cb?x=1", "http://[::1]:53124/cb?x=1", True),
+        ("http://[::1]/cb", "http://127.0.0.1:53124/cb", False),
+        ("http://127.0.0.1/cb", "http://127.0.0.1:53124/other", False),
+        ("http://127.0.0.1/cb?x=1", "http://127.0.0.1:53124/cb?x=2", False),
+        ("https://127.0.0.1/cb", "https://127.0.0.1:53124/cb", False),
+        ("http://localhost/cb", "http://localhost:53124/cb", False),
+    ],
+)
+def test_metadata_redirect_port_exception(registered, requested, expected):
+    from vecten_mcp.auth.client_metadata import metadata_redirect_matches
+
+    assert metadata_redirect_matches(requested, [registered]) is expected

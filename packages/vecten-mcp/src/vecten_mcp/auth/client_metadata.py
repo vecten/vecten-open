@@ -37,6 +37,22 @@ def redirect_allowed(uri):
     )
 
 
+def metadata_redirect_matches(requested, registered):
+    if not redirect_allowed(requested):
+        return False
+    if requested in registered:
+        return True
+    # RFC 8252 allows the native app to choose its listener port at runtime.
+    loopback = re.compile(r"(http://(?:127\.0\.0\.1|\[::1\]))(?::[0-9]+)?([/?].*|)")
+    match = loopback.fullmatch(requested)
+    if match:
+        for uri in registered:
+            candidate = loopback.fullmatch(uri)
+            if candidate and candidate.groups() == match.groups():
+                return True
+    return False
+
+
 def _metadata_url(value):
     parts = urlsplit(value)
     if (

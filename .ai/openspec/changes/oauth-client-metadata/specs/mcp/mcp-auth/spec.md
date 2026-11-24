@@ -2,7 +2,17 @@
 
 ### Requirement: Public clients identified by HTTPS metadata documents
 
-The authorization server SHALL advertise client ID metadata document support and allow a public client to start an authorization code flow using its HTTPS document URL. It SHALL validate the document identity, name, redirect URIs and supported authentication method, check the requested redirect exactly and show the client and redirect hosts during consent. It SHALL constrain DNS, address selection, TLS, response size, cache lifetime and concurrent requests.
+The server SHALL advertise HTTPS client metadata document support, validate the document, constrain outbound requests and display the client and redirect hosts as separate labelled fields on consent.
+
+#### Scenario: Matching the redirect
+
+- **WHEN** the client requests a redirect
+- **THEN** it must match a registered URI exactly except for the port on HTTP loopback IP literals (127.0.0.1 or ::1)
+
+#### Scenario: Grants available to the client
+
+- **WHEN** a metadata client asks for a token
+- **THEN** the server issues refresh tokens only when its document lists `refresh_token` and refuses the device grant
 
 #### Scenario: Public client signs in
 

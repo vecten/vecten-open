@@ -64,10 +64,17 @@ def login_page(flow, csrf, *, oidc=False, error=None):
     return page("Sign in to Vecten", body, 400 if error else 200)
 
 
-def consent_page(flow, csrf, client):
+def consent_page(flow, csrf, client, *, client_host=None, redirect_host=None):
+    hosts = ""
+    if client_host is not None and redirect_host is not None:
+        hosts = (
+            f"<dl><dt>Client host</dt><dd>{escape(client_host)}</dd>"
+            f"<dt>Redirect host</dt><dd>{escape(redirect_host)}</dd></dl>"
+        )
     return page(
         "Allow this client?",
-        f"<p>{escape(client)} will act as you with your warehouse permissions.</p>"
+        f"<p><bdi>{escape(client)}</bdi> will act as you with your warehouse permissions.</p>"
+        f"{hosts}"
         '<form method="post" action="/consent">'
         f"{hidden('flow', flow)}{hidden('csrf', csrf)}"
         '<button name="decision" value="approve">Approve</button>'

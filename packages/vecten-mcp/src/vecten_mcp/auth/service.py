@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-from vecten_mcp.auth.client_metadata import redirect_allowed
+from vecten_mcp.auth.client_metadata import metadata_redirect_matches, redirect_allowed
 from vecten_mcp.auth.identity import challenge, digest
 from vecten_mcp.auth.limits import RateLimiter
 
@@ -109,7 +109,13 @@ class OAuthService:
         self, client_id, redirect_uri, code_challenge, method, resource, state, *, document=None
     ):
         client = document if document is not None else self.client(client_id)
-        if client.get("principal_id") or redirect_uri not in client["redirect_uris"]:
+        allowed = client["redirect_uris"]
+        matches = (
+            metadata_redirect_matches(redirect_uri, allowed)
+            if document is not None
+            else redirect_uri in allowed
+        )
+        if client.get("principal_id") or not matches:
             raise ValueError("invalid redirect URI or client")
         if method != "S256" or not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
             raise ValueError("PKCE S256 is required")
