@@ -823,6 +823,13 @@ def test_issuer_and_standalone_gate_serve_distinct_surfaces(gate):
             assert issuer.get("/gate/verify").status_code == 404
             assert http.get("/gate/authorize").status_code == 404
             assert http.get("/jwks").status_code == 404
+            logout = http.post("/gate/logout")
+            assert logout.status_code == 200
+            assert 'href="/_vecten/assets/favicon.png"' in logout.text
+            assert 'href="/_vecten/assets/vecten.css"' in logout.text
+            for app in (issuer, http):
+                icon = app.get("/_vecten/assets/favicon.png", follow_redirects=False)
+                assert icon.status_code == 200 and icon.headers["content-type"] == "image/png"
             assert (
                 http.get("/gate/verify", headers={"X-Vecten-Gate-Host": PORTAL}).status_code == 401
             )

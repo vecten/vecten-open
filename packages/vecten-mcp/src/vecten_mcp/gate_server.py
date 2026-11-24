@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from vecten_mcp.apps import AppScopes, read_bound_apps
+from vecten_mcp.assets import page_asset_route
 from vecten_mcp.auth.gate import GateService
 from vecten_mcp.auth.routes import auth_routes
 from vecten_mcp.http_limits import BodyLimit
@@ -58,7 +59,7 @@ def create_app(factory=configured_gate):
     async def health(request):
         return JSONResponse({"status": "ok"})
 
-    app = Starlette(routes=[Route("/health", health)], lifespan=lifespan)
+    app = Starlette(routes=[Route("/health", health), page_asset_route()], lifespan=lifespan)
     app.add_middleware(BodyLimit)
     return app
 

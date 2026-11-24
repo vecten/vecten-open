@@ -46,7 +46,8 @@ def client():
     oauth = OAuthService(state, keys, "https://mcp.example", PasswordBackend(state))
     calls = []
 
-    def echo(value):
+    def echo(value: str):
+        """Return the supplied value."""
         if value == "fail":
             raise ValueError("postgres://user:fixture-secret@warehouse/db")
         if value == "refused":
@@ -61,7 +62,16 @@ def client():
         return value
 
     extensions = McpExtensions(
-        {"echo": {"handler": echo, "groups": ["default"]}},
+        {
+            "echo": {"handler": echo, "groups": ["default"]},
+            "repeat": {
+                "handler": echo,
+                "groups": ["default"],
+                "title": "Repeat a value",
+                "description": "Repeat the input as text.",
+                "annotations": {"readOnlyHint": True, "openWorldHint": False},
+            },
+        },
         {},
         {},
         {},
@@ -113,14 +123,84 @@ def test_sdk_serves_authenticated_calls_and_current_groups(client):
     http, oauth, p, token, calls = client
     response = rpc(http, token, "tools/list")
     assert response.status_code == 200, response.text
-    assert [tool["name"] for tool in response.json()["result"]["tools"]] == ["echo"]
+    tools = {tool["name"]: tool for tool in response.json()["result"]["tools"]}
+    assert set(tools) == {"echo", "repeat"}
+    legacy = tools["echo"]
+    assert legacy["description"] == "Return the supplied value."
+    assert "annotations" not in legacy and "title" not in legacy
+    annotated = tools["repeat"]
+    assert annotated["title"] == "Repeat a value"
+    assert annotated["description"] == "Repeat the input as text."
+    assert annotated["annotations"] == {"readOnlyHint": True, "openWorldHint": False}
+    assert annotated["inputSchema"] == legacy["inputSchema"]
+    assert annotated["inputSchema"]["properties"]["value"]["type"] == "string"
     result = rpc(http, token, "tools/call", {"name": "echo", "arguments": {"value": "hello"}})
     assert result.status_code == 200 and calls == ["hello"], result.text
     with oauth.state.transaction() as conn:
         conn.execute(delete(memberships).where(memberships.c.principal_id == p["id"]))
     assert rpc(http, token, "tools/list").json()["result"]["tools"] == []
-    denied = rpc(http, token, "tools/call", {"name": "echo", "arguments": {"value": "denied"}})
-    assert denied.json()["result"]["isError"] and calls == ["hello"]
+    for name in ("echo", "repeat"):
+        denied = rpc(http, token, "tools/call", {"name": name, "arguments": {"value": "denied"}})
+        assert denied.json()["result"]["isError"] and calls == ["hello"]
+
+
+def _registry(tool, monkeypatch):
+    from vecten_mcp import extensions
+    from vecten_shared.config import VectenConfig
+
+    tools = {"repeat": {"handler": lambda value: value, "groups": ["default"], **tool}}
+    monkeypatch.setattr(
+        extensions, "load_group", lambda config, group: tools if group == "vecten.mcp.tools" else {}
+    )
+    monkeypatch.setattr(extensions, "selected_entry_points", lambda *args: [])
+    return extensions.McpExtensions.from_config(
+        VectenConfig.model_validate(
+            {"project": {"name": "fixture", "scaffold_version": "0.1.0"}, "users": 2}
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool", "problem"),
+    [
+        ({"anotations": {"readOnlyHint": True}}, r"unknown anotations$"),
+        ({"annotations": {"readonlyHint": True}}, r"unknown annotations\.readonlyHint$"),
+        ({"annotations": {"read_only_hint": True}}, r"unknown annotations\.read_only_hint$"),
+        ({"annotations": {"readOnlyHint": "true"}}, r"invalid annotations\.readOnlyHint \("),
+        ({"annotations": {"readOnlyHint": 1}}, r"invalid annotations\.readOnlyHint \("),
+        ({"annotations": ["readOnlyHint"]}, r"invalid annotations \("),
+        ({"title": ""}, r"invalid title \("),
+        ({"description": "", "title": 3}, r"invalid title \(.*\); description \("),
+    ],
+)
+def test_the_registry_refuses_malformed_tool_metadata(tool, problem, monkeypatch):
+    from vecten_shared.output import ExitCode, Failure
+
+    with pytest.raises(Failure, match=rf"tool extension repeat has {problem}") as caught:
+        _registry(tool, monkeypatch)
+    assert caught.value.code == ExitCode.CONFIG
+
+
+def test_the_registry_accepts_every_documented_hint(monkeypatch):
+    hints = {
+        "title": "Repeat",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    }
+    registry = _registry({"title": "Repeat a value", "annotations": hints}, monkeypatch)
+    assert registry.tools["repeat"]["annotations"] == hints
+
+
+def test_signed_out_browser_receives_the_favicon_directly(client):
+    http, *_ = client
+    for path in ("/favicon.ico", "/_vecten/assets/favicon.png", "/assets/favicon.png"):
+        icon = http.get(path, follow_redirects=False)
+        assert icon.status_code == 200
+        assert icon.headers["content-type"] == "image/png"
+        assert icon.headers["cache-control"] == "public, max-age=86400"
+        assert icon.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_auth_fails_before_tool_runs_and_sse_is_absent(client):
@@ -194,7 +274,7 @@ def test_official_sdk_client_lists_and_calls_over_http(client):
                 streamable_http_client("https://mcp.example/mcp", http_client=transport)
             ) as sdk:
                 result = await sdk.list_tools()
-                assert [tool.name for tool in result.tools] == ["echo"]
+                assert {tool.name for tool in result.tools} == {"echo", "repeat"}
                 await sdk.call_tool("echo", {"value": "official-client"})
 
     anyio.run(exercise)
