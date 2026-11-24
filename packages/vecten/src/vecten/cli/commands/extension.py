@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -81,6 +82,34 @@ def new(
         else:
             lines.append(f"register it with `vecten extension add ./{data['path']}`")
         return Result(data=data, message="\n".join(lines))
+
+    run_command(json_output, run)
+
+
+@extension.command("pack-skill")
+def pack_skill(
+    name: str,
+    output: Annotated[Path, typer.Option("--output", help="Write the skill ZIP to a new file.")],
+    json_output: bool = JsonFlag,
+) -> None:
+    """Package a data-user skill from an installed project extension."""
+    import os
+    from tempfile import NamedTemporaryFile
+
+    from vecten_shared.config import load_config
+    from vecten_shared.consumer_skills import skill_packages
+    from vecten_shared.output import ExitCode, Failure
+
+    def run(ctx: CliContext) -> Result:
+        archive = skill_packages(load_config(ctx.require_project()), [name])[name]
+        try:
+            with NamedTemporaryFile(dir=output.parent) as handle:
+                handle.write(archive)
+                handle.flush()
+                os.link(handle.name, output)
+        except OSError as exc:
+            raise Failure(ExitCode.REFUSED, f"cannot write {output}: {exc.strerror}") from exc
+        return Result(data={"skill": name, "path": str(output)}, message=f"wrote {output}")
 
     run_command(json_output, run)
 

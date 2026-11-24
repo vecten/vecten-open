@@ -50,6 +50,8 @@ def check_wheels(directory: Path) -> None:
                 archive.extractall(target)
         program = r"""
 import importlib.metadata as metadata
+import io
+import zipfile
 import tempfile
 from pathlib import Path
 from vecten_shared.config import VectenConfig, save_config
@@ -64,6 +66,7 @@ from vecten_mcp.app import create_app
 from vecten_shared.output import Failure
 config = VectenConfig.model_validate({
     "project": {"name": "wheel-check", "scaffold_version": "0.1.0"},
+    "consumer_skills": {"monthly-orders": {"groups": ["analyst"]}},
     "users": 2, "extensions": ["vecten-test-extension==1.0"], "mcp": {"auth": "fixture"},
 })
 points = metadata.distribution("vecten-test-extension").entry_points
@@ -79,6 +82,12 @@ with tempfile.TemporaryDirectory() as project:
     assert "fixture_dataset" in merge(documents).datasets
     assert not validate_osi(root / "osi", warehouse_kind="postgres").errors
     registry = create_app(root).state.extensions
+    download = registry.consumer_skills["monthly-orders"]
+    assert download.groups == {"analyst"}
+    with zipfile.ZipFile(io.BytesIO(download.archive)) as skill_zip:
+        assert skill_zip.namelist() == [
+            "monthly-orders/SKILL.md", "monthly-orders/references/orders.md",
+        ]
     assert registry.tools_for({"analyst"})["fixture"]() == "fixture"
     assert registry.identity_backend("fixture")({})["subject"] == "fixture"
     assert registry.provision("fixture", "alice") == "alice"
@@ -95,7 +104,7 @@ with tempfile.TemporaryDirectory() as project:
         assert "saml" in exc.message and "not installed" in exc.message
     else:
         raise AssertionError("missing SAML extension accepted")
-print("five wheels checked; all ten extension groups reached their owning layers")
+print("five wheels checked; extension groups reached their owning layers")
 """
         subprocess.run(
             [sys.executable, "-c", program],

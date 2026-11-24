@@ -20,6 +20,7 @@ GROUPS = (
     "vecten.mcp.provisioning",
     "vecten.mcp.audit_sinks",
     "vecten.skills",
+    "vecten.consumer_skills",
     "vecten.services",
     "vecten.apps",
     "vecten.manifest",

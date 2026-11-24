@@ -564,6 +564,7 @@ class VectenConfig(Strict):
     services: dict[str, dict[str, ServiceBinding]] = Field(default_factory=dict)
     # `[apps.<extension>.<app>]`: who may open each declared analytics app, and where it runs.
     apps: dict[str, dict[str, AppBinding]] = Field(default_factory=dict)
+    consumer_skills: dict[str, AccessDecl] = Field(default_factory=dict)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -845,7 +846,15 @@ def save_config(project_root: Path, config: VectenConfig) -> None:
     if problem:
         raise Failure(ExitCode.REFUSED, problem)
     data = config.model_dump(mode="json", exclude_none=True)
-    for optional in ("dependencies", "secrets", "settings", "services", "apps", "areas"):
+    for optional in (
+        "dependencies",
+        "secrets",
+        "settings",
+        "services",
+        "apps",
+        "consumer_skills",
+        "areas",
+    ):
         if not data.get(optional):
             data.pop(optional, None)
     path = project_root / CONFIG_FILE

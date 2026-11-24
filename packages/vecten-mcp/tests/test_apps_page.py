@@ -333,3 +333,32 @@ def test_public_http_host_starts_panel_login_with_a_secure_cookie(page, base, fo
     assert set(response.cookies) == {name}
     cookie = response.cookies.jar
     assert all(c.secure and c.path == "/" and not c.domain_specified for c in cookie)
+
+
+def test_consumer_skill_visibility_and_download_follow_current_membership(page):
+    from vecten_mcp.extensions import SkillDownload
+
+    page.runtime.extensions.consumer_skills = {
+        "monthly-orders": SkillDownload(frozenset({"sales"}), b"sales package"),
+        "payroll": SkillDownload(frozenset({"finance"}), b"finance package"),
+    }
+    url = "/apps/skills/monthly-orders.zip"
+    assert page.http.get(url, follow_redirects=False).status_code == 303
+    sign_in(page.http)
+    listing = page.http.get("/apps")
+    assert url in listing.text and "payroll" not in listing.text
+    download = page.http.get(url)
+    assert (
+        download.content == b"sales package"
+        and download.headers["content-type"] == "application/zip"
+    )
+    assert "no-store" in download.headers["cache-control"]
+    assert download.headers["content-disposition"] == 'attachment; filename="monthly-orders.zip"'
+    assert page.http.get("/apps/skills/payroll.zip").status_code == 404
+    page.runtime.access.membership("sales", page.analyst["id"], grant=False)
+    assert url not in page.http.get("/apps").text
+    assert (
+        page.http.get(url).status_code
+        == page.http.get("/apps/skills/unknown.zip").status_code
+        == 404
+    )

@@ -244,6 +244,7 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.mcp.auth` | Callable identity backend. Selected by `auth = "company_login"` in the `[mcp]` section of `vecten.toml`; the registry refuses a missing backend at startup. Extensions cannot replace the reserved `password`/`oidc` names. |
 | `vecten.mcp.provisioning` | Callable provisioning hook. The registry invokes the named hook with the owning service's arguments. |
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
+| `vecten.consumer_skills` | A skill directory and an explicit list of supporting files. A project grants download access by group. See [skills for data users](#skills-for-data-users). |
 | `vecten.services` | A dictionary, or zero-argument factory returning one, declaring one long-running process and its HTTP routes. The entry name is the service's name. `vecten lock` records it; it runs once `vecten.toml` binds it (see [services](#services)). |
 | `vecten.apps` | A dictionary, or zero-argument factory returning one, declaring one analytics app: `title`, `description`, `kind` (`container` or `snowflake`), the Ossie `datasets` it reads and suggested `groups`; a `container` app gives `runtime = "streamlit"` with `entry`, or `command` and `port`. `vecten lock` records it; `extension add` binds it in `[apps.<extension>.<app>]`. See [analytics apps](analytics-apps.md). |
 | `vecten.manifest` | A dictionary, or zero-argument factory returning one, with `secrets` and `settings`: what the extension needs, not a part it contributes (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
@@ -635,3 +636,46 @@ shipped Python for prohibited licence-gating and telemetry symbols/imports. This
 scan is a regression guard; code review remains necessary for behavior it cannot recognize.
 
 Back to the [docs index](README.md).
+
+## Skills for data users
+
+An extension can give analysts a reusable set of instructions for their own assistant. For
+example, a finance analyst can download a monthly-orders skill that uses the analyst’s MCP
+connection to summarize completed orders. Downloading the instructions grants no warehouse
+permissions.
+
+In the extension’s `pyproject.toml`, declare the skill by name:
+
+```toml
+[project.entry-points."vecten.consumer_skills"]
+monthly-orders = "acme_reports.skills:monthly_orders"
+```
+
+In `acme_reports/skills.py`, export the directory containing `SKILL.md` and list each
+supporting file to include. Package those files in the extension wheel.
+
+```python
+from pathlib import Path
+
+monthly_orders = {
+    "directory": Path(__file__).parent / "monthly-orders",
+    "files": ["references/orders.md"],
+}
+```
+
+From a project that has the extension installed and listed in `vecten.toml`, run
+`vecten extension pack-skill monthly-orders --output monthly-orders.zip` to inspect the
+archive locally. The destination must be a new file. The ZIP contains
+`monthly-orders/SKILL.md` and the listed files under the same folder.
+
+To make the ZIP available to the finance group, add the following to the project’s
+`vecten.toml` and ship the project through its usual workflow:
+
+```toml
+[consumer_skills.monthly-orders]
+groups = ["finance"]
+```
+
+A member signs in at `https://mcp.<domain>/apps` and chooses **monthly-orders** under
+**Skills for your assistant**. The server checks current membership on each download.
+Removing a member stops future downloads. Copies already downloaded stay with their recipients.

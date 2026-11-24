@@ -3,8 +3,15 @@
 from dataclasses import dataclass, field
 
 from vecten_shared.config import VectenConfig
+from vecten_shared.consumer_skills import skill_packages
 from vecten_shared.extensions import load_group, selected_entry_points
 from vecten_shared.output import ExitCode, Failure
+
+
+@dataclass(frozen=True)
+class SkillDownload:
+    groups: frozenset[str]
+    archive: bytes
 
 
 @dataclass
@@ -14,6 +21,7 @@ class McpExtensions:
     provisioning: dict
     audit_sinks: dict
     tool_plugins: dict = field(default_factory=dict)
+    consumer_skills: dict[str, SkillDownload] = field(default_factory=dict)
 
     @classmethod
     def from_config(cls, config: VectenConfig) -> McpExtensions:
@@ -22,6 +30,12 @@ class McpExtensions:
             for name in ("tools", "auth", "provisioning", "audit_sinks")
         ]
         instance = cls(*groups)
+        if config.consumer_skills:
+            archives = skill_packages(config, config.consumer_skills)
+            instance.consumer_skills = {
+                name: SkillDownload(frozenset(binding.groups), archives[name])
+                for name, binding in config.consumer_skills.items()
+            }
         instance.tool_plugins = {
             point.name: point.dist.name
             for point in selected_entry_points(config, "vecten.mcp.tools")
