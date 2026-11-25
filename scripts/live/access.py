@@ -312,10 +312,10 @@ def sandbox_profile(
 def _own_sockets(directory: Path) -> str:
     """Rules opening the sockets a run binds directly in its own fresh directory.
 
-    A daemon's socket could otherwise be moved in, alone or in its directory, or the
-    directory swapped for the daemon's: no socket elsewhere can be unlinked (a move unlinks
-    its source), one a level down is not opened, and neither the directory nor one above it
-    can be moved.
+    A daemon's socket could otherwise be linked or moved in, alone or in its directory, or
+    the directory swapped for the daemon's: nothing is hard-linked in, no socket elsewhere can
+    be unlinked (a move unlinks its source), one a level down is not opened, and neither the
+    directory nor one above it can be moved.
     """
     entries = " ".join(
         f'(regex #"^{"".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in v)}/[^/]+$")'
@@ -327,6 +327,7 @@ def _own_sockets(directory: Path) -> str:
     )
     return (
         f"(allow network-outbound {entries})"
+        f"(deny file-link {entries})"
         "(deny file-write-unlink (vnode-type SOCKET))"
         f"(allow file-write-unlink {entries})"
         f"(deny file-write-unlink {fixed})"

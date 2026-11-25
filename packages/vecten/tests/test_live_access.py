@@ -934,6 +934,7 @@ def test_the_profile_opens_only_sockets_made_directly_in_the_given_directory():
     entry = r'(regex #"^/private/tmp/example-run/[^/]+$")'
     assert profile == DENIED_TEXT + (
         f"(allow network-outbound {entry})"
+        f"(deny file-link {entry})"
         "(deny file-write-unlink (vnode-type SOCKET))"
         f"(allow file-write-unlink {entry})"
         '(deny file-write-unlink (literal "/private/tmp/example-run")'
@@ -1050,12 +1051,12 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
         shutil.rmtree(sockets)
 
 
-# Moves the named paths in turn, then connects to the last argument.
+# Renames (or hard-links) the named paths in turn, then connects to the last argument.
 MOVE_THEN_CONNECT = (
     "import os, socket, sys\n"
-    "*moves, target = sys.argv[1:]\n"
+    "how, *moves, target = sys.argv[1:]\n"
     "for source, destination in zip(moves[::2], moves[1::2]):\n"
-    "    os.rename(source, destination)\n"
+    "    getattr(os, how)(source, destination)\n"
     "socket.socket(socket.AF_UNIX).connect(target)\n"
 )
 BIND_CONNECT_REMOVE = (
@@ -1073,6 +1074,7 @@ BIND_CONNECT_REMOVE = (
     "route",
     [
         "the socket into the run's directory",
+        "a hard link to the socket in the run's directory",
         "the socket's directory into the run's directory",
         "the run's directory away, the socket's directory in its place",
         "the directory above the run's away, the socket's directory in its place",
@@ -1087,19 +1089,23 @@ def test_no_foreign_socket_can_be_moved_where_the_run_may_connect(tmp_path, rout
     agent = listening(agent_dir / "agent.sock")
     moves = {
         "the socket into the run's directory": (
-            [agent_dir / "agent.sock", run / "agent.sock"],
+            ["rename", agent_dir / "agent.sock", run / "agent.sock"],
+            run / "agent.sock",
+        ),
+        "a hard link to the socket in the run's directory": (
+            ["link", agent_dir / "agent.sock", run / "agent.sock"],
             run / "agent.sock",
         ),
         "the socket's directory into the run's directory": (
-            [agent_dir, run / "agent"],
+            ["rename", agent_dir, run / "agent"],
             run / "agent/agent.sock",
         ),
         "the run's directory away, the socket's directory in its place": (
-            [run, base / "old", agent_dir, run],
+            ["rename", run, base / "old", agent_dir, run],
             run / "agent.sock",
         ),
         "the directory above the run's away, the socket's directory in its place": (
-            [run.parent, base / "old", agent_dir, run.parent],
+            ["rename", run.parent, base / "old", agent_dir, run.parent],
             run.parent / "agent.sock",
         ),
     }
