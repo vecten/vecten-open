@@ -95,6 +95,7 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
   viewer attribution on its outbound MCP calls.
   ([#90](https://github.com/vecten/vecten-open/issues/90), [#118](https://github.com/vecten/vecten-open/issues/118))
 - The local Airflow stack reads its admin password file from tmpfs and removes the old on-disk copy during `up` or `down` ([#33](https://github.com/vecten/vecten-open/issues/33)).
+- The CLI requires filelock 4.2.1 or later and the lock pins 4.2.12, which fix the lock-file advisories reported against 3.32.7, among them GHSA-69hj-f68j-2879 for `UnixFileLock`, the lock behind the CLI's token cache.
 
 ## [0.1.1] - 2026-11-18
 
