@@ -208,7 +208,7 @@ def test_package_metadata_identifies_the_project():
         assert p["authors"] == [{"name": "Vecten"}], name
         assert p["keywords"] and all(" " not in k or k.islower() for k in p["keywords"]), name
         assert name != "vecten" or "cli" in p["keywords"]
-        assert "Development Status :: 3 - Alpha" in p["classifiers"], name
+        assert "Development Status :: 4 - Beta" in p["classifiers"], name
         assert "Programming Language :: Python :: 3.14" in p["classifiers"], name
         for label in ("Homepage", "Source", "Documentation", "Issues", "Changelog", "Security"):
             assert p["urls"][label].startswith(PUBLIC_URL), (name, label)

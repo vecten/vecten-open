@@ -9,7 +9,7 @@ readme = "README.md"
 authors = [{ name = "Vecten" }]
 keywords = ["vecten", "mcp", "model context protocol", "semantic layer", "warehouse"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3.14",
     "Operating System :: POSIX",
     "Topic :: Database",
