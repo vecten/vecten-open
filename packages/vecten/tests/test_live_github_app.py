@@ -77,7 +77,8 @@ def test_jwt_verifies_against_the_public_key(tmp_path):
     assert openssl_verifies(key.public, f"{header}.{payload}".encode(), b64d(signature))
 
 
-def test_a_cached_token_is_reused_until_five_minutes_before_expiry(tmp_path):
+def test_every_token_handed_out_has_fifty_five_minutes_left(tmp_path):
+    # A deploy or ship follows its workflow with the token it started with, for many minutes.
     cfg = config(tmp_path)
     cache = tmp_path / "cache"
     calls = []
@@ -88,10 +89,10 @@ def test_a_cached_token_is_reused_until_five_minutes_before_expiry(tmp_path):
 
     m = mod()
     expires = m.parse_time(EXPIRES_AT)
-    assert m.installation_token(cfg, cache, expires - 3000, fetch) == "ghs_1"
-    assert m.installation_token(cfg, cache, expires - 301, fetch) == "ghs_1"
+    assert m.installation_token(cfg, cache, expires - 3600, fetch) == "ghs_1"
+    assert m.installation_token(cfg, cache, expires - 3301, fetch) == "ghs_1"
     assert calls == [URL]
-    assert m.installation_token(cfg, cache, expires - 299, fetch) == "ghs_2"
+    assert m.installation_token(cfg, cache, expires - 3299, fetch) == "ghs_2"
     assert len(calls) == 2
 
 

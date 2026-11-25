@@ -9,9 +9,12 @@ import os
 import pwd
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import time
 import tomllib
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
@@ -116,6 +119,9 @@ CLAUDE_CONTROL = (
 # Any unix socket may belong to an agent or daemon that acts with the maintainer's access
 # (Docker, ssh-agent, gpg-agent), so every one is denied and only the resolver's is open.
 ALLOWED_SOCKETS = ("/private/var/run/mDNSResponder",)
+# A run's TMPDIR outlives it, since the wrapper becomes the command; the next run clears any
+# older than a day.
+TMP_KEPT = 86400
 # The commands' own HOME holds tool caches and binaries, not the credentials the home was given.
 NOT_SECRET = (
     ("allow.toml",), ("google", "hostnames.txt"), ("google", "oidc-client-id"),
@@ -263,6 +269,7 @@ def sandbox_profile(
     live_home: Path,
     tools: Path,
     interpreter: Iterable[Path],
+    sockets: Path | None = None,
 ) -> str:
     """A Seatbelt profile that keeps tools, and slips, off the maintainer's credentials.
 
@@ -286,7 +293,10 @@ def sandbox_profile(
     unlinks = " ".join(f'(literal "{path}")' for path in ancestors)
     # The later rule wins, so each allow follows the deny it narrows and no file rule follows the
     # last two denies: the steering files, the tools copy and its interpreter stay unwritable.
-    sockets = "".join(f'(allow network-outbound (literal "{path}"))' for path in ALLOWED_SOCKETS)
+    opened = "".join(f'(allow network-outbound (literal "{path}"))' for path in ALLOWED_SOCKETS)
+    if sockets is not None:
+        # Only the run's own fresh directory: no agent or daemon has a socket there.
+        opened += f"(allow network-outbound {_filters([('subpath', sockets)])})"
     return (
         "(version 1)(allow default)"
         f"(deny file-read* {env_files})"
@@ -296,17 +306,33 @@ def sandbox_profile(
         f"(allow file-write* {_filters(('subpath', live_home / p) for p in LIVE_WRITABLE)})"
         f"(deny file-write* {_filters(unwritable)} {claude})"
         f"(deny file-write-unlink {unlinks})"
-        f"(deny network-outbound (remote unix-socket)){sockets}"
+        f"(deny network-outbound (remote unix-socket)){opened}"
     )
 
 
-def _os_sandbox() -> list[str]:
+def _os_sandbox(sockets: Path | None = None) -> list[str]:
     """The argv prefix that runs a command under the deny profile; empty off macOS."""
     if PLATFORM != "darwin":
         return []
     interpreter = [Path(prefix).resolve() for prefix in INTERPRETER]
-    profile = sandbox_profile(real_home(), credential_home(), tools_root(), interpreter)
+    profile = sandbox_profile(real_home(), credential_home(), tools_root(), interpreter, sockets)
     return [SANDBOX_EXEC, "-p", profile]
+
+
+def _private_tmp(home: Path) -> Path:
+    """A new directory only this run uses, for TMPDIR: tools that talk to their own helpers
+    over a unix socket (Terraform and its providers) make it there."""
+    parent = home / "home" / "tmp"
+    _own_directory(home / "home")
+    _own_directory(parent)
+    stale = time.time() - TMP_KEPT
+    for entry in parent.iterdir():
+        if os.lstat(entry).st_mtime < stale:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+    return Path(tempfile.mkdtemp(dir=parent))
 
 
 def plain_env() -> dict[str, str]:
@@ -554,12 +580,14 @@ def _run(
         raise Refused(f"--cwd {cwd} is not a directory")
     source = _stdin_file(home, stdin_file) if stdin_file is not None else None
     secrets = secret_values(home)
-    sandbox = _os_sandbox()
+    private = _private_tmp(home)
+    sandbox = _os_sandbox(private)
     env, found, reasons = _examine(home, allow, IDENTITIES, github, secrets, sandbox)
     problems = violations(allow, found, github)
     if problems:
         lines = [*problems, *(f"{name}: {reason}" for name, reason in reasons.items())]
         raise Refused(redact("refused:\n  " + "\n  ".join(lines), secrets))
+    env["TMPDIR"] = str(private)
     command = [*sandbox, *command]
     try:
         if source is not None:

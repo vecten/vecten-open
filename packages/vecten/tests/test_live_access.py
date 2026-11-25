@@ -885,11 +885,53 @@ def test_on_macos_probes_and_command_run_inside_the_os_sandbox(tmp_path):
         tmp_path, "run", "--", "vecten", "status", PLATFORM="darwin", SANDBOX_EXEC=str(fake)
     )
     assert result.returncode == 7, result.stderr
-    profile = mod().sandbox_profile(tmp_path / "real", tmp_path / "home", REPO, interpreter())
+    private = Path(environments(record)[-1]["TMPDIR"])
+    profile = mod().sandbox_profile(
+        tmp_path / "real", tmp_path / "home", REPO, interpreter(), sockets=private
+    )
     calls = invocations(record)
     assert all(call[:2] == ["-p", profile] for call in calls)
     assert [call[2] for call in calls] == ["aws", "scw", "snow", "gh", "vecten"]
     assert calls[-1][2:] == ["vecten", "status"]
+
+
+def test_each_run_gets_a_fresh_private_temporary_directory(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path, vecten="exit 0")
+    fake, record = recording_sandbox(tmp_path)
+    for _ in range(2):
+        result = access(tmp_path, "run", "--", "vecten", PLATFORM="darwin", SANDBOX_EXEC=str(fake))
+        assert result.returncode == 0, result.stderr
+    calls = zip(environments(record), invocations(record), strict=True)
+    commands = [env for env, call in calls if call[2] == "vecten"]
+    first, second = (Path(env["TMPDIR"]) for env in commands)
+    assert first != second
+    for private in (first, second):
+        assert private.parent == tmp_path / "home/home/tmp"
+        assert stat.S_IMODE(private.stat().st_mode) == 0o700
+
+
+def test_a_temporary_directory_older_than_a_day_is_removed(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path, vecten="exit 0")
+    parent = tmp_path / "home/home/tmp"
+    old, recent = parent / "old", parent / "recent"
+    (old / "left").mkdir(parents=True)
+    recent.mkdir()
+    day_ago = old.stat().st_mtime - 86400 - 60
+    os.utime(old, (day_ago, day_ago))
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 0, result.stderr
+    assert not old.exists()
+    assert recent.is_dir()
+
+
+def test_the_profile_opens_unix_sockets_beneath_the_given_directory_only():
+    private = Path("/private/tmp/example-run")
+    profile = mod().sandbox_profile(
+        EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_TOOLS, EXAMPLE_PYTHON, sockets=private
+    )
+    assert profile == DENIED_TEXT + f'(allow network-outbound (subpath "{private}"))'
 
 
 def test_a_sandbox_that_cannot_start_is_a_refusal(tmp_path):
@@ -955,8 +997,10 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
     # A unix socket path must stay under about 100 bytes, so the sockets live in a short dir.
     sockets = Path(tempfile.mkdtemp(dir="/tmp"))
     server = listening(sockets / "agent.sock")
+    (sockets / "run").mkdir()
+    plugin = listening(sockets / "run/plugin.sock")
     try:
-        profile = mod().sandbox_profile(real, live, tools, [python])
+        profile = mod().sandbox_profile(real, live, tools, [python], sockets=sockets / "run")
 
         def sandboxed(*argv):
             command = ["/usr/bin/sandbox-exec", "-p", profile, *argv]
@@ -991,8 +1035,11 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
         ]
         assert subprocess.run(connect, capture_output=True).returncode == 0
         assert sandboxed(*connect) != 0
+        # Terraform reaches each provider plugin over a socket in the run's own TMPDIR.
+        assert sandboxed(*connect[:-1], str(sockets / "run/plugin.sock")) == 0
     finally:
         server.close()
+        plugin.close()
         shutil.rmtree(sockets)
 
 
