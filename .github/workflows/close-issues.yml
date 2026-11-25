@@ -1,0 +1,32 @@
+name: close-issues
+# GitHub closes the issues a pull request names only when it merges into the default branch, and
+# work reaches main only with a release. A push runs the workflow file of the branch it lands
+# on, so a release branch closes its own issues without the file being on main first, and a
+# merged pull request from a fork gets the same token as any other.
+on:
+  push:
+    branches: ['release/**']
+permissions: {}
+jobs:
+  close-issues:
+    # Deleting a release branch after its release is a push too, with nothing to close.
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: close the issues the merged pull requests declare they fix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: >-
+          uv run --locked --script scripts/close_issues.py
+          "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$BEFORE" "$AFTER"

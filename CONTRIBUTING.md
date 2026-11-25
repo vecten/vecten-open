@@ -112,6 +112,8 @@ Every merge also needs CI green, and no one bypasses that, the maintainers inclu
 release branch is open at a time. It opens as the next
 patch version; when a breaking change is accepted, a maintainer renames it to the next minor
 (`release/0.2.0`), which GitHub carries over to the open pull requests.
+GitHub deletes a pull request's branch when it merges, a release branch included once it
+reaches `main`; restore it from the pull request page if work continues on it.
 
 A hotfix is for a vulnerability handled under [SECURITY.md](SECURITY.md) and nothing else: an
 urgent bug that is not a vulnerability goes to the release branch. A maintainer opens the
@@ -123,6 +125,9 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 (`fix(mcp): …`, `docs: …`). The template asks what changed, why, which tests ran and whether a
 spec or a doc moved. A change a user would notice adds a line under `[Unreleased]` in the
 [changelog](CHANGELOG.md), in the same pull request.
+Name the issue a pull request fixes with a closing keyword at the start of a line or sentence
+(`Fixes #123.`); the issue closes when the pull request merges into the release branch, not
+when the release reaches `main`. A keyword in inline code, a code block or a quote closes nothing.
 
 ## Releasing
 
