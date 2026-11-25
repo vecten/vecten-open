@@ -26,11 +26,13 @@ BASE = "https://airflow.example"
 
 
 @pytest.fixture
-def flow(monkeypatch, tmp_path):
+def flow(monkeypatch, tmp_path, request):
+    claim_setting = getattr(request, "param", None)
+    selection = f'oidc_email_verified_claim = "{claim_setting}"\n' if claim_setting else ""
     (tmp_path / "vecten.toml").write_text(
         'users = 3\n[project]\nname = "acme"\nscaffold_version = "0.1.1"\n'
         f'[mcp]\nauth = "oidc"\noidc_issuer = "{ISSUER}"\noidc_client_id = "client"\n'
-        'admins = ["owner@example.org"]\n[airflow]\nauth = "oidc"\n'
+        f'{selection}admins = ["owner@example.org"]\n[airflow]\nauth = "oidc"\n'
     )
     monkeypatch.setenv("VECTEN_PROJECT_ROOT", str(tmp_path))
     monkeypatch.setenv("AIRFLOW__API__BASE_URL", BASE)
@@ -38,7 +40,7 @@ def flow(monkeypatch, tmp_path):
     monkeypatch.setenv("AIRFLOW__API_AUTH__JWT_SECRET", "test-airflow-signing-key-" * 4)
     key = RSAKey.generate_key(2048, parameters={"kid": "mock-issuer"})
     public = key.as_dict(private=False)
-    provider = {"claims": {}, "signed_by": key, "metadata": {}}
+    provider = {"claims": {"email_verified": True}, "signed_by": key, "metadata": {}}
 
     def respond(request):
         if request.url.path == "/.well-known/openid-configuration":
@@ -67,7 +69,6 @@ def flow(monkeypatch, tmp_path):
             "iss": ISSUER,
             "sub": "subject",
             "email": "Owner@Example.org",
-            "email_verified": True,
             "aud": "client",
             "nonce": provider["nonce"],
             "iat": now,
@@ -125,7 +126,7 @@ def start(browser, provider):
 )
 def test_browser_sign_in(flow, claims, status):
     browser, provider, manager = flow
-    provider["claims"] = claims
+    provider["claims"].update(claims)
     response = browser.get(
         "/auth/oidc/callback", params=start(browser, provider), follow_redirects=False
     )
@@ -146,6 +147,29 @@ def test_browser_sign_in(flow, claims, status):
             if line.startswith(COOKIE_NAME_JWT_TOKEN + "=")
         )
         assert "Secure" in cookie and "HttpOnly" in cookie
+
+
+@pytest.mark.parametrize(
+    "flow,claims,status",
+    [
+        (None, {"xms_edov": True}, 403),
+        ("xms_edov", {"xms_edov": True}, 303),
+        ("xms_edov", {"email_verified": True}, 403),
+        ("xms_edov", {"xms_edov": False, "email_verified": True}, 403),
+        ("xms_edov", {"xms_edov": "true"}, 403),
+        ("xms_edov", {"xms_edov": 1}, 403),
+        ("xms_edov", {"xms_edov": True, "email": "other@example.org"}, 403),
+    ],
+    indirect=["flow"],
+)
+def test_entra_administrator_sign_in(flow, claims, status):
+    browser, provider, _ = flow
+    provider["claims"] = claims
+    response = browser.get(
+        "/auth/oidc/callback", params=start(browser, provider), follow_redirects=False
+    )
+    assert response.status_code == status
+    assert (COOKIE_NAME_JWT_TOKEN in response.cookies) == (status == 303)
 
 
 def test_unsigned_identity_or_unknown_state_cannot_create_session(flow):

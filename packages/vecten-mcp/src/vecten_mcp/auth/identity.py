@@ -166,11 +166,13 @@ class OIDCBackend:
         redirect_uri,
         *,
         client_secret=None,
+        email_verified_claim="email_verified",
         client=None,
         clock=time.time,
     ):
         self.state, self.issuer, self.client_id = state, issuer, client_id
         self.redirect_uri, self.client_secret = redirect_uri, client_secret
+        self.email_verified_claim = email_verified_claim
         self.client = client or httpx.Client(timeout=15, follow_redirects=False)
         self.clock = clock
 
@@ -262,7 +264,7 @@ class OIDCBackend:
                 claims["exp"] <= self.clock()
                 or claims["iat"] > self.clock() + 30
                 or claims["nonce"] != pending["nonce"]
-                or claims.get("email_verified") is not True
+                or claims.get(self.email_verified_claim) is not True
                 or claims.get("azp", self.client_id) != self.client_id
             ):
                 raise ValueError("OIDC identity is unverified, expired or misbound")

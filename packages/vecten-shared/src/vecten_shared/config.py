@@ -196,6 +196,7 @@ def promotion_scaffold_problem(config: VectenConfig) -> str | None:
 
 
 McpAuth = Literal["oidc", "password"]
+OidcEmailVerifiedClaim = Literal["email_verified", "xms_edov"]
 
 
 def allow_networks(value: list[str]) -> list[str]:
@@ -208,6 +209,7 @@ class McpSection(Strict):
     auth: str = Field(default="oidc", pattern=r"^[a-z][a-z0-9_-]*$")
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
+    oidc_email_verified_claim: OidcEmailVerifiedClaim = "email_verified"
     admin_panel: Literal["public", "off"] = "public"
     admin_allow: list[str] = Field(default_factory=list)
 
