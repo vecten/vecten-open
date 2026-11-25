@@ -1,6 +1,6 @@
 [project]
 name = "vecten-platform"
-version = "0.1.1"
+version = "0.1.2rc2"
 description = "Airflow, dlt and dbt runtime for Vecten Open"
 requires-python = ">=3.14"
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Database",
 ]
 dependencies = [
-    "vecten-shared==0.1.1",
+    "vecten-shared==0.1.2rc2",
     "dlt[duckdb,postgres,snowflake,sql_database,filesystem]>=1.31,<1.32",
     "httpx>=0.28,<1",
     "pyyaml>=6.0,<7",
