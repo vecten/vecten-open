@@ -686,8 +686,10 @@ The command then runs with:
     installation its interpreter runs from, so no command can change the code the settings let
     the agent run unasked, or plant code Python loads before the wrapper's first check;
   - every unix-socket connection but the name resolver's (`/private/var/run/mDNSResponder`)
-    and those beneath the run's own `TMPDIR`, so no Docker daemon, ssh-agent or gpg-agent is
-    reachable while Terraform still reaches its provider plugins.
+    and those made directly in the run's own `TMPDIR`, so no Docker daemon, ssh-agent or
+    gpg-agent is reachable while Terraform still reaches its provider plugins. So that no such
+    socket can be brought there, nothing can be hard-linked into it, no socket outside it can
+    be moved or removed, and neither the directory nor one above it can be moved.
 - **Its own home.** `HOME` is `<credential home>/home`, or `<credential home>/home-plain` for
   a subcommand that needs no credential, so a tool's default lookups miss your own files. The
   wrapper refuses (exit 3) a home that is a link or a file rather than a directory.
