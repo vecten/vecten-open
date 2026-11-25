@@ -330,7 +330,13 @@ def snowflake_root(
             ("warehouse_size", snowflake_warehouse_size(str(values["size"]))),
             ("loader_public_key", public_key),
         ),
-        # Policy read-backs need a warehouse; Snowflake resolves this name per query.
-        env={**credentials, "SNOWFLAKE_WAREHOUSE": names.warehouse},
+        # Policy read-backs need a warehouse; Snowflake resolves this name per query. The
+        # driver refuses to sign in naming a warehouse that does not exist unless told not to
+        # check, and on a first deploy this apply is what creates it.
+        env={
+            **credentials,
+            "SNOWFLAKE_WAREHOUSE": names.warehouse,
+            "SNOWFLAKE_VALIDATE_DEFAULT_PARAMETERS": "false",
+        },
         secrets=(credentials["SNOWFLAKE_USER"], credentials["SNOWFLAKE_PRIVATE_KEY"]),
     )

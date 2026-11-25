@@ -44,6 +44,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Fixed
 
+- The first deploy of a project whose platform builds a Snowflake warehouse no longer fails
+  to sign in to Snowflake before the environment's warehouse exists.
 - MCP browser pages show the Vecten mark in browser tabs. On service hosts, the sign-out
   page can load its icon, stylesheet and fonts after the session ends
   ([#187](https://github.com/vecten/vecten-open/issues/187)).

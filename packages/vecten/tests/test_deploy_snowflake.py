@@ -236,7 +236,8 @@ def test_root_carries_state_key_names_size_and_public_key(tmp_path):
 def test_terraform_sessions_name_the_environments_warehouse(tmp_path, monkeypatch, shared):
     # The provider reads a policy attachment back through POLICY_REFERENCES, which needs a
     # warehouse, and the deploy user need not have a default one. Snowflake resolves a
-    # session's warehouse by name, so one the same apply creates serves its later queries.
+    # session's warehouse by name, so one the same apply creates serves its later queries,
+    # provided the driver does not check at sign-in that the warehouse already exists.
     from vecten.deploy import snowflake
 
     root = render_snowflake(tmp_path / "snow")
@@ -245,6 +246,7 @@ def test_terraform_sessions_name_the_environments_warehouse(tmp_path, monkeypatc
     found = snowflake_root(root, load_config(root), "prod", deploy_store())
     assert found.env["SNOWFLAKE_WAREHOUSE"] == dict(found.extra_vars)["warehouse_name"]
     assert found.env["SNOWFLAKE_WAREHOUSE"] not in found.secrets
+    assert found.env["SNOWFLAKE_VALIDATE_DEFAULT_PARAMETERS"] == "false"
 
 
 def test_missing_credentials_refuse_before_a_loader_key_is_written(tmp_path):
