@@ -3062,7 +3062,7 @@ wheels = [
 
 [[package]]
 name = "vecten"
-version = "0.1.1"
+version = "0.1.2rc1"
 source = { editable = "packages/vecten" }
 dependencies = [
     { name = "copier" },
@@ -3099,7 +3099,7 @@ requires-dist = [
 
 [[package]]
 name = "vecten-mcp"
-version = "0.1.1"
+version = "0.1.2rc1"
 source = { editable = "packages/vecten-mcp" }
 dependencies = [
     { name = "argon2-cffi" },
@@ -3173,7 +3173,7 @@ dev = [
 
 [[package]]
 name = "vecten-platform"
-version = "0.1.1"
+version = "0.1.2rc1"
 source = { editable = "packages/vecten-platform" }
 dependencies = [
     { name = "authlib" },
@@ -3210,7 +3210,7 @@ requires-dist = [
 
 [[package]]
 name = "vecten-shared"
-version = "0.1.1"
+version = "0.1.2rc1"
 source = { editable = "packages/vecten-shared" }
 dependencies = [
     { name = "boto3" },
