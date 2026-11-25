@@ -123,6 +123,8 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 (`fix(mcp): …`, `docs: …`). The template asks what changed, why, which tests ran and whether a
 spec or a doc moved. A change a user would notice adds a line under `[Unreleased]` in the
 [changelog](CHANGELOG.md), in the same pull request.
+Name the issue a pull request fixes with a closing keyword (`Fixes #123`); the issue closes when
+the pull request merges into the release branch, not when the release reaches `main`.
 
 ## Releasing
 
