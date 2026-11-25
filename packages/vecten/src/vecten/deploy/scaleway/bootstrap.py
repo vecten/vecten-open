@@ -193,9 +193,8 @@ def host_rules(layout: Layout, project: str, env: str, project_id: str, host: st
     writable: list[str] = []
     if setup:
         generated = layout.generated_names()
-        readable += _named(
-            [scaleway_resource_name(project, env, n) for n in generated if scope_for(n) not in scopes]
-        )
+        outside = [n for n in generated if scope_for(n) not in scopes]
+        readable += _named([scaleway_resource_name(project, env, n) for n in outside])
         writable += generated
     if "platform" in components:
         writable += AIRFLOW_APP_SECRETS
