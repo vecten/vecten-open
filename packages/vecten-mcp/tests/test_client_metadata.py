@@ -50,6 +50,15 @@ def test_invalid_document_is_refused(change):
         _validate(json.dumps(DOC | change), CID)
 
 
+def test_grants_the_server_does_not_offer_are_ignored():
+    # Published documents list grants for other servers too, such as the JWT bearer grant.
+    listed = ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer"]
+
+    doc = _validate(json.dumps(DOC | {"grant_types": listed}), CID)
+
+    assert doc["grant_types"] == ["authorization_code", "refresh_token"]
+
+
 @pytest.mark.parametrize(
     ("directive", "ttl"),
     [("max-age=18", 16), ("max-age=99999", 298), ("no-store", 0), ("no-cache", 0)],
