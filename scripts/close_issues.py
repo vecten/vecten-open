@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["markdown-it-py==4.2.0"]
+# ///
 """Close the issues a merged pull request declares it fixes once it lands on a release branch.
 
-Usage: close_issues.py <owner/repo> <branch> <commit>... with GH_TOKEN set. GitHub closes them
-itself only on a merge into the default branch. A declaration is a line of its own,
-`Fixes #12` or `- Closes: #12, resolves #13`, at the start of a line or of a sentence; a
-keyword inside a sentence, inline code, a code block, a quote or an HTML comment is a mention,
-not a declaration. A number that names no issue is reported and
-skipped; any other failure fails the run after every other issue has been tried.
+Usage: close_issues.py <owner/repo> <branch> <before> <after> with GH_TOKEN set, for a push that
+moved <branch> from <before> to <after>. GitHub closes them itself only on a merge into the
+default branch.
+
+A declaration is a closing keyword and an issue number, `Fixes #12` or `Closes: #12, resolves
+#13`, that opens a line or a sentence of a paragraph. The body is parsed as CommonMark first, so
+a keyword in a quote, a code block, a code span or HTML is a mention, not a declaration.
+
+A number that names no issue is reported and skipped; any other failure fails the run after
+every other issue has been tried.
 """
 
 from __future__ import annotations
@@ -19,35 +27,44 @@ import time
 import urllib.error
 import urllib.request
 
+from markdown_it import MarkdownIt
+
 API = "https://api.github.com"
 KEYWORD = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+"
 # After the first number the keyword is optional, as in `Closes #116 and #117`.
 NUMBERS = rf"{KEYWORD}#\d+(?:\s*(?:,|\band\b)\s*(?:{KEYWORD})?#\d+|\s*;\s*{KEYWORD}#\d+)*(?!\w)"
-# A declaration opens a line, after an optional bullet, or opens a sentence.
-DECLARATION = re.compile(rf"(?:^ {{0,3}}(?:[-*+] +)?|(?<=[.!?]) +)({NUMBERS})", re.I)
-FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
-# A quote, or four spaces of indent, which make an indented code block.
-NOT_PROSE = re.compile(r" {0,3}>| {4}|\t")
-INLINE_CODE = re.compile(r"(`+).*?\1")
-COMMENT = re.compile(r"<!--.*?-->", re.S)
+DECLARATION = re.compile(rf"(?:^\s*|(?<=[.!?]) +)({NUMBERS})", re.I)
+# Stands in for a code span or inline HTML: neither a word nor the end of a sentence.
+OPAQUE = "\x00"
+# Longer than any first-parent run one push lands on a protected release branch.
+MAX_LANDED = 100
+
+
+def prose(inline) -> list[str]:
+    """The lines of a paragraph as text, with code spans and inline HTML made opaque."""
+    parts = []
+    for child in inline.children or []:
+        if child.type == "text":
+            parts.append(child.content)
+        elif child.type in ("softbreak", "hardbreak"):
+            parts.append("\n")
+        elif child.type in ("code_inline", "html_inline"):
+            parts.append(OPAQUE)
+    return "".join(parts).split("\n")
 
 
 def declared(body: str | None) -> list[int]:
-    found, fence = set(), None
-    for line in COMMENT.sub("", body or "").splitlines():
-        marker = FENCE.match(line)
-        if marker:
-            run = marker.group(1)
-            # A fence closes only on the same character, at least as long as the one that opened it.
-            if fence is None:
-                fence = run
-            elif run[0] == fence[0] and len(run) >= len(fence):
-                fence = None
-            continue
-        if fence is not None or NOT_PROSE.match(line):
-            continue
-        for declaration in DECLARATION.finditer(INLINE_CODE.sub(" ", line)):
-            found.update(int(number) for number in re.findall(r"#(\d+)", declaration.group(1)))
+    found, quoted, paragraph = set(), 0, False
+    for token in MarkdownIt("commonmark").parse(body or ""):
+        if token.type == "blockquote_open":
+            quoted += 1
+        elif token.type == "blockquote_close":
+            quoted -= 1
+        elif token.type == "inline" and paragraph and not quoted:
+            for line in prose(token):
+                for declaration in DECLARATION.finditer(line):
+                    found.update(int(n) for n in re.findall(r"#(\d+)", declaration.group(1)))
+        paragraph = token.type == "paragraph_open"
     return sorted(found)
 
 
@@ -64,6 +81,26 @@ def call(method: str, path: str, payload: dict | None = None):
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
+
+
+def landed(repo: str, before: str, after: str) -> list[str]:
+    """The commits the push put on the branch's first-parent line, oldest first.
+
+    A merge commit brings the pull request's own commits along; only the merge itself landed on
+    the branch. A new branch landed nothing.
+    """
+    if set(before) == {"0"}:
+        return []
+    commits, sha = [], after
+    while sha != before:
+        if len(commits) == MAX_LANDED:
+            raise RuntimeError(f"{before} is not within {MAX_LANDED} first parents of {after}")
+        commits.append(sha)
+        parents = call("GET", f"/repos/{repo}/commits/{sha}")["parents"]
+        if not parents:
+            raise RuntimeError(f"{before} is not a first parent of {after}")
+        sha = parents[0]["sha"]
+    return commits[::-1]
 
 
 def merged_pulls(repo: str, branch: str, commit: str, attempts: int = 3, pause: float = 5):
@@ -103,9 +140,9 @@ def close(repo: str, issue: int, pull: int, branch: str) -> None:
     print(f"closed #{issue}, fixed by #{pull}")
 
 
-def main(repo: str, branch: str, commits: list[str]) -> int:
+def main(repo: str, branch: str, before: str, after: str) -> int:
     failed = False
-    for commit in commits:
+    for commit in landed(repo, before, after):
         for pull in merged_pulls(repo, branch, commit):
             for issue in declared(pull["body"]):
                 try:
@@ -119,6 +156,6 @@ def main(repo: str, branch: str, commits: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
+    if len(sys.argv) != 5:
         sys.exit(__doc__)
-    sys.exit(main(sys.argv[1], sys.argv[2], sys.argv[3:]))
+    sys.exit(main(*sys.argv[1:]))

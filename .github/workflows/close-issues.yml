@@ -19,8 +19,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: close the issues the merged pull request declares it fixes
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: close the issues the merged pull requests declare they fix
         env:
           GH_TOKEN: ${{ github.token }}
-          COMMITS: ${{ join(github.event.commits.*.id, ' ') }}
-        run: python3 scripts/close_issues.py "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" $COMMITS
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: >-
+          uv run --locked --script scripts/close_issues.py
+          "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$BEFORE" "$AFTER"
