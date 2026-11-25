@@ -27,7 +27,7 @@ Prerequisites: Python 3.14 and Docker. No cloud account, domain or GitHub accoun
 
 ## What v0.1 does and does not do
 
-An alpha release. It deploys to AWS and Scaleway, with Postgres or Snowflake, one warehouse per
+A beta release. It deploys to AWS and Scaleway, with Postgres or Snowflake, one warehouse per
 deployment, with GitHub Actions as the CI. Azure, GCP, BigQuery and Databricks are outside it;
 there is no analyst dashboard, no Kubernetes deployment and no connector catalogue. Minor
 releases in the 0.x series may break things; pin the minor.

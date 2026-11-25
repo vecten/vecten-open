@@ -38,6 +38,10 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - `vecten up` reports each active component’s base image and how to select published images when a local build was chosen ([#21](https://github.com/vecten/vecten-open/issues/21)).
 - The Analytics screen checks each bound container app’s HTTP health when opened ([#115](https://github.com/vecten/vecten-open/issues/115)).
 
+### Changed
+
+- The four packages are now marked beta (`Development Status :: 4 - Beta`), and the READMEs say so.
+
 ### Fixed
 
 - MCP browser pages show the Vecten mark in browser tabs. On service hosts, the sign-out

@@ -10,7 +10,7 @@
   <a href="https://github.com/vecten/vecten-open/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/vecten/vecten-open/ci.yml?branch=main&label=CI" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.14-blue" alt="Python 3.14"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="Apache-2.0"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/status-beta-yellow" alt="beta"></a>
 </p>
 
 # Vecten Open
@@ -86,7 +86,7 @@ tells you what it will cost first.
 
 ## What v0.1 does and does not do
 
-This is an alpha. v0.1 deploys to AWS and Scaleway, with Postgres or Snowflake, one warehouse
+This is a beta. v0.1 deploys to AWS and Scaleway, with Postgres or Snowflake, one warehouse
 per deployment, GitHub Actions as the CI. Azure, GCP, other CI hosts, BigQuery and Databricks
 are outside it. No analyst dashboard, no Kubernetes, no built-in model inference, no connector
 catalogue: sources use dlt or your own code. Metric queries operate on one dataset. Minor
