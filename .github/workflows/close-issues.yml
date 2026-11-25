@@ -1,35 +1,26 @@
 name: close-issues
 # GitHub closes the issues a pull request names only when it merges into the default branch, and
-# work reaches main only with a release. pull_request_target gives a merged pull request from a
-# fork a token that can close issues; nothing from the pull request is checked out or run, and
-# its body reaches the script through the environment because it is the author's text.
+# work reaches main only with a release. A push runs the workflow file of the branch it lands
+# on, so a release branch closes its own issues without the file being on main first, and a
+# merged pull request from a fork gets the same token as any other.
 on:
-  pull_request_target:
-    types: [closed]
+  push:
     branches: ['release/**']
 permissions: {}
 jobs:
   close-issues:
-    if: github.event.pull_request.merged
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 5
     permissions:
+      contents: read
       issues: write
+      pull-requests: read
     steps:
-      - name: close the issues the pull request names with a closing keyword
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: close the issues the merged pull request declares it fixes
         env:
           GH_TOKEN: ${{ github.token }}
-          BODY: ${{ github.event.pull_request.body }}
-          NUMBER: ${{ github.event.pull_request.number }}
-          BASE: ${{ github.event.pull_request.base.ref }}
-        run: |
-          set -euo pipefail
-          issues=$(grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?):? +#[0-9]+' <<<"$BODY" | grep -oE '[0-9]+$' | sort -un || true)
-          for issue in $issues; do
-            # A closing keyword can name a pull request, which this job must leave alone.
-            open=$(gh api "repos/$GITHUB_REPOSITORY/issues/$issue" --jq '.pull_request == null and .state == "open"')
-            if [[ "$open" == "true" ]]; then
-              gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed \
-                --comment "Fixed by #$NUMBER, merged into $BASE."
-            fi
-          done
+          COMMITS: ${{ join(github.event.commits.*.id, ' ') }}
+        run: python3 scripts/close_issues.py "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" $COMMITS
