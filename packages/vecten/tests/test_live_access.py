@@ -926,12 +926,19 @@ def test_a_temporary_directory_older_than_a_day_is_removed(tmp_path):
     assert recent.is_dir()
 
 
-def test_the_profile_opens_unix_sockets_beneath_the_given_directory_only():
+def test_the_profile_opens_only_sockets_made_directly_in_the_given_directory():
     private = Path("/private/tmp/example-run")
     profile = mod().sandbox_profile(
         EXAMPLE_HOME, EXAMPLE_LIVE, EXAMPLE_TOOLS, EXAMPLE_PYTHON, sockets=private
     )
-    assert profile == DENIED_TEXT + f'(allow network-outbound (subpath "{private}"))'
+    entry = r'(regex #"^/private/tmp/example-run/[^/]+$")'
+    assert profile == DENIED_TEXT + (
+        f"(allow network-outbound {entry})"
+        "(deny file-write-unlink (vnode-type SOCKET))"
+        f"(allow file-write-unlink {entry})"
+        '(deny file-write-unlink (literal "/private/tmp/example-run")'
+        ' (literal "/private/tmp") (literal "/private"))'
+    )
 
 
 def test_a_sandbox_that_cannot_start_is_a_refusal(tmp_path):
@@ -1041,6 +1048,77 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
         server.close()
         plugin.close()
         shutil.rmtree(sockets)
+
+
+# Moves the named paths in turn, then connects to the last argument.
+MOVE_THEN_CONNECT = (
+    "import os, socket, sys\n"
+    "*moves, target = sys.argv[1:]\n"
+    "for source, destination in zip(moves[::2], moves[1::2]):\n"
+    "    os.rename(source, destination)\n"
+    "socket.socket(socket.AF_UNIX).connect(target)\n"
+)
+BIND_CONNECT_REMOVE = (
+    "import os, socket, sys\n"
+    "server = socket.socket(socket.AF_UNIX)\n"
+    "server.bind(sys.argv[1])\n"
+    "server.listen(1)\n"
+    "socket.socket(socket.AF_UNIX).connect(sys.argv[1])\n"
+    "os.unlink(sys.argv[1])\n"
+)
+
+
+@pytest.mark.skipif(not os_sandbox_works(), reason="needs a usable macOS sandbox-exec")
+@pytest.mark.parametrize(
+    "route",
+    [
+        "the socket into the run's directory",
+        "the socket's directory into the run's directory",
+        "the run's directory away, the socket's directory in its place",
+        "the directory above the run's away, the socket's directory in its place",
+    ],
+)
+def test_no_foreign_socket_can_be_moved_where_the_run_may_connect(tmp_path, route):
+    base = Path(tempfile.mkdtemp(dir="/tmp")).resolve()
+    agent_dir = base / "agent"
+    agent_dir.mkdir()
+    run = base / "live/home/tmp/run"
+    run.mkdir(parents=True)
+    agent = listening(agent_dir / "agent.sock")
+    moves = {
+        "the socket into the run's directory": (
+            [agent_dir / "agent.sock", run / "agent.sock"],
+            run / "agent.sock",
+        ),
+        "the socket's directory into the run's directory": (
+            [agent_dir, run / "agent"],
+            run / "agent/agent.sock",
+        ),
+        "the run's directory away, the socket's directory in its place": (
+            [run, base / "old", agent_dir, run],
+            run / "agent.sock",
+        ),
+        "the directory above the run's away, the socket's directory in its place": (
+            [run.parent, base / "old", agent_dir, run.parent],
+            run.parent / "agent.sock",
+        ),
+    }
+    renames, target = moves[route]
+    try:
+        profile = mod().sandbox_profile(
+            tmp_path / "real", tmp_path / "live", tmp_path / "tools", [], sockets=run
+        )
+
+        def sandboxed(script, *args):
+            command = ["/usr/bin/sandbox-exec", "-p", profile, sys.executable, "-c", script]
+            return subprocess.run([*command, *map(str, args)], capture_output=True).returncode
+
+        assert sandboxed(BIND_CONNECT_REMOVE, run / "plugin1") == 0
+        assert not (run / "plugin1").exists()
+        assert sandboxed(MOVE_THEN_CONNECT, *renames, target) != 0
+    finally:
+        agent.close()
+        shutil.rmtree(base)
 
 
 def test_secrets_check_names_the_tracked_files_holding_a_secret(tmp_path):

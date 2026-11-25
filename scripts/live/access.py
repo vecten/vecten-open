@@ -295,8 +295,7 @@ def sandbox_profile(
     # last two denies: the steering files, the tools copy and its interpreter stay unwritable.
     opened = "".join(f'(allow network-outbound (literal "{path}"))' for path in ALLOWED_SOCKETS)
     if sockets is not None:
-        # Only the run's own fresh directory: no agent or daemon has a socket there.
-        opened += f"(allow network-outbound {_filters([('subpath', sockets)])})"
+        opened += _own_sockets(sockets)
     return (
         "(version 1)(allow default)"
         f"(deny file-read* {env_files})"
@@ -307,6 +306,30 @@ def sandbox_profile(
         f"(deny file-write* {_filters(unwritable)} {claude})"
         f"(deny file-write-unlink {unlinks})"
         f"(deny network-outbound (remote unix-socket)){opened}"
+    )
+
+
+def _own_sockets(directory: Path) -> str:
+    """Rules opening the sockets a run binds directly in its own fresh directory.
+
+    A daemon's socket could otherwise be moved in, alone or in its directory, or the
+    directory swapped for the daemon's: no socket elsewhere can be unlinked (a move unlinks
+    its source), one a level down is not opened, and neither the directory nor one above it
+    can be moved.
+    """
+    entries = " ".join(
+        f'(regex #"^{"".join(f"\\{c}" if c in REGEX_SPECIAL else c for c in v)}/[^/]+$")'
+        for v in _variants(directory)
+    )
+    fixed = " ".join(
+        f'(literal "{path}")'
+        for path in dict.fromkeys([*_variants(directory), *_ancestors([("subpath", directory)])])
+    )
+    return (
+        f"(allow network-outbound {entries})"
+        "(deny file-write-unlink (vnode-type SOCKET))"
+        f"(allow file-write-unlink {entries})"
+        f"(deny file-write-unlink {fixed})"
     )
 
 
