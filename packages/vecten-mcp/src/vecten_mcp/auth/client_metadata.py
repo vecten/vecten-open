@@ -100,11 +100,13 @@ def _validate(body, client_id):
         or "client_secret_expires_at" in doc
         or not isinstance(grants, list)
         or "authorization_code" not in grants
-        or not all(g in ("authorization_code", "refresh_token") for g in grants)
         or doc.get("response_types", ["code"]) != ["code"]
     ):
         raise ValueError("invalid client metadata")
-    return {"client_name": name, "redirect_uris": redirects, "grant_types": grants}
+    # A published document lists every grant its client uses with any server; only the two
+    # this server issues to metadata clients carry over.
+    offered = [g for g in ("authorization_code", "refresh_token") if g in grants]
+    return {"client_name": name, "redirect_uris": redirects, "grant_types": offered}
 
 
 def _lifetime(headers):
