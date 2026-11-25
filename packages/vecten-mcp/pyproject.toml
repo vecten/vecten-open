@@ -1,6 +1,6 @@
 [project]
 name = "vecten-mcp"
-version = "0.1.1"
+version = "0.1.2rc3"
 description = "The MCP server of Vecten Open"
 requires-python = ">=3.14"
 license = "Apache-2.0 AND OFL-1.1"
@@ -15,7 +15,7 @@ classifiers = [
     "Topic :: Database",
 ]
 dependencies = [
-    "vecten-shared==0.1.1",
+    "vecten-shared==0.1.2rc3",
     "starlette>=1.9,<2",
     "uvicorn>=0.54,<1",
     "mcp>=2.3,<2.4",

@@ -2,7 +2,7 @@
   "name": "vecten",
   "displayName": "Vecten Open",
   "description": "Build and run a Vecten Open data platform with your agent: connect sources, model the warehouse, define shared metrics and operate it through the vecten CLI. The skills: connector, guide, model, operate and semantic.",
-  "version": "0.1.1",
+  "version": "0.1.2rc3",
   "author": {
     "name": "Vecten"
   },

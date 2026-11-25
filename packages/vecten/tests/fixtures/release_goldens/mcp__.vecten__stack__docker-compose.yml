@@ -4,7 +4,7 @@ services:
     build:
       context: ./build
       dockerfile: mcp.Dockerfile
-    image: vecten-acme-prod-mcp:0.1.1
+    image: vecten-acme-prod-mcp:0.1.2rc3
     profiles:
     - mcp
     environment:

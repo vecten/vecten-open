@@ -48,7 +48,7 @@ services:
       - --fail
       - http://localhost:8080/api/v2/monitor/health
       timeout: 10s
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2rc3
     ports:
     - 127.0.0.1:8482:8080
     profiles: &id002
@@ -93,7 +93,7 @@ services:
       airflow-api-server:
         condition: service_healthy
     environment: *id001
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2rc3
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
@@ -105,7 +105,7 @@ services:
       airflow-api-server:
         condition: service_healthy
     environment: *id001
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2rc3
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
@@ -117,7 +117,7 @@ services:
       airflow-api-server:
         condition: service_healthy
     environment: *id001
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2rc3
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
@@ -163,7 +163,7 @@ services:
       - --fail
       - http://localhost:8001/health
       timeout: 5s
-    image: golden-mcp:0.1.1
+    image: golden-mcp:0.1.2rc3
     profiles:
     - mcp
     restart: unless-stopped
