@@ -9,6 +9,8 @@ on:
 permissions: {}
 jobs:
   close-issues:
+    # Deleting a release branch after its release is a push too, with nothing to close.
+    if: ${{ !github.event.deleted }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

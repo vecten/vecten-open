@@ -41,10 +41,21 @@ MAX_LANDED = 100
 
 
 def prose(inline) -> list[str]:
-    """The lines of a paragraph as text, with code spans and inline HTML made opaque."""
-    parts = []
+    """The lines of a paragraph as text, with code spans, inline HTML and links made opaque.
+
+    A link's label says nothing about where it points: `[#123](https://github.com/other/repo/
+    issues/123)` names another repository's issue, so a link never declares a fix here.
+    """
+    parts, linked = [], 0
     for child in inline.children or []:
-        if child.type == "text":
+        if child.type == "link_open":
+            linked += 1
+            parts.append(OPAQUE)
+        elif child.type == "link_close":
+            linked -= 1
+        elif linked:
+            continue
+        elif child.type == "text":
             parts.append(child.content)
         elif child.type in ("softbreak", "hardbreak"):
             parts.append("\n")
@@ -87,9 +98,9 @@ def landed(repo: str, before: str, after: str) -> list[str]:
     """The commits the push put on the branch's first-parent line, oldest first.
 
     A merge commit brings the pull request's own commits along; only the merge itself landed on
-    the branch. A new branch landed nothing.
+    the branch. A new branch landed nothing, and a deleted one has no commits left to read.
     """
-    if set(before) == {"0"}:
+    if set(before) == {"0"} or set(after) == {"0"}:
         return []
     commits, sha = [], after
     while sha != before:

@@ -41,6 +41,8 @@ close_issues = load()
         ("Fixes #1, #2", [1, 2]),
         ("Fixes #1; closes #2", [1, 2]),
         ("**Fixes #7**", [7]),
+        ("Fixes #123\n\nFixes [#124](https://github.com/another/project/issues/124)", [123]),
+        ("Fixes #123. See [the notes](https://example.com).", [123]),
         ("Summary first.\n\nFixes #12\n\nMore text.", [12]),
         ("A paragraph that wraps\nFixes #12 on its second line.", [12]),
         ("Fixes #12\nCloses #12", [12]),
@@ -85,6 +87,13 @@ def test_a_declaration_opens_a_line_or_a_sentence(body, issues):
         "Ran it on `Fixes #190`. Fine.",
         'The issue said "Fixes #3".',
         "e.g.fixes #4",
+        # A link's label does not say which repository it points to.
+        "Fixes [#123](https://github.com/another/project/issues/123)",
+        "Fixes [#123](https://github.com/vecten/vecten-open/issues/123)",
+        "[Fixes #123](https://example.com)",
+        "Fixes [#123][ref]\n\n[ref]: https://github.com/another/project/issues/123",
+        "Fixes <https://github.com/another/project/issues/123>",
+        "Fixes another/project#123",
     ],
 )
 def test_a_mention_is_not_a_declaration(body):
@@ -230,6 +239,13 @@ def test_a_new_branch_landed_nothing(monkeypatch, capsys):
     assert api.calls == []
 
 
+def test_a_deleted_branch_landed_nothing(monkeypatch, capsys):
+    api = Api()
+    code, _ = run(monkeypatch, capsys, api, before="m1", after="0" * 40)
+    assert code == 0
+    assert api.calls == []
+
+
 def test_a_push_without_a_merged_pull_request_closes_nothing(monkeypatch, capsys):
     api = Api(parents={"m1": ["base"]})
     code, _ = run(monkeypatch, capsys, api)
@@ -248,6 +264,7 @@ def test_the_workflow_runs_the_locked_script_on_release_pushes_with_least_privil
     assert WORKFLOW["permissions"] == {}
     job = WORKFLOW["jobs"]["close-issues"]
     assert job["permissions"] == {"contents": "read", "issues": "write", "pull-requests": "read"}
+    assert job["if"] == "${{ !github.event.deleted }}"
     step = job["steps"][-1]
     assert step["run"].startswith("uv run --locked --script scripts/close_issues.py")
     assert step["env"]["BEFORE"] == "${{ github.event.before }}"
