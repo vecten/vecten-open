@@ -18,8 +18,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 API = "https://api.github.com"
-# A token this close to expiry could lapse before the caller's request lands.
-REFRESH_MARGIN = 300
+# A deploy or ship follows its workflow with one token for many minutes, so every token handed
+# out has 55 of its 60 minutes left.
+REFRESH_MARGIN = 3300
 # The signer sees the App's private key outside any sandbox, so it is the system's own binary,
 # which no command of the user can replace, wherever the system has one.
 OPENSSL = "/usr/bin/openssl" if Path("/usr/bin/openssl").is_file() else "openssl"

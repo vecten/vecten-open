@@ -25,7 +25,8 @@ confirm it, so you can stop at any item and know where you are. Have these open:
   in with;
 - a terminal at the root of a checkout of this repository, with `uv`, `aws` (version 2),
   `scw`, `snow` (the Snowflake CLI), `gh`, `git`, `terraform`, `openssl` and `dig` on the
-  `PATH`.
+  `PATH`. `terraform` is the version `terraform/` requires (`required_version`, 1.16 for
+  0.1.2); an older one refuses every plan and destroy the run makes from the laptop.
 
 This repository is public, so this page uses placeholders. The real values go in `allow.toml`
 and the other files of the credential home, which live only on your laptop:
@@ -684,11 +685,15 @@ The command then runs with:
   - writing the tools copy the wrapper runs from, `~/vecten-live-tools`, and the Python
     installation its interpreter runs from, so no command can change the code the settings let
     the agent run unasked, or plant code Python loads before the wrapper's first check;
-  - every unix-socket connection but the name resolver's (`/private/var/run/mDNSResponder`),
-    so no Docker daemon, ssh-agent or gpg-agent is reachable.
+  - every unix-socket connection but the name resolver's (`/private/var/run/mDNSResponder`)
+    and those beneath the run's own `TMPDIR`, so no Docker daemon, ssh-agent or gpg-agent is
+    reachable while Terraform still reaches its provider plugins.
 - **Its own home.** `HOME` is `<credential home>/home`, or `<credential home>/home-plain` for
   a subcommand that needs no credential, so a tool's default lookups miss your own files. The
   wrapper refuses (exit 3) a home that is a link or a file rather than a directory.
+- **Its own temporary directory.** For `live run`, `TMPDIR` is a new directory under
+  `<credential home>/home/tmp`, made for this one run and open to you alone; the next run
+  removes any older than a day.
 - **An environment built from an allowlist.** Only `PATH`, `LANG`, `TERM`, `TMPDIR`, `USER`,
   `LOGNAME`, `SHELL`, `TZ`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, the proxy variables and the
   `LC_*` variables pass through. The wrapper sets the rest: each tool's configuration in the
@@ -898,7 +903,10 @@ command; type it again in that form.
    of these values goes into anything checked in.
 7. `vecten deploy`, `vecten destroy`, `vecten github push` on a deployed project and
    `gh run watch` follow a workflow for many minutes, the publish run for up to three hours.
-   Run them in the background and wait for their exit.
+   Run them in the background and wait for their exit. Each run gets a GitHub token with at
+   least 55 minutes left; a follow that outlives it stops on `HTTP 401` while the workflow
+   runs on. Resume it with `gh run watch <run id> --exit-status` through `live run`, and
+   rerun a `vecten deploy` whose follow was cut, since it applies nothing twice.
 
 ### Rules
 
