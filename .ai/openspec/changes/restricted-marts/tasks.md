@@ -86,9 +86,9 @@ ship before areas.
 - [x] 5.5 `docs/mcp-identity.md`: bound roles, `IS_ROLE_IN_SESSION` rather than `CURRENT_ROLE()`
 - [x] 5.6 unit: name override and refusals; bind, confirm and unbind flows against fake adapters
 - [x] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it
-- [x] 5.8 live: Snowflake bound role: a member reads through it; `SHOW GRANTS TO ROLE PROVISIONER` unchanged; the startup check passes
+- [ ] 5.8 live: Snowflake bound role: a member reads through it; `SHOW GRANTS TO ROLE PROVISIONER` unchanged; the startup check passes
   - Partly run live for 0.1.1 (rc2, AWS): binding, review query, no new provisioner grant, reconciliation leaves the role alone, the startup check passes. A member reading through the role not run.
-  - Live, 0.1.2rc3 on AWS with a shared Snowflake account: a member read a table through a bound role confirmed in the admin panel; `SHOW GRANTS TO ROLE PROVISIONER_…` kept every earlier grant and gained none on the bound role; the MCP restarted healthy with the binding in place. The CLI's bind and confirm time out on this account (#202).
+  - Partly run live for 0.1.2 (rc3, AWS with a shared Snowflake account): a member read a table through a bound role confirmed in the admin panel; the provisioner role gained no grant on the bound role; the MCP restarted healthy with the binding in place. Not shown: `SHOW GRANTS TO ROLE PROVISIONER` unchanged across the bind alone, since group and user creation and a build ran between the two listings. Next run: list it after setup, bind and confirm, and compare at once. The CLI's bind and confirm time out on this account (#202).
 
 ## 6. Release checks
 
