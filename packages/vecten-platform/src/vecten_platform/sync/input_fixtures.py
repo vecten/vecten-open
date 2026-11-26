@@ -19,6 +19,7 @@ from dlt.common.configuration.container import Container
 from dlt.common.pipeline import PipelineContext
 
 from vecten_platform.sync import context
+from vecten_platform.sync.fixtures import input_sample_files
 from vecten_platform.sync.loader import load_connector
 from vecten_platform.sync.recording import RECORD_LIMIT
 from vecten_platform.sync.sampling import bound_recording
@@ -169,7 +170,7 @@ def _replay(path: Path, connector_dir: Path, connector: str, temp: Path) -> None
 
 def verify_input_fixtures(connector_dir: Path, connector: str, work: Path) -> bool:
     """Return whether any input samples were verified."""
-    paths = sorted((connector_dir / "fixtures" / "inputs").glob("*.json"))
+    paths = input_sample_files(connector_dir / "fixtures")
     for path in paths:
         try:
             work.mkdir(parents=True, exist_ok=True)
