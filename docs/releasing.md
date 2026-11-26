@@ -1700,6 +1700,11 @@ through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front
    that kind with `scw <product> … list project-id=<id> -o json`, delete what the list shows,
    and write the commands into this page in the run's pull request
    (not yet tried against a live account).
+   The state bucket is versioned, and `scw object bucket delete` refuses it while old versions
+   remain (`BucketNotEmpty`, every time). Deleting versions needs the S3 API with a Scaleway
+   key, which the wrapper does not hand to `aws`, so the bucket and its two projects are a
+   hand-off: the maintainer empties the bucket in the Scaleway console (Object Storage, the
+   bucket, Empty bucket), then the agent reruns the delete and the two project deletions.
 6. Delete the repository:
    `~/vecten-live-tools/scripts/live/live run -- gh repo delete <sandbox-org>/<name> --yes`.
 7. Set the entry's `destroyed_at` in `<created>` to `<now>`. Leave `<project>` on the laptop:
@@ -1711,9 +1716,13 @@ through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front
      --created .claude/live-checks-<version>.created.json
    ```
 
-   Exit 0 proves the removal. Cloud APIs can list a just-destroyed resource for a few minutes,
-   so on an exit 1 right after a destroy, wait five minutes and sweep once more before you
-   treat a line as a leftover. Exit 1: a `leftover:` line whose project and environment are an
+   Exit 0 proves the removal. Cloud APIs can list a just-destroyed resource for a while: on
+   AWS the tagging API kept terminated instances, their volumes and rules for more than
+   twenty minutes after the destroys. So on an exit 1 right after a destroy, check each line
+   with its own service (`aws ec2 describe-instances` shows `terminated`, `describe-volumes`
+   and `describe-security-group-rules` with the project tag list nothing) before you treat it
+   as a leftover. The sweep does not list Scaleway buckets or projects either: step 5's
+   listings are that check. Exit 1: a `leftover:` line whose project and environment are an
    entry of `<created>` is the run's; remove it with the matching command above, then sweep
    again. A line of any other project is not the run's: never remove it. An exit 1 whose every
    line also appeared in the Start sweep's output counts as clean for this run, and those lines
