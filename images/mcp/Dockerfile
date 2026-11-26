@@ -46,5 +46,12 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
         /mnt/wheels/vecten_shared-*.whl /mnt/wheels/vecten_mcp-*.whl \
     && uv pip check --python /opt/venv/bin/python \
     && rm -f /opt/venv/.lock
+USER root
+ARG BASE_IMAGE
+COPY LICENSE NOTICE images/THIRD-PARTY.txt /usr/share/doc/vecten/
+RUN printf '%s\n' "${BASE_IMAGE}" > /usr/share/doc/vecten/base-image \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\n' \
+        > /usr/share/doc/vecten/debian-packages.tsv
+USER app
 EXPOSE 8001
 CMD ["python", "-m", "vecten_mcp"]

@@ -12,13 +12,13 @@
         "title": "hubspot object deals fails with KeyError",
         "resolution": "connector",
         "occurrences": 3,
-        "first_seen": "2026-10-18T02:00:00Z",
-        "last_seen": "2026-10-20T02:00:00Z",
+        "first_seen": "2026-10-18T00:00:00Z",
+        "last_seen": "2026-10-20T00:00:00Z",
         "evidence": {
           "untrusted": true,
-          "run_id": "scheduled__2026-10-20T02:00:00+00:00",
+          "run_id": "scheduled__2026-10-20T00:00:00+00:00",
           "error_class": "KeyError",
-          "location": "s3://acme-prod-artifacts/platform/logs/dag_id=sync_hubspot_default/run_id=scheduled__2026-10-20T02:00:00+00:00/task_id=sync/map_index=0/attempt=3.log"
+          "location": "s3://acme-prod-artifacts/platform/logs/dag_id=sync_hubspot_default/run_id=scheduled__2026-10-20T00:00:00+00:00/task_id=sync/map_index=0/attempt=3.log"
         }
       },
       {

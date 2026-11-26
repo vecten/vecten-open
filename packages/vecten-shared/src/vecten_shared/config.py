@@ -23,10 +23,12 @@ from pydantic import (
     model_validator,
 )
 
+from vecten_shared.airflow_resources import AirflowResources
 from vecten_shared.apps import APP_CREDENTIAL, principal_name
 from vecten_shared.declarations import PROJECT as PROJECT_SETTINGS
-from vecten_shared.declarations import is_toml_time, secret_problem
+from vecten_shared.declarations import component_for, is_toml_time, secret_problem
 from vecten_shared.names import (
+    SKILL_NAME,
     area_name_problem,
     connector_name_problem,
     env_name_problem,
@@ -194,6 +196,7 @@ def promotion_scaffold_problem(config: VectenConfig) -> str | None:
 
 
 McpAuth = Literal["oidc", "password"]
+OidcEmailVerifiedClaim = Literal["email_verified", "xms_edov"]
 
 
 def allow_networks(value: list[str]) -> list[str]:
@@ -206,6 +209,7 @@ class McpSection(Strict):
     auth: str = Field(default="oidc", pattern=r"^[a-z][a-z0-9_-]*$")
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
+    oidc_email_verified_claim: OidcEmailVerifiedClaim = "email_verified"
     admin_panel: Literal["public", "off"] = "public"
     admin_allow: list[str] = Field(default_factory=list)
 
@@ -221,9 +225,12 @@ class McpSection(Strict):
         return self
 
 
-class AirflowSection(Strict):
+class AirflowSection(AirflowResources):
     # The networks that may reach a deployed `airflow.<domain>`; empty leaves it public.
     allow: list[str] = Field(default_factory=list)
+    auth: Literal["password", "oidc"] = "password"
+    oidc_client_id: str | None = None
+    oidc_client_secret_name: str | None = None
 
     @field_validator("allow")
     @classmethod
@@ -357,6 +364,7 @@ GENERIC_KINDS: tuple[str, ...] = ("rest", "sql", "filesystem")
 class ConnectorDecl(Strict):
     name: str
     source: SourceKind
+    record: bool = True
     access: AccessDecl | None = None
     dependencies: list[str] = Field(default_factory=list)
     secrets: list[str] = Field(default_factory=list)
@@ -394,6 +402,12 @@ class AreaDecl(Strict):
     until an admin grants the area to a group."""
 
     access: AccessDecl | None = None
+    restricted_source_layers: bool = False
+
+
+def source_layer_areas(areas):
+    """Areas whose readers may see staging rows and snapshot history."""
+    return sorted(name for name, area in areas.items() if area.restricted_source_layers)
 
 
 # Cloud identifiers land in tfvars, workflow variables and API paths.
@@ -420,6 +434,8 @@ class EnvironmentFacts(Strict):
     # Non-secret identifiers `bootstrap` creates, such as the Scaleway project IDs.
     cloud_ids: dict[str, str] = Field(default_factory=dict)
     deployed_commit: str | None = None
+    # A new onboarding cycle must be acknowledged by a ship to this environment.
+    mcp_ship_generation: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     first_user_added: bool = False
     connector_access_applied: list[str] = Field(default_factory=list)
     area_access_applied: list[str] = Field(default_factory=list)
@@ -427,6 +443,7 @@ class EnvironmentFacts(Strict):
     # The Snowflake access procedures' version the confirmed provisioner script installed; a
     # run confirmed without one installed an older version.
     access_version: int | None = Field(default=None, ge=1)
+    access_source_areas: list[str] | None = None
     provisioner_secrets_set: bool = False
     connection_shown: bool = False
     alert_webhook_asked: bool = False
@@ -554,6 +571,7 @@ class VectenConfig(Strict):
     services: dict[str, dict[str, ServiceBinding]] = Field(default_factory=dict)
     # `[apps.<extension>.<app>]`: who may open each declared analytics app, and where it runs.
     apps: dict[str, dict[str, AppBinding]] = Field(default_factory=dict)
+    consumer_skills: dict[str, AccessDecl] = Field(default_factory=dict)
     environments: dict[str, EnvironmentFacts] = Field(default_factory=dict)
 
     @field_validator("environments")
@@ -568,6 +586,8 @@ class VectenConfig(Strict):
     def _area_names(cls, value: dict[str, AreaDecl]) -> dict[str, AreaDecl]:
         for name in value:
             _checked(area_name_problem(name), name)
+            if value[name].restricted_source_layers and len(name) > 53:
+                raise ValueError(f"area {name}: snapshots_<area> exceeds 63 characters")
         return value
 
     @model_validator(mode="after")
@@ -602,6 +622,33 @@ class VectenConfig(Strict):
 
     @model_validator(mode="after")
     def _airflow_needs_platform(self) -> VectenConfig:
+        airflow = self.airflow
+        if airflow.auth == "oidc":
+            issuer = urlsplit(self.mcp.oidc_issuer or "")
+            if not self.has("platform") or self.mcp.auth != "oidc":
+                raise ValueError("[airflow] auth = oidc needs platform and [mcp] auth = oidc")
+            if (
+                issuer.scheme != "https"
+                or not issuer.hostname
+                or issuer.username is not None
+                or issuer.query
+                or issuer.fragment
+            ):
+                raise ValueError("Airflow OIDC needs an HTTPS [mcp] oidc_issuer")
+            if not (airflow.oidc_client_id or self.mcp.oidc_client_id) or not self.mcp.admins:
+                raise ValueError("Airflow OIDC needs a client ID and [mcp] admins")
+            if (
+                airflow.oidc_client_secret_name
+                and airflow.oidc_client_secret_name not in self.secrets
+            ):
+                raise ValueError("declare the airflow oidc_client_secret_name in project secrets")
+            if (
+                airflow.oidc_client_secret_name
+                and component_for(airflow.oidc_client_secret_name) != "platform"
+            ):
+                raise ValueError("the airflow OIDC client secret must belong to the platform scope")
+        elif airflow.oidc_client_id or airflow.oidc_client_secret_name:
+            raise ValueError("Airflow OIDC client settings require [airflow] auth = oidc")
         # Without the platform no host serves Airflow, so the list would restrict nothing.
         if self.airflow.allow and not self.has("platform"):
             raise ValueError("[airflow] allow needs the platform component")
@@ -688,6 +735,15 @@ class VectenConfig(Strict):
                             f"{where}.routes.{route_name}.access: a login route needs the mcp "
                             "component, whose sign-in admits people"
                         )
+        return self
+
+    @model_validator(mode="after")
+    def _consumer_skill_bindings(self) -> VectenConfig:
+        for name in self.consumer_skills:
+            if not SKILL_NAME.fullmatch(name):
+                raise ValueError(f"consumer_skills: invalid consumer skill name {name!r}")
+            if not self.has("mcp"):
+                raise ValueError(f"consumer_skills.{name}: downloads need the mcp component")
         return self
 
     @model_validator(mode="after")
@@ -833,7 +889,15 @@ def save_config(project_root: Path, config: VectenConfig) -> None:
     if problem:
         raise Failure(ExitCode.REFUSED, problem)
     data = config.model_dump(mode="json", exclude_none=True)
-    for optional in ("dependencies", "secrets", "settings", "services", "apps", "areas"):
+    for optional in (
+        "dependencies",
+        "secrets",
+        "settings",
+        "services",
+        "apps",
+        "consumer_skills",
+        "areas",
+    ):
         if not data.get(optional):
             data.pop(optional, None)
     path = project_root / CONFIG_FILE

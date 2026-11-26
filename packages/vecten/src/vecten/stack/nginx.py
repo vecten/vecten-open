@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from vecten_shared.output import ExitCode, Failure
+from vecten_shared.page_assets import PAGE_ASSET_PATH, PAGE_ASSET_TYPES
 from vecten_shared.records import write_text_atomic
 from vecten_shared.services import Bound, route_prefix
 
@@ -22,6 +23,9 @@ PROXY_HEADERS = """        proxy_http_version 1.1;
 # addresses that another container may take, so the name is looked up per request through
 # Docker's embedded DNS, which a variable in proxy_pass forces.
 RESOLVER = "resolver 127.0.0.11 valid=10s ipv6=off;\n"
+# NGINX's default server-name bucket holds names of up to 46 characters on a 64-bit host and
+# refuses to start past that; 512 bytes hold the longest DNS name, 253 characters.
+SERVER_NAMES_BUCKET = "server_names_hash_bucket_size 512;\n"
 
 
 def _upstream(url: str, uri: str = "", variable: str = "$upstream") -> str:
@@ -152,7 +156,11 @@ GATE_STATE_COOKIE = "__Host-vecten-gate-state"
 GATE_COOKIE_NAMES = f"{GATE_COOKIE}(?:-state)?"
 # A header NGINX sets itself is never copied from the client, whatever its letter case, and
 # an empty value sends none; the default ignore_invalid_headers drops underscore spellings.
-IDENTITY_CLEARED = "".join(f'        proxy_set_header {h} "";\n' for h in IDENTITY_HEADERS)
+# Only the app sets viewer attribution on its outbound MCP request.
+CLEAR_VIEWER = '        proxy_set_header X-Vecten-On-Behalf-Of "";\n'
+IDENTITY_CLEARED = CLEAR_VIEWER + "".join(
+    f'        proxy_set_header {h} "";\n' for h in IDENTITY_HEADERS
+)
 # The browser sends the gate's host-only cookies to every path of the service's hostname; a
 # service holding them could replay them to the gate. Cookie names compare case-insensitively
 # for the __Host- prefix. The first map removes the session cookie, the second the sign-in
@@ -206,7 +214,7 @@ GATE_PATHS = ("start", "callback", "logout")
 GATE_IDENTITY = {h: "$vecten_gate_" + h.removeprefix("X-Vecten-").lower() for h in IDENTITY_HEADERS}
 # The verify answer's headers, copied into the request forwarded to the service; NGINX sends
 # no client header of a name it sets itself.
-IDENTITY_FROM_GATE = "".join(
+IDENTITY_FROM_GATE = CLEAR_VIEWER + "".join(
     f"        proxy_set_header {header} {variable};\n" for header, variable in GATE_IDENTITY.items()
 )
 GATE_DENIED_PAGE = (
@@ -233,7 +241,7 @@ def gate_upstream(
     host_components: list[str], hosts: dict[str, str], mode: str
 ) -> GateUpstream | None:
     if "mcp" in host_components:
-        return GateUpstream("http://mcp-server:8001", _bare(hosts["mcp"]), False)
+        return GateUpstream("http://login-gate:8002", _bare(hosts["mcp"]), False)
     if mode == "vm" and hosts.get("mcp"):
         name = _bare(hosts["mcp"])
         return GateUpstream(f"https://{name}", name, True)
@@ -368,6 +376,19 @@ def _gate_locations(site: ServiceSite, gate: GateUpstream) -> list[str]:
         )
         for path in GATE_PATHS
     ]
+    # A service may own /assets. Only fixed package paths go to the gate, including after logout.
+    for name in PAGE_ASSET_TYPES:
+        path = f"{PAGE_ASSET_PATH}/{name}"
+        out.append(
+            _location(
+                f"= {path}",
+                "        limit_except GET { deny all; }\n"
+                + "        proxy_pass_request_headers off;\n"
+                + "        proxy_pass_request_body off;\n"
+                + '        proxy_set_header Content-Length "";\n'
+                + _gate_proxy(gate, site, path, ""),
+            )
+        )
     for route in sorted(logins, key=lambda r: r.key):
         out.append(
             _location(
@@ -400,18 +421,20 @@ def _gate_locations(site: ServiceSite, gate: GateUpstream) -> list[str]:
     return out
 
 
+def _health_location(site: ServiceSite) -> str:
+    # Ship probes from CI and the MCP probes through the app hostname, including laptop HTTP.
+    # Both need access from any address. Forward only the declared path for every matching URI.
+    if site.health_path is None:
+        return ""
+    return _location(
+        f"= {SERVICE_HEALTH_PATH}",
+        "        limit_except GET {\n            deny all;\n        }\n"
+        + _service_proxy(site.upstream, site.health_path),
+    )
+
+
 def _service_locations(site: ServiceSite, mode: str, gate: GateUpstream | None) -> str:
-    out = []
-    if site.health_path is not None:
-        # Open to every address, as `ship` polls it from CI; the declared path is forwarded
-        # whatever form of the URI matched.
-        out.append(
-            _location(
-                f"= {SERVICE_HEALTH_PATH}",
-                "        limit_except GET {\n            deny all;\n        }\n"
-                + _service_proxy(site.upstream, site.health_path),
-            )
-        )
+    out = [_health_location(site)]
     reserved = IDENTITY_CLEARED + "        return 404;\n"
     out += [_location("= /_vecten", reserved), _location("/_vecten/", reserved)]
     if gate is not None:
@@ -468,7 +491,7 @@ def _service_servers(
     case_check = f"    if ({variable}) {{\n        return 404;\n    }}\n" if case_map else ""
     return [
         *([case_map] if case_map else []),
-        _redirect_server(site.host),
+        _redirect_server(site.host, _health_location(site) if mode == "local" else ""),
         f"server {{\n    listen 443 ssl;\n    server_name {host};\n"
         + _tls(host, mode)
         + case_check
@@ -477,13 +500,13 @@ def _service_servers(
     ]
 
 
-def _redirect_server(host: str) -> str:
+def _redirect_server(host: str, health: str = "") -> str:
     # $host drops the published port, so a host value carrying one names the target itself.
     target = f"https://{host}" if ":" in host else "https://$host"
     return (
         f"server {{\n    listen 80;\n    server_name {_bare(host)};\n"
         "    location /.well-known/acme-challenge/ { root /var/www/certbot; }\n"
-        f"    location / {{ return 301 {target}$request_uri; }}\n}}\n"
+        f"{health}    location / {{ return 301 {target}$request_uri; }}\n}}\n"
     )
 
 
@@ -496,6 +519,7 @@ def generate_nginx_conf(
     admin_allow: list[str] | tuple[str, ...] = (),
     airflow_allow: list[str] | tuple[str, ...] = (),
     services: Sequence[ServiceSite] = (),
+    standalone_gate: bool = False,
 ) -> str:
     unknown = [c for c in host_components if c not in HOST_KEYS]
     if unknown:
@@ -509,7 +533,8 @@ def generate_nginx_conf(
         CONNECTION_UPGRADE_MAP
         + (SERVICE_MAPS if services else "")
         + (GATE_MAPS if gated else "")
-        + RESOLVER,
+        + RESOLVER
+        + SERVER_NAMES_BUCKET,
         "server {\n    listen 80 default_server;\n    listen 443 ssl default_server;\n"
         "    server_name _;\n    ssl_reject_handshake on;\n    return 444;\n}\n",
     ]
@@ -530,6 +555,16 @@ def generate_nginx_conf(
         out.append(
             f"server {{\n    listen 443 ssl;\n    server_name {host};\n"
             + _tls(host, mode)
+            + (
+                "".join(
+                    _location(
+                        f"= /gate/{path}", _upstream("http://login-gate:8002") + PROXY_HEADERS
+                    )
+                    for path in (*GATE_PATHS, "verify")
+                )
+                if standalone_gate or gated
+                else ""
+            )
             + _admin_location(admin_panel, list(admin_allow))
             + "    location / {\n"
             + MCP_PROXY
@@ -550,6 +585,7 @@ def write_nginx(
     admin_allow: list[str] | tuple[str, ...] = (),
     airflow_allow: list[str] | tuple[str, ...] = (),
     services: Sequence[ServiceSite] = (),
+    standalone_gate: bool = False,
 ) -> None:
     conf_dir = stack_dir / "nginx" / "conf.d"
     conf_dir.mkdir(parents=True, exist_ok=True)
@@ -561,5 +597,6 @@ def write_nginx(
         admin_allow=admin_allow,
         airflow_allow=airflow_allow,
         services=services,
+        standalone_gate=standalone_gate,
     )
     write_text_atomic(conf_dir / "default.conf", conf)

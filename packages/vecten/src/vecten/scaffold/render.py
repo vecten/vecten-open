@@ -8,7 +8,7 @@ from pathlib import Path
 from copier import run_copy
 
 from vecten.knowhow.render import vendor_skills
-from vecten.scaffold.baseline import write_baseline
+from vecten.scaffold.baseline import BASELINE, write_baseline
 from vecten.scaffold.params import ScaffoldParams
 
 OWNER_FILES = frozenset({"osi/metrics.json", "evals/semantic.yaml"})
@@ -50,11 +50,13 @@ def render_project(target: Path, params: ScaffoldParams) -> list[Path]:
             for p in pristine.rglob("*")
             if p.is_file()
         }
+        rendered = []
         for name in files:
             dest = target / name
             if name in OWNER_FILES and dest.exists():
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(pristine / name, dest)
+            rendered.append(dest)
         write_baseline(target, params.vecten_version, files)
-    return sorted(p for p in target.rglob("*") if p.is_file())
+    return sorted([*rendered, target / BASELINE])

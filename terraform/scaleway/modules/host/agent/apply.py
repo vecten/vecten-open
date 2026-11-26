@@ -106,8 +106,8 @@ LEGACY_HOST_DEFAULTS = {
     "service_network": "",
 }
 LEGACY_OUTPUT_KEYS = ("bucket", "secret_prefix")
-# Present only when the project declares an area, so a project without one ships unchanged.
-OPTIONAL_HOST_KEYS = {"areas": []}
+# Omitted from host records when the project has no corresponding declaration.
+OPTIONAL_HOST_KEYS = {"areas": [], "source_layer_areas": [], "airflow_api_accounts": {}}
 _AREA = re.compile(r"[a-z][a-z0-9]{0,56}")
 # What the watcher needs before any release exists on the host; user data writes it.
 WATCH_KEYS = ("host", "components", "bucket", "region", "project_id", "secret_prefix")
@@ -189,6 +189,7 @@ NGINX_UID, NGINX_GID = 101, 101
 SETUP_PASSWORDS = {
     "with_airflow": (("AIRFLOW_DB_PASSWORD", "AIRFLOW_DB_PASSWORD"),),
     "with_mcp_state": (("MCP_STATE_DB_PASSWORD", "MCP_STATE_DB_PASSWORD"),),
+    "with_gate": (("MCP_GATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"),),
     "with_warehouse": (("LOADER_PASSWORD", "LOADER_PASSWORD"),),
     "with_mcp": (
         ("PROVISIONER_PASSWORD", "MCP_PROVISIONER_PASSWORD"),
@@ -227,6 +228,14 @@ class AgentError(Exception):
 
 class PrivilegeError(AgentError):
     """The process may not bind the source port the metadata server demands."""
+
+
+class UngrantedSecretError(AgentError):
+    """The cloud refused a secret, or has no secret to write, until the host is granted it.
+
+    A generated name new to an environment exists and is writable only after the commands
+    the backend's `grant_steps` names have run.
+    """
 
 
 @contextlib.contextmanager
@@ -403,7 +412,9 @@ def scope_for(name: str) -> str:
     return "platform"
 
 
-def setup_flags(instance_databases: list[str], with_mcp: bool) -> dict[str, str]:
+def setup_flags(
+    instance_databases: list[str], with_mcp: bool, with_gate: bool = False
+) -> dict[str, str]:
     unknown = sorted(set(instance_databases) - set(SETUP_DATABASES))
     if unknown:
         raise AgentError(f"no setup for database(s): {', '.join(unknown)}")
@@ -415,6 +426,7 @@ def setup_flags(instance_databases: list[str], with_mcp: bool) -> dict[str, str]
     return {
         "with_airflow": flag("airflow" in instance_databases),
         "with_mcp_state": flag("mcp_state" in instance_databases),
+        "with_gate": flag(with_gate and "mcp_state" in instance_databases),
         "with_warehouse": flag(with_warehouse),
         "with_mcp": flag(with_mcp and with_warehouse),
     }
@@ -443,11 +455,25 @@ def load_host(release: Path) -> dict:
         raise AgentError(f"{path} lacks {', '.join(missing)}")
     for key, value in OPTIONAL_HOST_KEYS.items():
         host.setdefault(key, value)
+    accounts = host["airflow_api_accounts"]
+    if not isinstance(accounts, dict) or any(
+        not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}", account)
+        or account.lower() == AIRFLOW_ADMIN_USER
+        or not isinstance(secret, str)
+        or secret not in host["connector_secrets"]
+        for account, secret in accounts.items()
+    ):
+        raise AgentError(f"{path} names an invalid Airflow API account or undeclared password")
     areas = host["areas"]
     if not isinstance(areas, list) or not all(
         isinstance(a, str) and _AREA.fullmatch(a) for a in areas
     ):
         raise AgentError(f"{path} names areas outside [a-z][a-z0-9]*")
+    restricted = host["source_layer_areas"]
+    if not isinstance(restricted, list) or not all(
+        isinstance(a, str) and a in areas and len(a) <= 53 for a in restricted
+    ):
+        raise AgentError(f"{path} names invalid source_layer_areas")
     host["release"] = str(release)
     return host
 
@@ -468,7 +494,7 @@ def _holds(outputs: dict, database: str) -> bool:
     return any(database in p["databases"] for p in outputs["postgres"].values())
 
 
-def generated_names(outputs: dict) -> list[str]:
+def generated_names(outputs: dict, with_gate: bool = False) -> list[str]:
     """The credentials the setup host creates; the IAM role grants exactly these names."""
     components = project_components(outputs)
     warehouse = _holds(outputs, "warehouse")
@@ -479,6 +505,8 @@ def generated_names(outputs: dict) -> list[str]:
         names.append("LOADER_PASSWORD")
     if "mcp" in components:
         names.append("MCP_STATE_DB_PASSWORD")
+        if with_gate:
+            names.append("MCP_GATE_DB_PASSWORD")
         if warehouse:
             names += ["MCP_PROVISIONER_PASSWORD", "MCP_IMPERSONATOR_PASSWORD"]
     return names
@@ -495,6 +523,10 @@ class Backend:
     container_key: tuple[str, str] | None = None
 
     def describe(self, name: str) -> str:
+        raise NotImplementedError
+
+    def grant_steps(self, env: str) -> str:
+        """The instruction, run from the project, that grants the host a newly generated name."""
         raise NotImplementedError
 
     def read_secret(self, name: str) -> str | None:
@@ -530,6 +562,15 @@ class AwsBackend(Backend):
     def describe(self, name: str) -> str:
         return f"{self.secret_prefix}{scope_for(name)}/{name}"
 
+    def grant_steps(self, env: str) -> str:
+        # Terraform grants the instance role every generated name; the agent creates the secret.
+        return f"run `vecten deploy --env {env}`"
+
+    def _error(self, message: str, stderr: str) -> AgentError:
+        if "AccessDenied" in stderr:
+            return UngrantedSecretError(message)
+        return AgentError(message)
+
     def read_reference(self, reference: str) -> str | None:
         """The value of `reference` (a name or an ARN), or None when it holds no value."""
         result = self.run(
@@ -540,7 +581,7 @@ class AwsBackend(Backend):
             return result.stdout[:-1] if result.stdout.endswith("\n") else result.stdout
         if "ResourceNotFoundException" in result.stderr:
             return None
-        raise AgentError(f"reading {reference} failed (exit {result.returncode})")
+        raise self._error(f"reading {reference} failed (exit {result.returncode})", result.stderr)
 
     def read_secret(self, name: str) -> str | None:
         return self.read_reference(self.describe(name))
@@ -554,7 +595,7 @@ class AwsBackend(Backend):
         if created.returncode == 0:
             return
         if "ResourceExistsException" not in created.stderr:
-            raise AgentError(f"creating {sid} failed (exit {created.returncode})")
+            raise self._error(f"creating {sid} failed (exit {created.returncode})", created.stderr)
         if name in AIRFLOW_APP_SECRETS:
             # The platform host's role may create these secrets but not write a version.
             raise AgentError(
@@ -569,7 +610,7 @@ class AwsBackend(Backend):
             input=value,
         )
         if put.returncode != 0:
-            raise AgentError(f"storing {sid} failed (exit {put.returncode})")
+            raise self._error(f"storing {sid} failed (exit {put.returncode})", put.stderr)
 
     def get_object(self, key: str) -> bytes | None:
         raise AgentError("on AWS, releases arrive through SSM; the agent reads no objects")
@@ -637,6 +678,10 @@ class ScalewayBackend(Backend):
         path, plain = self.secret_location(name)
         return f"{path}/{plain}"
 
+    def grant_steps(self, env: str) -> str:
+        # Bootstrap writes the host key's policy; Terraform then creates the empty secret.
+        return f"run `vecten bootstrap --env {env}`, then `vecten deploy --env {env}`"
+
     def _api(
         self, method: str, path: str, query: dict | None = None, payload: dict | None = None
     ) -> tuple[int, bytes]:
@@ -651,9 +696,10 @@ class ScalewayBackend(Backend):
         return self._send(method, url, headers, body)
 
     def _failure(self, operation: str, subject: str, status: int, raw: bytes) -> AgentError:
-        return AgentError(
+        message = (
             f"Secret Manager {operation} for {subject} answered HTTP {status}{_error_type(raw)}"
         )
+        return UngrantedSecretError(message) if status == 403 else AgentError(message)
 
     def _secret_id(self, name: str) -> str | None:
         path, plain = self.secret_location(name)
@@ -708,9 +754,7 @@ class ScalewayBackend(Backend):
         sid = self._secret_id(name)
         # Terraform creates every secret a VM writes, and the VM key may only add versions.
         if sid is None:
-            raise AgentError(
-                f"{self.describe(name)} does not exist; run `vecten deploy` to create it"
-            )
+            raise UngrantedSecretError(f"{self.describe(name)} does not exist")
         payload = {"data": base64.b64encode(value.encode("utf-8")).decode("ascii")}
         status, raw = self._api(
             "POST", f"/secrets/{urllib.parse.quote(sid, safe='')}/versions", payload=payload
@@ -792,16 +836,32 @@ def _new_value(name: str) -> str:
     return secrets.token_urlsafe(32)
 
 
+def _needs_gate_password(host: dict) -> bool:
+    # Older releases have no standalone gate in their recorded service secrets.
+    return "MCP_GATE_DB_PASSWORD" in host.get("service_secrets", [])
+
+
 def ensure_generated(host: dict, outputs: dict, run: Run, backend: Backend | None = None) -> None:
     backend = backend or backend_for(host, run)
     names = []
     if host["setup_host"]:
-        names += generated_names(outputs)
+        names += generated_names(outputs, _needs_gate_password(host))
     if "platform" in host["components"]:
         names += list(AIRFLOW_APP_SECRETS)
     for name in names:
-        if not backend.secret_has_value(name):
-            backend.add_secret_version(name, _new_value(name))
+        try:
+            if not backend.secret_has_value(name):
+                backend.add_secret_version(name, _new_value(name))
+        except UngrantedSecretError as exc:
+            raise AgentError(f"{exc}; {_grant_advice(name, backend, host['env'])}") from None
+
+
+def _grant_advice(name: str, backend: Backend, env: str) -> str:
+    if name == "MCP_GATE_DB_PASSWORD":
+        lead = "MCP_GATE_DB_PASSWORD is new with the first bound `login` route:"
+    else:
+        lead = f"if {name} is new to this environment,"
+    return f"{lead} {backend.grant_steps(env)}, then ship again"
 
 
 def _instance(outputs: dict, database: str) -> dict:
@@ -850,10 +910,12 @@ def secret_env(
         )
     if "mcp" in components:
         env["MCP_STATE_DB_PASSWORD"] = _required(backend, "MCP_STATE_DB_PASSWORD")
+        if _needs_gate_password(host):
+            env["MCP_GATE_DB_PASSWORD"] = _required(backend, "MCP_GATE_DB_PASSWORD")
     requested = set(env) | set(host["connector_secrets"] if "platform" in components else ())
     # Optional like connector secrets: an unset name reaches its service empty.
     for name in host["service_secrets"]:
-        if name not in requested:
+        if name not in requested and name != "MCP_GATE_DB_PASSWORD":
             value = backend.read_secret(name)
             if value is not None:
                 env[name] = value
@@ -921,7 +983,9 @@ def isolate_services(host: dict, run: Run, create_chain: bool = False) -> None:
     bridge = host["service_network"]
     if not bridge:
         return
-    if not _INTERFACE.fullmatch(bridge):
+    # Only the reserved service prefix may match more than one bridge. Older releases
+    # provide their exact interface name in the same field.
+    if bridge != "vecten-+" and not _INTERFACE.fullmatch(bridge):
         raise AgentError(f"service_network {bridge!r} is no interface name")
     address = METADATA_ADDRESSES.get(host["cloud"])
     if address is None:
@@ -1027,7 +1091,7 @@ def run_setup(host: dict, outputs: dict, run: Run, backend: Backend | None = Non
             raise AgentError(
                 f"the {key} instance's master secret is not username/password JSON"
             ) from None
-        flags = setup_flags(instance["databases"], with_mcp)
+        flags = setup_flags(instance["databases"], with_mcp, _needs_gate_password(host))
         env = {"PGPASSWORD": password, "PGSSLMODE": "require", "MASTER_ROLE": user}
         for flag, pairs in SETUP_PASSWORDS.items():
             if flags[flag] == "true":
@@ -1043,6 +1107,8 @@ def run_setup(host: dict, outputs: dict, run: Run, backend: Backend | None = Non
             args += ["-v", f"{flag}={value}"]
         if host["areas"]:
             args += ["-v", "areas=" + ",".join(host["areas"])]
+        if host.get("source_layer_areas"):
+            args += ["-v", "source_layer_areas=" + ",".join(host["source_layer_areas"])]
         args += ["-f", "/sql/warehouse_setup.sql"]
         # psql's output can quote the statements it ran, so only the exit code is reported.
         result = run(args, env=env)
@@ -1196,18 +1262,33 @@ def _write_private(path: Path, text: str, owner: tuple) -> None:
         os.chown(str(path), *owner)
 
 
-def write_run_files(host: dict, env: dict[str, str], run_dir: Path) -> None:
+def write_run_files(
+    host: dict, env: dict[str, str], run_dir: Path, *, skip_missing_accounts: bool = False
+) -> str:
+    """Write runtime credentials and return the matching viewer roles for Compose."""
     if run_dir.is_file() or run_dir.is_symlink():
         run_dir.unlink()
     run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     run_dir.chmod(0o700)
     if "platform" not in host["components"]:
-        return
-    passwords = json.dumps({AIRFLOW_ADMIN_USER: env["AIRFLOW_ADMIN_PASSWORD"]})
+        return ""
+    users = {AIRFLOW_ADMIN_USER: env["AIRFLOW_ADMIN_PASSWORD"]}
+    for name, secret in host.get("airflow_api_accounts", {}).items():
+        if not env.get(secret):
+            message = f"Airflow API account {name} needs the declared secret {secret}"
+            if skip_missing_accounts:
+                print(
+                    f"Skipping Airflow API account {name}: missing secret {secret}", file=sys.stderr
+                )
+                continue
+            raise AgentError(message)
+        users[name] = env[secret]
+    passwords = json.dumps(users)
     _write_private(run_dir / "airflow_passwords.json", passwords, (AIRFLOW_UID, AIRFLOW_GID))
     digest = hashlib.sha1(env["AIRFLOW_BASIC_AUTH_PASSWORD"].encode("utf-8")).digest()
     line = f"{AIRFLOW_BASIC_AUTH_USER}:{{SHA}}{base64.b64encode(digest).decode()}\n"
     _write_private(run_dir / "htpasswd", line, (NGINX_UID, NGINX_GID))
+    return "".join(f",{name}:viewer" for name in sorted(users) if name != AIRFLOW_ADMIN_USER)
 
 
 def _real(path: Path) -> Path:
@@ -1391,7 +1472,7 @@ def _start(
                 backend = backend_for(host, run, http)
                 env = secret_env(host, outputs, run, backend)
             with step("run files"):
-                write_run_files(host, env, run_dir)
+                viewers = write_run_files(host, env, run_dir, skip_missing_accounts=True)
             break
         except AgentError:
             if attempt == attempts:
@@ -1402,7 +1483,14 @@ def _start(
     try:
         with step("compose up"):
             stack = stack_env(host, backend.container_key)
-            compose_up(release, host, {**stack, **env}, run, force_recreate, injected)
+            compose_up(
+                release,
+                host,
+                {**stack, **env, "VECTEN_AIRFLOW_VIEWERS": viewers},
+                run,
+                force_recreate,
+                injected,
+            )
     except AgentError as exc:
         raise AgentError(str(exc), (list(exc.log) + log)[:LOG_EXCERPT_MAX]) from None
     return log
@@ -1436,7 +1524,7 @@ def ship(
         ensure_certificates(host, outputs, run, sleep, resolve)
     try:
         with step("run files"):
-            write_run_files(host, env, run_dir or RUN_DIR)
+            viewers = write_run_files(host, env, run_dir or RUN_DIR)
         with step("service isolation"):
             isolate_services(host, run)
             if host["service_network"]:
@@ -1455,10 +1543,11 @@ def ship(
             swap(releases, release)
         with step("compose up"):
             stack = stack_env(host, backend.container_key)
+            compose_env = {**stack, **env, "VECTEN_AIRFLOW_VIEWERS": viewers}
             compose_up(
                 release,
                 host,
-                {**stack, **env},
+                compose_env,
                 run,
                 force_recreate=reshipped,
                 secrets=_injected(env, backend),
@@ -1470,7 +1559,7 @@ def ship(
         raise AgentError(f"{exc}; {outcome}", log[:LOG_EXCERPT_MAX]) from None
     with contextlib.suppress(FileNotFoundError):
         (_real(release) / NEVER_STARTED).unlink()
-    return orphaned_volumes(release, host, {**stack, **env}, run)
+    return orphaned_volumes(release, host, compose_env, run)
 
 
 def _ensure_nginx(host: dict, run: Run) -> None:

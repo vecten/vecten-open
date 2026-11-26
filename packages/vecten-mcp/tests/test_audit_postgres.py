@@ -49,6 +49,8 @@ def database(tmp_path_factory):
                     "exec",
                     "-e",
                     "MCP_STATE_DB_PASSWORD=fixture-state",
+                    "-e",
+                    "MCP_GATE_DB_PASSWORD=fixture-gate",
                     name,
                     "psql",
                     "-U",
@@ -59,6 +61,8 @@ def database(tmp_path_factory):
                     "with_airflow=false",
                     "-v",
                     "with_mcp_state=true",
+                    "-v",
+                    "with_gate=true",
                     "-v",
                     "with_warehouse=false",
                     "-v",
@@ -382,3 +386,71 @@ def test_folding_preserves_concurrent_admin_status(database, monkeypatch, fallba
         release.set()
         audit.close()
         state.close()
+
+
+def test_gate_role_can_use_gate_state_but_cannot_modify_identity_or_issuer_sessions(database):
+    from sqlalchemy.engine import URL
+
+    from vecten_mcp.state import StateStore
+
+    with database("mcp_state", "fixture-state", "mcp_state") as conn:
+        owner_url = URL.create(
+            "postgresql+psycopg",
+            username="mcp_state",
+            password="fixture-state",
+            host=conn.info.host,
+            port=conn.info.port,
+            database="mcp_state",
+        )
+    owner = StateStore(owner_url)
+    gate = StateStore(owner_url.set(username="mcp_gate", password="fixture-gate"), initialize=False)
+    try:
+        user = owner.invite("gate-fixture@example.org", "Fixture", "gatefixture", provisioned=True)
+        pid = user["id"]
+        owner.put("browser_sessions", "session-key", {"principal_id": pid})
+        owner.put("panel_sessions", "panel-key", {"principal_id": pid})
+        owner.put("gate_codes", "code", {"principal_id": pid}, expires_at=30)
+        owner.put("app_admission", "app", {"groups": ["default"]})
+        assert gate.principal(pid)["email"] == user["email"]
+        assert "default" in gate.groups_for(pid)
+        assert gate.get("app_admission", "app") == {"groups": ["default"]}
+        assert gate.take("gate_codes", "code", now=10) == {"principal_id": pid}
+        assert gate.take("gate_codes", "code", now=10) is None
+        gate.open_gate_session("gate-key", pid, "app.example", now=10, expires_at=30)
+        gate.logout_gate_session("gate-key", now=15)
+        assert gate.gate_session("gate-key", now=16) is None
+        first = owner.get("gate_logouts", pid)
+        gate.open_gate_session("next-gate-key", pid, "app.example", now=16, expires_at=30)
+        gate.logout_gate_session("next-gate-key", now=17)
+        assert gate.gate_session("next-gate-key", now=18) is None
+        second = owner.get("gate_logouts", pid)
+        assert first and second and second["generation"] != first["generation"]
+        with database("mcp_gate", "fixture-gate", "mcp_state") as db:
+            db.autocommit = True
+            for stmt in (
+                "UPDATE principals SET admin=true WHERE id=%s",
+                "DELETE FROM memberships WHERE principal_id=%s",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    db.execute(stmt, (pid,))
+            for kind in ("panel_sessions", "browser_sessions", "gate_codes", "app_admission"):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    db.execute(
+                        "INSERT INTO records (kind,key,body) VALUES (%s,'new','{}')", (kind,)
+                    )
+            for kind, key in (("browser_sessions", "session-key"), ("panel_sessions", "panel-key")):
+                assert gate.get(kind, key) is None
+                assert (
+                    db.execute(
+                        "UPDATE records SET body='{}' WHERE kind=%s AND key=%s", (kind, key)
+                    ).rowcount
+                    == 0
+                )
+                assert (
+                    db.execute("DELETE FROM records WHERE kind=%s AND key=%s", (kind, key)).rowcount
+                    == 0
+                )
+                assert owner.get(kind, key) == {"principal_id": pid}
+    finally:
+        gate.close()
+        owner.close()

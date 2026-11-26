@@ -9,7 +9,7 @@
   <a href="https://pypi.org/project/vecten-mcp/"><img src="https://img.shields.io/pypi/v/vecten-mcp" alt="PyPI"></a>
   <a href="https://github.com/vecten/vecten-open/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/vecten/vecten-open/ci.yml?branch=main&label=CI" alt="CI"></a>
   <a href="https://github.com/vecten/vecten-open/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="Apache-2.0"></a>
-  <a href="https://github.com/vecten/vecten-open/blob/main/CHANGELOG.md"><img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha"></a>
+  <a href="https://github.com/vecten/vecten-open/blob/main/CHANGELOG.md"><img src="https://img.shields.io/badge/status-beta-yellow" alt="beta"></a>
 </p>
 
 # The Vecten MCP
@@ -97,7 +97,7 @@ Connectors, add a custom connector with the same address. The first call opens t
 
 ## What v0.1 covers
 
-This is an alpha.
+This is a beta.
 
 | | v0.1 |
 |---|---|

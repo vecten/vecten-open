@@ -228,6 +228,7 @@ def backend(agent, fake, key=(ACCESS, SECRET)):
         "AIRFLOW_DB_PASSWORD",
         "HUBSPOT_API_KEY",
         "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
         "DEPLOY_SNOWFLAKE_USER",
         "ADMIN_ANNA_PASSWORD",
         "SETUP_STATE_ADMIN_PASSWORD",
@@ -290,8 +291,8 @@ def test_add_secret_version_posts_base64_data_to_the_shell(agent):
     assert not any("jwt-value" in u for u in fake.urls())
 
 
-def test_adding_a_version_without_the_terraform_shell_names_deploy(agent):
-    with pytest.raises(agent.AgentError, match="does not exist.*vecten deploy"):
+def test_adding_a_version_without_the_terraform_shell_is_refused(agent):
+    with pytest.raises(agent.UngrantedSecretError, match="AIRFLOW_JWT_SECRET does not exist"):
         backend(agent, FakeScaleway()).add_secret_version("AIRFLOW_JWT_SECRET", "v")
 
 
@@ -345,7 +346,7 @@ def test_put_object_signs_the_body_hash(agent):
 # ---------------------------------------------------------------- ship on Scaleway
 
 
-def scw_store(fake, out):
+def scw_store(fake, out, *, with_gate=False):
     """Every secret a standard or minimal Scaleway environment holds once it has shipped."""
     for key in out["postgres"]:
         fake.add_secret(
@@ -360,6 +361,7 @@ def scw_store(fake, out):
             "AIRFLOW_DB_PASSWORD",
             "LOADER_PASSWORD",
             "MCP_STATE_DB_PASSWORD",
+            *(["MCP_GATE_DB_PASSWORD"] if with_gate else []),
             "MCP_PROVISIONER_PASSWORD",
             "MCP_IMPERSONATOR_PASSWORD",
             "AIRFLOW_FERNET_KEY",
@@ -388,14 +390,81 @@ def ship_scaleway(agent, release, run, fake, monkeypatch):
     )
 
 
-def test_minimal_ship_on_scaleway_generates_sets_up_and_starts(agent, tmp_path, monkeypatch):
+@pytest.mark.parametrize("refusal", ["no shell", "403"])
+def test_a_first_login_route_before_bootstrap_stops_naming_bootstrap_then_deploy(
+    agent, tmp_path, monkeypatch, refusal
+):
+    out = scw_outputs("minimal")
+    release = stage_scaleway(tmp_path / "releases", out, "main")
+    path = release / ".vecten/ship/host.json"
+    host = json.loads(path.read_text())
+    host["service_secrets"] = ["MCP_GATE_DB_PASSWORD"]
+    path.write_text(json.dumps(host))
+    fake = FakeScaleway()
+    scw_store(fake, out, with_gate=refusal == "403")
+    if refusal == "403":
+        (sid,) = [k for k, s in fake.secrets.items() if s["name"] == "MCP_GATE_DB_PASSWORD"]
+        fake.fail("POST", f"{SCW_API}/secrets/{sid}/versions", 403)
+    write_key(agent)
+    run = FakeRun()
+    with pytest.raises(agent.AgentError) as exc:
+        ship_scaleway(agent, release, run, fake, monkeypatch)
+    message = str(exc.value)
+    assert message.startswith("generated secrets: ")
+    assert f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD" in message
+    assert ("does not exist" if refusal == "no shell" else "HTTP 403 permissions_denied") in message
+    assert message.endswith(
+        "MCP_GATE_DB_PASSWORD is new with the first bound `login` route: run "
+        "`vecten bootstrap --env prod`, then `vecten deploy --env prod`, then ship again"
+    )
+    assert "secret-ish" not in message
+    assert compose_calls(run) == []
+    assert not [c for c in run.calls if "psql" in c["args"]]
+
+
+def test_any_generated_name_refused_on_scaleway_names_bootstrap_then_deploy(agent, tmp_path):
+    out = scw_outputs("minimal")
+    host = agent.load_host(stage_scaleway(tmp_path / "releases", out, "main"))
+    fake = FakeScaleway()
+    scw_store(fake, out)
+    fake.fail("POST", f"{SCW_API}/secrets/", 403)
+    with pytest.raises(agent.AgentError) as exc:
+        agent.ensure_generated(host, out, FakeRun(), backend(agent, fake))
+    assert str(exc.value).endswith(
+        "; if AIRFLOW_DB_PASSWORD is new to this environment, run "
+        "`vecten bootstrap --env prod`, then `vecten deploy --env prod`, then ship again"
+    )
+
+
+def test_a_scaleway_error_other_than_403_carries_no_grant_advice(agent, tmp_path):
+    out = scw_outputs("minimal")
+    host = agent.load_host(stage_scaleway(tmp_path / "releases", out, "main"))
+    fake = FakeScaleway()
+    scw_store(fake, out)
+    fake.fail("POST", f"{SCW_API}/secrets/", 500)
+    with pytest.raises(agent.AgentError) as exc:
+        agent.ensure_generated(host, out, FakeRun(), backend(agent, fake))
+    assert "HTTP 500" in str(exc.value) and "ship again" not in str(exc.value)
+
+
+@pytest.mark.parametrize("gate", [False, True])
+def test_minimal_ship_on_scaleway_generates_sets_up_and_starts(agent, tmp_path, monkeypatch, gate):
     out = scw_outputs("minimal")
     release = stage_scaleway(tmp_path / "releases", out, "main")
     fake = FakeScaleway()
-    scw_store(fake, out)
+    if gate:
+        path = release / ".vecten/ship/host.json"
+        host = json.loads(path.read_text())
+        host["service_secrets"] = ["MCP_GATE_DB_PASSWORD"]
+        path.write_text(json.dumps(host))
+    scw_store(fake, out, with_gate=gate)
     write_key(agent)
     run = FakeRun()
     ship_scaleway(agent, release, run, fake, monkeypatch)
+    if gate:
+        assert fake.value("MCP_GATE_DB_PASSWORD")
+    else:
+        assert not any("MCP_GATE_DB_PASSWORD" in url for url in fake.urls())
     assert not run.argv("aws")
     for name in ("AIRFLOW_DB_PASSWORD", "MCP_IMPERSONATOR_PASSWORD", "AIRFLOW_FERNET_KEY"):
         assert fake.value(name), name

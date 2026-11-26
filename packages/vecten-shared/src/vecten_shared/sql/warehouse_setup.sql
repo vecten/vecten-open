@@ -12,6 +12,10 @@
 \else
 \set with_mcp_state ''
 \endif
+\if :{?with_gate}
+\else
+\set with_gate 'false'
+\endif
 \if :{?with_warehouse}
 \else
 \set with_warehouse ''
@@ -23,7 +27,7 @@
 SELECT format('DO $check$ BEGIN RAISE EXCEPTION %L; END $check$',
               name || ' must be exactly true or false, got: ' || value)
 FROM (VALUES ('with_airflow', :'with_airflow'), ('with_mcp_state', :'with_mcp_state'),
-             ('with_warehouse', :'with_warehouse'), ('with_mcp', :'with_mcp')) AS flags (name, value)
+             ('with_warehouse', :'with_warehouse'), ('with_mcp', :'with_mcp'), ('with_gate', :'with_gate')) AS flags (name, value)
 WHERE value NOT IN ('true', 'false') \gexec
 -- The declared restricted areas, comma-separated; each becomes core_<area> and marts_<area>.
 \if :{?areas}
@@ -33,6 +37,13 @@ WHERE value NOT IN ('true', 'false') \gexec
 SELECT format('DO $check$ BEGIN RAISE EXCEPTION %L; END $check$',
               'areas must be comma-separated names matching [a-z][a-z0-9]*, got: ' || :'areas')
 WHERE :'areas' !~ '^([a-z][a-z0-9]{0,56}(,[a-z][a-z0-9]{0,56})*)?$' \gexec
+\if :{?source_layer_areas}
+\else
+\set source_layer_areas ''
+\endif
+SELECT format('DO $err$ BEGIN RAISE EXCEPTION %L; END $err$', 'invalid source_layer_areas')
+WHERE :'source_layer_areas' !~ '^([a-z][a-z0-9]{0,52}(,[a-z][a-z0-9]{0,52})*)?$'
+   OR NOT string_to_array(:'source_layer_areas', ',') <@ string_to_array(:'areas', ',') \gexec
 
 -- RDS's master is CREATEROLE without superuser: from Postgres 16 it holds ADMIN OPTION on the
 -- roles it creates but no SET, which CREATE DATABASE ... OWNER and SET ROLE need. Each owner
@@ -63,6 +74,26 @@ RESET ROLE;
 
 \if :with_mcp_state
 \getenv mcp_state_password MCP_STATE_DB_PASSWORD
+\if :with_gate
+\getenv mcp_gate_password MCP_GATE_DB_PASSWORD
+-- Existing installations could have given the name to a person or a warehouse group.
+-- Never turn that role (or its members) into a reader of MCP identity state.
+DO $check_gate$
+BEGIN
+  IF EXISTS (
+    SELECT FROM pg_roles r WHERE r.rolname = 'mcp_gate' AND
+      (shobj_description(r.oid, 'pg_authid') IS DISTINCT FROM 'Vecten service login: MCP gate'
+       OR NOT r.rolcanlogin OR r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb
+       OR r.rolreplication OR EXISTS (SELECT FROM pg_auth_members m WHERE m.member = r.oid))
+  ) THEN
+    RAISE EXCEPTION 'existing mcp_gate role is not the dedicated gate login';
+  END IF;
+END;
+$check_gate$;
+SELECT format('CREATE ROLE mcp_gate LOGIN PASSWORD %L; '
+              'COMMENT ON ROLE mcp_gate IS %L', :'mcp_gate_password', 'Vecten service login: MCP gate')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mcp_gate') \gexec
+\endif
 SELECT format('CREATE ROLE mcp_state LOGIN PASSWORD %L', :'mcp_state_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mcp_state') \gexec
 SELECT format('GRANT mcp_state TO %I WITH INHERIT FALSE, SET TRUE', :'master_role')
@@ -96,6 +127,10 @@ SET ROLE mcp_state_maintenance;
 GRANT CONNECT ON DATABASE mcp_state TO mcp_state;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE, CREATE ON SCHEMA public TO mcp_state;
+\if :with_gate
+GRANT CONNECT ON DATABASE mcp_state TO mcp_gate;
+GRANT USAGE ON SCHEMA public TO mcp_gate;
+\endif
 CREATE SCHEMA IF NOT EXISTS vecten_audit AUTHORIZATION mcp_state_maintenance;
 REVOKE ALL ON SCHEMA vecten_audit FROM PUBLIC;
 GRANT USAGE ON SCHEMA vecten_audit TO mcp_state;
@@ -225,6 +260,9 @@ CREATE SCHEMA IF NOT EXISTS staging AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS snapshots AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS core AUTHORIZATION loader;
 CREATE SCHEMA IF NOT EXISTS marts AUTHORIZATION loader;
+SELECT format('CREATE SCHEMA IF NOT EXISTS %I AUTHORIZATION loader', layer || '_' || area)
+FROM unnest(string_to_array(:'source_layer_areas', ',')) AS area
+CROSS JOIN unnest(ARRAY['staging', 'snapshots']) AS layer \gexec
 -- An area's schemas exist before the helpers are installed below, so the first area grant
 -- finds a helper; no role is granted anything in them here.
 SELECT format('CREATE SCHEMA IF NOT EXISTS %I AUTHORIZATION loader', layer || '_' || area)
@@ -247,6 +285,7 @@ RESET ROLE;
 SELECT 'GRANT analyst TO provisioner WITH ADMIN TRUE, INHERIT FALSE, SET FALSE' WHERE :'with_mcp' = 'true' \gexec
 \if :with_mcp
 SET ROLE loader;
+SELECT set_config('vecten.source_layer_areas', :'source_layer_areas', false);
 -- BEGIN VECTEN ACCESS HELPERS
 CREATE SCHEMA IF NOT EXISTS vecten_access;
 REVOKE ALL ON SCHEMA vecten_access FROM PUBLIC;
@@ -265,16 +304,28 @@ DECLARE
     fn text;
     body text;
     installer text := current_user;
+    source_areas text[] := string_to_array(coalesce(current_setting('vecten.source_layer_areas', true), ''), ',');
     had_create boolean;
     had_usage boolean;
 BEGIN
     FOR scope IN
-        SELECT n.oid AS schema_oid, n.nspname, r.oid AS owner_oid, r.rolname
+        SELECT n.oid AS schema_oid, n.nspname, r.oid AS owner_oid, r.rolname,
+               n.nspname !~ '^(staging|snapshots)_' OR
+                   split_part(n.nspname, '_', 2) = ANY(source_areas) AS allow_grants
         FROM pg_catalog.pg_namespace n CROSS JOIN pg_catalog.pg_roles r
         WHERE (n.nspname IN ('core','marts','staging','snapshots')
                OR n.nspname ~ '^raw_[a-zA-Z0-9_]+$'
-               OR n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$')
+               OR n.nspname ~ '^(core|marts)_[a-z][a-z0-9]*$'
+               OR (n.nspname ~ '^(staging|snapshots)_[a-z][a-z0-9]*$'
+                   AND (split_part(n.nspname, '_', 2) = ANY(source_areas)
+                        OR EXISTS (SELECT FROM vecten_access.helpers h
+                                   WHERE h.schema_name=n.nspname))))
         AND (r.oid=n.nspowner
+             -- A source-layer schema keeps every recorded helper available, revoke-only
+             -- after an opt-out, including the helper of a role that owns nothing there.
+             OR (n.nspname ~ '^(staging|snapshots)_' AND EXISTS (
+                 SELECT FROM vecten_access.helpers h
+                 WHERE h.schema_name=n.nspname AND h.owner_oid=r.oid))
              OR EXISTS (SELECT FROM pg_catalog.pg_class c
                         WHERE c.relnamespace=n.oid AND c.relowner=r.oid)
              OR EXISTS (SELECT FROM pg_catalog.pg_default_acl d
@@ -311,6 +362,9 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'target is not a bounded reader role' USING ERRCODE='42501';
     END IF;
+    IF enabled AND NOT %L::boolean THEN
+        RAISE EXCEPTION 'schema is outside the installed source area list' USING ERRCODE='42501';
+    END IF;
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_namespace
                    WHERE oid=schema_id AND nspname=%L) THEN
         RAISE EXCEPTION 'schema changed; administrator must reinstall access helpers';
@@ -335,7 +389,7 @@ BEGIN
                        current_user,%L,action,direction,target);
     END IF;
 END
-$body$, scope.schema_oid, scope.nspname, scope.nspname, scope.nspname, scope.nspname);
+$body$, scope.schema_oid, scope.allow_grants, scope.nspname, scope.nspname, scope.nspname, scope.nspname);
         had_create := pg_catalog.has_schema_privilege(scope.owner_oid,'vecten_access','CREATE');
         IF NOT had_create THEN
             EXECUTE format('GRANT CREATE ON SCHEMA vecten_access TO %I', scope.rolname);

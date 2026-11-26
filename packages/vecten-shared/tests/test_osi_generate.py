@@ -380,3 +380,16 @@ def test_two_marts_of_one_alias_in_different_schemas_are_refused():
         and "marts_finance.sales_pipeline" in i.message
         for i in exc.value.issues
     )
+
+
+def test_uppercase_key_uses_lowercase_semantic_name_and_physical_expression():
+    manifest, catalog = _artifacts()
+    node = _sales_pipeline(manifest)
+    column = node["columns"].pop("deal_id")
+    node["columns"]["DEAL_ID"] = column
+    node["meta"] = {"osi": {"primary_key": ["DEAL_ID"]}}
+    doc = generate_datasets(manifest, catalog, database="SHOP", model_name="shop")
+    dataset = next(d for d in doc["semantic_model"][0]["datasets"] if d["name"] == node["alias"])
+    field = next(f for f in dataset["fields"] if f["name"] == "deal_id")
+    assert dataset["primary_key"] == ["deal_id"]
+    assert field["expression"]["dialects"][0]["expression"] == "DEAL_ID"

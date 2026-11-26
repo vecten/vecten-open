@@ -203,10 +203,12 @@ def test_package_metadata_identifies_the_project():
         root = REPO / "packages" / name
         p = tomllib.loads((root / "pyproject.toml").read_text())["project"]
         assert (root / p["readme"]).is_file(), name
+        assert "NOTICE" in p["license-files"]
+        assert (root / "NOTICE").read_bytes() == (REPO / "NOTICE").read_bytes()
         assert p["authors"] == [{"name": "Vecten"}], name
         assert p["keywords"] and all(" " not in k or k.islower() for k in p["keywords"]), name
         assert name != "vecten" or "cli" in p["keywords"]
-        assert "Development Status :: 3 - Alpha" in p["classifiers"], name
+        assert "Development Status :: 4 - Beta" in p["classifiers"], name
         assert "Programming Language :: Python :: 3.14" in p["classifiers"], name
         for label in ("Homepage", "Source", "Documentation", "Issues", "Changelog", "Security"):
             assert p["urls"][label].startswith(PUBLIC_URL), (name, label)
@@ -228,3 +230,7 @@ def test_a_package_bundling_fonts_declares_their_licence():
         assert all((root / n).is_file() for n in notices), name
         # An Apache-only classifier would understate a wheel that also carries OFL fonts.
         assert not any(c.startswith("License ::") for c in p["classifiers"]), name
+
+
+def test_release_export_includes_image_notice():
+    assert exporter().public("NOTICE")

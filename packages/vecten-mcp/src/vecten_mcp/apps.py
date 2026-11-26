@@ -11,9 +11,11 @@ query_metrics see a model holding only those, and sql-exec reads only their tabl
 import copy
 import dataclasses
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
+import httpx
 from sqlglot import exp
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 
@@ -49,6 +51,8 @@ class BoundApp:
     description: str = ""
     # A container app's hostname label below the environment's domain; None for any other app.
     hostname: str | None = None
+    http_health: bool = True
+    runs_locally: bool = True
 
     @property
     def key(self):
@@ -83,6 +87,8 @@ def read_bound_apps(root, config):
                 version=entry.version if entry else "",
                 description=declared.description if declared else "",
                 hostname=(binding.hostname or name) if container else None,
+                http_health=container and declared.service.health_path is not None,
+                runs_locally=binding.local is not False,
             )
     return found
 
@@ -100,6 +106,21 @@ def app_url(issuer, label):
     name = domain if label == "@" else f"{label}.{domain}"
     port = f":{parts.port}" if parts.port else ""
     return f"https://{name}{port}/"
+
+
+def _probe_app(url, local):
+    host = urlsplit(url).hostname
+    target = "http://nginx/_vecten/health" if local else url + "_vecten/health"
+    headers = {"Host": host} if local else {}
+    try:
+        with httpx.stream(
+            "GET", target, headers=headers, timeout=2, follow_redirects=False, trust_env=False
+        ) as response:
+            if 200 <= response.status_code < 400:
+                return "healthy"
+            return f"unhealthy (HTTP {response.status_code})"
+    except httpx.RequestError:
+        return "unreachable"
 
 
 def scoped_model(model, datasets):
@@ -187,7 +208,7 @@ class AppScopes:
             "enabled": bool(found["enabled"]),
         }
 
-    def listing(self, issuer):
+    def listing(self, issuer, *, check_health=False):
         """Every bound app as the Analytics screen, the admin API and the admin tool show it."""
         failures = self.health()
         entries = []
@@ -208,14 +229,30 @@ class AppScopes:
                     "datasets": list(app.datasets),
                     "state": "bound" if published else "not published",
                     "reason": None if published else self._unpublished(app),
-                    # `vecten ship` reports a service's health to the person who ships;
-                    # nothing hands it to the MCP.
                     "health": None,
                     "binding": f"[apps.{app.extension}.{app.name}] in vecten.toml",
                     "principal": self.principal(app),
                     "failures": [f for f in failures if f["app"] == app.key],
                 }
             )
+        if check_health:
+            local = urlsplit(issuer).hostname == "mcp.localhost"
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                pending = []
+                for row in entries:
+                    app = self.apps[row["name"]]
+                    if app.kind != "container":
+                        continue
+                    if local and not app.runs_locally:
+                        row["health"] = "disabled locally"
+                    elif not app.http_health:
+                        row["health"] = "command check only"
+                    elif not row["url"]:
+                        row["health"] = "hostname unavailable"
+                    else:
+                        pending.append((row, pool.submit(_probe_app, row["url"], local)))
+                for row, result in pending:
+                    row["health"] = result.result()
         return entries
 
     @staticmethod

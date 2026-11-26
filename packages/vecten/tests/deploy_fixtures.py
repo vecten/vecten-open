@@ -308,6 +308,7 @@ class FakeGh:
         created_at: str = "2999-01-01T00:00:00Z",
         logged_in: bool = True,
         canonical: str = "acme/data",
+        default_branch: str | None = "main",
         failing: tuple[str, ...] = (),
         environments: tuple[str, ...] = (),
         branch_policies: bool = True,
@@ -327,6 +328,7 @@ class FakeGh:
                 (entry[0], entry[1], entry[2] if len(entry) > 2 else _stamp(rank * 100 + i))
                 for i, entry in enumerate(found)
             ]
+        self.descriptions = {}
         self._posted = 0
         # How many times a status write (`statuses`) or a commit's status read (`status`)
         # fails with HTTP 502 before it answers.
@@ -341,6 +343,7 @@ class FakeGh:
         self.logged_in = logged_in
         # The repository as GitHub spells it, answered by `repo view`.
         self.canonical = canonical
+        self.default_branch = default_branch
         # Leading words (`api`, `variable`) of calls that exit 1.
         self.failing = failing
         # `repos/<repo>/environments/<env>` paths that exist, each with its
@@ -391,7 +394,13 @@ class FakeGh:
             status = (
                 None
                 if found is None
-                else {"context": {"state": found[1].upper(), "createdAt": found[2]}}
+                else {
+                    "context": {
+                        "state": found[1].upper(),
+                        "createdAt": found[2],
+                        "description": self.descriptions.get((sha, fields["context"])),
+                    }
+                }
             )
             nodes.append({"oid": sha, "status": status})
         more = start + size < len(self.history)
@@ -442,6 +451,7 @@ class FakeGh:
                 return self._fail(args, 502, "Bad Gateway")
             fields = gh_fields(args)
             sha = path.rsplit("/", 1)[-1]
+            self.descriptions[sha, fields["context"]] = fields.get("description")
             self._posted += 1
             created = _stamp(10**6 + self._posted)
             self.statuses.setdefault(sha, []).append((fields["context"], fields["state"], created))
@@ -489,7 +499,14 @@ class FakeGh:
             return subprocess.CompletedProcess(
                 args,
                 0,
-                json.dumps({"nameWithOwner": self.canonical, "defaultBranchRef": {"name": "main"}}),
+                json.dumps(
+                    {
+                        "nameWithOwner": self.canonical,
+                        "defaultBranchRef": {"name": self.default_branch}
+                        if self.default_branch
+                        else None,
+                    }
+                ),
                 "",
             )
         if args[:2] == ["workflow", "run"]:

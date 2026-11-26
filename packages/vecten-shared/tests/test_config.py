@@ -338,6 +338,8 @@ def test_mcp_section_defaults_and_round_trip(tmp_path):
         {"users": 1, "project": {"name": "a", "scaffold_version": "0.1.0"}}
     )
     assert cfg.mcp.auth == "oidc" and cfg.mcp.oidc_issuer is None and cfg.mcp.admins == []
+    assert cfg.mcp.oidc_email_verified_claim == "email_verified"
+    cfg.mcp.oidc_email_verified_claim = "xms_edov"
     cfg.mcp.auth = "password"
     cfg.mcp.oidc_issuer = "https://accounts.example.com"
     cfg.environments["prod"].alert_webhook_asked = True
@@ -345,7 +347,16 @@ def test_mcp_section_defaults_and_round_trip(tmp_path):
     loaded = load_config(tmp_path)
     assert loaded.mcp.auth == "password"
     assert loaded.mcp.oidc_issuer == "https://accounts.example.com"
+    assert loaded.mcp.oidc_email_verified_claim == "xms_edov"
     assert loaded.environments["prod"].alert_webhook_asked is True
+
+
+@pytest.mark.parametrize("claim", ["email_verifed", "xms_edov ", "phone_number_verified"])
+def test_mcp_refuses_unknown_email_verification_claims(claim):
+    from vecten_shared.config import McpSection
+
+    with pytest.raises(ValidationError, match="oidc_email_verified_claim"):
+        McpSection(oidc_email_verified_claim=claim)
 
 
 def test_mcp_auth_refuses_invalid_plugin_names():

@@ -5,7 +5,9 @@ The project folder the human chose is $project. Run every shell command through 
 
     $run 'vecten next --json'
 
-The wrapper runs the command in the project folder, with the environment the evaluation needs (the vecten CLI, the mocked cloud and GitHub, the certificate bundle), and logs it. It gives the command no terminal and no standard input. Some commands start Docker containers, reach https hosts on 127.0.0.1, or take several minutes. If the sandbox blocks one (Docker socket, network, "Operation not permitted"), run it again with the sandbox disabled. Give long commands a Bash timeout of up to 600000 ms. Create a branch with `git checkout -b <name>`. Reading files in the project folder with your file tools is fine. Do not read anything else in $checkout except the skill path and the input files named above.
+The wrapper runs the command in the project folder, with the environment the evaluation needs (its tools, stand-ins and certificate bundle), and logs it. It gives the command no terminal and no standard input. Some commands start Docker containers, reach https hosts on 127.0.0.1, or take several minutes. If the sandbox blocks one (Docker socket, network, "Operation not permitted"), run it again with the sandbox disabled. Give long commands a Bash timeout of up to 600000 ms. Create a branch with `git checkout -b <name>`. Reading files in the project folder with your file tools is fine. Do not read anything else in $checkout except the skill path and the input files named above.
+
+The CLI reads the test project’s .env. GitHub commands and git push read the test CA bundle (*.pem). If the sandbox hides those files, request access to the run directory for the affected command.
 
 When you need the human to do something you cannot do from your shell, tell them through the human helper and wait for their reply. That covers typing a secret at a hidden prompt in their own terminal, opening a page in their browser, having someone run something, or anything else that needs them. Call it with a Bash timeout of 600000 ms:
 

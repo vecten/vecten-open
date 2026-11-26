@@ -10,7 +10,7 @@
   <a href="https://github.com/vecten/vecten-open/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/vecten/vecten-open/ci.yml?branch=main&label=CI" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.14-blue" alt="Python 3.14"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green" alt="Apache-2.0"></a>
-  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/status-alpha-orange" alt="alpha"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/status-beta-yellow" alt="beta"></a>
 </p>
 
 # Vecten Open
@@ -25,6 +25,15 @@ on Postgres or Snowflake, deployed to AWS or Scaleway with Terraform. The **MCP*
 agents over the Model Context Protocol, the open protocol assistants such as Claude use to reach
 data, with one warehouse identity per person and an audit of every answer. Both work on an
 existing warehouse too. An agent does the building; you lead it.
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=ZTjz8s3pmAM">
+    <img src="https://img.youtube.com/vi/ZTjz8s3pmAM/maxresdefault.jpg" width="640"
+      alt="Vecten Open walkthrough: a data platform you build with your agent">
+  </a>
+  <br>
+  <em>Watch the walkthrough on YouTube.</em>
+</p>
 
 ## Five promises
 
@@ -86,7 +95,7 @@ tells you what it will cost first.
 
 ## What v0.1 does and does not do
 
-This is an alpha. v0.1 deploys to AWS and Scaleway, with Postgres or Snowflake, one warehouse
+This is a beta. v0.1 deploys to AWS and Scaleway, with Postgres or Snowflake, one warehouse
 per deployment, GitHub Actions as the CI. Azure, GCP, other CI hosts, BigQuery and Databricks
 are outside it. No analyst dashboard, no Kubernetes, no built-in model inference, no connector
 catalogue: sources use dlt or your own code. Metric queries operate on one dataset. Minor
@@ -121,4 +130,4 @@ Built on [dlt](https://github.com/dlt-hub/dlt), [Apache Airflow](https://airflow
 [dbt](https://github.com/dbt-labs/dbt), the [Model Context Protocol](https://modelcontextprotocol.io/)
 and [Apache Ossie](https://ossie.apache.org/). Apache Airflow and Apache Ossie are trademarks of
 the Apache Software Foundation; dbt is a trademark of dbt Labs; Snowflake is a trademark of
-Snowflake Inc. Licensed under [Apache-2.0](LICENSE). Copyright 2026 Vecten.
+Snowflake Inc. Licensed under [Apache-2.0](LICENSE). Copyright 2026 Vecten. The container images include [third-party notices](images/THIRD-PARTY.txt).

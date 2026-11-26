@@ -240,13 +240,15 @@ corresponding environment lock to install the recorded package versions.
 | `vecten.dags` | Installed directory of Python DAG files. The Airflow loader imports actual DAG objects, including DAGs created by calling `@dag` functions at module level; task objects are excluded and duplicate DAG IDs are refused. Use absolute package imports in DAG files. |
 | `vecten.osi` | Installed directory of JSON semantic documents. Shared discovery and validation merge these with project `osi/` files and reject duplicate definitions. |
 | `vecten.skills` | Installed directory containing `SKILL.md` and any supporting files. The entry name becomes the project/plugin skill link; built-in skill names (`connector`, `model`, `semantic`, `operate`, `guide`) are reserved. |
-| `vecten.mcp.tools` | Dictionary with callable `handler` and `groups: list[str]`. The server's tool registry returns it only when the caller's groups intersect the declaration. An empty list exposes it to nobody. |
+| `vecten.mcp.tools` | Dictionary with callable `handler` and `groups: list[str]`. The server's tool registry returns it only when the caller's groups intersect the declaration. An empty list exposes it to nobody. Optional tool metadata is described below. |
 | `vecten.mcp.auth` | Callable identity backend. Selected by `auth = "company_login"` in the `[mcp]` section of `vecten.toml`; the registry refuses a missing backend at startup. Extensions cannot replace the reserved `password`/`oidc` names. |
+| `vecten.mcp.sign_in` | Factory called with `config` that returns the local groups an extension owns and its verified sign-in handler. See [sign-in extension hooks](mcp-identity.md#sign-in-extension-hooks). |
 | `vecten.mcp.provisioning` | Callable provisioning hook. The registry invokes the named hook with the owning service's arguments. |
 | `vecten.mcp.audit_sinks` | Callable accepting one audit-row dictionary. The owning audit service calls the registry after persisting its local row. |
+| `vecten.consumer_skills` | A skill directory and an explicit list of supporting files. A project grants download access by group. See [skills for data users](#skills-for-data-users). |
 | `vecten.services` | A dictionary, or zero-argument factory returning one, declaring one long-running process and its HTTP routes. The entry name is the service's name. `vecten lock` records it; it runs once `vecten.toml` binds it (see [services](#services)). |
 | `vecten.apps` | A dictionary, or zero-argument factory returning one, declaring one analytics app: `title`, `description`, `kind` (`container` or `snowflake`), the Ossie `datasets` it reads and suggested `groups`; a `container` app gives `runtime = "streamlit"` with `entry`, or `command` and `port`. `vecten lock` records it; `extension add` binds it in `[apps.<extension>.<app>]`. See [analytics apps](analytics-apps.md). |
-| `vecten.manifest` | A dictionary, or zero-argument factory returning one, with `secrets` and `settings`: what the extension needs, not a part it contributes (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
+| `vecten.manifest` | A dictionary, or zero-argument factory returning one, declaring its `secrets`, `settings` and `airflow` resources (below). At most one per distribution; a package declaring only a manifest is refused. Its module imports only the standard library and `vecten_shared`. |
 
 MCP means Model Context Protocol, the client/server interface for warehouse tools. OAuth login,
 the authenticated transport, warehouse identity services, the [tool audit](mcp-audit.md) and the
@@ -264,6 +266,38 @@ without it, the invocation record can lack SQL, its hash and row count. Prefer
 `context.run` with the query function and its arguments. Capture a separate context for each
 concurrent submission, and await the query before returning from the handler so the evidence
 is present when the invocation is recorded.
+
+To describe an extension tool to clients, add optional fields to its `vecten.mcp.tools`
+dictionary. For example, an extension with a handler named `lookup_customer` can export:
+
+```python
+customer_tool = {
+    "handler": lookup_customer,
+    "groups": ["support"],
+    "title": "Find a customer",
+    "description": "Look up a customer by account number.",
+    "annotations": {"readOnlyHint": True},
+}
+```
+
+If that dictionary lives in `acme_resolution/tools.py`, register it in the extension's
+`pyproject.toml`:
+
+```toml
+[project.entry-points."vecten.mcp.tools"]
+lookup_customer = "acme_resolution.tools:customer_tool"
+```
+
+Use `vecten group list` to find the project's groups. An administrator manages membership
+with `vecten group add-member`. Members of the example `support` group see this metadata when their client requests `tools/list`.
+The title gives clients a display name. The description defaults to the handler's docstring,
+and the handler's signature supplies the input schema. The read-only hint tells clients that
+the handler only reads data. Each client decides whether to ask for confirmation.
+
+The hints take their MCP names: `readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint` and `title`, each a boolean except `title`. When the server loads its
+extensions, it refuses a declaration with an unknown field or hint name, an empty title or
+description, or a value of the wrong type, and names the tool and field.
 
 HTTP routes are declared as part of a [service](#services). No CLI-command hooks are offered yet.
 
@@ -335,10 +369,23 @@ manifest's default. An override replaces the whole value, with no merge of neste
 `[settings.project]` holds the project's own values the same way, without a schema: they are
 checked only for having a JSON type. TOML dates and times are refused; use strings.
 
+To install with required settings, run for example
+`vecten extension add ./extensions/acme-resolution --set daily_cap=10 --set dry_run=false`.
+Each option sets one base value. Spaces around a TOML literal are allowed, so
+`--set 'daily_cap = 10'` sets an integer. Quote strings that look like TOML literals.
+For example, `--set 'version="1.0"'` sets a string and `--set version=1.0` sets a float.
+Unquoted text such as `label=one=two` stays text.
+
 **Checks.** Values are checked against the manifest's schema, which may use `properties` typed
 `string`, `integer`, `number`, `boolean`, `array` or `object`, with `default`, `description`,
-`enum`, `minimum`, `maximum` and `items`, plus `required`; unknown settings are always refused,
-and no setting may be named `env`. `vecten lock` checks the laptop and every environment an
+`enum` and `const`. Arrays accept `items`, `minItems`, `maxItems` and `uniqueItems`. Strings
+accept `minLength`, `maxLength` and `pattern`. Numbers accept `minimum`, `maximum`,
+`exclusiveMinimum`, `exclusiveMaximum` and `multipleOf`. For example, a price with
+`multipleOf: 0.01` accepts `19.99`. Declare defaults on top-level settings. To supply
+nested values by default, put the complete object in the top-level setting's `default`.
+Nested objects accept `properties`, `required` and `additionalProperties` (a boolean or a
+typed schema). The top level accepts only declared settings and reserves `env` for
+overrides. `vecten extension add` and `vecten lock` check the laptop and every environment an
 override names, `vecten up` the laptop, `vecten ship` and `ship --check` the environment
 shipped, and the MCP server every extension's settings before it starts serving. An error
 names `settings.<namespace>.<key>` and the environment, before anything starts. On a VM a change
@@ -360,6 +407,45 @@ project().secret("SLACK_TOKEN")
 `secret()` refuses a name its extension, or the project, did not declare, and a name delivered
 to the other component, on the laptop and on every VM alike, even where the host's cloud identity
 could read it. Connector code may keep using `vecten_platform.sync.secret`.
+
+### Airflow pools, variables and API accounts
+
+A project can reserve slots for a DAG, set a default for a run switch, and give a monitoring
+service a read-only Airflow login. Declare them in `vecten.toml`. A service account maps its
+username to a password secret declared by the same project or extension.
+
+```toml
+secrets = ["MONITOR_PASSWORD"]
+
+[airflow.pools]
+paid_search = 2
+
+[airflow.variables]
+pause_searches = "off"
+
+[airflow.api_accounts]
+monitor = "MONITOR_PASSWORD"
+```
+
+An extension can return the same `airflow` mapping and `secrets` list from its
+`vecten.manifest` entry point. Run `vecten lock` after changing the manifest. Set the
+password with `vecten secret set MONITOR_PASSWORD` in each environment before starting or
+shipping the stack. If the password is missing, `vecten up` and `vecten ship` report the
+account and secret name and stop. A failed ship keeps the previous release serving. On an
+unattended VM start, the agent logs the missing secret, skips that account and starts the stack.
+A platform-hosted service in the declaring extension receives that secret
+through its usual environment. When `[airflow] allow` is set, include the service host's
+public address if the service calls Airflow through its public hostname.
+
+At startup the API server applies the pool sizes and creates missing variables before the
+scheduler starts. Existing variable values survive another `up` or `ship`, so operators
+can change a switch at runtime. Removing a declaration leaves its pool or variable in Airflow
+for DAGs that still use it. Removing an API account prevents new logins on the next `up` or `ship`. Tokens already
+issued remain valid until they expire. Each account signs in at Airflow's token endpoint with its own
+username and password at `POST /auth/token`. Use the resulting bearer token for
+`GET /api/v2/dags` and other permitted reads. Airflow's viewer role can read pools and DAG resources including runs, task
+logs, DAG source and XCom values (data passed between tasks). Logs and XComs can contain
+warehouse data. Grant a viewer account only to a service that may read those records.
 
 ### Dependencies per component
 
@@ -506,12 +592,18 @@ extension's manifest does not declare.
 example `extension acme-bot: service bot: routes.webhook.path: /_vecten/ is reserved for Vecten`;
 a key this release does not know is reported and ignored.
 
-For an [in-repo extension](#extensions-in-the-project), a declaration is code, so editing it
-makes no lock stale: run `vecten lock` after changing it and commit `extensions.lock.json`
-with the change. `vecten up` compares the declarations of the in-repo extensions installed
-from this checkout with the record, and refuses a difference, naming the service and
-`vecten lock`, before any container starts. Nothing in CI makes that comparison: a commit that changes a declaration without
-`vecten lock` ships the new code with the recorded command, routes and limits.
+Run `vecten lock --check` to verify the committed component locks, including projects
+with no local extensions. It names each stale or missing file. For an
+[in-repo extension](#extensions-in-the-project), run `vecten lock --check` after
+editing its manifest, services or apps. On a fresh laptop checkout, run `vecten extension sync`
+first to install the local packages in the CLI environment. The check compares their current
+secret names, settings schemas, service and app declarations with `extensions.lock.json`.
+If they differ, run `vecten lock` and commit the updated record with the code. Project CI
+normally runs this check by installing the in-repo extensions and their locked index dependencies.
+Projects with both a private index and a bound consumer skill use the committed record in PR CI. PR CI does not fetch registered Git
+extensions. Keep imports of those packages inside the runtime code that uses them so CI
+can load your manifest, service and app declarations. On the laptop, `vecten up` also
+checks services and apps before starting containers.
 
 **Binding a service.** A declared service runs only while `vecten.toml` binds it, and a route
 is served only while its own table is there:
@@ -614,5 +706,63 @@ installing its extension fails startup with the backend's name. No SAML implemen
 bundled. A test in this repository's CI (`scripts/check_extension_wheels.py`) exercises a fixture declaring every group and scans
 shipped Python for prohibited licence-gating and telemetry symbols/imports. This automated
 scan is a regression guard; code review remains necessary for behavior it cannot recognize.
+
+## Skills for data users
+
+An extension can give analysts a reusable set of instructions for their own assistant. For
+example, a finance analyst can download a monthly-orders skill that uses the analyst’s MCP
+connection to summarize completed orders. `vecten mcp connection --env <env>` prints the
+warehouse server’s URL and instructions for connecting an assistant. Downloading the
+instructions grants no warehouse permissions.
+
+In the extension’s `pyproject.toml`, declare the skill by name:
+
+```toml
+[project.entry-points."vecten.consumer_skills"]
+monthly-orders = "acme_reports.skills:monthly_orders"
+```
+
+In `acme_reports/skills.py`, export the directory containing `SKILL.md` and list each
+supporting file to include. Package those files in the extension wheel.
+
+```python
+from pathlib import Path
+
+monthly_orders = {
+    "directory": Path(__file__).parent / "monthly-orders",
+    "files": ["references/orders.md"],
+}
+```
+
+Install the extension in the project using its distribution name with
+[`vecten extension add`](#install-and-update). From that project, run
+`vecten extension pack-skill monthly-orders --output monthly-orders.zip` to inspect the
+archive locally. The destination must be a new file. The ZIP contains
+`monthly-orders/SKILL.md` and the listed files under the same folder.
+
+To make the ZIP available to the finance group, add the following to the project’s
+`vecten.toml`. Use the MCP group name shown by `vecten group list`. Administrators manage
+membership through [MCP identity and access](mcp-identity.md).
+
+```toml
+[consumer_skills.monthly-orders]
+groups = ["finance"]
+```
+
+Run `vecten lock` to record which extension packaged each bound skill. Run it once on upgrade
+if the project already binds skills and its `extensions.lock.json` predates skill records.
+Commit `vecten.toml`, `extensions.lock.json` and the other [dependency files](#dependencies-and-locks)
+together, then use the project’s ship workflow for the target environment. After the new MCP container starts, open `/apps` on the host
+shown by `vecten mcp connection --env <env>`. A member signs in and chooses **monthly-orders** under
+**Skills for your assistant**. The server checks current membership on each download.
+Removing a member stops future downloads. Copies already downloaded stay with their recipients.
+The MCP access log records successful and denied download attempts by signed-in users.
+
+Pull-request CI checks bindings against the committed record. It also packages in-repo skills
+unless the project configures a private package index. With a private index and bound skills,
+run `vecten lock --check` in your authenticated development environment after changing a local
+declaration. Ship checks the recorded bindings before contacting the host. On the host and
+on the laptop, the MCP image build first installs the wheels, then packages their skill archives
+with network access disabled. A packaging error stops the build before the new MCP server starts.
 
 Back to the [docs index](README.md).

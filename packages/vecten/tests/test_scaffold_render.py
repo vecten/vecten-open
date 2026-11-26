@@ -83,7 +83,7 @@ def test_render_layout(tmp_path, params):
     assert (cfg.warehouse.host, cfg.warehouse.port) == (loc.host, loc.port)
     assert (cfg.warehouse.database, cfg.warehouse.account) == (loc.database, loc.account)
     runbook = (target / "docs" / "runbook.md").read_text()
-    replay_note = "never run `connector.py`" in runbook
+    replay_note = "--record --record-inputs" in runbook
     assert replay_note is ("platform" in params.components)
     scaleway_deploy = params.render_deploy and params.cloud == "scaleway"
     assert ("## Scaleway deployment" in runbook) is scaleway_deploy
@@ -145,7 +145,7 @@ def test_render_layout(tmp_path, params):
         assert "-backend-config=encrypt=true" in runbook
     convention = (target / "docs" / "schema-convention.md").read_text()
     assert convention.startswith(f"# Schema convention, version {VERSIONS.schema_convention}\n")
-    assert VERSIONS.schema_convention == 2
+    assert VERSIONS.schema_convention == 3
     assert f"Apache Ossie {VERSIONS.ossie_spec}" in convention
     assert len(convention.splitlines()) < 150
     headings = re.findall(r"^## (.+)$", convention, re.M)
@@ -688,10 +688,8 @@ def test_runbook_says_record_reloads_and_fixtures_are_real_data(tmp_path):
     params = ScaffoldParams.from_answers({"name": "acme", "users": 3, "sources": ["hubspot"]}, {})
     render_project(root, params)
     runbook = " ".join((root / "docs" / "runbook.md").read_text().split())
-    assert (
-        "`--record` reloads the object from the start so the fixture is complete; run it on the "
-        "first sync or whenever the fixture should be refreshed."
-    ) in runbook
+    assert "replaces its local raw data with a sample" in runbook
+    assert "vecten connector check-fixtures <source>" in runbook
     for phrase in ("real records", "up to 200 per object", "committed", "personal data"):
         assert phrase in runbook, phrase
 
@@ -716,7 +714,11 @@ def test_ci_validates_the_semantic_model_and_checks_the_build(tmp_path, params):
     ci = (root / ".github" / "workflows" / "ci.yml").read_text()
     pin = f'uvx --with "vecten=={params.vecten_version}"'
     assert f"{pin} vecten mcp validate" in ci
-    assert (f"{pin} vecten dbt-build-local --check" in ci) == ("platform" in params.components)
+    replay = f'{pin} --with-requirements "$RUNNER_TEMP/connector-requirements.txt"'
+    replay += ' --constraints "$RUNNER_TEMP/connector-sources.txt"'
+    replay += ' --build-constraints "$RUNNER_TEMP/connector-sources.txt"'
+    assert (f"{replay} pytest connectors" in ci) == ("platform" in params.components)
+    assert (f"{replay} vecten dbt-build-local --check" in ci) == ("platform" in params.components)
     assert ("docker info" in ci) == ("platform" in params.components)
     # An unpinned ruff takes each new release's default rules into the project's CI.
     assert f"- run: uvx ruff@{VERSIONS.ruff} check ." in ci

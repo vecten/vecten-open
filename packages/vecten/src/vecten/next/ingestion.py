@@ -59,8 +59,12 @@ def ingestion_items(project_root: Path, config: VectenConfig) -> list[Item]:
                 Item(
                     "command",
                     f"Run {decl.name} locally",
-                    command if has_fixtures else f"{command} --record",
+                    command if has_fixtures or not decl.record else f"{command} --record",
                 )
+            )
+        elif not has_fixtures and not decl.record:
+            fixture_items.append(
+                Item("skill", f"Write synthetic fixtures for {decl.name}", "connector")
             )
         elif not has_fixtures:
             fixture_items.append(

@@ -374,6 +374,18 @@ def test_guide_dispatches_to_the_vendored_skill_paths():
         assert f"skills/{name}/SKILL.md" in body, name
 
 
+def test_terminal_handoffs_use_the_verified_cli_even_outside_the_persons_path():
+    body = skill_body("guide")
+    guide = " ".join(body.split())
+    assert (
+        "`vecten secret set` command for their terminal, give them the same absolute "
+        "executable path, shell-quoted" in guide
+    )
+    assert 'export DBT_PATH="$(dirname "$(readlink -f <vecten>)")/dbt"' in body
+    assert "with `<vecten>` as the shell-quoted verified `vecten` path" in guide
+    assert "command -v vecten)" not in body
+
+
 def test_guide_names_every_post_deploy_answer_key():
     body = skill_body("guide")
     keys = [*OIDC.answer_keys, *ADMIN.answer_keys, "mcp.auth", "alert_webhook.prod"]
@@ -384,8 +396,9 @@ def test_guide_names_every_post_deploy_answer_key():
 def test_guide_evals_cover_both_branches_and_start_empty():
     text = _skill_dir("guide").joinpath("evals", "evals.json").read_text(encoding="utf-8")
     cases = json.loads(text)["evals"]
-    assert len(cases) == 3
-    full, existing, empty = (" ".join(case["expectations"]) for case in cases)
+    assert len(cases) == 4
+    full, existing, empty, install = (" ".join(case["expectations"]) for case in cases)
+    assert "uv installed" in install and "vecten version" in install
     assert "vecten answer has_warehouse no" in full and "vecten deploy --env prod" in full
     assert '"yes"' in full and "vecten user add" in full and "vecten mcp connection" in full
     assert "vecten answer has_warehouse yes" in existing and "vecten mcp introspect" in existing
@@ -540,7 +553,7 @@ def test_committed_renderings_are_in_sync():
 
 def test_guide_eval_wording_matches_what_the_harness_can_observe():
     root = _skill_dir("guide").joinpath("evals")
-    full, existing, empty = json.loads(root.joinpath("evals.json").read_text(encoding="utf-8"))[
+    full, existing, empty, _ = json.loads(root.joinpath("evals.json").read_text(encoding="utf-8"))[
         "evals"
     ]
     assert "https://mcp.data.acme.test/mcp" in " ".join(full["expectations"])
@@ -579,10 +592,10 @@ def test_semantic_refines_introspected_datasets_before_any_metric():
     assert "Refine the drafted datasets before adding any metric" in flat("semantic")
 
 
-def test_connector_skill_says_fixture_replays_never_run_the_connector_code():
+def test_connector_skill_distinguishes_input_replay_and_live_sync():
     body = flat("connector")
-    assert "never runs `connector.py`" in body
-    assert "`vecten connector run <name> --json` is the live proof" in body
+    assert "--record-inputs" in body
+    assert "`vecten connector run <name> --json` for a live sync" in body
 
 
 def test_plugin_icon_meets_the_directory_rules():

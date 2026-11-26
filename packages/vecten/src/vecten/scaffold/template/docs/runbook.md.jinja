@@ -9,23 +9,37 @@ Each source lives under `connectors/<source>/` with `connector.py` exposing `sou
 `vecten secret set <NAME>`, read in code with `secret("<NAME>")`; the stack passes every secret the
 declaration names into the Airflow containers on the next `vecten up`. Run locally: `vecten connector run
 <source> [--object <name>]`; record fixtures: `vecten connector run <source> --record`; inspect:
-`vecten raw schema <source> --json`. Each object syncs through its own dlt pipeline, so a failing object
-neither blocks nor resets the others; the sync DAGs are `orchestration/dags/sync_<source>_<group>.py`.
+`vecten raw schema <source> --json`. Each named dlt resource is an object (for example,
+`@dlt.resource(name="tickets")` defines the object `tickets`). The dlt ingestion library loads
+each object through its own pipeline, so a failing object neither blocks nor resets the others; the sync DAGs are `orchestration/dags/sync_<source>_<group>.py`.
 A connector's Python dependencies are installed in the Airflow image from `vecten.toml`; install them
 where `vecten` runs as well, for example `uv tool install vecten --with <package>`. Failures post to
 `ALERT_WEBHOOK_URL` when that secret is set, each with its issue id. `vecten issues` (the laptop) or
 `vecten issues --env <env>` lists every failure that has not run green since, `vecten issues show
 <id>` prints its redacted log excerpt, and `skills/operate/SKILL.md` works through the list.
 
-`--record` reloads the object from the start so the fixture is complete; run it on the first sync or
-whenever the fixture should be refreshed. It writes `connectors/<source>/fixtures/<object>.jsonl` only
-for objects that synced and yielded records; the test `connectors/<source>/test_<source>.py` replays
-them into DuckDB with the network blocked and is skipped until fixtures exist. That test and
-`vecten dbt-build-local` load the fixtures straight into the raw tables and never run `connector.py`,
-so a code change that breaks every live sync still passes CI while the fixtures are unchanged; after
-changing `connector.py`, `vecten connector run <source> --json` is the live proof. Fixtures hold real
-records from the source (up to 200 per object) and are committed to the project, so check them for
-personal data before the repository is shared.
+`--record` reloads the object from the start and replaces its local raw data with a sample; run
+it on the first sync or whenever the fixture should be refreshed. Use `--record --limit 3` for
+three rows per object. For each nonempty recording it writes two files under
+`connectors/<source>/fixtures/`. `<object>.jsonl` holds at most the limit, 200 records by default.
+The companion `<object>.schema.json` tells dlt how to load them, including which columns hold
+JSON, how deeply to expand nested records and which keys to use for merges. Commit both files
+together. A `.jsonl` file without a companion schema still loads with dlt's default type
+inference. If replay reports an incompatible schema, run
+`vecten connector run <source> --object <object> --record` to refresh both files.
+
+The test `connectors/<source>/test_<source>.py` replays fixtures into DuckDB with the network
+blocked and is skipped until fixtures exist. With output fixtures alone, that test and
+`vecten dbt-build-local` load the rows straight into the raw tables and never run `connector.py`,
+so a code change that breaks every live sync still passes CI while the fixtures are unchanged. To
+check connector parsing as well, save upstream JSON with `--record --record-inputs` for a source
+that supports `inputs(fetch)`. After changing `connector.py`, run
+`vecten connector run <source> --json` and check for `"ok": true` under each changed object's name
+in `objects`. Fixtures hold real records from the source (up to 200 per
+object) and are committed to the project, so check them for personal data before the repository is
+shared. To avoid recording, set `record = false` in the connector declaration in `vecten.toml`,
+write invented JSON objects one per line under `connectors/<source>/fixtures/<object>.jsonl` and
+run `vecten connector check-fixtures <source>`.
 
 After changing which secrets a connector reads, update the `secrets` list of its declaration in
 `vecten.toml` and run `vecten up` again.
@@ -203,6 +217,12 @@ stored under in AWS Secrets Manager, as `vecten/[[ project_name ]]/<env>/<scope>
 | `ADMIN_*` | `admin` | none: passwords from `vecten user add-admin` |
 | any other name | `platform` | the platform VM |
 
+An existing AWS environment needs the new gate password only if a service or container app
+has a bound login route. For its first upgrade to the standalone gate, run
+`gh workflow disable ship.yml` in the project repository, then `vecten github push --no-wait`.
+Run `vecten deploy --env <env>` to apply the new infrastructure permissions and ship the
+updated commit, then `gh workflow enable ship.yml` to resume shipping on push.
+
 Under `minimal` the one VM reads both `platform` and `mcp`. The deploy role reads and writes
 all four scopes, as does an administrator's own AWS login. `vecten secret set <NAME> --env
 <env>` stores a secret from a hidden prompt or standard input, `--from-local` copies it from
@@ -212,7 +232,7 @@ The setup host is the one VM that reads the RDS master credentials: the MCP VM w
 has the `mcp` component, else the platform VM, and `main` under `minimal`. On every ship it runs
 the setup SQL on each instance, which creates the databases, their owner roles and the service
 roles and is safe to repeat, and it generates the database passwords the stack uses:
-`AIRFLOW_DB_PASSWORD` and `LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`,
+`AIRFLOW_DB_PASSWORD` and `LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`, `MCP_GATE_DB_PASSWORD`,
 `MCP_PROVISIONER_PASSWORD` and `MCP_IMPERSONATOR_PASSWORD` in the `mcp` scope, each only when the
 project has what it serves. Its role may create, write and read back exactly those names, so
 that a replaced instance gets the same passwords again. The platform VM generates the Airflow
@@ -230,10 +250,14 @@ rollback to one finds it, live under `/run/vecten/`, a memory-backed directory (
 mode 0600 that the VM agent rebuilds on every ship and at boot. vecten writes no other file
 holding a secret on a VM.
 
-Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
+By default, sign in at `https://airflow.[[ domain ]]` with user `admin` and password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secrets Manager page.
 [%- if 'platform' in components %]
+To use the MCP's OpenID Connect provider for Airflow, register
+`https://airflow.[[ domain ]]/auth/oidc/callback` with that provider and set
+`auth = "oidc"` under `[airflow]` in `vecten.toml`. After the next ship, sign in with a
+verified email listed in `[mcp] admins`. The laptop keeps password login.
 To keep the login page off the open internet, list the networks that may reach it under
 `[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
 the ship polls. Run `vecten issues --env <env>` from a listed network.
@@ -549,6 +573,12 @@ to Domains and DNS there, and records it as `cloud_ids["dns_project"]`, which `v
 hands to Terraform. When no project of the organization holds the zone, bootstrap creates
 nothing and exits naming the zone.
 
+An existing Scaleway environment needs the new gate password only if a service or container app
+has a bound login route. On Scaleway, run `vecten bootstrap --env <env>` first to update the setup host’s key. For its first upgrade to the standalone gate, run
+`gh workflow disable ship.yml` in the project repository, then `vecten github push --no-wait`.
+Run `vecten deploy --env <env>` to apply the new infrastructure permissions and ship the
+updated commit, then `gh workflow enable ship.yml` to resume shipping on push.
+
 Run `vecten bootstrap --env <env>` again after changing `components` or `profile`, then
 `vecten deploy --env <env>` straight after. Bootstrap gives a new host its application and key
 and deletes those of a host the configuration no longer has; that host's VM keeps running until
@@ -663,7 +693,7 @@ instance and in its secret together. The admin password in Secret Manager is the
 is overwritten on the next deploy. On every ship the setup host runs the setup SQL on each
 instance, which creates the databases, their owner roles and the service roles and is safe to
 repeat, and it generates the database passwords the stack uses: `AIRFLOW_DB_PASSWORD` and
-`LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`, `MCP_PROVISIONER_PASSWORD`
+`LOADER_PASSWORD` in the `platform` scope, `MCP_STATE_DB_PASSWORD`, `MCP_GATE_DB_PASSWORD`, `MCP_PROVISIONER_PASSWORD`
 and `MCP_IMPERSONATOR_PASSWORD` in the `mcp` scope, each only when the project has what it
 serves. Terraform creates each of those secrets empty, so a VM key only ever adds a version to a
 secret that exists; the setup host's key may add versions to and read back exactly those names,
@@ -681,10 +711,14 @@ that only an older release's NGINX reads, kept so a rollback to one finds it, li
 every ship and at boot. Apart from those and the VM's key, vecten writes no file holding a
 secret on a VM.
 
-Airflow's own login guards `https://airflow.[[ domain ]]`: user `admin`, password
+By default, sign in at `https://airflow.[[ domain ]]` with user `admin` and password
 `AIRFLOW_ADMIN_PASSWORD`, which `vecten secret` names but does not print; read it in the
 console's Secret Manager page of the project `<prefix>`.
 [%- if 'platform' in components %]
+To use the MCP's OpenID Connect provider for Airflow, register
+`https://airflow.[[ domain ]]/auth/oidc/callback` with that provider and set
+`auth = "oidc"` under `[airflow]` in `vecten.toml`. After the next ship, sign in with a
+verified email listed in `[mcp] admins`. The laptop keeps password login.
 To keep the login page off the open internet, list the networks that may reach it under
 `[airflow] allow` in `vecten.toml`; everyone else gets 403 from NGINX, except on the health path
 the ship polls. Run `vecten issues --env <env>` from a listed network.
@@ -868,6 +902,7 @@ below.
        ALTER ROLE airflow PASSWORD '<value of AIRFLOW_DB_PASSWORD>';
 [%- if 'mcp' in components %]
        ALTER ROLE mcp_state PASSWORD '<value of MCP_STATE_DB_PASSWORD>';
+       ALTER ROLE mcp_gate PASSWORD '<value of MCP_GATE_DB_PASSWORD>';
 [%- endif %]
 [%- elif 'mcp' in components %]
 
@@ -875,6 +910,7 @@ below.
 
        ALTER ROLE airflow PASSWORD '<value of AIRFLOW_DB_PASSWORD>';
        ALTER ROLE mcp_state PASSWORD '<value of MCP_STATE_DB_PASSWORD>';
+       ALTER ROLE mcp_gate PASSWORD '<value of MCP_GATE_DB_PASSWORD>';
 [%- endif %]
 
    Then run `vecten deploy --env <env>` again: it ships with the passwords the roles now have
@@ -944,12 +980,15 @@ in a way that would replace a resource, and a person reconciles the two, startin
   set it before the first deploy when you will want admin access.
 - `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
   `instance_type_overrides` replaces the server or node type of a host or an instance by its
-  key: `platform`, `mcp`, `main`, `state` or `warehouse`.
+  key: `platform`, `mcp`, `main`, `state` or `warehouse`. vecten reads tfvars values as JSON,
+  so write the map as `instance_type_overrides = {"main": "POP2-2C-8G"}`.
 - `root_volume_size_gb` sets the size of every VM's boot volume, which holds the images and
   Docker's named volumes: 30 GB by default, and at least 30. A DEV1 type boots from its local
   SSD, so the size cannot exceed the type's local storage (40 GB on DEV1-M, 80 GB on DEV1-L);
-  a POP2 type boots from an SBS volume, which can grow but never shrink. Whether a changed size
-  is applied in place or replaces the VM is not verified, so set it before the first deploy.
+  a POP2 type boots from an SBS volume, which can grow but never shrink. A larger size grows a
+  POP2 server's volume in place; on a DEV1 type it replaces the server, and with it every
+  service volume on its local SSD, which the plan's warnings name. Set it before the first
+  deploy on DEV1.
 [%- if 'platform' in components %]
 - `dags_paused_at_creation = true` makes the environment's new DAGs start paused, so nothing
   scheduled runs until someone unpauses it in the Airflow UI. By default a deployed DAG starts
@@ -1125,8 +1164,12 @@ and, with the `mcp` component, `PROVISIONER`, the service user `LOADER`, and a w
   with the provisioner's user and the integration `EXTERNAL_OAUTH_<BASE>_<ENV>`, as kept.
   With it, destroy refuses while any of them stays, because their sign-in policies live in the
   database it drops, and prints the statements an ACCOUNTADMIN runs: a `DROP` for each user
-  and role the provisioner owns, then the provisioner's user and the integration. Run them,
-  then destroy again.
+  and role the provisioner owns, then the provisioner's user, the environment's
+  `<BASE>_<ENV>.VECTEN_ACCESS.MCP_SIGN_IN` authentication policy and finally the integration
+  that policy references. Run them in order. If an ACCOUNTADMIN has confirmed that the
+  environment database was already dropped, skip only the policy drop and continue with
+  the integration. A permissions error alone does not establish that the database is gone.
+  Then run destroy again.
 [%- endif %]
 - Moving an environment that has fixed names into a shared account is a new deployment of it:
   destroy it with `--delete-data <env>`, keeping its `state` snapshot if you want it, point

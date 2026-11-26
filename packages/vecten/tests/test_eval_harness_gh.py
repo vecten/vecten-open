@@ -343,3 +343,20 @@ def test_the_standin_answers_every_gh_subcommand_vecten_spells(checkout, gh_env)
     spelled = gh_calls_in_source()
     assert {("workflow", "run"), ("repo", "create"), ("auth", "status"), ("api", None)} <= spelled
     assert spelled <= gh_standin.ANSWERED, spelled - gh_standin.ANSWERED
+
+
+def test_changing_the_base_and_deleting_a_merged_parent_retargets_children(checkout, gh_env):
+    parent = open_pull(gh_env, checkout, "parent", "parent fix")
+    child = open_pull(gh_env, checkout, "child", "child fix")
+    gh(gh_env, "pr", "edit", str(child), "--base", "parent", cwd=checkout)
+    assert calls(gh_env)[-1]["argv"] == ["pr", "edit", str(child), "--base", "parent"]
+
+    def base():
+        return json.loads(
+            gh(gh_env, "pr", "view", str(child), "--json", "baseRefName", cwd=checkout).stdout
+        )["baseRefName"]
+
+    assert base() == "parent"
+    gh(gh_env, "pr", "merge", str(parent), "--merge", "--delete-branch", cwd=checkout)
+    assert base() == "main"
+    assert not git(gh_env, checkout, "ls-remote", "origin", "refs/heads/parent")

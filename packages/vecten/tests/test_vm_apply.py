@@ -274,6 +274,7 @@ def seeded(out, extra=()):
         "AIRFLOW_DB_PASSWORD",
         "LOADER_PASSWORD",
         "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
         "MCP_PROVISIONER_PASSWORD",
         "MCP_IMPERSONATOR_PASSWORD",
         "AIRFLOW_FERNET_KEY",
@@ -329,6 +330,7 @@ def test_agent_scope_rule_matches_the_provider():
         "AIRFLOW_DB_PASSWORD",
         "LOADER_PASSWORD",
         "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
         "MCP_PROVISIONER_PASSWORD",
         "MCP_IMPERSONATOR_PASSWORD",
         "AIRFLOW_FERNET_KEY",
@@ -370,12 +372,18 @@ def test_load_host_reads_the_contract_and_names_missing_keys(agent, tmp_path):
 
 def test_secret_values_never_in_argv(agent, tmp_path):
     out = outputs("minimal")
-    release = stage(tmp_path / "releases", out, "main", connector_secrets=["HUBSPOT_API_KEY"])
+    release = stage(
+        tmp_path / "releases",
+        out,
+        "main",
+        service_secrets=["MCP_GATE_DB_PASSWORD"],
+        connector_secrets=["HUBSPOT_API_KEY"],
+    )
     run = FakeRun(store={k: v for k, v in master(out, "state").items()})
     run.store[f"{PREFIX}platform/HUBSPOT_API_KEY"] = "hubspot-secret-value"
     ship(agent, release, run, tmp_path)
     values = [v for v in run.store.values()] + ["master-state-pw"]
-    assert len(run.created()) == 10
+    assert len(run.created()) == 11
     for call in run.calls:
         for arg in call["args"]:
             for value in values:
@@ -384,7 +392,7 @@ def test_secret_values_never_in_argv(agent, tmp_path):
 
 def test_generated_once(agent, tmp_path):
     out = outputs("standard")
-    release = stage(tmp_path / "releases", out, "mcp")
+    release = stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
     run = FakeRun(store=master(out, "state") | master(out, "warehouse"))
     ship(agent, release, run, tmp_path)
     assert sorted(run.created()) == sorted(
@@ -392,6 +400,7 @@ def test_generated_once(agent, tmp_path):
             f"{PREFIX}platform/AIRFLOW_DB_PASSWORD",
             f"{PREFIX}platform/LOADER_PASSWORD",
             f"{PREFIX}mcp/MCP_STATE_DB_PASSWORD",
+            f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD",
             f"{PREFIX}mcp/MCP_PROVISIONER_PASSWORD",
             f"{PREFIX}mcp/MCP_IMPERSONATOR_PASSWORD",
         ]
@@ -400,7 +409,9 @@ def test_generated_once(agent, tmp_path):
         assert len(run.store[sid]) >= 43  # 32 random bytes, url-safe base64
     first = dict(run.store)
     again = FakeRun(store=first)
-    release2 = stage(tmp_path / "releases", out, "mcp", commit="c2")
+    release2 = stage(
+        tmp_path / "releases", out, "mcp", commit="c2", service_secrets=["MCP_GATE_DB_PASSWORD"]
+    )
     ship(agent, release2, again, tmp_path)
     assert again.created() == [] and again.argv("aws", "--region") and again.store == first
 
@@ -412,6 +423,10 @@ def test_generated_names_follow_the_configuration(agent):
         "LOADER_PASSWORD",
     ]
     assert gen(outputs("mcp_only")) == ["MCP_STATE_DB_PASSWORD"]
+    assert gen(outputs("mcp_only"), with_gate=True) == [
+        "MCP_STATE_DB_PASSWORD",
+        "MCP_GATE_DB_PASSWORD",
+    ]
     assert (
         set(gen(outputs("minimal"))) == set(gen(outputs("standard")))
         and len(gen(outputs("minimal"))) == 5
@@ -420,7 +435,9 @@ def test_generated_names_follow_the_configuration(agent):
 
 def test_existing_secret_without_a_value_gets_put_not_created_twice(agent, tmp_path):
     out = outputs("mcp_only")
-    host = agent.load_host(stage(tmp_path / "releases", out, "mcp"))
+    host = agent.load_host(
+        stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
+    )
     run = FakeRun(store=master(out, "state"))
 
     def answer(args, env=None, input=None):
@@ -431,8 +448,32 @@ def test_existing_secret_without_a_value_gets_put_not_created_twice(agent, tmp_p
 
     agent.ensure_generated(host, out, answer)
     puts = run.argv("aws", "--region", "eu-central-1", "secretsmanager", "put-secret-value")
-    assert len(puts) == 1 and puts[0][puts[0].index("--secret-id") + 1].endswith(
-        "mcp/MCP_STATE_DB_PASSWORD"
+    assert {args[args.index("--secret-id") + 1] for args in puts} == {
+        f"{PREFIX}mcp/MCP_STATE_DB_PASSWORD",
+        f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD",
+    }
+
+
+def test_a_first_login_route_the_role_cannot_read_yet_names_deploy(agent, tmp_path):
+    out = outputs("mcp_only")
+    host = agent.load_host(
+        stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
+    )
+    run = FakeRun(store=master(out, "state"))
+
+    def answer(args, env=None, input=None):
+        if "get-secret-value" in args and f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD" in args:
+            run.calls.append({"args": list(args), "env": {}, "input": input})
+            return subprocess.CompletedProcess(
+                args, 254, "", "An error occurred (AccessDeniedException) when calling"
+            )
+        return run(args, env, input)
+
+    with pytest.raises(agent.AgentError) as exc:
+        agent.ensure_generated(host, out, answer)
+    assert str(exc.value) == (
+        f"reading {PREFIX}mcp/MCP_GATE_DB_PASSWORD failed (exit 254); MCP_GATE_DB_PASSWORD is "
+        "new with the first bound `login` route: run `vecten deploy --env prod`, then ship again"
     )
 
 
@@ -503,6 +544,7 @@ def test_secret_env_for_the_platform_host(agent, tmp_path):
     # An absent connector secret or webhook is left out; the run names it.
     assert "STRIPE_KEY" not in env and "ALERT_WEBHOOK_URL" not in env
     assert "MCP_STATE_DB_PASSWORD" not in env
+    assert "MCP_GATE_DB_PASSWORD" not in env
     for n in ("AIRFLOW_FERNET_KEY", "AIRFLOW_API_SECRET_KEY", "AIRFLOW_JWT_SECRET"):
         assert env[n] == f"value-of-{n}"
 
@@ -540,7 +582,7 @@ def flags(args):
 
 def test_setup_runs_once_per_instance_with_standard_flags(agent, tmp_path):
     out = outputs("standard")
-    release = stage(tmp_path / "releases", out, "mcp")
+    release = stage(tmp_path / "releases", out, "mcp", service_secrets=["MCP_GATE_DB_PASSWORD"])
     run = FakeRun(store=seeded(out))
     host = agent.load_host(release)
     agent.run_setup(host, out, run)
@@ -549,12 +591,14 @@ def test_setup_runs_once_per_instance_with_standard_flags(agent, tmp_path):
     assert flags(runs["state.rds"]["args"]) == {
         "with_airflow": "true",
         "with_mcp_state": "true",
+        "with_gate": "true",
         "with_warehouse": "false",
         "with_mcp": "false",
     }
     assert flags(runs["wh.rds"]["args"]) == {
         "with_airflow": "false",
         "with_mcp_state": "false",
+        "with_gate": "false",
         "with_warehouse": "true",
         "with_mcp": "true",
     }
@@ -582,6 +626,7 @@ def test_setup_runs_once_per_instance_with_standard_flags(agent, tmp_path):
     state = runs["state.rds"]["env"]
     assert verifies(state["AIRFLOW_DB_PASSWORD"], "value-of-AIRFLOW_DB_PASSWORD")
     assert verifies(state["MCP_STATE_DB_PASSWORD"], "value-of-MCP_STATE_DB_PASSWORD")
+    assert verifies(state["MCP_GATE_DB_PASSWORD"], "value-of-MCP_GATE_DB_PASSWORD")
 
 
 SCRAM = re.compile(r"SCRAM-SHA-256\$4096:([A-Za-z0-9+/=]+)\$([A-Za-z0-9+/=]+):([A-Za-z0-9+/=]+)")
@@ -632,7 +677,9 @@ def test_load_host_refuses_an_area_outside_the_name_rule(agent, tmp_path, areas)
 
 def test_setup_under_minimal_is_one_run_with_every_flag(agent, tmp_path):
     out = outputs("minimal")
-    host = agent.load_host(stage(tmp_path / "releases", out, "main"))
+    host = agent.load_host(
+        stage(tmp_path / "releases", out, "main", service_secrets=["MCP_GATE_DB_PASSWORD"])
+    )
     run = FakeRun(store=seeded(out))
     agent.run_setup(host, out, run)
     (only,) = psql_runs(run)
@@ -774,6 +821,22 @@ def test_write_run_files_formats_and_modes(agent, tmp_path):
     assert mode(passwords) == 0o600 and mode(run_dir / "htpasswd") == 0o600
 
 
+def test_viewer_password_tracks_the_declared_account_and_secret(agent, tmp_path):
+    env = {"AIRFLOW_ADMIN_PASSWORD": "a", "AIRFLOW_BASIC_AUTH_PASSWORD": "b", "BOT_PASSWORD": "c"}
+    host = {"components": ["platform"], "airflow_api_accounts": {"monitor": "BOT_PASSWORD"}}
+    target = tmp_path / "run"
+    agent.write_run_files(host, env, target)
+    path = target / "airflow_passwords.json"
+    assert json.loads(path.read_text()) == {"admin": "a", "monitor": "c"}
+    assert mode(path) == 0o600
+    del env["BOT_PASSWORD"]
+    with pytest.raises(agent.AgentError, match="monitor needs the declared secret BOT_PASSWORD"):
+        agent.write_run_files(host, env, target)
+    host["airflow_api_accounts"] = {}
+    agent.write_run_files(host, env, target)
+    assert json.loads(path.read_text()) == {"admin": "a"}
+
+
 def test_write_run_files_replaces_a_directory_docker_created(agent, tmp_path):
     run_dir = tmp_path / "run" / "vecten"
     (run_dir / "airflow_passwords.json").mkdir(parents=True)
@@ -869,13 +932,14 @@ def test_compose_up_uses_the_host_profiles_and_passes_secrets_by_env(agent, tmp_
 
 def test_minimal_host_starts_both_profiles(agent, tmp_path):
     out = outputs("minimal")
-    release = stage(tmp_path / "releases", out, "main")
+    release = stage(tmp_path / "releases", out, "main", service_secrets=["MCP_GATE_DB_PASSWORD"])
     run = FakeRun(store=seeded(out))
     ship(agent, release, run, tmp_path)
     (up,) = compose_calls(run)
     args = up["args"]
     assert [args[i + 1] for i, a in enumerate(args) if a == "--profile"] == ["platform", "mcp"]
     assert up["env"]["MCP_STATE_DB_PASSWORD"] == "value-of-MCP_STATE_DB_PASSWORD"
+    assert up["env"]["MCP_GATE_DB_PASSWORD"] == "value-of-MCP_GATE_DB_PASSWORD"
 
 
 def test_ship_order_setup_before_compose(agent, tmp_path):
@@ -945,6 +1009,42 @@ def test_boot_rebuilds_run_files_from_current_release(agent, tmp_path):
     assert "--force-recreate" in up["args"]
     assert str(release.resolve() / ".vecten" / "stack") in up["args"]
     assert run.created() == [] and not psql_runs(run) and not run.argv("docker", "run")
+
+
+def test_missing_viewer_password_refuses_ship_but_allows_boot(agent, tmp_path, capsys):
+    out = outputs("standard")
+    releases = tmp_path / "releases"
+    first = stage(releases, out, "platform")
+    ship(agent, first, FakeRun(store=seeded(out)), tmp_path)
+    accounts = {"monitor": "BOT_PASSWORD", "alerts": "ALERT_PASSWORD"}
+    second = stage(
+        releases,
+        out,
+        "platform",
+        commit="c2",
+        connector_secrets=list(accounts.values()),
+        airflow_api_accounts=accounts,
+    )
+    missing = FakeRun(store=seeded(out, extra=["ALERT_PASSWORD"]))
+    with pytest.raises(agent.AgentError, match="monitor needs the declared secret BOT_PASSWORD"):
+        ship(agent, second, missing, tmp_path)
+    assert (releases / "current").resolve() == first.resolve()
+    assert not compose_calls(missing)
+    ready = FakeRun(store=seeded(out, extra=accounts.values()))
+    ship(agent, second, ready, tmp_path)
+    assert (
+        compose_calls(ready)[0]["env"]["VECTEN_AIRFLOW_VIEWERS"] == ",alerts:viewer,monitor:viewer"
+    )
+    agent.boot(releases, missing)
+    assert (
+        "Skipping Airflow API account monitor: missing secret BOT_PASSWORD"
+        in capsys.readouterr().err
+    )
+    assert compose_calls(missing)[0]["env"]["VECTEN_AIRFLOW_VIEWERS"] == ",alerts:viewer"
+    assert set(json.loads((agent.RUN_DIR / "airflow_passwords.json").read_text())) == {
+        "admin",
+        "alerts",
+    }
 
 
 def test_boot_without_a_current_release_fails(agent, tmp_path):
@@ -1672,6 +1772,7 @@ def test_setup_with_agent_verifiers_admits_the_plaintext_passwords(agent, tmp_pa
     passwords = {
         "AIRFLOW_DB_PASSWORD": "a1-plain",
         "MCP_STATE_DB_PASSWORD": "m1-plain",
+        "MCP_GATE_DB_PASSWORD": "g1-plain",
         "LOADER_PASSWORD": "l1-plain",
         "PROVISIONER_PASSWORD": "p1-plain",
         "IMPERSONATOR_PASSWORD": "i1-plain",
@@ -1687,7 +1788,7 @@ def test_setup_with_agent_verifiers_admits_the_plaintext_passwords(agent, tmp_pa
             cmd += ["-e", f"{key}={agent.scram_verifier(value)}"]
         cmd += [name, "psql", "-h", "127.0.0.1", "-U", "vecten_master", "-d", "postgres"]
         cmd += ["-v", "ON_ERROR_STOP=1"]
-        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp"):
+        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp", "with_gate"):
             cmd += ["-v", f"{flag}=true"]
         cmd += ["-f", "/docker-entrypoint-initdb.d/vecten/warehouse_setup.sql"]
         setup = subprocess.run(cmd, capture_output=True, text=True)
@@ -1695,6 +1796,7 @@ def test_setup_with_agent_verifiers_admits_the_plaintext_passwords(agent, tmp_pa
         for role, key, database in (
             ("airflow", "AIRFLOW_DB_PASSWORD", "airflow"),
             ("mcp_state", "MCP_STATE_DB_PASSWORD", "mcp_state"),
+            ("mcp_gate", "MCP_GATE_DB_PASSWORD", "mcp_state"),
             ("loader", "LOADER_PASSWORD", "warehouse"),
             ("provisioner", "PROVISIONER_PASSWORD", "warehouse"),
             ("impersonator", "IMPERSONATOR_PASSWORD", "warehouse"),
@@ -1728,6 +1830,7 @@ def test_setup_runs_again_after_an_admin_login_on_scaleway(agent, tmp_path):
     passwords = {
         "AIRFLOW_DB_PASSWORD": "a1-plain",
         "MCP_STATE_DB_PASSWORD": "m1-plain",
+        "MCP_GATE_DB_PASSWORD": "g1-plain",
         "LOADER_PASSWORD": "l1-plain",
         "PROVISIONER_PASSWORD": "p1-plain",
         "IMPERSONATOR_PASSWORD": "i1-plain",
@@ -1743,7 +1846,7 @@ def test_setup_runs_again_after_an_admin_login_on_scaleway(agent, tmp_path):
             cmd += ["-e", f"{key}={agent.scram_verifier(value)}"]
         cmd += [name, "psql", "-h", "127.0.0.1", "-U", "vecten_master", "-d", "postgres"]
         cmd += ["-v", "ON_ERROR_STOP=1"]
-        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp"):
+        for flag in ("with_airflow", "with_mcp_state", "with_warehouse", "with_mcp", "with_gate"):
             cmd += ["-v", f"{flag}=true"]
         cmd += ["-f", "/docker-entrypoint-initdb.d/vecten/warehouse_setup.sql"]
         first = subprocess.run(cmd, capture_output=True, text=True)
@@ -1784,7 +1887,7 @@ def test_private_package_index_read_is_component_scoped(agent, tmp_path, compone
     assert other not in env
 
 
-BRIDGE = "vecten-services"
+BRIDGE = "vecten-+"
 AWS_DROP = ("DOCKER-USER", "-i", BRIDGE, "-d", "169.254.169.254", "-j", "DROP")
 
 
@@ -1831,6 +1934,14 @@ def test_on_scaleway_the_rule_drops_its_metadata_address(agent):
     assert run.rules == {("DOCKER-USER", "-i", BRIDGE, "-d", "169.254.42.42", "-j", "DROP")}
 
 
+def test_an_older_release_keeps_its_exact_bridge_rule(agent):
+    run = FakeRun()
+    agent.isolate_services({"cloud": "aws", "service_network": "vecten-services"}, run)
+    assert run.rules == {
+        ("DOCKER-USER", "-i", "vecten-services", "-d", "169.254.169.254", "-j", "DROP")
+    }
+
+
 def test_a_host_without_services_runs_no_iptables(agent, tmp_path):
     out = outputs("standard")
     release = stage(tmp_path / "releases", out, "platform")
@@ -1839,7 +1950,9 @@ def test_a_host_without_services_runs_no_iptables(agent, tmp_path):
     assert run.argv("iptables") == []
 
 
-@pytest.mark.parametrize("bridge", ["-j", "vecten services", "a" * 16, "x/y"])
+@pytest.mark.parametrize(
+    "bridge", ["-j", "vecten services", "a" * 16, "x/y", "+", "br+", "vecten-++"]
+)
 def test_a_bridge_name_that_is_no_interface_name_is_refused(agent, bridge):
     run = FakeRun()
     with pytest.raises(agent.AgentError, match="interface name"):
@@ -2169,3 +2282,22 @@ def test_main_prints_each_orphaned_volume_after_a_ship(agent, tmp_path, monkeypa
         "vecten agent volume: p_svc-a-data",
         "vecten agent volume: p_svc-b-data",
     ]
+
+
+@pytest.mark.parametrize(
+    "shape,host",
+    [("minimal", "main"), ("standard", "mcp"), ("standard", "platform"), ("mcp_only", "mcp")],
+)
+def test_upgrade_without_a_login_route_never_accesses_the_gate_secret(agent, tmp_path, shape, host):
+    out = outputs(shape)
+    # Older host records have no gate flag and old cloud policies cannot write its password.
+    release = stage(tmp_path / "releases", out, host)
+    store = seeded(out)
+    store.pop(f"{PREFIX}mcp/MCP_GATE_DB_PASSWORD", None)
+    run = FakeRun(store=store)
+    ship(agent, release, run, tmp_path)
+    agent.boot(release.parent, run)
+    assert not any("MCP_GATE_DB_PASSWORD" in arg for call in run.calls for arg in call["args"])
+    assert all("MCP_GATE_DB_PASSWORD" not in call["env"] for call in compose_calls(run))
+    for call in psql_runs(run):
+        assert flags(call["args"])["with_gate"] == "false"

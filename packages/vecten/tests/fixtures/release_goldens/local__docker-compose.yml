@@ -9,6 +9,8 @@ services:
     - -c
     - airflow db migrate && exec airflow api-server --proxy-headers
     depends_on:
+      airflow-auth:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment: &id001
@@ -20,7 +22,7 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
       AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
-      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/simple_auth_manager_passwords.json.generated
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /run/vecten-airflow-auth/passwords.json
       AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_ADMIN_USER}:admin
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres/airflow
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
@@ -46,7 +48,7 @@ services:
       - --fail
       - http://localhost:8080/api/v2/monitor/health
       timeout: 10s
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2
     ports:
     - 127.0.0.1:8482:8080
     profiles: &id002
@@ -62,14 +64,36 @@ services:
     - ../../osi:/opt/airflow/osi:ro
     - airflow-logs:/opt/airflow/logs
     - ../artifacts:/opt/airflow/artifacts
-    - ./airflow_passwords.json:/opt/airflow/simple_auth_manager_passwords.json.generated
+    - airflow-auth:/run/vecten-airflow-auth
+  airflow-auth:
+    entrypoint:
+    - python
+    - /seed.py
+    healthcheck:
+      interval: 2s
+      test:
+      - CMD
+      - test
+      - -s
+      - /run/vecten-airflow-auth/passwords.json
+    image: apache/airflow:3.3.2-python3.14
+    network_mode: none
+    profiles:
+    - platform
+    read_only: true
+    restart: unless-stopped
+    user: '50000:0'
+    volumes:
+    - ../../.env:/project.env:ro
+    - ./airflow_auth.py:/seed.py:ro
+    - airflow-auth:/run/vecten-airflow-auth
   airflow-dag-processor:
     command: dag-processor
     depends_on:
       airflow-api-server:
         condition: service_healthy
     environment: *id001
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
@@ -81,7 +105,7 @@ services:
       airflow-api-server:
         condition: service_healthy
     environment: *id001
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
@@ -93,7 +117,7 @@ services:
       airflow-api-server:
         condition: service_healthy
     environment: *id001
-    image: golden-airflow:0.1.1
+    image: golden-airflow:0.1.2
     profiles: *id002
     pull_policy: never
     restart: unless-stopped
@@ -139,7 +163,7 @@ services:
       - --fail
       - http://localhost:8001/health
       timeout: 5s
-    image: golden-mcp:0.1.1
+    image: golden-mcp:0.1.2
     profiles:
     - mcp
     restart: unless-stopped
@@ -202,6 +226,12 @@ services:
     - postgres-data:/var/lib/postgresql/data
     - ./pg-init:/docker-entrypoint-initdb.d:ro
 volumes:
+  airflow-auth:
+    driver: local
+    driver_opts:
+      device: tmpfs
+      o: uid=50000,mode=0700,size=64k
+      type: tmpfs
   airflow-logs: {}
   mcp-secrets: {}
   postgres-data: {}

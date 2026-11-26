@@ -1,0 +1,1 @@
+Use the registry selection already passed to the project Dockerfiles and the same image naming function. Filter the report through the components that start locally. The `base_images` JSON object is keyed by component and carries `image` and `source`. When the source is local, both output formats include the published registry override.

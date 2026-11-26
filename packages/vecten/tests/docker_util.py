@@ -16,9 +16,11 @@ from vecten_shared.provider.local import LOCAL_PG_PUBLISHED_PORT
 from vecten_shared.versions import VERSIONS
 
 REPO = Path(__file__).resolve().parents[3]
-# What the MCP Dockerfile reads to install the locked dependencies: `uv sync --locked` checks
-# the lock against every workspace member's metadata.
-LOCK_INPUTS = (
+# The temporary context carries the notices and every input uv needs to verify the lock.
+MCP_CONTEXT_INPUTS = (
+    "LICENSE",
+    "NOTICE",
+    "images/THIRD-PARTY.txt",
     "uv.lock",
     "pyproject.toml",
     *sorted(str(p.relative_to(REPO)) for p in REPO.glob("packages/*/pyproject.toml")),
@@ -71,7 +73,7 @@ def ensure_mcp_image() -> str:
     image = base_image("mcp", None)
     with tempfile.TemporaryDirectory(prefix="vecten-mcp-image-") as context:
         dist = Path(context) / "dist"
-        for name in LOCK_INPUTS:
+        for name in MCP_CONTEXT_INPUTS:
             (Path(context) / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / name, Path(context) / name)
         for package in ("vecten-shared", "vecten-mcp"):

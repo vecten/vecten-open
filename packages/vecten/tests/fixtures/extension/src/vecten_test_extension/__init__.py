@@ -20,6 +20,13 @@ def identity(credentials):
     return {"subject": "fixture"}
 
 
+def sign_in(*, config):
+    def verified(*, identity, verified_claims, set_membership):
+        return identity.email
+
+    return {"groups": [], "handler": verified}
+
+
 def provision(name):
     return name
 
@@ -70,3 +77,5 @@ warehouse = {
     "datasets": ["fixture_dataset"],
     "groups": ["analyst"],
 }
+
+monthly_orders = {"directory": root / "monthly-orders", "files": ["references/orders.md"]}

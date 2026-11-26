@@ -252,6 +252,8 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
                 "exec",
                 "-e",
                 "MCP_STATE_DB_PASSWORD=fixture-state",
+                "-e",
+                "MCP_GATE_DB_PASSWORD=fixture-gate",
                 container,
                 "psql",
                 "-U",
@@ -262,6 +264,8 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
                 "with_airflow=false",
                 "-v",
                 "with_mcp_state=true",
+                "-v",
+                "with_gate=true",
                 "-v",
                 "with_warehouse=false",
                 "-v",
@@ -294,6 +298,7 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
             "VECTEN_MCP_PUBLIC_URL": "https://mcp.example",
             "VECTEN_MCP_SECRET_DIR": str(tmp_path / "keys"),
             "MCP_STATE_DB_PASSWORD": "fixture-state",
+            "MCP_GATE_DB_PASSWORD": "fixture-gate",
             "MCP_PROVISIONER_PASSWORD": "fixture-provisioner",
             "MCP_IMPERSONATOR_PASSWORD": "fixture-impersonator",
         }.items():
@@ -306,8 +311,18 @@ def test_configured_runtime_serves_principal_query_against_postgres(tmp_path, mo
             return runtime.queries.execute(caller, "SELECT current_user", [], receipt(None))
 
         extensions = McpExtensions({"who": {"handler": who, "groups": ["default"]}}, {}, {}, {})
-        config = VectenConfig(users=5, project={"name": "demo", "scaffold_version": "0.1.0"})
+        config = VectenConfig(
+            users=5,
+            project={"name": "demo", "scaffold_version": "0.1.0"},
+            mcp={
+                "auth": "oidc",
+                "oidc_issuer": "https://idp.example",
+                "oidc_client_id": "demo",
+                "oidc_email_verified_claim": "xms_edov",
+            },
+        )
         runtime = configured_runtime(tmp_path, config, extensions)
+        assert runtime.oauth.backend.email_verified_claim == "xms_edov"
         with connect("postgres", "fixture-master", "mcp_state") as c:
             c.execute("GRANT UPDATE ON audit_log TO mcp_state")
             c.commit()
@@ -518,6 +533,28 @@ def test_owner_helpers_bound_grants_and_future_objects(warehouse):
     a.schema_grant("reporting", "staging", False)
     a.schema_grant("analyst", "core")
     a.schema_grant("analyst", "core", False)
+
+
+def test_source_layer_helpers_refuse_new_grants_after_an_opt_out(warehouse):
+    from vecten_shared.identity_setup import postgres_access_helpers
+
+    a = adapter(warehouse)
+    with warehouse() as c:
+        c.execute("CREATE SCHEMA staging_billing")
+        c.execute("CREATE TABLE staging_billing.invoice (amount int)")
+        c.execute("SET vecten.source_layer_areas = 'billing'")
+        c.execute(postgres_access_helpers())
+    a.schema_grant("analyst", "staging_billing")
+    with warehouse() as c:
+        c.execute("SET vecten.source_layer_areas = ''")
+        c.execute(postgres_access_helpers())
+    a.schema_grant("analyst", "staging_billing", False)
+    with pytest.raises(psycopg.errors.InsufficientPrivilege, match="installed source area list"):
+        a.schema_grant("analyst", "staging_billing")
+    with warehouse() as c:
+        assert not c.execute(
+            "SELECT has_table_privilege('analyst', 'staging_billing.invoice', 'SELECT')"
+        ).fetchone()[0]
 
 
 def test_rds_superuser_and_its_members_are_not_creators_needing_a_helper(warehouse):

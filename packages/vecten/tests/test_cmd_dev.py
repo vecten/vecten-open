@@ -99,6 +99,9 @@ def test_build_context_admits_the_wheels_and_the_lock_inputs():
         "!uv.lock",
         "!pyproject.toml",
         "!packages/*/pyproject.toml",
+        "!LICENSE",
+        "!NOTICE",
+        "!images/THIRD-PARTY.txt",
     ]
 
 

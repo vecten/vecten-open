@@ -45,7 +45,8 @@ from vecten.stack.compose import (
 from vecten.stack.images import write_project_layer
 from vecten.stack.nginx import service_site, write_nginx
 from vecten.stack.up import PUBLISHED_REGISTRY
-from vecten_shared.config import VectenConfig
+from vecten_shared.airflow_resources import effective_resources
+from vecten_shared.config import VectenConfig, source_layer_areas
 from vecten_shared.declarations import check_settings
 from vecten_shared.extension_record import Extension, read_record
 from vecten_shared.output import ExitCode, Failure
@@ -259,6 +260,7 @@ def _render_stack(
         components,
         hosts,
         "vm",
+        standalone_gate="login-gate" in doc["services"],
         admin_panel=config.mcp.admin_panel,
         admin_allow=config.mcp.admin_allow,
         airflow_allow=config.airflow.allow,
@@ -305,7 +307,9 @@ def host_document(
     cloud = config.deploy.cloud
     sizing = _host_tier(host, cloud, tfvars)
     components = list(outputs.hosts[host].components)
-    service_secrets, service_network = host_services(config, record or {}, components)
+    service_secrets, service_network = host_services(
+        config, record or {}, components, setup_host=outputs.setup_host == host
+    )
     served = _served(config, record or {}, outputs, host)
     doc = {
         "host": host,
@@ -335,8 +339,14 @@ def host_document(
         "service_secrets": service_secrets,
         "service_network": service_network,
     }
+    if "platform" in components and (
+        accounts := effective_resources(config, record or {}).api_accounts
+    ):
+        doc["airflow_api_accounts"] = accounts
     if config.areas:
         doc["areas"] = sorted(config.areas)
+    if restricted := source_layer_areas(config.areas):
+        doc["source_layer_areas"] = restricted
     if set(doc) - set(OPTIONAL_HOST_KEYS) != set(HOST_KEYS):
         raise Failure(ExitCode.INTERNAL, "host.json keys differ from the agent's HOST_KEYS")
     return doc

@@ -239,3 +239,20 @@ def test_the_runbook_names_only_harness_commands_that_exist():
     assert named <= parser_commands, named - parser_commands
     for command in ("asks", "reply", "bundle", "brief", "teardown", "report"):
         assert f"eval_harness {command}" in section, command
+
+
+def test_first_install_case_starts_without_vecten_and_keeps_its_install(tmp_path, capsys):
+    case = cases.CASES["guide-4"]
+    paths = cli.Paths(tmp_path, "guide-4")
+    cli.print_instructions(case, paths)
+    instructions = capsys.readouterr().out
+    assert "Start Claude Code in your normal terminal" in instructions
+    assert "In the terminal that starts Claude Code" not in instructions
+    env = cli.write_env(case, paths, dict(os.environ))
+    probe = source(env, 'command -v uv && ! command -v vecten && echo "$UV_TOOL_DIR"', tmp_path)
+    assert probe.returncode == 0
+    assert str(paths.dir / "tools") in probe.stdout
+    step = paths.dir / "tool-bin" / "vecten"
+    step.write_text("#!/bin/sh\necho installed\n")
+    step.chmod(0o755)
+    assert source(env, "vecten version", tmp_path).stdout.strip() == "installed"

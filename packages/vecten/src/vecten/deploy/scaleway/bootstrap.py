@@ -153,7 +153,7 @@ class Layout:
         if managed:
             names.append("LOADER_PASSWORD")
         if "mcp" in self.components:
-            names.append("MCP_STATE_DB_PASSWORD")
+            names += ["MCP_STATE_DB_PASSWORD", "MCP_GATE_DB_PASSWORD"]
             if managed:
                 names += ["MCP_PROVISIONER_PASSWORD", "MCP_IMPERSONATOR_PASSWORD"]
         return names
@@ -170,14 +170,19 @@ def _under(path: str) -> str:
     return f'resource.name.startsWith("{path}/")'
 
 
-def _named(resource_name: str) -> str:
-    return f'resource.name == "{resource_name}"'
+def _named(resource_names: list[str]) -> list[str]:
+    """One term for any number of exact names: Scaleway IAM refuses a condition of eleven
+    ORed terms as too complex, and accepts a list of twelve names."""
+    if not resource_names:
+        return []
+    listed = ", ".join(f'"{n}"' for n in resource_names)
+    return [f"resource.name in [{listed}]"]
 
 
 def host_rules(layout: Layout, project: str, env: str, project_id: str, host: str) -> list[dict]:
     """The rules of host `host`'s policy, every one on the resources project only.
 
-    Secret access names whole scope paths with `startsWith` and single secrets with `==`.
+    Secret access names whole scope paths with `startsWith` and single secrets by list.
     Listing has no single secret to evaluate, so the listing rule alone adds
     `!has(resource.id)`; it grants names and metadata, never a value.
     """
@@ -188,11 +193,8 @@ def host_rules(layout: Layout, project: str, env: str, project_id: str, host: st
     writable: list[str] = []
     if setup:
         generated = layout.generated_names()
-        readable += [
-            _named(scaleway_resource_name(project, env, n))
-            for n in generated
-            if scope_for(n) not in scopes
-        ]
+        outside = [n for n in generated if scope_for(n) not in scopes]
+        readable += _named([scaleway_resource_name(project, env, n) for n in outside])
         writable += generated
     if "platform" in components:
         writable += AIRFLOW_APP_SECRETS
@@ -205,8 +207,8 @@ def host_rules(layout: Layout, project: str, env: str, project_id: str, host: st
     ]
     if writable:
         names = list(dict.fromkeys(writable))
-        create = " || ".join(_named(scaleway_resource_name(project, env, n)) for n in names)
-        rules.append(_rule(["SecretManagerSecretCreate"], project_id, create))
+        create = _named([scaleway_resource_name(project, env, n) for n in names])
+        rules.append(_rule(["SecretManagerSecretCreate"], project_id, create[0]))
     rules.append(_rule(HOST_OBJECT_SETS, project_id))
     return rules
 

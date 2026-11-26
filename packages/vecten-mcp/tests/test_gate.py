@@ -84,7 +84,9 @@ class Browser:
 
     def service(self, host, path, *, method="GET", headers=None, cookies=None, data=None):
         jar = self.jars.setdefault(host, {}) if cookies is None else cookies
-        sent = {"X-Vecten-Gate-Host": host, **(headers or {})}
+        sent = (headers or {}).copy()
+        if "X-Forwarded-Host" not in sent:
+            sent["X-Vecten-Gate-Host"] = host
         # NGINX sends the gate the two cookies it reads by exact name, and no other.
         forwarded = {k: v for k, v in jar.items() if k in (GATE, STATE)}
         if forwarded:
@@ -195,6 +197,27 @@ def test_first_visit_signs_in_on_the_server_and_lands_on_the_path(gate):
     assert answer.headers["x-vecten-name"] == "Ada Lovelace"
     assert answer.headers["x-vecten-groups"] == "default"
     assert answer.headers["x-vecten-admin"] == "false"
+
+
+def test_forwarded_host_with_https_port_signs_in_and_redeems_the_code(gate):
+    _, browser, _ = gate
+    headers = {"X-Forwarded-Host": f"{PORTAL}:443"}
+    start = browser.service(PORTAL, "/gate/start?rd=/docs", headers=headers)
+    page = browser.mcp.get(start.headers["location"])
+    done = browser.mcp.post(
+        "/login",
+        data={
+            "flow": hidden(page, "flow"),
+            "csrf": hidden(page, "csrf"),
+            "email": "ada@acme.com",
+            "password": PASSWORD,
+        },
+    )
+    callback = urlsplit(unescape(re.search(r'<a href="([^"]+)"', done.text)[1]))
+    assert callback.hostname == PORTAL
+    landed = browser.service(PORTAL, "/gate/callback?" + callback.query, headers=headers)
+    assert landed.status_code == 303 and landed.headers["location"] == "/docs"
+    assert browser.verify(PORTAL, HOME).status_code == 200
 
 
 def test_the_session_id_is_stored_only_as_a_hash(gate):
@@ -661,6 +684,89 @@ SERVICES = {
 }
 
 
+def test_forwarded_route_uses_the_longest_declared_prefix_and_the_live_session(gate):
+    from vecten_shared.extension_record import Extension
+    from vecten_shared.services import parse_service
+
+    original, _, _ = gate
+    routes = {
+        "home": {"path": "/", "access": "login", "groups": ["default"]},
+        "books": {"path": "/books", "access": "login", "groups": ["finance"]},
+        "hook": {"path": "/hook", "access": "public"},
+        "unbound": {"path": "/private", "access": "public"},
+    }
+    declaration = parse_service(
+        "acme-portal",
+        "web",
+        {"command": ["portal"], "port": 8000, "health": {"path": "/health"}, "routes": routes},
+    ).service
+    config_doc = config(
+        {
+            "acme-portal": {
+                "web": {
+                    "hostname": "portal",
+                    "routes": {
+                        name: {k: v for k, v in item.items() if k != "path"}
+                        for name, item in routes.items()
+                        if name != "unbound"
+                    },
+                }
+            }
+        }
+    )
+    record = {"acme-portal": Extension("1.0", (), services={"web": declaration})}
+    service = GateService.from_config(original.oauth, config_doc, record=record)
+    browser = Browser(Starlette(routes=auth_routes(original.oauth, service)))
+
+    def verify(uri="/", method="GET", host=PORTAL, **options):
+        headers = {
+            "X-Forwarded-Host": host,
+            "X-Forwarded-Uri": uri,
+            "X-Forwarded-Method": method,
+            **options,
+        }
+        sid = browser.jars.get(PORTAL, {}).get(GATE)
+        if sid:
+            headers["Cookie"] = f"{GATE}={sid}"
+        return browser.front.get(
+            "/gate/verify?forwarded=1&redirect=1", headers=headers, follow_redirects=False
+        )
+
+    reply = verify("/docs?q=a%20b&sort=date")
+    assert reply.status_code == 303
+    assert (
+        reply.headers["Location"]
+        == f"https://{PORTAL}/_vecten/gate/start?rd=/docs?q=a%20b&sort=date"
+    )
+    assert verify(method="POST").status_code == 401
+    assert verify(host="other.example").status_code == 403
+    assert browser.sign_in(PORTAL, "ada@acme.com").status_code == 303
+    for path in ["/", "/docs/read", "/bookstore", "/%64ocs/one"]:
+        reply = verify(path)
+        assert reply.status_code == 200 and reply.headers["X-Vecten-User"] == "ada@acme.com"
+    for path in [
+        "/books",
+        "/books/one",
+        "/Books/one",
+        "/private/notes",
+        "/hook",
+        "/_vecten/health",
+    ]:
+        assert verify(path, **{"X-Vecten-Gate-Route": HOME}).status_code == 403
+    for uri in ["", "//unbound", "/a/../books", "/path;params", "/doc%2fsub", "/%zz"]:
+        assert verify(uri).status_code == 403
+    duplicated = browser.front.get(
+        "/gate/verify?forwarded=1",
+        headers=[
+            ("X-Forwarded-Host", PORTAL),
+            ("X-Forwarded-Host", PORTAL),
+            ("X-Forwarded-Uri", "/"),
+            ("X-Forwarded-Method", "GET"),
+        ],
+    )
+    assert duplicated.status_code == 403
+
+
 def test_the_server_reads_its_login_routes_from_vecten_toml(gate):
     service, _, _ = gate
     built = GateService.from_config(service.oauth, config(SERVICES))
@@ -669,6 +775,7 @@ def test_the_server_reads_its_login_routes_from_vecten_toml(gate):
         "acme-portal.apex.home": GateRoute("data.acme.com", ("sales",)),
     }
     assert built.origin("portal.data.acme.com") == "https://portal.data.acme.com"
+    assert GateService.from_config(service.oauth, config(SERVICES), record={}).routes == {}
 
 
 def test_the_server_reads_its_container_apps_routes_and_hostnames(gate):
@@ -701,17 +808,33 @@ def test_on_the_laptop_a_service_hostname_keeps_the_published_port(gate):
     assert built.origin("portal.localhost") == "https://portal.localhost:8443"
 
 
-def test_the_server_answers_the_gate_when_its_runtime_has_one(gate):
+def test_issuer_and_standalone_gate_serve_distinct_surfaces(gate):
     from vecten_mcp.app import create_app
     from vecten_mcp.extensions import McpExtensions
+    from vecten_mcp.gate_server import create_app as gate_app
     from vecten_mcp.runtime import Runtime
 
     service, _, _ = gate
     runtime = Runtime(
         service.state, service.oauth, McpExtensions({}, {}, {}, {}), None, None, gate=service
     )
-    with TestClient(create_app(runtime=runtime), base_url=ISSUER) as http:
-        refused = http.get("/gate/verify", headers={"X-Vecten-Gate-Host": PORTAL})
-        assert refused.status_code == 401
-        assert http.get("/gate/start?rd=/", headers={"X-Vecten-Gate-Host": PORTAL},
-                        follow_redirects=False).status_code == 303  # fmt: skip
+    with TestClient(gate_app(lambda: service), base_url=ISSUER) as http:
+        with TestClient(create_app(runtime=runtime), base_url=ISSUER) as issuer:
+            assert issuer.get("/gate/verify").status_code == 404
+            assert http.get("/gate/authorize").status_code == 404
+            assert http.get("/jwks").status_code == 404
+            logout = http.post("/gate/logout")
+            assert logout.status_code == 200
+            assert 'href="/_vecten/assets/favicon.png"' in logout.text
+            assert 'href="/_vecten/assets/vecten.css"' in logout.text
+            for app in (issuer, http):
+                icon = app.get("/_vecten/assets/favicon.png", follow_redirects=False)
+                assert icon.status_code == 200 and icon.headers["content-type"] == "image/png"
+            assert (
+                http.get("/gate/verify", headers={"X-Vecten-Gate-Host": PORTAL}).status_code == 401
+            )
+            start = http.get(
+                "/gate/start?rd=/", headers={"X-Vecten-Gate-Host": PORTAL}, follow_redirects=False
+            )
+            assert start.status_code == 303
+            assert issuer.get(start.headers["location"]).status_code == 200

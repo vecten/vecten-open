@@ -1,0 +1,32 @@
+#!/bin/sh -p
+# The settings pre-approve this file by its path in the tools copy, so it runs only the wrapper
+# beside it, with that copy's own interpreter. -p keeps the shell from importing functions and
+# CDPATH from the environment; -I keeps Python from the caller's PYTHON* variables, the current
+# directory and the user site directory.
+set -eu
+
+self=$0
+while [ -L "$self" ]; do
+    target=$(command -p readlink "$self")
+    case $target in
+        /*) self=$target ;;
+        *)
+            case $self in
+                */*) self=${self%/*}/$target ;;
+                *) self=$target ;;
+            esac
+            ;;
+    esac
+done
+case $self in
+    */*) here=${self%/*} ;;
+    *) here=. ;;
+esac
+here=$(cd -P -- "$here" && pwd -P)
+root=$(cd -P -- "$here/../.." && pwd -P)
+python=$root/.venv/bin/python
+if [ ! -x "$python" ]; then
+    echo "live: no interpreter at $python; run \`uv sync --locked --all-packages\` in $root" >&2
+    exit 2
+fi
+exec "$python" -I "$here/access.py" "$@"

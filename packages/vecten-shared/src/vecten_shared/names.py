@@ -6,6 +6,8 @@ import re
 
 from vecten_shared.output import ExitCode, Failure
 
+SKILL_NAME = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+
 # A connector name becomes a schema, a Python package and a file name.
 CONNECTOR_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 CONNECTOR_RULE = (

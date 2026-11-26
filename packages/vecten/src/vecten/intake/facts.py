@@ -5,12 +5,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, get_args
 from urllib.parse import urlsplit
+from uuid import uuid4
 
-from vecten_shared.config import McpAuth, load_config, promotion_problem, save_config
+from vecten_shared.config import (
+    McpAuth,
+    OidcEmailVerifiedClaim,
+    load_config,
+    promotion_problem,
+    save_config,
+)
 from vecten_shared.names import check_env_name
 from vecten_shared.output import ExitCode, Failure
 
-MCP_KEYS = ("mcp.auth", "mcp.oidc_issuer", "mcp.oidc_client_id", "mcp.admins")
+MCP_KEYS = (
+    "mcp.auth",
+    "mcp.oidc_issuer",
+    "mcp.oidc_client_id",
+    "mcp.oidc_email_verified_claim",
+    "mcp.admins",
+)
 ALERT_PREFIX = "alert_webhook."
 ALERT_CHOICES = ("yes", "no")
 OIDC_REGISTERED_PREFIX = "oidc_registered."
@@ -37,6 +50,11 @@ def _parse_mcp_value(key: str, raw: str, auth_names: tuple[str, ...] = ()) -> An
         if value.lower() not in choices:
             raise _usage(f"{key} must be one of: {', '.join(choices)}")
         return value.lower()
+    if key == "mcp.oidc_email_verified_claim":
+        choices = get_args(OidcEmailVerifiedClaim)
+        if value not in choices:
+            raise _usage(f"{key} must be one of: {', '.join(choices)}")
+        return value
     if key == "mcp.oidc_issuer":
         parts = urlsplit(value)
         if parts.scheme != "https" or not parts.hostname:
@@ -67,7 +85,16 @@ def set_mcp_fact(project_root: Path, key: str, raw: str) -> Any:
         else ()
     )
     value = _parse_mcp_value(key, raw, auth_names)
-    setattr(config.mcp, key.removeprefix("mcp."), value)
+    field = key.removeprefix("mcp.")
+    if getattr(config.mcp, field) != value:
+        for env, facts in config.environments.items():
+            if (
+                facts.deployed_commit
+                and config.promoted_from(env)
+                and not facts.mcp_ship_generation
+            ):
+                facts.mcp_ship_generation = uuid4().hex
+    setattr(config.mcp, field, value)
     save_config(project_root, config)
     return value
 

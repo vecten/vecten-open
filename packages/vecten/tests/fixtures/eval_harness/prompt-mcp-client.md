@@ -3,3 +3,5 @@ An MCP client stands for the human's AI assistant: the command `mcp-client`, on 
 - `mcp-client tools <url>` lists the server's tools.
 - `mcp-client call <url> <tool> '<json arguments>'` calls one tool and prints its result with its `_meta`.
 - The client keeps its own sign-in; you never see a password or token. Run it with no arguments for its usage.
+
+The mcp-client command also needs read access to the test CA bundle (*.pem).

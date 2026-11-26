@@ -44,10 +44,12 @@ template can run on; B must land in the same release, before any public route re
 - [x] 4.7 Tests: NGINX rendering (public, allow, websocket, body size, header clearing, health location, fallback); a Docker-tier test with a stub upstream that logs requests: forged `X-Vecten-*` headers never arrive, `POST` and an encoded path on the health location behave as specified, an unbound path is 404, a WebSocket upgrade passes; bundle tests for `host.json` hostnames with and without outputs
 - [ ] 4.8 **[deploy]** On AWS (standard) and on Scaleway (minimal): `vecten deploy` creates `portal.<domain>`, the next ship issues its certificate, the renewal timer's dry run (`certbot renew --dry-run`) covers it, and a public route answers over HTTPS
   - Partly run live for 0.1.1 (rc2, AWS): record, certificate, renewal dry run and a public route over HTTPS on AWS. Scaleway not run.
+  - Partly run live for 0.1.2 (rc4, Scaleway minimal): `portal.<domain>` got its Let's Encrypt certificate on the ship after deploy and a public route answered over HTTPS. The renewal dry run (host shell) and AWS not run.
 - [x] 4.9 **[deploy]** A ship from a GitHub-hosted runner reports a routed service's health while its route's `allow` excludes the runner
   - Live, 0.1.1rc2 on AWS: the runner's ship reported the service healthy while a route's `allow` refused the runner's addresses.
 - [ ] 4.10 **[deploy]** Apex binding (`@`) on a domain below its zone, on both clouds
   - Partly run live for 0.1.1 (rc2, AWS): an apex binding on a domain below its zone got its record, certificate and gate on AWS. Scaleway not run.
+  - Partly run live for 0.1.2 (rc4, Scaleway): `@` on a domain one level below its zone answered over HTTPS with its own certificate. AWS not run.
 - [x] 4.11 Review of #89, items 2 and 3: forward `Upgrade` only for `websocket` (services and Airflow); a declared route left unbound answers 404 under a bound route's path; unit and Docker-tier tests
 - [x] 4.12 Issue #91: service containers run with `cap_drop: [ALL]`, `no-new-privileges` and `pids_limit: 512`; a Docker-tier test reads them from the running service
 - [x] 4.13 A case variant of a declared route prefix (judged by the longest prefix matching without regard to case) answers 404 at the server's rewrite phase, through a per-hostname `map` on `$uri`; unit tests for nesting and case-only-different prefixes, Docker-tier test with written and percent-encoded variants

@@ -1,6 +1,7 @@
 import json
 import tomllib
 
+import pytest
 import yaml
 
 from vecten.intake.answers import SOURCES_NEED_PLATFORM
@@ -23,6 +24,24 @@ def test_answer_records_value(invoke, workdir):
         "file": "vecten-answers.yml",
     }
     assert yaml.safe_load((workdir / "vecten-answers.yml").read_text()) == {"cloud": "aws"}
+
+
+@pytest.mark.parametrize("invalid", ["Acme Data Warehouse", "4acme", "acmé", "a" * 64])
+def test_answer_and_init_apply_the_same_project_name_rule(invoke, workdir, invalid):
+    valid = "a-_" + "1" * 60
+    assert invoke("answer", "name", valid).exit_code == 0
+    answers = workdir / "vecten-answers.yml"
+    before = answers.read_bytes()
+    answer = invoke("answer", "name", invalid, "--json")
+    init = invoke(
+        "init", "project", "--name", invalid, "--users", "4", "--source", "demo", "--json"
+    )
+    assert answer.exit_code == init.exit_code == 2
+    error = json.loads(answer.stdout)["error"]
+    assert "lowercase" in error and "63" in error
+    assert error == json.loads(init.stdout)["error"]
+    assert answers.read_bytes() == before
+    assert not (workdir / "project").exists()
 
 
 def test_answer_inside_a_project_writes_at_the_project_root(invoke, workdir, monkeypatch):
@@ -126,10 +145,12 @@ def test_mcp_keys_write_vecten_toml(invoke, tmp_path, monkeypatch):
     monkeypatch.chdir(root)
     assert invoke("answer", "mcp.auth", "password").exit_code == 0
     assert invoke("answer", "mcp.oidc_issuer", "https://login.example.com").exit_code == 0
+    assert invoke("answer", "mcp.oidc_email_verified_claim", "xms_edov").exit_code == 0
     assert invoke("answer", "mcp.admins", "jane@acme.com, ola@acme.com").exit_code == 0
     assert invoke("answer", "alert_webhook.prod", "no").exit_code == 0
     cfg = load_config(root)
     assert cfg.mcp.auth == "password" and cfg.mcp.oidc_issuer == "https://login.example.com"
+    assert cfg.mcp.oidc_email_verified_claim == "xms_edov"
     assert cfg.mcp.admins == ["jane@acme.com", "ola@acme.com"]
     assert cfg.environments["prod"].alert_webhook_asked is True
 
@@ -140,6 +161,8 @@ def test_mcp_keys_refused_outside_a_project_and_validated(invoke, tmp_path, monk
     monkeypatch.chdir(root)
     assert invoke("answer", "mcp.auth", "ldap").exit_code == 2
     assert invoke("answer", "mcp.oidc_issuer", "http://insecure").exit_code == 2
+    assert invoke("answer", "mcp.oidc_email_verified_claim", "phone_number_verified").exit_code == 2
+    assert load_config(root).mcp.oidc_email_verified_claim == "email_verified"
     assert invoke("answer", "mcp.admins", "not-an-email").exit_code == 2
     assert invoke("answer", "alert_webhook.prod", "maybe").exit_code == 2
 

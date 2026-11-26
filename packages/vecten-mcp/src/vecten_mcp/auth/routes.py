@@ -4,11 +4,13 @@ import base64
 import logging
 import secrets
 from html import escape
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from vecten_mcp.auth.client_metadata import ClientMetadata
 from vecten_mcp.auth.gate import (
     GATE_COOKIE,
     HOST_HEADER,
@@ -27,6 +29,7 @@ from vecten_mcp.auth.pages import (
     redirect_page,
 )
 from vecten_mcp.auth.service import SESSION_SECONDS, RegistrationError
+from vecten_mcp.extensions import SignInHookUnavailable
 from vecten_mcp.failures import describe_error
 
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -53,8 +56,23 @@ BROWSER = frozenset(
 )
 
 
-def auth_routes(service, gate=None):
+def auth_routes(service, gate=None, *, surface="combined"):
     state = service.state
+    documents = ClientMetadata()
+
+    def consent_for(flow, csrf, pending):
+        client_id = pending["client_id"]
+        name = service.client(client_id)["client_name"]
+        if client_id.startswith("https://"):
+            redirect_host = urlsplit(pending["redirect_uri"]).netloc
+            return consent_page(
+                flow,
+                csrf,
+                name,
+                client_host=urlsplit(client_id).netloc,
+                redirect_host=redirect_host,
+            )
+        return consent_page(flow, csrf, name)
 
     def loopback_origin(request):
         url = request.url
@@ -91,7 +109,10 @@ def auth_routes(service, gate=None):
         state.put(
             "browser_sessions",
             digest(token),
-            {"principal_id": principal["id"]},
+            {
+                "principal_id": principal["id"],
+                "gate_logout": state.get("gate_logouts", principal["id"]),
+            },
             expires_at=service.clock() + 3600,
         )
         response.set_cookie(
@@ -126,6 +147,7 @@ def auth_routes(service, gate=None):
                 issuer=service.issuer,
                 authorization_endpoint=service.issuer + "/authorize",
                 token_endpoint=service.issuer + "/token",
+                client_id_metadata_document_supported=True,
                 registration_endpoint=service.issuer + "/register",
                 revocation_endpoint=service.issuer + "/revoke",
                 device_authorization_endpoint=service.issuer + "/device",
@@ -166,13 +188,18 @@ def auth_routes(service, gate=None):
         q = request.query_params
         if q.get("response_type") != "code":
             raise ValueError("unsupported_response_type")
+        client_id = q.get("client_id", "")
+        document = None
+        if client_id.startswith("https://"):
+            document = await documents.get(client_id, service.registration_limit, address(request))
         flow = service.authorize(
-            q.get("client_id"),
+            client_id,
             q.get("redirect_uri"),
             q.get("code_challenge", ""),
             q.get("code_challenge_method"),
             q.get("resource"),
             q.get("state", ""),
+            document=document,
         )
         return begin_browser(request, flow)
 
@@ -185,7 +212,7 @@ def auth_routes(service, gate=None):
             identity = service.backend.authenticate(
                 str(form.get("email", "")), str(form.get("password", "")), address(request)
             )
-            principal = service.authenticate(form["flow"], identity)
+            principal = await run_in_threadpool(service.authenticate, form["flow"], identity)
         except ValueError:
             service.event(None, "login", None, "denied")
             return login_page(
@@ -198,9 +225,7 @@ def auth_routes(service, gate=None):
             return browser_session(request, finish_gate(form["flow"], principal), principal)
         return browser_session(
             request,
-            consent_page(
-                form["flow"], form["csrf"], service.client(pending["client_id"])["client_name"]
-            ),
+            consent_for(form["flow"], form["csrf"], pending),
             principal,
         )
 
@@ -256,7 +281,7 @@ def auth_routes(service, gate=None):
         )
         csrf = held(request, "vecten_csrf")
         csrf_check(request, {"flow": flow, "csrf": csrf})
-        principal = service.authenticate(flow, identity)
+        principal = await run_in_threadpool(service.authenticate, flow, identity)
         pending = state.get("flows", digest(flow), now=service.clock())
         if pending and pending.get("gate"):
             # The provider's redirect is a GET, so no form-action rule covers this one.
@@ -265,7 +290,7 @@ def auth_routes(service, gate=None):
             return browser_session(request, RedirectResponse(url, status_code=303), principal)
         return browser_session(
             request,
-            consent_page(flow, csrf, service.client(pending["client_id"])["client_name"]),
+            consent_for(flow, csrf, pending),
             principal,
         )
 
@@ -334,7 +359,9 @@ def auth_routes(service, gate=None):
             digest(held(request, "vecten_browser")),
             now=service.clock(),
         )
-        principal = state.principal(row["principal_id"]) if row else None
+        if not row or row.get("gate_logout") != state.get("gate_logouts", row["principal_id"]):
+            return None
+        principal = state.principal(row["principal_id"])
         return principal if principal and principal["enabled"] else None
 
     def current_browser(request):
@@ -358,6 +385,12 @@ def auth_routes(service, gate=None):
     def gate_cookie_cleared(response, name):
         response.delete_cookie(name, path="/", secure=True, httponly=True, samesite="lax")
 
+    def gate_host(request):
+        if HOST_HEADER in request.headers:
+            return request.headers[HOST_HEADER]
+        values = request.headers.getlist("x-forwarded-host")
+        return gate.forwarded_host(values[0]) if len(values) == 1 else ""
+
     async def gate_start(request):
         # NGINX appends the visited $request_uri after `rd=` unencoded, so the rest of the
         # query string is the return path, `&` and `?` included.
@@ -368,9 +401,7 @@ def auth_routes(service, gate=None):
         # Always a new verifier: one the browser sent may have been planted by whoever wants
         # their own code redeemed here.
         verifier = secrets.token_urlsafe(32)
-        response = RedirectResponse(
-            gate.start(request.headers.get(HOST_HEADER, ""), rd, verifier), status_code=303
-        )
+        response = RedirectResponse(gate.start(gate_host(request), rd, verifier), status_code=303)
         gate_cookie(response, STATE_COOKIE, verifier, max_age=STATE_SECONDS)
         return response
 
@@ -385,7 +416,7 @@ def auth_routes(service, gate=None):
     async def gate_callback(request):
         sid, rd = gate.redeem(
             request.query_params.get("code", ""),
-            request.headers.get(HOST_HEADER, ""),
+            gate_host(request),
             cookie_value(request, STATE_COOKIE),
         )
         response = RedirectResponse(rd, status_code=303)
@@ -412,11 +443,39 @@ def auth_routes(service, gate=None):
 
     async def gate_verify(request):
         try:
-            status, headers = gate.verify(
-                cookie_value(request, GATE_COOKIE),
-                request.headers.get(HOST_HEADER, ""),
-                request.headers.get(ROUTE_HEADER, ""),
+            values = request.headers
+            sid = cookie_value(request, GATE_COOKIE)
+            forwarded = request.query_params.get("forwarded") == "1" or (
+                HOST_HEADER not in values
+                and ROUTE_HEADER not in values
+                and "x-forwarded-host" in values
             )
+            if forwarded:
+
+                def single(name):
+                    fields = values.getlist("x-forwarded-" + name)
+                    return fields[0] if len(fields) == 1 else ""
+
+                host = gate.forwarded_host(single("host"))
+                uri, method = single("uri"), single("method")
+                route = gate.forwarded_route(host, uri, method)
+                if route is None:
+                    status, headers = 403, {}
+                else:
+                    status, headers = gate.verify(sid, host, route)
+                if (
+                    status == 401
+                    and method in ("GET", "HEAD")
+                    and request.query_params.get("redirect") == "1"
+                ):
+                    status, headers = (
+                        303,
+                        {"Location": gate.origin(host) + "/_vecten/gate/start?rd=" + uri},
+                    )
+            else:
+                status, headers = gate.verify(
+                    sid, values.get(HOST_HEADER, ""), values.get(ROUTE_HEADER, "")
+                )
         except Exception as exc:
             # NGINX answers 500 for any status but 2xx, 401 and 403, so nobody is admitted.
             logger.error("gate verify failed: %s", describe_error(exc))
@@ -510,6 +569,8 @@ def auth_routes(service, gate=None):
                 if int(request.headers.get("content-length", "0")) > 16384:
                     return JSONResponse({"error": "invalid_request"}, status_code=413)
                 response = await handler(request)
+            except SignInHookUnavailable:
+                response = failure_page("sign_in_hook_unavailable", 503)
             except RegistrationError as exc:
                 response = JSONResponse(
                     {"error": exc.error, "error_description": exc.description}, status_code=400
@@ -569,10 +630,13 @@ def auth_routes(service, gate=None):
         ("/set-password", password_setup, ["GET", "POST"]),
         ("/jwks", jwks, ["GET"]),
     ]
-    if gate is not None:
+    if surface == "service":
+        endpoints = []
+    elif gate is not None:
+        endpoints.append(("/gate/authorize", gate_authorize, ["GET"]))
+    if gate is not None and surface != "issuer":
         endpoints += [
             ("/gate/start", gate_start, ["GET"]),
-            ("/gate/authorize", gate_authorize, ["GET"]),
             ("/gate/callback", gate_callback, ["GET"]),
             ("/gate/logout", gate_logout, ["GET", "POST"]),
         ]
@@ -580,7 +644,7 @@ def auth_routes(service, gate=None):
         Route(path, safe(handler, browser=path in BROWSER), methods=methods)
         for path, handler, methods in endpoints
     ]
-    if gate is not None:
+    if gate is not None and surface != "issuer":
         # NGINX asks on every request of a login route, all from one address per host, so no
         # per-address limit applies; an unknown session gets 401 and nothing else.
         routes.append(Route("/gate/verify", gate_verify, methods=["GET"]))

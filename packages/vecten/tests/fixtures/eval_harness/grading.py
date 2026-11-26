@@ -9,8 +9,10 @@ subagent runs do not create when each configuration runs once.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from eval_harness.runs import Run
@@ -20,8 +22,28 @@ EVIDENCE_LIMIT = 420
 CONFIGS = (("with_skill", "with the skill"), ("without_skill", "without the skill"))
 
 
+def _credential_status(canary):
+    if not canary.exists():
+        return "missing (cannot verify)"
+    if canary.stat().st_atime_ns > 1_000_000_000:
+        return "read"
+    # A separate file on the same mount distinguishes unread from disabled access times.
+    with tempfile.NamedTemporaryFile(dir=canary.parent) as probe:
+        probe.write(b"probe")
+        probe.flush()
+        path = Path(probe.name)
+        os.utime(path, ns=(1_000_000_000, path.stat().st_mtime_ns))
+        path.read_bytes()
+        if path.stat().st_atime_ns <= 1_000_000_000:
+            return "inconclusive (filesystem does not record reads)"
+    return "unread"
+
+
 def bundle(run: Run, outputs: Path) -> int:
     """Write the grader's `commands.md` and `human-messages.md`; the commands bundled."""
+    if run.case.startswith("operate-"):
+        canary = run.case_dir / "hubspot-token"
+        (outputs / "credential-check.txt").write_text(_credential_status(canary) + "\n")
     commands = sorted(run.log.glob("*.cmd"))
     lines = ["# Commands the agent ran through the run wrapper, in order", ""]
     for cmd in commands:
@@ -42,6 +64,11 @@ def bundle(run: Run, outputs: Path) -> int:
         messages += [f"## {ask.stem}", "Agent:", "```", ask.read_text().strip(), "```"]
         messages += ["Reply:", "```", answer, "```", ""]
     (outputs / "human-messages.md").write_text("\n".join(messages))
+    if run.case.startswith("semantic-"):
+        from eval_harness.semantic_grading import evidence
+
+        result = evidence(run.project, run.case, run.case_dir / "github")
+        (outputs / "semantic-evidence.json").write_text(json.dumps(result, indent=2) + "\n")
     return len(commands)
 
 
@@ -145,8 +172,11 @@ def report(iteration: Path, *, executor: str, grader: str, commit: str) -> str:
         f"tokens {delta['tokens']}.",
         "",
     ]
-    for case in sorted(iteration.glob("eval-*")):
-        meta = json.loads((case / "eval_metadata.json").read_text())
+    cases = [
+        (case, json.loads((case / "eval_metadata.json").read_text()))
+        for case in iteration.glob("eval-*")
+    ]
+    for case, meta in sorted(cases, key=lambda item: int(item[1]["eval_id"])):
         lines += [f"### Case {meta['eval_id']}: {meta['eval_name']}", ""]
         for key, label in CONFIGS:
             run = case / key / "run-1"

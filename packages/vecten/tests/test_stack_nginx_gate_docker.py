@@ -55,6 +55,8 @@ class Gate(BaseHTTPRequestHandler):
                 status = 403
             else:
                 status = 401
+        elif self.path == "/_vecten/assets/favicon.png":
+            status, extra = 200, {"Content-Type": "image/png"}
         elif self.path.startswith("/gate/"):
             status, extra = 303, {"Location": "https://" + headers.get("host", "") + "/next"}
         self.send_response(status)
@@ -149,8 +151,8 @@ def gate_behind_nginx(tmp_path, *, cross_vm: bool, trusted: bool = True):
         else:
             util.docker(
                 "run", "-d", "--name", gate, "--network", network,
-                "--network-alias", "mcp-server", VERSIONS.mcp_base_image, "python", "-c", GATE,
-                "8001",
+                "--network-alias", "login-gate", VERSIONS.mcp_base_image, "python", "-c", GATE,
+                "8002",
             )  # fmt: skip
         util.docker(
             "run", "-d", "--name", front, "--network", network,
@@ -189,6 +191,12 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
         assert status == 302
         assert headers["location"] == "/_vecten/gate/start?rd=/docs?x=1&y=%2Fz"
 
+        status, headers, _ = head(
+            port, ca, "GET", "/_vecten/assets/favicon.png", "Cookie: app=1\r\n"
+        )
+        assert status == 200 and headers["content-type"] == "image/png"
+        assert "cookie" not in seen(gate)[-1]["headers"]
+
         # A plain-named state cookie, as a sibling hostname could plant it, comes first.
         cookies = (
             "Cookie: vecten-gate-state=EVIL; a=1; __Host-vecten-gate-state=V; "
@@ -199,7 +207,8 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
 
         good = "Cookie: a=1; __Host-vecten-gate=good; __Host-vecten-gate-state=V; b=2\r\n"
         assert head(port, ca, "GET", "/docs", FORGED + good)[0] == 200
-        assert head(port, ca, "POST", "/docs/form", good, body="field=1")[0] == 200
+        viewer = "X-Vecten-On-Behalf-Of: client-marker\r\n"
+        assert head(port, ca, "POST", "/docs/form", good + viewer, body="field=1")[0] == 200
         upgrade = request(
             port,
             ca,
@@ -256,6 +265,7 @@ def test_nginx_admits_a_login_request_only_on_the_gates_word(tmp_path, cross_vm)
         assert sent["x-vecten-admin"] == "false"
         assert sent["cookie"] == "a=1; b=2"
         assert "x_vecten_user" not in sent
+        assert "x-vecten-on-behalf-of" not in sent
     hook = received[-1]["headers"]
     assert hook["cookie"] == "a=1; b=2"
     assert not [h for h in hook if h.replace("_", "-").startswith("x-vecten")], hook

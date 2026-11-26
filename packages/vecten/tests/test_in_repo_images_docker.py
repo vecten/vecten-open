@@ -23,6 +23,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "extension"
 NAME = "vecten-test-extension"
 OLD_HATCHLING = "vecten-old-hatchling"
 SETUPTOOLS = "vecten-setuptools-extension"
+SKILL = "monthly-orders"
 
 
 def _base_pin(kind: str, name: str) -> str:
@@ -31,12 +32,13 @@ def _base_pin(kind: str, name: str) -> str:
     return next(line for line in pins if line.lower().startswith(f"{name}=="))
 
 
-def _config(names: list[str]) -> VectenConfig:
+def _config(names: list[str], **fields: object) -> VectenConfig:
     return VectenConfig.model_validate(
         {
             "project": {"name": "in-repo-test", "scaffold_version": VERSIONS.vecten},
             "users": 2,
             "extensions": names,
+            **fields,
         }
     )
 
@@ -176,6 +178,39 @@ def test_extensions_with_conflicting_build_pins_and_a_setuptools_backend_all_ins
             "assert 'file:///tmp/vecten-build/' in url, url"
         )
         run = _probe(image, probe)
+        assert run.returncode == 0, run.stdout + run.stderr
+    finally:
+        subprocess.run(["docker", "image", "rm", "-f", image], capture_output=True)
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["complete", "missing-file"])
+def test_the_mcp_build_packages_a_bound_consumer_skill_offline(tmp_path, missing):
+    """The packaging step runs with no network and only its bind-mounted input, so a skill
+    that cannot be packaged fails the build rather than the running server."""
+    require_base_image("mcp")
+    root = tmp_path / "project"
+    root.mkdir()
+    shutil.copytree(FIXTURE, root / "extensions" / NAME)
+    if missing:
+        skill = root / "extensions" / NAME / "src" / "vecten_test_extension" / SKILL
+        (skill / "references" / "orders.md").unlink()
+    config = _config([NAME], consumer_skills={SKILL: {"groups": ["sales"]}})
+    _record(root, config, "mcp", [NAME])
+    stack = root / ".vecten" / "stack"
+    write_project_layer(stack, config, None)
+    assert "python -m vecten_shared.consumer_skills" in (stack / "build/mcp.Dockerfile").read_text()
+    image = f"vecten-in-repo-skill-{uuid.uuid4().hex[:8]}"
+    try:
+        build = _build_image(stack, "mcp", image)
+        output = build.stdout + build.stderr
+        if missing:
+            assert build.returncode != 0, output
+            assert f"consumer skill {SKILL}: references/orders.md" in output, output
+            return
+        assert build.returncode == 0, output
+        run = _probe(
+            image, "import pathlib; assert not pathlib.Path('/tmp/consumer-skills.json').exists()"
+        )
         assert run.returncode == 0, run.stdout + run.stderr
     finally:
         subprocess.run(["docker", "image", "rm", "-f", image], capture_output=True)

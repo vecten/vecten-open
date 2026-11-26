@@ -7,7 +7,7 @@ from pathlib import Path
 from vecten_platform.dbt.local_warehouse import LocalTarget
 
 # Importing the sync package turns dlt telemetry off, so it precedes every dlt import here.
-from vecten_platform.sync.fixtures import fixture_files
+from vecten_platform.sync.fixtures import fixture_files, input_sample_files
 from vecten_shared.config import VectenConfig
 from vecten_shared.output import ExitCode, Failure
 
@@ -21,6 +21,7 @@ def missing_fixtures(connectors_dir: Path, config: VectenConfig) -> list[str]:
         c.name
         for c in config.connectors
         if not fixture_files(_fixtures_dir(connectors_dir, c.name))
+        and not input_sample_files(_fixtures_dir(connectors_dir, c.name))
     ]
 
 
@@ -51,6 +52,7 @@ def replay_fixtures(
     import dlt
     from dlt.pipeline.exceptions import PipelineStepFailed
 
+    from vecten_platform.sync.input_fixtures import verify_input_fixtures
     from vecten_platform.sync.recording import replay_source
     from vecten_platform.sync.runner import dataset_name
 
@@ -58,6 +60,7 @@ def replay_fixtures(
     for connector in config.connectors:
         name = connector.name
         fixtures_dir = _fixtures_dir(connectors_dir, name)
+        verify_input_fixtures(fixtures_dir.parent, name, target.workdir)
         if not fixture_files(fixtures_dir):
             loaded[name] = []
             continue
@@ -67,10 +70,10 @@ def replay_fixtures(
             dataset_name=dataset_name(name),
             pipelines_dir=str(target.workdir / "dlt"),
         )
-        # Fixture resources append, so the raw tables are dropped first to hold the fixtures only.
+        # Each local build starts from exactly the rows in the current fixtures.
         try:
             pipeline.run(replay_source(fixtures_dir, name), refresh="drop_sources")
-        except PipelineStepFailed as exc:
+        except (PipelineStepFailed, ValueError) as exc:
             raise Failure(
                 ExitCode.TOOL_FAILED, f"replaying connector {name} failed: {exc}"
             ) from exc

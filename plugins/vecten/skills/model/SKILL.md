@@ -240,6 +240,13 @@ until an admin grants it, so declaring the area is the human's decision, never y
 still copy restricted rows into an unrestricted schema; never build a `core` or `marts` model
 from an area's models.
 
+If staging rows or snapshot history also need protection, have the owner opt in with
+`restricted_source_layers = true` under the area's declaration. Place the sensitive staging
+models and snapshots explicitly in `staging_<area>` and `snapshots_<area>` using dbt's schema
+configuration. The same area grant covers all four schemas. Preserve and verify existing
+snapshot history before retiring any shared copy. On Snowflake, follow `vecten next` to
+regenerate and confirm the provisioner script when the installed area list changes.
+
 Never set dbt's `grants` config or a granting post-hook: the MCP owns every read grant, and
 `convention_no_grants` fails the build.
 
@@ -258,10 +265,10 @@ the marts. The document carries `ok`,
 
 - **0**: green. `datasets_changed: true` means the build rewrote `osi/datasets.json`;
   `false` means nothing the datasets are generated from changed, so the file is already fresh.
-- **3**: a prerequisite. "no fixtures for <source>" names
-  `vecten connector run <source> --record`, which writes real records into the project to be
-  committed, so hand the source to the `connector` skill, which tells the human first. "Docker
-  is needed" means asking the human to start Docker.
+- **3**: "no fixtures for <source>" names the connector whose offline inputs are missing.
+  Hand it to the `connector` skill. When its declaration sets `record = false`, write and
+  check synthetic fixtures. Otherwise confirm with the human before recording real rows.
+  "Docker is needed" means asking the human to start Docker.
 - **5**: dbt failed. Fix each node `failed` names, then build again. Repeat until exit 0. A
   staging node failing because its raw relation does not exist means a declared table has no
   fixture: stop and hand back as step 1 says, rather than building again.

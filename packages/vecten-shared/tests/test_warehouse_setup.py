@@ -23,11 +23,17 @@ pytestmark = [
     pytest.mark.docker,
     pytest.mark.skipif(not docker_util.docker_available(), reason="no docker daemon"),
 ]
-MCP_VARS = ("MCP_STATE_DB_PASSWORD", "PROVISIONER_PASSWORD", "IMPERSONATOR_PASSWORD")
+MCP_VARS = (
+    "MCP_GATE_DB_PASSWORD",
+    "MCP_STATE_DB_PASSWORD",
+    "PROVISIONER_PASSWORD",
+    "IMPERSONATOR_PASSWORD",
+)
 ENV = {
     "POSTGRES_PASSWORD": "master",
     "AIRFLOW_DB_PASSWORD": "a1",
     "MCP_STATE_DB_PASSWORD": "m1",
+    "MCP_GATE_DB_PASSWORD": "fixture-gate",
     "LOADER_PASSWORD": "l1",
     "PROVISIONER_PASSWORD": "p1",
     "IMPERSONATOR_PASSWORD": "i1",
@@ -57,6 +63,30 @@ def rerun_init(name: str, *env_args: str) -> subprocess.CompletedProcess:
 def role_names(connect) -> set[str]:
     with connect("postgres", "master", "postgres") as c:
         return {r[0] for r in c.execute("select rolname from pg_roles")}
+
+
+def test_laptop_upgrades_an_existing_state_volume_for_the_gate(init_dir):
+    script = init_dir / "10-vecten.sh"
+    script.rename(init_dir / "vecten" / "setup.sh")
+    with pg_container(init_dir, ENV | {"VECTEN_WITH_GATE": "true"}) as (connect, name):
+        with connect("postgres", "master", "postgres") as c:
+            c.autocommit = True
+            c.execute("CREATE ROLE mcp_state LOGIN PASSWORD 'm1'")
+            c.execute("CREATE DATABASE mcp_state OWNER mcp_state")
+        with connect("mcp_state", "m1", "mcp_state") as c:
+            c.execute("CREATE TABLE existing_state (value int)")
+            c.execute("INSERT INTO existing_state VALUES (7)")
+        (init_dir / "vecten" / "setup.sh").rename(script)
+        for _ in range(2):
+            subprocess.run(
+                ["docker", "exec", name, "bash", INIT_SCRIPT, "--ensure-gate"],
+                check=True,
+                capture_output=True,
+            )
+            with connect("mcp_gate", ENV["MCP_GATE_DB_PASSWORD"], "mcp_state") as c:
+                assert c.execute("SELECT current_user").fetchone() == ("mcp_gate",)
+            with connect("mcp_state", "m1", "mcp_state") as c:
+                assert c.execute("SELECT value FROM existing_state").fetchone() == (7,)
 
 
 def test_roles_databases_and_revokes(init_dir):
@@ -263,3 +293,18 @@ def test_with_mcp_must_be_exactly_true_or_false(init_dir):
         assert rerun.returncode != 0
         assert "VECTEN_WITH_MCP must be exactly true or false" in rerun.stderr
         assert not {"provisioner", "impersonator", "mcp_state"} & role_names(connect)
+
+
+def test_mcp_without_a_gate_sets_up_state_without_a_gate_secret(init_dir):
+    env = {name: value for name, value in ENV.items() if name != "MCP_GATE_DB_PASSWORD"}
+    with pg_container(init_dir, env) as (connect, name):
+        assert "mcp_state" in role_names(connect) and "mcp_gate" not in role_names(connect)
+        with connect("postgres", "master", "postgres") as c:
+            c.autocommit = True
+            c.execute("CREATE ROLE mcp_gate NOLOGIN")
+        rerun = rerun_init(name)
+        assert rerun.returncode == 0, rerun.stderr
+        with connect("postgres", "master", "mcp_state") as c:
+            assert not c.execute(
+                "SELECT has_database_privilege('mcp_gate', 'mcp_state', 'CONNECT')"
+            ).fetchone()[0]

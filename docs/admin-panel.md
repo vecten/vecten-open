@@ -47,7 +47,7 @@ Afterwards you land on the overview. The first admins are the addresses listed u
 | Audit | Filter audit rows by person, tool, resolution and date; open a row and its request chain | `search_audit`, `read_audit_row` tools |
 | Connected clients | Active client sessions across people | `connected_clients` tool |
 | Settings | Current value, default and range of each setting; change one | `read_settings` tool, `POST /api/admin/settings/set` |
-| Analytics | Every bound [analytics app](analytics-apps.md): title, extension and version, kind, URL, bound and admitted groups, datasets, its principal, its access-health entries and where its binding lives in `vecten.toml`; read-only | `list_apps` tool, `GET /api/admin/apps` |
+| Analytics | Every bound [analytics app](analytics-apps.md): title, extension and version, kind, URL, bound and admitted groups, datasets, its principal, its access-health entries, where its binding lives in `vecten.toml`, and the current HTTP health of container apps | `list_apps` tool, `GET /api/admin/apps?check_health=true` |
 | (no screen) | Create or rotate an app's principal and its credentials, or set its groups to the binding (`--groups-only`) | `vecten app connect`, `POST /api/admin/apps/connect`; no tool |
 
 ### Users and groups
@@ -72,7 +72,8 @@ Copy the secret immediately: it is never stored in readable form and cannot be s
 
 A grant gives a group read access to one dataset, translated to `GRANT SELECT` on its source,
 or to one convention schema (`core`, `marts`, `staging`, `snapshots` or `raw_<source>`), or to
-a restricted area `vecten.toml` declares, which covers both `core_<area>` and `marts_<area>`.
+a restricted area `vecten.toml` declares, which covers `core_<area>` and `marts_<area>`. An area with
+`restricted_source_layers = true` also includes its staging rows and snapshot history.
 Grants are desired state. The server reconciles them every fifteen minutes and whenever the
 model changes, and **Reconcile now** runs a reconciliation immediately.
 

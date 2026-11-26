@@ -29,6 +29,7 @@ SCRIPT = "/docker-entrypoint-initdb.d/vecten/warehouse_setup.sql"
 PASSWORDS = {
     "AIRFLOW_DB_PASSWORD": "a1",
     "MCP_STATE_DB_PASSWORD": "m1",
+    "MCP_GATE_DB_PASSWORD": "fixture-gate",
     "LOADER_PASSWORD": "l1",
     "PROVISIONER_PASSWORD": "p1",
     "IMPERSONATOR_PASSWORD": "i1",
@@ -36,6 +37,7 @@ PASSWORDS = {
 ALL = {
     "with_airflow": "true",
     "with_mcp_state": "true",
+    "with_gate": "false",
     "with_warehouse": "true",
     "with_mcp": "true",
 }
@@ -153,6 +155,7 @@ def test_setup_variables_for_state_instance_keep_warehouse_roles_off():
     assert setup_variables(["airflow", "mcp_state"], True) == {
         "with_airflow": "true",
         "with_mcp_state": "true",
+        "with_gate": "false",
         "with_warehouse": "false",
         "with_mcp": "false",
     }
@@ -162,6 +165,7 @@ def test_setup_variables_for_warehouse_instance():
     assert setup_variables(["warehouse"], True) == {
         "with_airflow": "false",
         "with_mcp_state": "false",
+        "with_gate": "false",
         "with_warehouse": "true",
         "with_mcp": "true",
     }
@@ -171,6 +175,7 @@ def test_setup_variables_without_mcp():
     assert setup_variables(["airflow", "warehouse"], False) == {
         "with_airflow": "true",
         "with_mcp_state": "false",
+        "with_gate": "false",
         "with_warehouse": "true",
         "with_mcp": "false",
     }

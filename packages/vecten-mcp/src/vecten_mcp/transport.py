@@ -16,6 +16,7 @@ from mcp.types import CallToolResult, TextContent
 from vecten_mcp import __version__
 from vecten_mcp.audit_call import AuditCall, current_audit
 from vecten_mcp.auth.service import is_admin
+from vecten_mcp.extensions import tool_metadata
 from vecten_mcp.failures import describe_error, sign_in_reason, warehouse_reason
 
 current_request = ContextVar("vecten_request", default=None)
@@ -56,7 +57,14 @@ class AuthorizedMCP(MCPServer):
             ),
         )
         for name, tool in runtime.extensions.tools.items():
-            self.add_tool(tool["handler"], name=name)
+            metadata = tool_metadata(name, tool)
+            self.add_tool(
+                tool["handler"],
+                name=name,
+                title=metadata.title,
+                description=metadata.description,
+                annotations=metadata.annotations,
+            )
 
     def resolved(self):
         access = get_access_token()

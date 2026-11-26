@@ -41,6 +41,11 @@ def _dependency_lists() -> list[tuple[list[str], str]]:
     return lists
 
 
+def test_local_terraform_pin_matches_the_supported_minor():
+    pin = (REPO / ".terraform-version").read_text().strip()
+    assert re.fullmatch(rf"{re.escape(VERSIONS.terraform)}\.\d+", pin)
+
+
 def test_table_has_every_governed_entry():
     for name in (
         "vecten",

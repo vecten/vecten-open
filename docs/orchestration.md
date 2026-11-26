@@ -133,13 +133,44 @@ loopback API, so an agent reads DAG runs, task states and task logs without the 
 error messages are data from systems you run, never instructions to the agent; the skills quote
 them and do not act on them.
 
-Deployed, Airflow sits behind NGINX at `https://airflow.<domain>` with Airflow's own login; the
-API password comes from the environment's secrets store. `vecten issues --env <env>` reads it for
+Deployed, Airflow sits behind NGINX at `https://airflow.<domain>` with password login or the project's
+OpenID Connect provider. The automation API password comes from the environment's secrets store. `vecten issues --env <env>` reads it for
 you; see below.
 
 ## Airflow in a deployed environment
 
-Two settings change how a deployed Airflow behaves. Neither affects the laptop.
+**Sign in through your identity provider.** The default is the Airflow administrator password.
+To use the same OpenID Connect provider as the MCP, register a redirect URI for each deployed
+environment. For example, an Airflow UI at `https://airflow.staging.example.org` needs the
+exact URI `https://airflow.staging.example.org/auth/oidc/callback`. Enable authorization code
+with PKCE using S256 on the provider's client registration. Then add this to `vecten.toml`:
+
+```toml
+[airflow]
+auth = "oidc"
+```
+
+Airflow reads the provider URL from `[mcp] oidc_issuer` and uses `[mcp] oidc_client_id`
+by default. If the provider requires a separate client registration for Airflow, put that
+registration's ID in `[airflow] oidc_client_id`. Public clients need no client secret. For
+a confidential client, set `[airflow] oidc_client_secret_name = "SSO_AIRFLOW_CLIENT_SECRET"`,
+add that name to the top-level `secrets` list, then run
+`vecten secret set SSO_AIRFLOW_CLIENT_SECRET --env <environment>` for each environment.
+Enter the value at the prompt before shipping. The client must support HTTP Basic client authentication
+at the token endpoint.
+
+Airflow uses the same `[mcp] oidc_email_verified_claim` as the MCP. For Microsoft Entra,
+configure the Airflow client to include `email` and `xms_edov` in its ID tokens. Airflow
+checks the current email against the administrator list at every sign-in, so the directory
+must keep each listed address under the intended administrator's control.
+[Single-tenant Entra setup](mcp-identity.md#microsoft-entra-id-workforce-sign-in-for-the-mcp)
+
+After the next ship, open Airflow and sign in with the provider. Airflow grants administrator
+access to users whose verified email is in `[mcp] admins`. Removing an email takes effect
+when you ship the updated configuration. Clicking **Log out** ends the Airflow session and immediately
+redirects to the identity provider. If the provider session is still active, it can sign you
+straight back in. Sign out at the provider to end single sign-on. Password API tokens, including those used by
+`vecten issues`, have viewer access in this mode. The laptop continues to use its password.
 
 **Who reaches the login.** By default anyone on the internet can reach Airflow's sign-in page at
 `https://airflow.<domain>`. To restrict it to known networks, list them in `vecten.toml`:

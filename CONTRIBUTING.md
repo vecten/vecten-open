@@ -61,8 +61,17 @@ No pull request may require a real cloud account to review or merge. Terraform c
 checked with `terraform fmt`, `terraform validate` and the `terraform test` suites under each
 module's `tests/`; real deploys happen on the maintainers' sandboxes before a release.
 
-Comments in code state the constraint that makes the code correct, never the change history;
-a hook lints them.
+Write comments that explain the constraint that makes the code correct. Keep change history
+in Git. The dev group includes
+the windbag comment linter. Run `uv run windbag check --staged` before committing. CI uses the same staged check for the comments introduced by the entire
+pull request. To audit existing comments too, run `uv run windbag check --all`. Both checks use
+windbag's default rules.
+
+To enable the supplied pre-commit hook in a fresh clone, run
+`git config --local core.hooksPath .githooks`. If you already use hooks, add
+`uv run --locked windbag check --staged` to your existing pre-commit hook.
+
+The root `.terraform-version` pins the exact Terraform version used by tfenv, tenv and repository CI.
 
 ## Specs
 
@@ -97,11 +106,14 @@ fails a pull request to `main` from any other branch. The maintainers are
 | `release/<version>` | any branch or fork | a maintainer's approval; a maintainer's own pull request needs none | a squash |
 | `main` | `release/<version>` | the other maintainer's approval | a merge commit |
 | `main` | `hotfix/<name>` | the other maintainer's approval | a squash |
+| none | `rc/<version>rcN`, created by the release tooling for a release candidate | nothing | never merged; deleted after the release |
 
 Every merge also needs CI green, and no one bypasses that, the maintainers included. One
 release branch is open at a time. It opens as the next
 patch version; when a breaking change is accepted, a maintainer renames it to the next minor
 (`release/0.2.0`), which GitHub carries over to the open pull requests.
+GitHub deletes a pull request's branch when it merges, a release branch included once it
+reaches `main`; restore it from the pull request page if work continues on it.
 
 A hotfix is for a vulnerability handled under [SECURITY.md](SECURITY.md) and nothing else: an
 urgent bug that is not a vulnerability goes to the release branch. A maintainer opens the
@@ -113,6 +125,9 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 (`fix(mcp): …`, `docs: …`). The template asks what changed, why, which tests ran and whether a
 spec or a doc moved. A change a user would notice adds a line under `[Unreleased]` in the
 [changelog](CHANGELOG.md), in the same pull request.
+Name the issue a pull request fixes with a closing keyword at the start of a line or sentence
+(`Fixes #123.`); the issue closes when the pull request merges into the release branch, not
+when the release reaches `main`. A keyword in inline code, a code block or a quote closes nothing.
 
 ## Releasing
 
@@ -128,7 +143,15 @@ distributions share one, and the tag is `v<version>`.
    merges it with a merge commit.
 3. Tag the merge commit `v<version>` with an annotated tag and push the tag. The Terraform
    modules are fetched by this tag, so nothing deploys from the version before it exists.
-4. Publish the packages and the images, then run `uv run vecten dev check-images`.
+   Pushing the tag starts the `publish` workflow, which refuses a tag that does not name the
+   version in the tree or does not sit on `main`.
+4. Approve the `publish` run in the `release` environment. A release takes one approval, for
+   the packages: the run waits for it before anything is published, then publishes the
+   packages to PyPI. The images build after that with no approval of their own and can take
+   long (up to three hours: the arm64 builds run under emulation); they are pushed to
+   `ghcr.io/vecten` and checked to hold both platforms. The `verify` job then installs the
+   published version, and the release is done when `verify` is green. Nothing is published by
+   hand. The one-time setup the workflow relies on is in `docs/releasing.md`.
 5. Rename the merged branch to `release/<next patch>`. Its open pull requests follow the
    rename; deleting the branch would move them onto `main`.
 

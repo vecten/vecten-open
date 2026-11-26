@@ -8,9 +8,11 @@ import typer
 
 from vecten.cli.context import CliContext
 from vecten.cli.runner import JsonFlag, run_command
+from vecten.deploy.tfvars import has_snowflake_root
 from vecten.intake.answers import ANSWERS_FILE, read_answers, read_answers_file, source_names
 from vecten.scaffold.params import ScaffoldParams
 from vecten.scaffold.render import render_project
+from vecten_shared.config import load_config, save_config
 from vecten_shared.output import ExitCode, Failure, Result
 from vecten_shared.records import write_record
 
@@ -34,15 +36,20 @@ def collect_params(
 
 
 def _refuse_non_empty(target: Path) -> None:
-    # The recorded answers file is what `init` reads in place, so it does not make the target busy.
     if not target.exists():
         return
     if not target.is_dir():
         raise Failure(ExitCode.REFUSED, f"{target} is not a directory")
-    if any(p.name != ANSWERS_FILE for p in target.iterdir()):
-        raise Failure(
-            ExitCode.REFUSED, f"{target} is not empty; init renders into an empty directory"
-        )
+    blockers = []
+    for entry in target.iterdir():
+        if entry.name in {ANSWERS_FILE, ".DS_Store"} and entry.is_file(follow_symlinks=False):
+            continue
+        if entry.name == ".claude" and entry.is_dir(follow_symlinks=False):
+            continue
+        blockers.append(entry.name)
+    if blockers:
+        names = ", ".join(repr(name) for name in sorted(blockers))
+        raise Failure(ExitCode.REFUSED, f"{target} is not empty. Blocking entries: {names}")
 
 
 def register(app: typer.Typer) -> None:
@@ -104,6 +111,12 @@ def register(app: typer.Typer) -> None:
             created = not target.exists()
             try:
                 files = render_project(target, params)
+                if params.snowflake_shared_account:
+                    # The layout is an editable project choice outside the pristine scaffold.
+                    config = load_config(target)
+                    if has_snowflake_root(config):
+                        config.warehouse.shared_account = True
+                        save_config(target, config)
             except BaseException:
                 # A half-rendered directory init made itself would make the retry refuse as busy.
                 if created:

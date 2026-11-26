@@ -5,6 +5,113 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-26
+
+### Added
+
+- Extension MCP tools can publish a title, description and annotations such as a read-only hint to clients ([#52](https://github.com/vecten/vecten-open/issues/52)).
+- A connector can raise `vecten_platform.sync.TerminalConnectorError` to fail an object once and alert when retrying cannot help. Resources can use `unit_cursor` and `finish_unit` to commit paid work one unit at a time ([#131](https://github.com/vecten/vecten-open/issues/131)).
+- Supply required extension settings during installation with repeatable `extension add --set key=value` options ([#134](https://github.com/vecten/vecten-open/issues/134)).
+- Extensions can package skills for data users. Members of the configured groups can download them from the MCP apps page ([#55](https://github.com/vecten/vecten-open/issues/55)).
+- Project CI checks formatting and validates each Terraform root before bootstrap ([#138](https://github.com/vecten/vecten-open/issues/138)).
+- Both runtime images include third-party notices, the base image reference and an inventory of installed Debian packages ([#24](https://github.com/vecten/vecten-open/issues/24)).
+- Project CI runs `vecten lock --check` to catch changed in-repo manifests, services, and apps ([#113](https://github.com/vecten/vecten-open/issues/113)).
+- Projects and extensions can declare Airflow pools, variable defaults and viewer API accounts ([#42](https://github.com/vecten/vecten-open/issues/42)).
+- Extension settings support nested object schemas, array, string and numeric constraints, and
+  constant values ([#139](https://github.com/vecten/vecten-open/issues/139)).
+- OAuth accepts HTTPS client metadata documents for public clients using authorization code and PKCE ([#41](https://github.com/vecten/vecten-open/issues/41)).
+- Connector recording bounds extraction per object and supports redaction and a recording
+  opt-out. Hand-written fixtures can be checked offline against declared objects
+  ([#46](https://github.com/vecten/vecten-open/issues/46)).
+- Connector authors can opt into `--record --record-inputs` to test parsing against saved
+  upstream JSON in connector tests and local dbt builds. See [connector fixtures](docs/connectors.md#test-connector-parsing-offline).
+  ([#6](https://github.com/vecten/vecten-open/issues/6))
+- MCP extensions can update human memberships in their own groups after verified sign-in. Access health lists each managing extension.
+- An area can opt into restricted staging and snapshot schemas. Existing area grants cover
+  those layers once enabled and models are explicitly placed there
+  ([#135](https://github.com/vecten/vecten-open/issues/135)). On Snowflake, opting in needs
+  version 9 of the access procedures: rerun the provisioner script, and again whenever the
+  opted-in areas change.
+- The service login gate can verify the original host, URI and method supplied by a forward-auth proxy and redirect browsers to sign-in ([#101](https://github.com/vecten/vecten-open/issues/101)).
+- Deployment plans name the bound service volumes that will be lost when an AWS or Scaleway
+  host is removed or replaced. The apply workflow also prints the warning before applying
+  ([#129](https://github.com/vecten/vecten-open/issues/129)).
+- Deployed Airflow can sign administrators in with the MCP’s OpenID Connect provider and shared administrator list ([#5](https://github.com/vecten/vecten-open/issues/5)).
+- `vecten up` reports each active component’s base image and how to select published images when a local build was chosen ([#21](https://github.com/vecten/vecten-open/issues/21)).
+- The Analytics screen checks each bound container app’s HTTP health when opened ([#115](https://github.com/vecten/vecten-open/issues/115)).
+
+### Changed
+
+- The four packages are now marked beta (`Development Status :: 4 - Beta`), and the READMEs say so.
+
+### Fixed
+
+- A recorded binary column replays as the same bytes. Fixtures write it as `0x` hex, which
+  the recorded column type turns back into bytes; before, replay kept the text in a variant
+  column and left the column empty.
+- `vecten dbt-build-local` accepts a connector whose only fixture is an input sample that kept
+  no rows, and replay checks that sample.
+- NGINX starts when a hostname is longer than 46 characters, as Scaleway hostnames under a
+  multi-level domain often are. It refused to start, so the ship's health check timed out.
+- The first deploy of a project whose platform builds a Snowflake warehouse no longer fails
+  to sign in to Snowflake before the environment's warehouse exists.
+- MCP browser pages show the Vecten mark in browser tabs. On service hosts, the sign-out
+  page can load its icon, stylesheet and fonts after the session ends
+  ([#187](https://github.com/vecten/vecten-open/issues/187)).
+- MCP and Airflow OIDC sign-in support Microsoft Entra ID's `xms_edov` claim for a single
+  workforce tenant. Set it in `vecten.toml` or with `vecten answer` ([#190](https://github.com/vecten/vecten-open/issues/190)).
+- An area revoke attempts every previously granted schema and reports any that still need
+  a retry. Snowflake access procedures version 7 track partial schema grants and check the
+  role's remaining visible privileges when a revoke fails. The revoke stays pending even
+  after a drop because Snowflake can restore grants with `UNDROP`. An ACCOUNTADMIN installs the
+  update with `vecten mcp provisioner-script` and confirms it with `--confirm-run`
+  ([#116](https://github.com/vecten/vecten-open/issues/116), [#117](https://github.com/vecten/vecten-open/issues/117)).
+  Every Snowflake project with the MCP reruns the script once after upgrading; `vecten next`
+  lists it.
+- Group bindings in shared Snowflake accounts check inherited grants before binding or
+  confirming a role. Access health reports bindings that later reach another environment or
+  cannot be verified. A shared account installs the check with version 8 of the access
+  procedures, which the same provisioner script rerun provides.
+- `vecten up` starts Airflow locally for Snowflake projects configured with both platform
+  and MCP components. The generated NGINX service depends only on the local Airflow API
+  ([#133](https://github.com/vecten/vecten-open/issues/133)).
+- `vecten init` keeps a Snowflake platform project’s recorded shared-account choice in
+  `vecten.toml` and renders the corresponding runbook through subsequent updates
+  ([#132](https://github.com/vecten/vecten-open/issues/132)).
+- The shared-account Snowflake teardown instructions drop the environment’s MCP sign-in policy
+  before the security integration it references ([#122](https://github.com/vecten/vecten-open/issues/122)).
+- `vecten connector run <source> --record` saves each object's dlt schema beside its fixture.
+  The connector test and `vecten dbt-build-local` preserve JSON columns, nesting and merge keys
+  on replay. Existing JSON Lines fixtures still load with dlt's default inference.
+  ([#45](https://github.com/vecten/vecten-open/issues/45))
+- The first guided project now initializes in the folder where Claude Code started, even
+  when it contains `.claude/` or Finder's `.DS_Store`. If other entries block initialization,
+  the CLI lists them. The guide explains the project name format and checks it when you answer.
+- The guide checks for the CLI before intake and installs a missing copy with uv and Python 3.14 ([#20](https://github.com/vecten/vecten-open/issues/20)).
+- Airflow syncs and dbt builds use the release's locked Snowflake connector. Syncs now skip
+  dlt's Airflow Variable lookups by default. Set `PROVIDERS__ENABLE_AIRFLOW_SECRETS=true`
+  to read dlt configuration from Airflow Variables
+  ([#136](https://github.com/vecten/vecten-open/issues/136), [#137](https://github.com/vecten/vecten-open/issues/137)).
+- Generated semantic field names use lowercase while their SQL expressions preserve the physical
+  column. With metrics present, platform project validation applies MetricFlow’s default
+  semantic-manifest rules to the generated datasets and metrics ([#142](https://github.com/vecten/vecten-open/issues/142)).
+- A shared-account Snowflake environment parses project datasets under its own database in
+  `vecten dbt --env` ([#142](https://github.com/vecten/vecten-open/issues/142)).
+- Deploy checks existing Snowflake object names in the saved Terraform plan before applying
+  either root. A failed first dispatch leaves the layout open for correction
+  ([#99](https://github.com/vecten/vecten-open/issues/99)).
+- After confirming an identity or changing MCP onboarding answers, `vecten promote --status` verifies the target environment’s last successful ship in a fresh checkout. `vecten next` uses the saved result offline before offering user administration ([#100](https://github.com/vecten/vecten-open/issues/100)).
+
+### Security
+
+- Service login checks run in an isolated gate container and existing sessions remain usable while the MCP process restarts ([#102](https://github.com/vecten/vecten-open/issues/102)). Existing deployments with a bound login route need a one-time permissions update before the first upgraded ship. On Scaleway, run `vecten bootstrap --env <env>` first. On both clouds, pause `ship.yml`, push with `vecten github push --no-wait`, run `vecten deploy --env <env>`, then re-enable the workflow. Deploy applies the permissions and ships the commit. Environments without a bound login route upgrade normally.
+- Each running extension service and container app gets a Docker network shared only with
+  NGINX. NGINX clears incoming `X-Vecten-On-Behalf-Of` headers so only the app can set
+  viewer attribution on its outbound MCP calls.
+  ([#90](https://github.com/vecten/vecten-open/issues/90), [#118](https://github.com/vecten/vecten-open/issues/118))
+- The local Airflow stack reads its admin password file from tmpfs and removes the old on-disk copy during `up` or `down` ([#33](https://github.com/vecten/vecten-open/issues/33)).
+- The CLI requires filelock 4.2.1 or later and the lock pins 4.2.12, which fix the lock-file advisories reported against 3.32.7, among them GHSA-69hj-f68j-2879 for `UnixFileLock`, the lock behind the CLI's token cache.
+
 ## [0.1.1] - 2026-11-18
 
 ### Added
@@ -363,6 +470,7 @@ The first public release.
 - Published as `vecten`, `vecten-platform`, `vecten-mcp` and `vecten-shared` on PyPI and as
   `ghcr.io/vecten/vecten-airflow` and `ghcr.io/vecten/vecten-mcp`.
 
-[Unreleased]: https://github.com/vecten/vecten-open/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/vecten/vecten-open/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/vecten/vecten-open/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/vecten/vecten-open/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vecten/vecten-open/releases/tag/v0.1.0

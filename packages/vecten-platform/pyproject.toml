@@ -1,29 +1,34 @@
 [project]
 name = "vecten-platform"
-version = "0.1.1"
+version = "0.1.2"
 description = "Airflow, dlt and dbt runtime for Vecten Open"
 requires-python = ">=3.14"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 readme = "README.md"
 authors = [{ name = "Vecten" }]
 keywords = ["vecten", "dlt", "airflow", "dbt", "data platform"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.14",
     "Operating System :: POSIX",
     "Topic :: Database",
 ]
 dependencies = [
-    "vecten-shared==0.1.1",
+    "vecten-shared==0.1.2",
     "dlt[duckdb,postgres,snowflake,sql_database,filesystem]>=1.31,<1.32",
     "httpx>=0.28,<1",
     "pyyaml>=6.0,<7",
     "dbt-core>=1.12,<1.13",
+    "metricflow>=0.213,<0.214",
     "dbt-postgres>=1.11,<1.12",
     "dbt-snowflake>=1.12,<1.13",
+    "snowflake-connector-python>=4.8,<4.9",
     "fakesnow>=0.11,<0.12",
+    "authlib>=1.9.10,<2",
+    "itsdangerous>=2.2,<3",
+    "httpx2>=2.16,<3",
 ]
 
 [project.urls]

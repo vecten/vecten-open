@@ -39,6 +39,12 @@ A service on the MCP host holds no more access than one on the platform host (se
 [isolation](#isolation-what-a-service-can-reach)), but it shares the VM's memory and CPU with
 the MCP server, which every person's question goes through.
 
+## Where login checks run
+
+A project with a bound login route runs `login-gate` from its MCP image on the MCP host. The gate checks service cookies against sessions, group memberships and app admission in the state database. It has its own network, and its container receives only the dedicated `mcp_gate` login for the state database. A split platform host reaches the gate through the MCP host’s HTTPS proxy.
+
+Existing service sessions keep working through an MCP process outage. New sign-ins use the MCP issuer on its own hostname and require that process. The state database and the NGINX proxies must remain available for either path.
+
 ## Hostnames and `vecten deploy`
 
 Each service with a bound route gets a hostname of its own: `<label>.<domain>`, or `<domain>`
@@ -94,6 +100,7 @@ On a service's hostname NGINX answers each request this way:
 |---|---|
 | `/_vecten/health` | The service's health check, to every address, for `GET` and `HEAD` (see [health](#health-and-the-ship-report)). |
 | `/_vecten/gate/...` | The gate's sign-in, on a hostname with a `login` route. |
+| Packaged files under `/_vecten/assets/` | On a hostname with a `login` route, `GET` and `HEAD` serve the gate's favicon, stylesheet, fonts and font license, including after sign-out. |
 | Any other path under `/_vecten` | 404. |
 | A path a bound route covers | The route's access mode, below. |
 | A path a declared route that `vecten.toml` does not bind covers | 404, even under a bound route's path. |
@@ -126,6 +133,11 @@ paths cannot be routed.
   (see [webhooks](#webhooks-and-signature-checks)).
 - **`login`**: only people signed in to the MCP who belong to one of the route's `groups`,
   through [the gate](#the-gate-signing-in-for-login-routes). It needs the `mcp` component.
+  An environment's first `login` route also needs the gate's database password,
+  `MCP_GATE_DB_PASSWORD`, which the setup host can create only once its permissions cover it:
+  on Scaleway run `vecten bootstrap --env <env>` and then `vecten deploy --env <env>` before
+  the ship that adds the route, on AWS `vecten deploy --env <env>`. Without them that ship
+  stops at its generated secrets step, before any container changes, and names those commands.
 - **`allow`** narrows either mode to the listed networks: on a deployed host NGINX answers 403 to
   every other address before any sign-in. `vecten up` ignores it, because the laptop's NGINX
   sees every request as coming from Docker's own address.
@@ -148,12 +160,12 @@ the identity provider: it only ever returns to the MCP.
 
 The sign-in flow:
 
-1. A browser asks for a `login` route. For every such request NGINX first asks the MCP server
+1. A browser asks for a `login` route. For every such request NGINX first asks the login gate
    whether the request's gate cookie belongs to an active person in one of the route's groups.
    Without a valid gate session, NGINX redirects the browser to
    `https://<hostname>/_vecten/gate/start` on the service's own hostname, carrying the path the
    person asked for.
-2. `start`, answered by the MCP server through NGINX, sets the state cookie
+2. `start`, answered by the login gate through NGINX, sets the state cookie
    `__Host-vecten-gate-state` on the service's hostname, holding a random value for 600
    seconds (HTTPS only, hidden from scripts, sent to that hostname only, `SameSite=Lax`). It
    then redirects to the MCP's
@@ -163,7 +175,7 @@ The sign-in flow:
    in to the MCP's browser pages passes straight through, so one sign-in covers every service.
 3. The MCP redirects back to `https://<hostname>/_vecten/gate/callback` with a one-time code,
    valid for at most 60 seconds and only for that hostname and that hash. The callback, again
-   answered by the MCP, accepts the code only together with the state cookie's value, so a
+   answered by the login gate, accepts the code only together with the state cookie's value, so a
    callback address leaked through a log is useless without the browser that started the
    sign-in. It creates a gate session, sets the cookie `__Host-vecten-gate` (with the same
    attributes) holding the session's id, clears the state cookie, and returns the browser to
@@ -187,11 +199,43 @@ session for that hostname and the person's sign-ins on the MCP's own browser pag
 sign-in asks for credentials again. Gate sessions on other service hostnames stay until they
 end on their own. A WebSocket opened before a session ends stays open until it reconnects.
 
-The gate depends on the MCP server: while it is down, `login` routes are down too, and `public`
-routes keep working. Under `standard` the platform host's NGINX asks the MCP over HTTPS at
+Existing gate sessions keep working when the MCP server restarts. New sign-ins need the MCP
+issuer. Under `standard` the platform host's NGINX asks the gate over HTTPS at
 `mcp.<domain>`, with its certificate checked, which adds a round trip between the two VMs to
 every request on a `login` route there. On the laptop, `login` routes use the laptop's MCP at
 `https://mcp.localhost:8443`, its password sign-in, and the laptop's own people and groups.
+
+### Checking service requests with a forward-auth proxy
+
+For a service route bound with `access = "login"` in `vecten.toml`, send a GET to
+`https://mcp.<domain>/gate/verify?forwarded=1`. Use the MCP host for the environment
+serving the app. Copy the `__Host-vecten-gate` cookie from the browser’s request to
+the application hostname into the verification request to the MCP host. Set
+`X-Forwarded-Host`, `X-Forwarded-Uri` (including the query), and `X-Forwarded-Method`
+from the original request. The proxy must overwrite incoming copies and strip
+`X-Vecten-Gate-Host` and `X-Vecten-Gate-Route` so clients cannot select the route being checked.
+
+For a successful check, forward the five identity headers listed [below](#identity-headers-which-to-trust-and-why)
+from the 200 response. Remove client-supplied identity headers and both gate cookies
+(`__Host-vecten-gate` and `__Host-vecten-gate-state`) before forwarding to the application.
+A missing session returns 401. A person outside the route’s groups receives 403.
+Add `&redirect=1` to have the gate send a browser visiting by GET or HEAD to sign-in.
+
+On the **service hostname**, forward `/_vecten/gate/start`, `/_vecten/gate/callback`
+and `/_vecten/gate/logout` to `/gate/start`, `/gate/callback` and `/gate/logout` on the MCP
+host. Let browsers reach these paths before checking their login. Forward the browser's
+gate cookies to these endpoints and supply the service hostname in `X-Forwarded-Host`.
+Pass the gate’s redirects and cookie responses back to the browser.
+
+The sign-out page also needs its files after the session ends. Copy the exact
+`/_vecten/assets/` locations from the generated NGINX configuration described below.
+Forward `GET` and `HEAD` for those files to the same paths on the MCP host before checking
+login. Omit client credentials on these requests and return 404 for unknown asset paths.
+
+The gate checks the longest declared path on the service hostname. The proxy enforces
+the route's IP allow-list and forwards public routes itself. The generated NGINX
+configuration in `.vecten/stack/nginx/conf.d/default.conf` illustrates these rules on
+the laptop. It identifies the route by extension, service and route name.
 
 ### Identity headers: which to trust and why
 
@@ -218,11 +262,8 @@ them trustworthy there:
   from the MCP's answer; everywhere else, on `public` routes, the health path, the gate and the
   404 answers, it sets them empty, which forwards none. A header of these names sent by the
   client never reaches the service, in any letter case; spellings with `_` for `-` are dropped.
-- **Only NGINX can reach a service.** A service publishes no port and sits on a Docker network
-  that, of the stack's own containers, only NGINX joins, so no DAG, connector or other part of
-  the stack can send it a request. Every bound service on a host shares that network, though,
-  so another service on the same host can reach its port directly: trust the headers only as
-  far as you trust every service bound on that host.
+- **NGINX is the only other container on the service's network.** Each service publishes no
+  host port. Requests from other services on the host must go through the routes NGINX exposes.
 - **The service never sees the gate's cookies.** NGINX removes `__Host-vecten-gate` and
   `__Host-vecten-gate-state` from the `Cookie` header it forwards, so a service holds no
   credential it could replay to the gate. A service must not set a cookie of either name
@@ -287,14 +328,14 @@ address, so the services on one VM share those limits.
 A public route is the code in a deployment most exposed to the internet, so a service holds as
 little as possible:
 
-- **Its own network.** Services join the Docker network `vecten-services`, which, of the
-  stack's containers, only NGINX joins, and publish no port. Airflow, DAG code and the MCP
-  server cannot resolve or reach a service, and a service reaches them only through their
-  public hostnames, as any client would.
+- **Its own network.** Each running extension service and container app has a Docker network
+  shared only with NGINX. NGINX also joins the stack's default network, where Airflow and the
+  MCP server run. On a VM, services can call them through the deployed hostnames
+  `airflow.<domain>` and `mcp.<domain>`, using `domain` from the environment’s Terraform variables.
 - **No cloud identity.** A service's environment holds no `AWS_*` or `SCW_*` key and no
   `AIRFLOW_CONN_*` connection. On a VM, the VM agent, the program that applies each ship, adds
   a firewall rule
-  (`iptables`, in Docker's `DOCKER-USER` chain) that drops traffic from that network to the
+  (`iptables`, in Docker's `DOCKER-USER` chain) that drops traffic from the service bridges to the
   cloud's instance metadata address (169.254.169.254 on AWS, 169.254.42.42 on Scaleway), where a
   container would otherwise obtain the VM's own cloud credentials. The rule is added on every
   ship before any container starts, and at boot by the unit `vecten-services-guard.service`
@@ -316,7 +357,17 @@ keeps Docker, and with it the host's whole stack, Airflow and the MCP included, 
 operator fixes the cause. On Scaleway, whose VMs accept no SSH and no run command, that means a new VM. Outbound internet stays open, and a service shares the host's kernel
 with the rest of the stack: install only extensions you trust.
 
+After upgrading a project from the single `vecten-services` network, Compose can leave the old
+network on the host. The new containers use their individual networks. The VM firewall rule
+also covers the old bridge during the transition.
+
 ## Limits and sizing
+
+Allow one Docker subnet per running service or container app, plus subnets for the rest
+of the host's Docker networks. Docker's built-in IPv4 pools have room for about 30 networks
+in total. Existing networks and overlapping host routes reduce the available capacity.
+For larger stacks, configure the Docker daemon's `default-address-pools` to allocate smaller
+subnets. [Docker subnet allocation](https://docs.docker.com/engine/network/#automatic-subnet-allocation)
 
 Every service runs with a memory limit and a CPU limit: the declaration's, 256 MB and half a
 CPU unless it says otherwise, or the binding's `memory_mb` and `cpus`. A service that exceeds its
@@ -355,6 +406,13 @@ host's instance being replaced or destroyed. Moving a service to the other host 
 starts it with an empty volume there. Keep in a volume only what the service can rebuild, such
 as a bot's conversation references, which it gets back when people message it again. Data that
 must last belongs in a store outside the VM.
+
+Before approving a deployment, run `vecten deploy --env <env> --plan-only` with the target
+environment's name. The generated pull-request workflow posts the plan for `prod`.
+For other environments, use the plan-only command to see the warning before apply.
+If the plan removes a host, its warning lists the Docker volumes
+for services currently bound to that host. Back up any data you need before applying.
+Check the old host separately for volumes from services you have moved or removed.
 
 Removing a service's binding stops its container but keeps its volume, and the next ship, and
 every ship after it, names the volume:
@@ -407,6 +465,13 @@ path, NGINX also serves `https://<hostname>/_vecten/health` to every address, ou
 and the gate, so that `ship` can reach it from a GitHub Actions runner. It admits `GET` and
 `HEAD` only, answering 403 to anything else, and forwards exactly the declared path. Anyone can
 read the answer, so put nothing private in it.
+
+Opening Analytics in the MCP admin panel also checks this path for container apps listed
+under `[apps.<extension>.<app>]` in `vecten.toml` (see [analytics apps](analytics-apps.md)).
+On a deployed stack the MCP uses the app’s public HTTPS hostname. On a laptop it calls
+NGINX over plain HTTP with the app’s hostname. NGINX serves the health path on port 80
+before redirecting other requests to HTTPS. If the app declares a health command alone,
+Docker runs it and Analytics displays `command check only`.
 
 After it has checked Airflow and the MCP, `ship` polls each served service's health address,
 one after another, for up to 60 seconds each, and reports one state per bound service, under

@@ -5,6 +5,7 @@ import typer
 from vecten.cli.context import CliContext
 from vecten.cli.runner import JsonFlag, run_command
 from vecten.stack import up as up_mod
+from vecten.stack.up import PUBLISHED_IMAGES_HINT
 from vecten_shared.output import Result
 
 
@@ -14,6 +15,14 @@ def register(app: typer.Typer) -> None:
         def run(ctx: CliContext) -> Result:
             res = up_mod.up(ctx.require_project(), up_mod.get_runner())
             lines = [f"{name}: {url}" for name, url in res.urls.items()]
+            lines += [
+                f"{component} base image: {base['image']} ({base['source']})"
+                for component, base in res.base_images.items()
+            ]
+            hint = None
+            if any(base["source"] == "local" for base in res.base_images.values()):
+                hint = PUBLISHED_IMAGES_HINT
+                lines.append(hint)
             lines += [f"{key}: {value}" for key, value in res.airflow_api.items()]
             if res.airflow_api:
                 lines.append("airflow password: AIRFLOW_ADMIN_PASSWORD in .env")
@@ -28,6 +37,8 @@ def register(app: typer.Typer) -> None:
             return Result(
                 data={
                     "profiles": res.profiles,
+                    "base_images": res.base_images,
+                    **({"base_image_hint": hint} if hint else {}),
                     "urls": res.urls,
                     "stack_dir": str(res.stack_dir),
                     "left_out": res.left_out,

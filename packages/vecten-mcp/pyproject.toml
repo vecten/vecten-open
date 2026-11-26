@@ -1,21 +1,21 @@
 [project]
 name = "vecten-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "The MCP server of Vecten Open"
 requires-python = ">=3.14"
 license = "Apache-2.0 AND OFL-1.1"
-license-files = ["LICENSE", "src/vecten_mcp/assets/static/fonts/OFL.txt"]
+license-files = ["LICENSE", "NOTICE", "src/vecten_mcp/assets/static/fonts/OFL.txt"]
 readme = "README.md"
 authors = [{ name = "Vecten" }]
 keywords = ["vecten", "mcp", "model context protocol", "semantic layer", "warehouse"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3.14",
     "Operating System :: POSIX",
     "Topic :: Database",
 ]
 dependencies = [
-    "vecten-shared==0.1.1",
+    "vecten-shared==0.1.2",
     "starlette>=1.9,<2",
     "uvicorn>=0.54,<1",
     "mcp>=2.3,<2.4",

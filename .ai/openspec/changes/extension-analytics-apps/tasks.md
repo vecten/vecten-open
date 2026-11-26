@@ -41,6 +41,9 @@ publishing is a later change with #40 (section 5).
   - Partly run live for 0.1.1 (rc2, AWS): a container Streamlit app with Snowflake: hostname created, a member read through the gate as `svc_app_<app>` with only the admitted group's role, an outsider was refused, the audit names the viewer. Scaleway with Postgres not run.
 - [x] 4.4 **[deploy]** With #51's restricted area: a finance dashboard bound to `["finance", "default"]` admits finance members only and access health names `default`
   - Live, 0.1.1rc2 on AWS: bound to `["finance", "default"]`, the app admitted `finance` only, access health named `default`; the area-grant path after the fix in #120.
+- [ ] 4.5 **[deploy]** The Analytics screen's health check (#115) on AWS and on Scaleway: the deployed MCP container fetches a container app's own public `https://<app>.<domain>/_vecten/health` over real TLS, verified against the MCP image's CA bundle (certifi's, which httpx uses). PASS on each cloud, for an app whose service declares an HTTP health path: while the app runs, the Analytics screen and `GET /api/admin/apps?check_health=true` from the deployed MCP show it `healthy`; with its service stopped, they show `unhealthy (HTTP <status>)` or `unreachable`
+  - Only a mocked transport (`test_app_listing.py`) and a local self-signed TLS server (`test_app_health_tls.py`) have exercised it.
+  - Partly run live for 0.1.2 (rc1, AWS): the Analytics screen showed a container app healthy, fetched over real TLS. Scaleway not run (sign-in).
 
 ## 5. Streamlit in Snowflake (later change, with #40)
 
@@ -56,3 +59,5 @@ publishing is a later change with #40 (section 5).
   - See 4.4.
 - [x] 6.3 The `snowflake_live` run of `packages/vecten-mcp/tests/test_app_sql_snowflake_live.py`: whether Snowflake's grammar itself refuses `LATERAL TABLE('<relation>')`, which the app SQL check refuses (written, not run: it needs the snowflake-live workflow's account)
   - `snowflake_live` run on `release/0.1.1`: Snowflake itself refuses `LATERAL TABLE('<relation>')`.
+- [ ] 6.4 Task 4.5: the Analytics health check from the deployed MCP on both clouds
+  - See 4.5.

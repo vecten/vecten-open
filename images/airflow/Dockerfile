@@ -13,6 +13,11 @@ LABEL org.opencontainers.image.source=https://github.com/vecten/vecten-open \
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends git curl \
     && rm -rf /var/lib/apt/lists/*
+ARG AIRFLOW_IMAGE
+COPY LICENSE NOTICE images/THIRD-PARTY.txt /usr/share/doc/vecten/
+RUN printf '%s\n' "${AIRFLOW_IMAGE}" > /usr/share/doc/vecten/base-image \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\t${source:Package}\n' \
+        > /usr/share/doc/vecten/debian-packages.tsv
 USER airflow
 # A fresh artifacts volume copies this directory's owner and mode, and Compose runs Airflow as
 # an arbitrary uid in group 0, so the group needs write access.
@@ -28,6 +33,18 @@ RUN --mount=from=uv,source=/uv,target=/bin/uv \
     --mount=type=cache,id=vecten-airflow-uv,target=/mnt/uv-cache,uid=50000,gid=0 \
     --mount=type=tmpfs,target=/tmp \
     --mount=type=bind,source=dist,target=/mnt/wheels \
-    /bin/uv pip install --cache-dir /mnt/uv-cache "apache-airflow==${AIRFLOW_VERSION}" \
-        /mnt/wheels/vecten_shared-*.whl /mnt/wheels/vecten_platform-*.whl \
-    && rm -f "${VIRTUAL_ENV}/.lock"
+    --mount=type=bind,source=uv.lock,target=/mnt/uv.lock <<'SH'
+set -e
+# Airflow resolves against its upstream image, but its Snowflake driver must match the MCP image.
+python - <<'PYTHON' > /tmp/snowflake-constraint.txt
+import tomllib
+
+with open("/mnt/uv.lock", "rb") as lock:
+    packages = tomllib.load(lock)["package"]
+[pin] = {p["version"] for p in packages if p["name"] == "snowflake-connector-python"}
+print(f"snowflake-connector-python=={pin}")
+PYTHON
+/bin/uv pip install --cache-dir /mnt/uv-cache --constraint /tmp/snowflake-constraint.txt \
+    "apache-airflow==${AIRFLOW_VERSION}" /mnt/wheels/vecten_shared-*.whl /mnt/wheels/vecten_platform-*.whl
+rm -f "${VIRTUAL_ENV}/.lock"
+SH

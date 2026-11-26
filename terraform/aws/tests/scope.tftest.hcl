@@ -123,7 +123,9 @@ run "mcp_role_reads_mcp_and_writes_the_generated_credentials" {
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/platform/LOADER_PASSWORD",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/platform/LOADER_PASSWORD-??????",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_STATE_DB_PASSWORD",
+      "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_GATE_DB_PASSWORD",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_STATE_DB_PASSWORD-??????",
+      "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_GATE_DB_PASSWORD-??????",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_PROVISIONER_PASSWORD",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_PROVISIONER_PASSWORD-??????",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_IMPERSONATOR_PASSWORD",
@@ -199,7 +201,9 @@ run "snowflake_setup_host_writes_state_credentials_only" {
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/platform/AIRFLOW_DB_PASSWORD",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/platform/AIRFLOW_DB_PASSWORD-??????",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_STATE_DB_PASSWORD",
+      "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_GATE_DB_PASSWORD",
       "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_STATE_DB_PASSWORD-??????",
+      "arn:aws:secretsmanager:eu-west-1:123456789012:secret:vecten/acme/prod/mcp/MCP_GATE_DB_PASSWORD-??????",
     ])
     error_message = "without a Postgres warehouse the setup host writes the state credentials only"
   }

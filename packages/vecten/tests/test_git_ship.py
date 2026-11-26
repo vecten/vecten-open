@@ -159,6 +159,51 @@ def test_each_source_extension_builds_with_only_its_own_build_pins(tmp_path):
     assert (stack / "build" / "airflow.Dockerfile").read_text() == first
 
 
+@pytest.mark.parametrize("private_index", [False, True])
+def test_private_git_skill_checks_the_record_without_fetching_and_the_installed_mcp_image(
+    tmp_path, monkeypatch, private_index
+):
+    from dataclasses import replace
+
+    from vecten import extensions
+    from vecten_shared.services import check_bindings
+
+    config_doc = config(
+        consumer_skills={"orders": {"groups": ["sales"]}}, packages={"private_index": private_index}
+    )
+    git_project(tmp_path, config_doc)
+    record = locking.read_record(tmp_path)
+    record[NAME] = replace(record[NAME], consumer_skills=("orders",))
+    (tmp_path / locking.RECORD_FILE).write_text(locking.record_text(record))
+
+    def no_fetch(*args, **kwargs):
+        pytest.fail("credential-free CI tried to install, fetch or import a remote extension")
+
+    monkeypatch.setattr(extensions, "install_lock", no_fetch)
+    monkeypatch.setattr(extensions, "sync", no_fetch)
+    monkeypatch.setattr(extensions, "installed_skills", no_fetch)
+    monkeypatch.setattr(git_extensions, "write_sources", no_fetch)
+    extensions.prepare_declaration_check(tmp_path)
+    assert extensions.check_declarations(tmp_path, project_ci=True) == []
+    with pytest.raises(Failure, match="orders is missing"):
+        check_bindings(config_doc, {})
+    stack = tmp_path / ".vecten" / "stack"
+    write_project_layer(stack, config_doc, None)
+    build = stack / "build"
+    dockerfile = (build / "mcp.Dockerfile").read_text()
+    assert dockerfile.index("pip check") < dockerfile.index(
+        "python -m vecten_shared.consumer_skills"
+    )
+    assert "consumer-skills.json" not in (build / "airflow.Dockerfile").read_text()
+    assert "secret" not in dockerfile.split("RUN --network=none")[-1]
+    image_config = VectenConfig.model_validate_json((build / "consumer-skills.json").read_bytes())
+    assert list(image_config.consumer_skills) == ["orders"] and image_config.extensions == [NAME]
+    record[NAME] = replace(record[NAME], consumer_skills=())
+    (tmp_path / locking.RECORD_FILE).write_text(locking.record_text(record))
+    with pytest.raises(Failure, match="orders is missing"):
+        extensions.check_declarations(tmp_path, project_ci=True)
+
+
 def test_a_url_line_the_record_does_not_hold_still_fails_the_layer(tmp_path):
     c = config()
     line = git_project(tmp_path, c)
@@ -567,21 +612,23 @@ def test_only_a_git_sources_files_keep_their_executable_bit():
     assert mode(".vecten/ship/apply.py", frozenset({NAME})) == 0o644
 
 
-# The decompressed bundles a project without git sources ships, as the release without git
-# sources built them for this project; gzip's own bytes depend on the zlib build, so they are
-# left out. A change meant to alter every bundle updates these.
+# Every tar byte is pinned with fixed agent/SQL inputs. Gzip bytes depend on the zlib build.
 UNCHANGED_BUNDLES = {
-    "platform": "acd5f0a7dd4e8465ad3916cd628f834ab584ce905ed549e58e64cd43032bf362",
-    "mcp": "da18ad823e2b3e9ad797a72b85748c59f31f58c936d12ee63173cf274eb61217",
+    "platform": "06e6b85ff053ddcc80276ebce5e60bedf0f1d71906a1b19bc5851369e8224f60",
+    "mcp": "f29bf795c98ee333fb6361ae74039bccf6419fd0b6289ee5a3ed2e202d3262fe",
 }
 
 
-def test_a_project_without_git_sources_ships_the_bytes_it_shipped_before_them(tmp_path):
+def test_a_project_without_git_sources_ships_the_bytes_it_shipped_before_them(
+    tmp_path, monkeypatch
+):
     import gzip
     import hashlib
+    from importlib.resources import files
 
-    from vecten.deploy.bundle import build_host_bundle
+    from vecten.deploy import bundle as bundler
     from vecten_shared.provider.environment import EnvironmentOutputs
+    from vecten_shared.sql import setup_sql_path
 
     from .deploy_fixtures import COMMIT as SHIPPED
     from .deploy_fixtures import STANDARD_OUTPUTS, render_aws
@@ -598,9 +645,22 @@ def test_a_project_without_git_sources_ships_the_bytes_it_shipped_before_them(tm
     # Lineage and feedback come from git and the MCP; pinned, the bundle depends on files alone.
     lineage = {"commit": SHIPPED, "ancestors": []}
     metadata = (lineage, {**lineage, "resolutions": [], "unreviewed": []})
+    write_tarball = bundler._write_tarball
+    agent = files("vecten.deploy.vm").joinpath("apply.py")
+
+    def write_fixture_tarball(stage, target, sources):
+        # The runtime agent and SQL are versioned inputs, copied verbatim into each host's
+        # bundle. Fix their contents only after checking the exact bytes staged by the CLI.
+        for name, source in (("apply.py", agent), ("warehouse_setup.sql", setup_sql_path())):
+            staged = stage / ".vecten/ship" / name
+            assert staged.read_bytes() == source.read_bytes()
+            staged.write_bytes(f"fixture for {name}\n".encode())
+        write_tarball(stage, target, sources)
+
+    monkeypatch.setattr(bundler, "_write_tarball", write_fixture_tarball)
     found = {}
     for host in UNCHANGED_BUNDLES:
-        bundle = build_host_bundle(
+        bundle = bundler.build_host_bundle(
             root, load(root), "prod", outputs, host, SHIPPED, tmp_path / "out", metadata=metadata
         )
         found[host] = hashlib.sha256(gzip.decompress(bundle.read_bytes())).hexdigest()

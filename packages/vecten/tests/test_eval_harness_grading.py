@@ -122,9 +122,14 @@ def test_finish_benchmark_fills_the_placeholders(tmp_path):
 
 def test_report_titles_cases_from_their_metadata(tmp_path):
     iteration = workspace(tmp_path)
+    from shutil import copytree
+
+    earlier_name = iteration / "eval-a"
+    copytree(iteration / "eval-full-platform-deploy", earlier_name)
+    write_json(earlier_name / "eval_metadata.json", {"eval_id": 10, "eval_name": "later"})
     grading.prepare_benchmark(iteration.parent)
     text = grading.report(iteration, executor="claude-x", grader="claude-y", commit="abc1234")
-    assert "### Case 1: full-platform-deploy" in text
+    assert text.index("### Case 1: full-platform-deploy") < text.index("### Case 10: later")
     assert "| 1 | ✅ | ran next |" in text and "| 2 | ❌ | no secret |" in text
     assert "a \\| b in transcript" in text
     assert "| with the skill | 50.0% | 61 s | 1,234 |" in text

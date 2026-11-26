@@ -107,7 +107,7 @@ MIGRATED_TABLES = {"gate_sessions"}
 
 
 class StateStore:
-    def __init__(self, url: str):
+    def __init__(self, url: str, *, initialize=True):
         options = {"pool_pre_ping": True}
         if str(url).startswith("sqlite:"):
             options.update(connect_args={"check_same_thread": False, "timeout": 30})
@@ -117,6 +117,12 @@ class StateStore:
         if str(url).startswith("sqlite:"):
             event.listen(self.engine, "connect", lambda db, _: db.execute("PRAGMA foreign_keys=ON"))
         skipped = set(MIGRATED_TABLES)
+        if not initialize:
+            with self.engine.connect() as conn:
+                current = conn.execute(select(schema_version.c.version)).scalar_one()
+                if current != SCHEMA_VERSION:
+                    raise ValueError("gate requires the MCP state schema for this release")
+            return
         if self.engine.dialect.name == "postgresql":
             self.check_audit_scope()
             skipped |= {"audit_log", "access_events"}
@@ -136,6 +142,42 @@ class StateStore:
                 conn.execute(update(schema_version).values(version=SCHEMA_VERSION))
             if conn.execute(select(groups).where(groups.c.name == "default")).first() is None:
                 conn.execute(insert(groups).values(name="default", warehouse_role="analyst"))
+
+            if (
+                self.engine.dialect.name == "postgresql"
+                and conn.execute(
+                    text(
+                        "SELECT EXISTS (SELECT FROM pg_roles WHERE rolname='mcp_gate' AND "
+                        "shobj_description(oid, 'pg_authid') = 'Vecten service login: MCP gate')"
+                    )
+                ).scalar_one()
+            ):
+                self._grant_gate_access(conn)
+
+    @staticmethod
+    def _grant_gate_access(conn):
+        # Tables can first appear during this app startup, after the setup script runs.
+        # The state-table owner bypasses these policies. The gate login owns no table.
+        for statement in (
+            "ALTER TABLE public.records ENABLE ROW LEVEL SECURITY",
+            "DROP POLICY IF EXISTS gate_record_reads ON public.records",
+            "CREATE POLICY gate_record_reads ON public.records FOR SELECT TO mcp_gate "
+            "USING (kind IN ('app_admission', 'gate_codes', 'gate_logouts'))",
+            "DROP POLICY IF EXISTS gate_spend_codes ON public.records",
+            "CREATE POLICY gate_spend_codes ON public.records FOR DELETE TO mcp_gate "
+            "USING (kind = 'gate_codes')",
+            "DROP POLICY IF EXISTS gate_insert_logout ON public.records",
+            "CREATE POLICY gate_insert_logout ON public.records FOR INSERT TO mcp_gate "
+            "WITH CHECK (kind = 'gate_logouts')",
+            "DROP POLICY IF EXISTS gate_update_logout ON public.records",
+            "CREATE POLICY gate_update_logout ON public.records FOR UPDATE TO mcp_gate "
+            "USING (kind = 'gate_logouts') WITH CHECK (kind = 'gate_logouts')",
+            "GRANT SELECT ON public.principals, public.groups, public.memberships, "
+            "public.schema_version TO mcp_gate",
+            "GRANT SELECT, INSERT, DELETE ON public.gate_sessions TO mcp_gate",
+            "GRANT SELECT, INSERT, UPDATE (body, expires_at), DELETE ON public.records TO mcp_gate",
+        ):
+            conn.execute(text(statement))
 
     def check_audit_scope(self):
         if self.engine.dialect.name != "postgresql":
@@ -462,6 +504,18 @@ class StateStore:
                 .first()
             )
             return dict(row) if row else None
+
+    def logout_gate_session(self, key, *, now):
+        # The issuer checks this generation on its own sessions. The gate cannot access
+        # browser session rows, even to delete them.
+        with self.transaction() as conn:
+            pid = conn.execute(
+                delete(gate_sessions)
+                .where(gate_sessions.c.key == key, gate_sessions.c.expires_at > now)
+                .returning(gate_sessions.c.principal_id)
+            ).scalar_one_or_none()
+            if pid:
+                self.put("gate_logouts", pid, {"generation": uuid4().hex}, conn=conn)
 
     def end_gate_session(self, key):
         with self.transaction() as conn:

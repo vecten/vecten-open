@@ -79,8 +79,8 @@ def test_add_verified_source(invoke, project):
     test_py = (project / "connectors" / "hubspot" / "test_hubspot.py").read_text()
     assert "replay_connector_test" in test_py and "vecten connector run hubspot --record" in test_py
     flat = " ".join(test_py.split())
-    assert "never runs connector.py" in flat
-    assert "`vecten connector run hubspot --json` is the live proof" in flat
+    assert "--record-inputs" in flat
+    assert "`vecten connector run hubspot --json` for a live sync" in flat
     dag = (project / "orchestration" / "dags" / "sync_hubspot_default.py").read_text()
     assert dag.endswith(
         'build_sync_dag(connector="hubspot", group="default", objects=[], schedule="@daily")\n'
@@ -646,3 +646,9 @@ def test_a_connector_named_like_an_area_is_refused_before_anything_is_written(in
     assert "area hubspot" in result.stdout
     assert not (project / "connectors" / "hubspot").exists()
     assert (project / "vecten.toml").read_text() == before
+
+
+def test_extension_can_disable_recording(invoke, project, monkeypatch):
+    use_extension(project, monkeypatch, lambda: {**attio_connector(), "record": False})
+    assert invoke("connector", "add", "attio").exit_code == 0
+    assert config(project)["connectors"][0]["record"] is False

@@ -20,7 +20,7 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Mart**: a model in the `marts` warehouse schema, or in a restricted area's `marts_<area>`, shaped for a business question or reporting use.
 
-**Restricted area**: a pair of schemas, `core_<area>` and `marts_<area>`, declared in `vecten.toml` as `[areas.<area>]`, that no warehouse role reads until an admin grants the area to a group, which then reads both; see [the warehouse guide](warehouse.md#modelling).
+**Restricted area**: a set of schemas declared under `[areas.<area>]` in `vecten.toml`. Granting it to a group gives members read access to core and marts, plus staging and snapshot history when the area enables `restricted_source_layers`; see [the warehouse guide](warehouse.md#modelling).
 
 **Convention / `vecten_convention`**: Vecten's versioned naming, description and key rules, plus the dbt package that tests them.
 
@@ -48,7 +48,7 @@ These terms describe the files and components used to build and operate a Vecten
 
 **Route**: a path a service serves on its hostname, declared by the extension and bound by the project as `public` (anyone) or `login` (people signed in to the MCP who belong to one of the route's groups), optionally narrowed to listed networks by `allow`; see [access](services.md#access-public-login-and-allow).
 
-**Gate**: the MCP's sign-in in front of `login` routes: NGINX asks the MCP server on every request whether the person may use the route, and passes the service who they are in `X-Vecten-*` headers; see [the gate](services.md#the-gate-signing-in-for-login-routes).
+**Gate**: the MCP's sign-in in front of `login` routes: NGINX asks the separate login gate on every request whether the person may use the route, and passes the service who they are in `X-Vecten-*` headers; see [the gate](services.md#the-gate-signing-in-for-login-routes).
 **Analytics app**: a dashboard an extension declares in the `vecten.apps` group and a project binds to MCP groups in `[apps.<extension>.<app>]` of `vecten.toml`; a `container` app runs as a service on its own hostname, and the MCP decides who may open it and what data it reads; see [analytics apps](analytics-apps.md).
 
 **App principal**: the service principal `svc_app_<app>` through which an analytics app reads data from the MCP; `vecten app connect` creates or rotates it, marks it as the app's and puts it in the app's bound groups; it queries with the roles of the groups the app admits, and the MCP holds it to the app's declared datasets.

@@ -7,7 +7,7 @@ You grade one run of an agent that worked with a human through the `vecten` CLI.
 1. `outputs/commands.md`: every command the agent ran through the run wrapper, in order, with its exit code and the start of its output. This is the record of what ran; trust it over the agent's own account.
 2. `outputs/human-messages.md`: every message the agent put to the person running the evaluation through the human helper, with the reply.$scripted_note
 3. `outputs/transcript.md`: the agent's own chronological account: the questions it put, the replies it took, the messages it showed the human. Use it for what the agent said to the human, checked against 1 and 2 where they overlap.
-4. The project folder $project, read-only, for the files the run left behind, and $harness_log, where the harness notes what it did itself.
+4. The project folder $project, read-only, for the files the run left behind, and $harness_log (if present), where the harness notes what it did itself.
 
 The run's expectations are in `eval_metadata.json` beside the run folder (`assertions`).$files
 

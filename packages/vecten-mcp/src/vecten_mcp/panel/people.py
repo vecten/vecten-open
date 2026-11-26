@@ -2,7 +2,7 @@
 other app."""
 
 from starlette.concurrency import run_in_threadpool
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
 from vecten_mcp.apps import app_url
@@ -65,9 +65,36 @@ def people_routes(runtime):
                 "open each app.",
                 class_="empty",
             )
+        skills = [
+            tag("li", link(f"/apps/skills/{name}.zip", name))
+            for name, skill in sorted(runtime.extensions.consumer_skills.items())
+            if skill.groups.intersection(caller.groups)
+        ]
+        if skills:
+            body = join(body, tag("h2", "Skills for your assistant"), tag("ul", join(*skills)))
         signed = tag("p", f"Signed in as {caller.principal['email']}.", class_="hint")
         logout = form("/apps/logout", record["csrf"], button="Sign out", class_="inline")
         return page("Analytics apps", join(signed, body, logout))
+
+    async def download(request):
+        current = sessions.current(request)
+        headers = {"Cache-Control": "private, no-store"}
+        if current is None:
+            return RedirectResponse("/apps/login", status_code=303, headers=headers)
+        caller, _ = current
+        name = request.path_params["name"]
+        item = runtime.extensions.consumer_skills.get(name)
+        allowed = item is not None and bool(item.groups.intersection(caller.groups))
+        runtime.oauth.event(
+            caller.principal["id"], "apps/skill", name, "allowed" if allowed else "denied"
+        )
+        if not allowed:
+            return Response(status_code=404, headers=headers)
+        return Response(
+            item.archive,
+            media_type="application/zip",
+            headers={**headers, "Content-Disposition": f'attachment; filename="{name}.zip"'},
+        )
 
     async def login(request):
         target, nonce, origin = sessions.begin(request)
@@ -111,6 +138,7 @@ def people_routes(runtime):
 
     return [
         Route("/apps", listing, methods=["GET"]),
+        Route("/apps/skills/{name}.zip", download, methods=["GET"]),
         Route("/apps/login", login, methods=["GET"]),
         Route("/apps/callback", callback, methods=["GET"]),
         Route("/apps/logout", logout, methods=["POST"]),

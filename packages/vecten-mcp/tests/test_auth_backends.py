@@ -62,7 +62,7 @@ def test_limiter_applies_address_limit_across_identities():
         limiter.hit("ip")
 
 
-def oidc_fixture(claims=None):
+def oidc_fixture(claims=None, *, verification=None, **backend_options):
     secrets = Secrets()
     signer = SigningKeys(secrets, issuer="https://idp.example", clock=lambda: 100)
     state = StateStore("sqlite://")
@@ -88,7 +88,7 @@ def oidc_fixture(claims=None):
                 200,
                 extra={
                     "email": "jane@example.com",
-                    "email_verified": True,
+                    **({"email_verified": True} if verification is None else verification),
                     "name": "Jane",
                     "nonce": backend.last_nonce,
                     **(claims or {}),
@@ -105,6 +105,7 @@ def oidc_fixture(claims=None):
         "https://mcp.example/oidc/callback",
         client=client,
         clock=lambda: 100,
+        **backend_options,
     )
     return backend
 
@@ -132,6 +133,37 @@ def test_oidc_rejects_unverified_or_misbound_id_token(claims):
         backend.callback(result["state"], "code")
 
 
+def test_oidc_accepts_the_configured_email_verification_claim():
+    backend = oidc_fixture(verification={"xms_edov": True}, email_verified_claim="xms_edov")
+    pending = backend.begin("flow")
+    backend.last_nonce = pending["nonce"]
+    identity, flow = backend.callback(pending["state"], "code")
+    assert (identity.issuer, identity.subject, identity.email, flow) == (
+        "https://idp.example",
+        "subject",
+        "jane@example.com",
+        "flow",
+    )
+
+
+@pytest.mark.parametrize(
+    ("options", "verification"),
+    [
+        ({}, {"xms_edov": True}),
+        ({"email_verified_claim": "xms_edov"}, {"email_verified": True}),
+        ({"email_verified_claim": "xms_edov"}, {"xms_edov": False, "email_verified": True}),
+        ({"email_verified_claim": "xms_edov"}, {"xms_edov": "true"}),
+        ({"email_verified_claim": "xms_edov"}, {"xms_edov": 1}),
+    ],
+)
+def test_oidc_requires_literal_true_in_the_selected_claim(options, verification):
+    backend = oidc_fixture(verification=verification, **options)
+    pending = backend.begin("flow")
+    backend.last_nonce = pending["nonce"]
+    with pytest.raises(ValueError, match="unverified"):
+        backend.callback(pending["state"], "code")
+
+
 def test_unconfigured_oidc_refuses_login():
     backend = OIDCBackend(StateStore("sqlite://"), None, None, "https://mcp.example/callback")
     with pytest.raises(ValueError, match="OIDC"):
@@ -156,3 +188,125 @@ def test_password_link_cannot_cross_deleted_or_disabled_principal():
     state.update_principal(replacement["id"], enabled=False)
     with pytest.raises(ValueError):
         backend.set_password(link, "long-enough-password")
+
+
+def test_verified_sign_in_hook_owns_only_its_declared_human_memberships():
+    from vecten_mcp.access import AccessService
+    from vecten_mcp.auth.service import OAuthService
+
+    class Roles:
+        def create_group(self, role):
+            pass
+
+        def membership(self, role, name, grant):
+            pass
+
+        def drop_group(self, role):
+            pass
+
+    seen = []
+
+    def handler(*, identity, verified_claims, set_membership):
+        seen.append((identity.email, verified_claims["sub"]))
+        with pytest.raises(ValueError, match="does not manage"):
+            set_membership("manual", True)
+        set_membership("not_created", True)
+        set_membership("finance", True)
+
+    backend = oidc_fixture({})
+    state = backend.state
+    access = AccessService(
+        state,
+        Roles(),
+        sign_in_hooks={"example": {"groups": ["finance", "not_created"], "handler": handler}},
+    )
+    service = OAuthService(
+        state, None, "https://mcp.example", backend, on_sign_in=access.on_sign_in
+    )
+    person = state.invite("jane@example.com", "Jane", "jane", provisioned=True)
+    access.create_group("finance")
+    access.create_group("manual")
+    access.membership("manual", person["id"])
+    started = backend.begin("browser")
+    backend.last_nonce = started["nonce"]
+    identity, _ = backend.callback(started["state"], "code")
+    service.login_identity(identity)
+    assert seen == [(person["email"], identity.subject)]
+    assert {r["group"]: r["source"] for r in access.health()["membership_sources"]} == {
+        "finance": "example",
+        "default": "local",
+        "manual": "local",
+    }
+    with pytest.raises(ValueError, match="example manages"):
+        access.membership("finance", person["id"], False)
+    assert access.delete_group("finance") == {"deleted": "finance"}
+    assert state.groups_for(person["id"]) == {"default", "manual"}
+
+
+@pytest.mark.parametrize("first_admin", [True, False])
+def test_unprovisioned_sign_in_skips_membership_hooks(first_admin):
+    from vecten_mcp.auth.service import OAuthService
+
+    backend = oidc_fixture(
+        {"email": "Jane@Example.COM"},
+        verification={"xms_edov": True},
+        email_verified_claim="xms_edov",
+    )
+    email = "jane@example.com"
+    if not first_admin:
+        backend.state.invite(email, "Jane", "jane")
+
+    def unexpected_hook(identity, principal):
+        pytest.fail("membership hook ran before provisioning")
+
+    oauth = OAuthService(
+        backend.state,
+        None,
+        "https://mcp.example",
+        backend,
+        admins=[email] if first_admin else [],
+        on_sign_in=unexpected_hook,
+    )
+    started = backend.begin("browser")
+    backend.last_nonce = started["nonce"]
+    identity, _ = backend.callback(started["state"], "code")
+    principal = oauth.login_identity(identity)
+    assert (principal["email"], principal["issuer"], principal["subject"]) == (
+        email,
+        identity.issuer,
+        identity.subject,
+    )
+    assert not principal["provisioned"]
+    assert principal["admin"] == first_admin
+
+
+@pytest.mark.parametrize(
+    "declarations",
+    [
+        {"a": ["team"], "b": ["team"]},
+        {"a": ["default"]},
+        {"local": []},
+        {"a": ["bad name!"]},
+    ],
+)
+def test_sign_in_hook_loader_rejects_ambiguous_or_invalid_owners(declarations, monkeypatch):
+    from vecten_mcp import extensions
+    from vecten_shared.config import VectenConfig
+    from vecten_shared.output import Failure
+
+    def factory(names):
+        return lambda *, config: {"groups": names, "handler": lambda **kwargs: None}
+
+    hooks = {name: factory(groups) for name, groups in declarations.items()}
+    monkeypatch.setattr(
+        extensions,
+        "load_group",
+        lambda config, group: hooks if group == "vecten.mcp.sign_in" else {},
+    )
+    monkeypatch.setattr(extensions, "selected_entry_points", lambda *args: [])
+    with pytest.raises(Failure, match="sign-in extension"):
+        extensions.McpExtensions.from_config(
+            VectenConfig.model_validate(
+                {"project": {"name": "fixture", "scaffold_version": "0.1.0"}, "users": 2}
+            )
+        )

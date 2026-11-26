@@ -439,7 +439,7 @@ def access(ctx):
         h2("Grants"),
         hint(
             "Grants are reconciled every fifteen minutes, on model change and on demand. "
-            "An area grant covers both of its schemas, core_<area> and marts_<area>."
+            "An area grant covers core and marts, plus staging and snapshots when enabled."
         ),
         grants_table,
         grant_form,
@@ -903,7 +903,7 @@ def principal_state(app):
 
 
 def apps(ctx):
-    listed = ctx.call("apps")
+    listed = ctx.call("apps", {"check_health": True})
     parts = [
         hint(
             "Who may open an app is its binding in vecten.toml: change it in a pull request and "
@@ -933,7 +933,7 @@ def apps(ctx):
             ("Datasets", ", ".join(app["datasets"])),
         ]
         if app["kind"] == "container":
-            rows.append(("Health", "not reported to the MCP; `vecten ship` prints it"))
+            rows.append(("Health", app["health"]))
         rows += [
             ("Principal", principal_state(app)),
             ("Binding", app["binding"]),

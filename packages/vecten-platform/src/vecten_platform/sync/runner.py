@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import dlt
 
-from vecten_platform.sync.recording import record_to
+from vecten_platform.sync import TerminalConnectorError
+from vecten_platform.sync.input_fixtures import InputSample
+from vecten_platform.sync.recording import RECORD_LIMIT, record_to
+from vecten_platform.sync.sampling import bound_recording
 from vecten_shared.output import Failure
 
 
@@ -20,6 +24,7 @@ class ObjectOutcome:
     error: str | None = None
     # The normalised top-level tables the load wrote to, which `rows` counts.
     tables: tuple[str, ...] = ()
+    terminal: bool = False
 
 
 def pipeline_name(connector: str, object_name: str) -> str:
@@ -68,6 +73,30 @@ def _landed(pipeline) -> dict[str, int]:
     return top_level_counts(info.row_counts if info else {})
 
 
+def _recover_pending(pipeline) -> Counter:
+    # A destination with no first load can wipe the local package when run() restores state.
+    # Finish outstanding normalization and loads before requesting any new data.
+    counts = Counter()
+    pending = set(pipeline.list_normalized_load_packages())
+    trace = pipeline.last_trace
+    normalized = trace.last_normalize_info if trace else None
+    if normalized:
+        for load_id in pending.intersection(normalized.metrics):
+            for step in normalized.metrics[load_id]:
+                counts.update(
+                    top_level_counts(
+                        {
+                            table: metric.items_count
+                            for table, metric in step["table_metrics"].items()
+                        }
+                    )
+                )
+    if pipeline.list_extracted_load_packages():
+        counts.update(top_level_counts(pipeline.normalize().row_counts))
+    pipeline.load().raise_on_failed_jobs()
+    return counts
+
+
 def _chain(exc: BaseException) -> list[BaseException]:
     """The exception and what it was raised from, outermost first, honouring `from None`."""
     chain: list[BaseException] = []
@@ -83,12 +112,6 @@ def _chain(exc: BaseException) -> list[BaseException]:
     return chain
 
 
-def _describe(exc: BaseException) -> str:
-    """One line naming the innermost exception, beneath dlt's pipeline-step wrappers."""
-    inner = _chain(exc)[-1]
-    return " ".join(f"{type(inner).__name__}: {inner}".split())
-
-
 def run_object(
     connector: str,
     make_source: Callable[[], object],
@@ -96,6 +119,11 @@ def run_object(
     destination,
     dlt_dir: Path,
     record_dir: Path | None = None,
+    *,
+    limit: int = RECORD_LIMIT,
+    redact_fixture: Callable | None = None,
+    record_inputs: bool = False,
+    single_unit: bool = False,
 ) -> ObjectOutcome:
     pipeline = dlt.pipeline(
         pipeline_name(connector, object_name),
@@ -104,41 +132,86 @@ def run_object(
         pipelines_dir=str(dlt_dir),
     )
     recording = None
+    landed = Counter()
     try:
-        source = make_source()
+        if pipeline.has_pending_data:
+            landed.update(_recover_pending(pipeline))
+
+        sample = InputSample(limit=limit) if record_inputs else None
+        if sample is not None and record_dir is None:
+            raise ValueError("--record-inputs requires --record")
+        source = sample.source(make_source, object_name) if sample is not None else make_source()
         if object_name not in source.resources:
             known = ", ".join(source.resources.keys())
             return ObjectOutcome(object_name, False, 0, f"unknown object; the source has: {known}")
         selected = source.with_resources(object_name)
         if record_dir is not None:
-            recording = record_to(record_dir / f"{object_name}.jsonl")
-            selected.resources[object_name].add_map(recording)
+            resource = selected.resources[object_name]
+            bound_recording(resource, limit)
+            if redact_fixture is not None:
+                resource.add_map(lambda row: redact_fixture(object_name, row))
+            recording = record_to(
+                record_dir / f"{object_name}.jsonl",
+                limit=limit,
+                table_name=resource.table_name,
+            )
+            resource.add_map(recording)
             # A fixture taken behind an incremental cursor would hold only the new rows, so a
-            # recording truncates the object's tables, resets its state and reloads everything.
-            pipeline.run(selected, refresh="drop_data")
+            # recording truncates the object's tables, resets its state and loads the sample.
+            pipeline.run(selected, refresh="drop_data").raise_on_failed_jobs()
+            landed.update(_landed(pipeline))
+            nesting = resource.max_table_nesting
+            recording.commit(
+                pipeline.default_schema,
+                selected.max_table_nesting if nesting is None else nesting,
+                input_document=sample.document() if sample is not None else None,
+            )
         else:
-            pipeline.run(selected)
+            seen_cursors = set()
+            while True:
+                loaded = pipeline.run(selected)
+                loaded.raise_on_failed_jobs()
+                landed.update(_landed(pipeline))
+                unit = selected.resources[object_name].state.get("vecten_unit", {})
+                if not unit.get("more"):
+                    break
+                if unit.get("load_id") not in loaded.loads_ids:
+                    raise ValueError("checkpointed resource finished without calling finish_unit")
+                seen_cursors.add(unit["previous"])
+                if unit["cursor"] in seen_cursors:
+                    raise ValueError("checkpointed resource repeated a cursor")
+                if single_unit:
+                    break
+                selected = make_source().with_resources(object_name)
     except Exception as exc:
         if recording is not None:
             recording.discard()
         # dlt wraps whatever a resource body raises in PipelineStepFailed, Ctrl-C included;
         # an interrupt must stop the run, not count as one object's failure.
-        interrupt = next((e for e in _chain(exc) if not isinstance(e, Exception)), None)
+        chain = _chain(exc)
+        interrupt = next((e for e in chain if not isinstance(e, Exception)), None)
         if interrupt is not None:
             raise interrupt from None
         # A missing secret or provider problem is a precondition, not a source failure, even
         # when a resource body raised it and dlt wrapped it.
-        failure = next((e for e in _chain(exc) if isinstance(e, Failure)), None)
+        failure = next((e for e in chain if isinstance(e, Failure)), None)
         if failure is not None:
             raise failure from None
-        return ObjectOutcome(object_name, False, 0, _describe(exc))
+        terminal = next((e for e in chain if isinstance(e, TerminalConnectorError)), None)
+        reason = terminal if terminal is not None else chain[-1]
+        message = " ".join(f"{type(reason).__name__}: {reason}".split())
+        return ObjectOutcome(
+            object_name,
+            False,
+            sum(landed.values()),
+            message,
+            tuple(sorted(landed)),
+            terminal is not None,
+        )
     except BaseException:
         if recording is not None:
             recording.discard()
         raise
-    if recording is not None:
-        recording.commit()
-    landed = _landed(pipeline)
     return ObjectOutcome(object_name, True, sum(landed.values()), tables=tuple(sorted(landed)))
 
 
@@ -149,8 +222,22 @@ def run_objects(
     destination,
     dlt_dir: Path,
     record_dir: Path | None = None,
+    *,
+    limit: int = RECORD_LIMIT,
+    redact_fixture: Callable | None = None,
+    record_inputs: bool = False,
 ) -> list[ObjectOutcome]:
     return [
-        run_object(connector, make_source, name, destination, dlt_dir, record_dir)
+        run_object(
+            connector,
+            make_source,
+            name,
+            destination,
+            dlt_dir,
+            record_dir,
+            limit=limit,
+            redact_fixture=redact_fixture,
+            record_inputs=record_inputs,
+        )
         for name in objects
     ]

@@ -38,13 +38,14 @@ ExecStart=/bin/true
 """
 FAILING_IPTABLES = "#!/bin/sh\nexit 4\n"
 BOOT_SECONDS = 60
-RULE = ["DOCKER-USER", "-i", "vecten-services", "-d", "169.254.169.254", "-j", "DROP"]
+RULE = ["DOCKER-USER", "-i", "vecten-+", "-d", "169.254.169.254", "-j", "DROP"]
 
 
 def docker(*args, input=None, check=True):
-    return subprocess.run(
-        ["docker", *args], input=input, capture_output=True, text=True, check=check
-    )
+    result = subprocess.run(["docker", *args], input=input, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise AssertionError(f"docker {args[0]} exited {result.returncode}: {result.stderr}")
+    return result
 
 
 def write(vm: str, path: str, text: str, mode: str = "0644") -> None:
@@ -62,7 +63,7 @@ def host_json() -> str:
             "env": "prod",
             "connector_secrets": [],
             "service_secrets": [],
-            "service_network": "vecten-services",
+            "service_network": "vecten-+",
         }
     )
     return json.dumps(doc)

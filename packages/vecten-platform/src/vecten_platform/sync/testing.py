@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import socket
+from collections import Counter
 from pathlib import Path
 
 import dlt
 import pytest
 
+from vecten_platform.sync.fixture_schema import fixture_table_counts
 from vecten_platform.sync.fixtures import fixture_files
+from vecten_platform.sync.input_fixtures import verify_input_fixtures
 from vecten_platform.sync.recording import replay_source
-from vecten_platform.sync.runner import top_level_counts
 
 
 def _no_network(*args, **kwargs):
@@ -27,8 +29,11 @@ def replay_connector_test(
     connector_dir: Path, connector: str, tmp_path: Path, monkeypatch
 ) -> dict[str, int]:
     fixtures_dir = connector_dir / "fixtures"
+    verified_inputs = verify_input_fixtures(connector_dir, connector, tmp_path)
     files = fixture_files(fixtures_dir)
     if not files:
+        if verified_inputs:
+            return {}
         pytest.skip(
             f"no fixtures under {fixtures_dir}; record them with "
             f"`vecten connector run {connector} --record`"
@@ -49,9 +54,16 @@ def replay_connector_test(
         pipelines_dir=str(tmp_path / "dlt"),
     )
     pipeline.run(replay_source(fixtures_dir, connector))
-    naming = pipeline.default_schema.naming
-    expected = {naming.normalize_table_identifier(p.stem): n for p, n in lines.items()}
-    # Child tables hold nested lists, whose row counts no fixture line count predicts.
-    counts = top_level_counts(pipeline.last_trace.last_normalize_info.row_counts)
-    assert counts == expected, f"replayed {counts}, fixtures hold {expected}"
-    return counts
+    schema = pipeline.default_schema
+    counts = pipeline.last_trace.last_normalize_info.row_counts
+    # Several raw tables can belong to one fixture when its resource routes rows by table name.
+    roots = {
+        t["name"]: counts[t["name"]]
+        for t in schema.data_tables()
+        if not t.get("parent") and t["name"] in counts
+    }
+    expected = Counter()
+    for path, count in lines.items():
+        expected.update(fixture_table_counts(path, count, schema))
+    assert roots == expected, f"replayed {roots}, fixtures hold {expected}"
+    return roots

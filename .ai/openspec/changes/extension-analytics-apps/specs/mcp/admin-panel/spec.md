@@ -2,7 +2,7 @@
 
 ### Requirement: Analytics screen
 
-The panel SHALL list every bound app under "Analytics" with its title, extension and version, kind, URL, bound and admitted groups, declared datasets, its service's last health reported by `ship` for a `container` app or its publication state for a `snowflake` app, and its access-health failures. The screen SHALL be read-only and SHALL name `[apps.<extension>.<app>]` in `vecten.toml` as the place to change an app's groups.
+The panel SHALL list every bound app under "Analytics" with its title, extension and version, kind, URL, bound and admitted groups, declared datasets, the result of an MCP check of its HTTP health endpoint (or that only a command check is configured) for a `container` app or its publication state for a `snowflake` app, and its access-health failures. The screen SHALL be read-only and SHALL name `[apps.<extension>.<app>]` in `vecten.toml` as the place to change an app's groups.
 
 #### Scenario: Admin reviews installed apps
 

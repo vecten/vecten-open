@@ -12,7 +12,7 @@ from vecten_mcp.warehouse.base import (
     check_account,
     drop_statement,
 )
-from vecten_shared.identity_setup import ACCESS_VERSION
+from vecten_shared.identity_setup import SOURCE_AREAS_VERSION
 
 READ_GRANTS = """
 WITH managed AS (SELECT oid, rolname FROM pg_catalog.pg_roles WHERE rolname = ANY(%s))
@@ -342,7 +342,7 @@ class PostgresAdapter:
     def access_version(self):
         # The catalogs are read directly and drift is revoked through the owner helpers,
         # whose behaviour no installed version changes.
-        return ACCESS_VERSION
+        return SOURCE_AREAS_VERSION
 
     def read_grants(self, roles):
         """`(role, kind, schema, relation, object kind)` for every USAGE, SELECT and default

@@ -69,6 +69,7 @@
 - [x] 9.5 An existing fixed-name sandbox environment plans empty after `vecten update`
   - Live, 0.1.1rc1: the fixed-name sandbox planned `0 to add, 0 to change, 0 to destroy` on Snowflake after `vecten update`.
 - [ ] 9.6 Two environments in one account: `dev`'s loader key, provisioner key and MCP signing key each fail to read `prod`'s marts; `destroy --env dev --delete-data dev` leaves every `prod` object in place
+  - Live, 2026-11-20 (#122): the integration drop failed while the MCP policy referenced it. The generated teardown SQL removed the target objects in order. After dropping the target database, the sibling's user, integration, policy and test table remained intact. The full Terraform destroy and cross-environment credential checks remain open.
   - Not run live for 0.1.1: it needs a destroy of the sandbox, which is kept.
 - [x] 9.7 External OAuth is refused for a `TYPE = SERVICE` user carrying a key-pair-only authentication policy (`AUTHENTICATION_METHODS = ('KEYPAIR')`), so another environment's integration cannot sign in as `PROVISIONER_<BASE>_<ENV>` or `LOADER_<BASE>_<ENV>`
   - Live, 0.1.1rc2 on AWS: External OAuth was refused for a `TYPE = SERVICE` user with a key-pair-only policy.
@@ -76,7 +77,8 @@
   - Live, 0.1.1rc2 on AWS: each environment's provisioner holds `APPLY`, `granted_on = AUTHENTICATION_POLICY`, on `<DB>.VECTEN_ACCESS.MCP_SIGN_IN`.
 - [x] 9.9 The shared provisioner script runs as one `EXECUTE IMMEDIATE` block: `SHOW` with `RESULT_SCAN`, `CREATE SECURITY INTEGRATION`, single-quoted procedure bodies, `UNSET RSA_PUBLIC_KEY_2` and `UNSET PASSWORD` on a service user, and the `UNSET`/`SET AUTHENTICATION POLICY` pair on a rerun; a squatted role, user or integration (another owner or comment) stops it before any change; so do a stranger holding the provisioner or analyst role (`SHOW GRANTS OF ROLE`, the correlated `RESULT_SCAN` over the provisioner's ownerships) and an access schema or sign-in policy another role owns; `EXECUTE IMMEDIATE :blocked` sets `EXTERNAL_OAUTH_BLOCKED_ROLES_LIST` to SYSADMIN and the deploy role while the privileged roles stay blocked
   - Live, 0.1.1rc2 on AWS: first run and rerun end in `done`, every statement form included; a foreign comment on a role, user or integration, a stranger holding the provisioner role, and a sign-in policy owned by another role each stop the block before any change.
-- [ ] 9.10 The deploy role can create the loader's authentication policy and set it on the loader user it owns (the Snowflake root's `snowflake_user_authentication_policy_attachment`)
+- [x] 9.10 The deploy role can create the loader's authentication policy and set it on the loader user it owns (the Snowflake root's `snowflake_user_authentication_policy_attachment`)
   - Failed on rc2 (000606 reading back the attachment with no default warehouse); fixed in #120. Recheck on the first deploy of 0.1.1.
+  - Live, 0.1.2rc3 on AWS: the first deploy's deploy role created the loader's authentication policy and set it on the loader user.
 - [x] 9.11 The fixed and the shared script each run with `snow sql -f` as an ACCOUNTADMIN with no default warehouse, to the end
   - Live, 0.1.1rc2 on AWS: both scripts ran to their last query as ACCOUNTADMIN from a session with no warehouse.

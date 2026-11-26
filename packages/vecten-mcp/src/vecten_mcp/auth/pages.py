@@ -4,20 +4,20 @@ from html import escape
 
 from starlette.responses import HTMLResponse
 
-from vecten_mcp.assets import LOGO, STYLESHEET
+from vecten_mcp.assets import ASSET_CSP, LOGO, PAGE_ASSETS
 
 
 def page(title, body, status=200, *, head=""):
     return HTMLResponse(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{escape(title)}</title>{STYLESHEET}{head}</head>"
+        f"<title>{escape(title)}</title>{PAGE_ASSETS}{head}</head>"
         f'<body class="signin"><main>{LOGO}<p class="eyebrow">Vecten Open</p>'
         f"<h1>{escape(title)}</h1>{body}</main></body></html>",
         status_code=status,
         headers={
             "Cache-Control": "no-store",
-            "Content-Security-Policy": "default-src 'none'; style-src 'self'; font-src 'self'; "
+            "Content-Security-Policy": f"default-src 'none'; {ASSET_CSP} "
             "form-action 'self'; frame-ancestors 'none'",
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
@@ -64,10 +64,17 @@ def login_page(flow, csrf, *, oidc=False, error=None):
     return page("Sign in to Vecten", body, 400 if error else 200)
 
 
-def consent_page(flow, csrf, client):
+def consent_page(flow, csrf, client, *, client_host=None, redirect_host=None):
+    hosts = ""
+    if client_host is not None and redirect_host is not None:
+        hosts = (
+            f"<dl><dt>Client host</dt><dd>{escape(client_host)}</dd>"
+            f"<dt>Redirect host</dt><dd>{escape(redirect_host)}</dd></dl>"
+        )
     return page(
         "Allow this client?",
-        f"<p>{escape(client)} will act as you with your warehouse permissions.</p>"
+        f"<p><bdi>{escape(client)}</bdi> will act as you with your warehouse permissions.</p>"
+        f"{hosts}"
         '<form method="post" action="/consent">'
         f"{hidden('flow', flow)}{hidden('csrf', csrf)}"
         '<button name="decision" value="approve">Approve</button>'
@@ -76,6 +83,7 @@ def consent_page(flow, csrf, client):
 
 
 FAILURES = {
+    "sign_in_hook_unavailable": "Sign-in access checks are unavailable. Try again later.",
     "access_denied": "The sign-in was declined, so nothing was shared with the client.",
     "temporarily_unavailable": "There were too many attempts from here. Wait a minute.",
     "not_provisioned": "Your account has no access yet. Ask an admin to add you, then try again.",

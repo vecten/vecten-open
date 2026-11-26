@@ -125,14 +125,16 @@ def _by_sets(rules: list[dict]) -> dict[tuple[str, ...], dict]:
 def test_the_platform_host_policy_reads_its_scope_and_creates_only_airflow_keys():
     rules = host_rules(STANDARD, "acme", "prod", RESOURCES, "platform")
     platform = f'resource.name.startsWith("{ROOT}/platform/")'
-    airflow = " || ".join(
-        f'resource.name == "{ROOT}/platform/{n}"'
-        for n in (
-            "AIRFLOW_FERNET_KEY",
-            "AIRFLOW_API_SECRET_KEY",
-            "AIRFLOW_JWT_SECRET",
-            "AIRFLOW_ADMIN_PASSWORD",
-            "AIRFLOW_BASIC_AUTH_PASSWORD",
+    airflow = "resource.name in [{}]".format(
+        ", ".join(
+            f'"{ROOT}/platform/{n}"'
+            for n in (
+                "AIRFLOW_FERNET_KEY",
+                "AIRFLOW_API_SECRET_KEY",
+                "AIRFLOW_JWT_SECRET",
+                "AIRFLOW_ADMIN_PASSWORD",
+                "AIRFLOW_BASIC_AUTH_PASSWORD",
+            )
         )
     )
     assert rules == [
@@ -163,18 +165,19 @@ def test_the_setup_host_policy_adds_setup_and_the_exact_generated_names():
     access = (
         f'resource.name.startsWith("{ROOT}/mcp/") || '
         f'resource.name.startsWith("{ROOT}/setup/") || '
-        f'resource.name == "{ROOT}/platform/AIRFLOW_DB_PASSWORD" || '
-        f'resource.name == "{ROOT}/platform/LOADER_PASSWORD"'
+        f'resource.name in ["{ROOT}/platform/AIRFLOW_DB_PASSWORD", '
+        f'"{ROOT}/platform/LOADER_PASSWORD"]'
     )
     assert rules[("SecretManagerSecretAccess",)]["condition"] == access
     assert rules[("SecretManagerReadOnly",)]["condition"] == f"{access} || !has(resource.id)"
     assert rules[("SecretManagerSecretCreate",)]["condition"] == (
-        f'resource.name == "{ROOT}/platform/AIRFLOW_DB_PASSWORD" || '
-        f'resource.name == "{ROOT}/platform/LOADER_PASSWORD" || '
-        f'resource.name == "{ROOT}/mcp/MCP_STATE_DB_PASSWORD" || '
-        f'resource.name == "{ROOT}/mcp/MCP_PROVISIONER_PASSWORD" || '
-        f'resource.name == "{ROOT}/mcp/MCP_IMPERSONATOR_PASSWORD" || '
-        f'resource.name == "{ROOT}/mcp/MCP_SIGNING_KEY"'
+        f'resource.name in ["{ROOT}/platform/AIRFLOW_DB_PASSWORD", '
+        f'"{ROOT}/platform/LOADER_PASSWORD", '
+        f'"{ROOT}/mcp/MCP_STATE_DB_PASSWORD", '
+        f'"{ROOT}/mcp/MCP_GATE_DB_PASSWORD", '
+        f'"{ROOT}/mcp/MCP_PROVISIONER_PASSWORD", '
+        f'"{ROOT}/mcp/MCP_IMPERSONATOR_PASSWORD", '
+        f'"{ROOT}/mcp/MCP_SIGNING_KEY"]'
     )
     assert set(rules) == {
         ("SecretManagerSecretAccess",),
@@ -228,9 +231,24 @@ def test_no_host_rule_reaches_the_state_project_or_reads_a_secret_unconditioned(
                         r'resource\.name\.startsWith\("/vecten/acme/prod/\w+/"\)', term
                     )
                 elif term != "!has(resource.id)":
-                    assert re.fullmatch(r'resource\.name == "/vecten/acme/prod/\w+/[A-Z_]+"', term)
+                    assert re.fullmatch(
+                        r'resource\.name in \["/vecten/acme/prod/\w+/[A-Z_]+"'
+                        r'(, "/vecten/acme/prod/\w+/[A-Z_]+")*\]',
+                        term,
+                    )
             assert not any(s.startswith("IAM") for s in sets)
             assert "SecretManagerFullAccess" not in sets
+
+
+@pytest.mark.parametrize("warehouse", ["postgres", "snowflake"])
+@pytest.mark.parametrize("profile", ["standard", "minimal"])
+def test_every_host_condition_stays_within_what_scaleway_accepts(profile, warehouse):
+    # Scaleway IAM refuses a condition of 11 ORed name terms as "too complex" and accepts 6.
+    layout = Layout(components=("platform", "mcp"), profile=profile, warehouse=warehouse)
+    for host in layout.hosts:
+        for rule in host_rules(layout, "a" * 40, "prod", RESOURCES, host):
+            if "condition" in rule:
+                assert len(rule["condition"].split(" || ")) <= 6, (host, rule)
 
 
 def test_a_host_never_reads_the_deploy_scope_where_vm_keys_live():
@@ -1175,5 +1193,6 @@ def test_registration_keeps_another_scaleway_factory(project, monkeypatch):
 def test_mcp_can_write_only_scoped_standing_identity_secrets():
     rules = _by_sets(host_rules(STANDARD, "acme", "prod", RESOURCES, "mcp"))
     condition = rules[("SecretManagerSecretCreate",)]["condition"]
-    assert f'resource.name == "{ROOT}/mcp/MCP_SIGNING_KEY"' in condition
+    assert condition.startswith("resource.name in [")
+    assert f'"{ROOT}/mcp/MCP_SIGNING_KEY"' in condition
     assert "MCP_USER_" not in condition

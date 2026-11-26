@@ -296,7 +296,11 @@ class AdminService:
             return self.set_setting(data["key"], data["value"])
         if operation == "apps":
             apps = getattr(runtime, "apps", None)
-            return apps.listing(auth.issuer) if apps else []
+            return (
+                apps.listing(auth.issuer, check_health=data.get("check_health") in (True, "true"))
+                if apps
+                else []
+            )
         if operation == "apps/connect":
             return admin.connect_app(
                 getattr(runtime, "apps", None),

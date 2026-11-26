@@ -124,7 +124,7 @@ Each service SHALL have a Compose health check from its declaration. On a servic
 
 ### Requirement: Compose services are grouped into profiles
 
-The stack SHALL define the profiles `platform` (`airflow-api-server`, `airflow-scheduler`, `airflow-dag-processor`, `airflow-triggerer`, `log-cleaner`), `mcp` (`mcp-server`) and `local` (`postgres`), with `nginx` in every profile. The only other services SHALL be the services `vecten.toml` binds, each in the profile of its `host` component. `up` SHALL start the profiles that `components` names plus `local`. A VM SHALL run the profile of the component shipped to it and never the `local` profile.
+The stack SHALL define `platform` (Airflow API server, scheduler, DAG processor, triggerer and log cleaner), `mcp` (MCP server and, for a bound login route, login gate) and `local` (Postgres), with NGINX in every profile. The other services SHALL be bound extensions in their host component's profile. Local up SHALL start the configured components and local profile. A VM SHALL run its assigned components and never the local profile.
 
 #### Scenario: Both components on a laptop
 
@@ -148,7 +148,7 @@ The stack SHALL define the profiles `platform` (`airflow-api-server`, `airflow-s
 
 ### Requirement: NGINX routes by hostname
 
-NGINX SHALL route `airflow.<domain>` to the Airflow UI and `mcp.<domain>` to the MCP server, which serves the MCP endpoint, the OAuth pages and the admin panel. It SHALL route each bound service hostname that the host serves to that service's routes, its gate paths and its health path, and no service route SHALL be served on `airflow.<domain>` or `mcp.<domain>`. It SHALL refuse any other host or path. Both built-in hostnames SHALL be issued under every profile. On the laptop `up` SHALL print one URL per started component and per bound route of a started service, distinguished by port or by local hostnames.
+NGINX SHALL route the Airflow hostname to Airflow and the MCP hostname to the MCP server for its MCP endpoint, OAuth, gate authorization and admin panel. On the MCP hostname, the service gate's start, callback, logout and verify paths SHALL go to the separate gate. A bound service hostname SHALL serve only its bound routes, gate paths and health path, and no service route SHALL be served on `airflow.<domain>` or `mcp.<domain>`. Unknown hosts and paths SHALL be refused. Both built-in names SHALL be issued under every profile and local up SHALL print the started routes.
 
 #### Scenario: Airflow host
 

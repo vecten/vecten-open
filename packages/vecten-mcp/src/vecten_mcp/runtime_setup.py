@@ -20,6 +20,7 @@ from vecten_mcp.state import StateStore
 from vecten_mcp.warehouse.pool import PrincipalPools
 from vecten_mcp.warehouse.postgres import PostgresAdapter
 from vecten_mcp.warehouse.snowflake import SnowflakeAdapter
+from vecten_shared.config import source_layer_areas
 from vecten_shared.output import ExitCode, Failure
 from vecten_shared.provider import get_provider, shipped_account, snowflake_names
 from vecten_shared.provider.runtime import RUNTIME_WRITABLE
@@ -259,6 +260,7 @@ def configured_runtime(root, config, extensions):
             config.mcp.oidc_client_id,
             issuer + "/oidc/callback",
             client_secret=optional_secret(secrets, "MCP_OIDC_CLIENT_SECRET"),
+            email_verified_claim=config.mcp.oidc_email_verified_claim,
         )
     else:
         backend = extensions.identity_backend(selected)(
@@ -295,18 +297,26 @@ def configured_runtime(root, config, extensions):
     else:
         adapter = snowflake_adapter(config, env, secrets, keys)
     pools = PrincipalPools(adapter, max_connections=int(os.environ.get("VECTEN_MCP_POOL_CAP", "2")))
-    oauth = OAuthService(
-        state, keys, issuer, backend, admins=config.mcp.admins, revoke_session=pools.revoke_session
-    )
-
-    pools.validate = session_validator(state, oauth.clock)
     access = AccessService(
         state,
         adapter,
         invalidate=pools.disable_principal,
         areas=config.areas,
+        source_areas=source_layer_areas(config.areas),
         built=built_reader(config, os.environ),
+        sign_in_hooks=extensions.sign_in_hooks,
     )
+    oauth = OAuthService(
+        state,
+        keys,
+        issuer,
+        backend,
+        admins=config.mcp.admins,
+        revoke_session=pools.revoke_session,
+        on_sign_in=access.on_sign_in if extensions.sign_in_hooks else None,
+    )
+
+    pools.validate = session_validator(state, oauth.clock)
     access.seed_defaults()
     idle_setting = state.get("settings", "session_idle_seconds")
     if idle_setting:
@@ -339,8 +349,11 @@ def configured_runtime(root, config, extensions):
     )
     access.apps = runtime.apps
     from vecten_mcp.auth.gate import GateService
+    from vecten_shared.extension_record import read_record
 
-    runtime.gate = GateService.from_config(oauth, config, apps=runtime.apps)
+    runtime.gate = GateService.from_config(
+        oauth, config, apps=runtime.apps, record=read_record(root)
+    )
     pools.validate = session_validator(state, oauth.clock, narrow=runtime.apps.query_groups)
     runtime.queries.narrow = runtime.apps.query_groups
     from vecten_mcp.model import ModelService

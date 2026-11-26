@@ -123,23 +123,28 @@ def test_every_location_of_a_service_hostname_sets_the_identity_headers_itself(c
         ServiceRoute("/api", "public", allow=("10.0.0.0/8",)),
         ServiceRoute("/settings", "login", groups=("finance",), key="acme-bot.bot.settings"),
     ]
-    block = tls(conf(site(routes=routes), components=components), "bot.data.acme.com")
-    found = locations(block)
+    text = conf(site(routes=routes), components=components)
+    found = locations(tls(text, "bot.data.acme.com"))
+    if "mcp" in components:
+        assert "X-Vecten-On-Behalf-Of" not in tls(text, "mcp.data.acme.com")
     assert len(found) >= 13
     assert len(IDENTITY_HEADERS) == 5
     for key, body in found.items():
+        assert 'proxy_set_header X-Vecten-On-Behalf-Of "";' in body, key
         login = key in ("= /settings", "/settings/")
         for header in IDENTITY_HEADERS:
             variable = "$vecten_gate_" + header.removeprefix("X-Vecten-").lower()
             expected = variable if login else '""'
             assert f"proxy_set_header {header} {expected};" in body, (key, header)
             assert body.count(f"proxy_set_header {header} ") == 1, (key, header)
-        if "proxy_pass $vecten_gate_upstream/gate/" not in body and "proxy_pass" in body:
-            assert "proxy_set_header Cookie $vecten_service_cookie;" in body, key
-        elif "proxy_pass" in body:
+        if key.startswith("= /_vecten/assets/"):
+            assert 'proxy_set_header Cookie "";' in body, key
+        elif "proxy_pass $vecten_gate_upstream/gate/" in body:
             # The gate's own paths forward the gate's cookies alone, to the MCP.
             assert "proxy_set_header Cookie $vecten_service_cookie;" not in body, key
             assert '"__Host-vecten-gate=$vecten_gate_session' in body, key
+        elif "proxy_pass" in body:
+            assert "proxy_set_header Cookie $vecten_service_cookie;" in body, key
 
 
 def test_the_gate_cookies_are_stripped_by_maps_that_keep_every_other_cookie():
@@ -185,6 +190,20 @@ def test_the_health_path_is_exact_reads_only_and_forwards_the_declared_path():
     assert "limit_except GET {\n            deny all;\n        }" in body
     assert f"set $upstream {UPSTREAM};" in body
     assert "proxy_pass $upstream/healthz;" in body
+
+
+def test_local_nginx_serves_only_health_before_its_https_redirect():
+    text = conf(site(host="bot.localhost:8443"), mode="local")
+    plain = next(
+        b for b in servers(text) if "server_name bot.localhost;" in b and "listen 80;" in b
+    )
+    assert "proxy_pass $upstream/healthz;" in locations(plain)["= /_vecten/health"]
+    assert "return 301 https://bot.localhost:8443$request_uri;" in plain
+    assert "= /_vecten/health" not in next(
+        b
+        for b in servers(conf(site()))
+        if "server_name bot.data.acme.com;" in b and "listen 80;" in b
+    )
 
 
 def test_a_health_command_gives_no_health_location():
@@ -497,3 +516,31 @@ def test_an_unbound_route_at_the_root_leaves_one_fallback():
     found = locations(block)
     assert "return 404;" in found["/"] and "proxy_pass" not in found["/"]
     assert "proxy_pass $upstream;" in found["/hook/"]
+
+
+def test_rendered_locations_enforce_the_declared_route_contract():
+    model = bound_site(
+        {"home": HOME, "admin": ADMIN, "reports": {"path": "/reports", "access": "public"}},
+        {"home": {"access": "public"}, "admin": {"access": "login", "groups": ["default"]}},
+    )
+    text = conf(model)
+    rendered = locations(tls(text, model.host))
+    for route in model.routes:
+        body = rendered["/" if route.path == "/" else "= " + route.path]
+        if route.access == "login":
+            assert f"auth_request /_vecten/gate/verify/{route.key};" in body
+        else:
+            assert "auth_request " not in body
+        for name in (*IDENTITY_HEADERS, "X-Vecten-On-Behalf-Of"):
+            headers = re.findall(rf"proxy_set_header {name} (.*?);", body)
+            expected = (
+                '""'
+                if route.access == "public" or name.endswith("On-Behalf-Of")
+                else "$vecten_gate_" + name.removeprefix("X-Vecten-").lower()
+            )
+            assert headers == [expected]
+        assert "proxy_set_header Cookie $vecten_service_cookie;" in body
+        assert "proxy_set_header Upgrade $websocket_upgrade;" in body
+    for path in model.unbound:
+        body = rendered["= " + path]
+        assert "return 404;" in body and "proxy_pass" not in body

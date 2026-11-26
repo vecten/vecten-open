@@ -12,7 +12,7 @@ HOME = ServiceRoute("/", "login", groups=("default",), key="acme-portal.web.home
 BOOKS = ServiceRoute("/books", "login", groups=("finance",), key="acme-portal.web.books")
 HOOK = ServiceRoute("/hook", "public", key="acme-portal.web.hook")
 PORTAL = "portal.data.acme.com"
-COMPOSE_MCP = "set $vecten_gate_upstream http://mcp-server:8001;"
+COMPOSE_MCP = "set $vecten_gate_upstream http://login-gate:8002;"
 PUBLIC_MCP = "set $vecten_gate_upstream https://mcp.data.acme.com;"
 
 
@@ -38,6 +38,27 @@ def test_a_login_route_asks_the_gate_for_each_request_and_forwards_its_answer():
     assert "proxy_set_header Cookie $vecten_service_cookie;" in body
     assert "if ($vecten_ambiguous_path) {\n            return 400;\n        }" in body
     assert "if ($vecten_cookie_repeated) {\n            return 400;\n        }" in body
+
+
+@pytest.mark.parametrize(
+    ("components", "upstream"),
+    [(("mcp",), COMPOSE_MCP), (("platform",), PUBLIC_MCP)],
+)
+def test_gate_pages_fetch_assets_on_the_service_host_after_logout(components, upstream):
+    paths = found(conf(portal(), components=components))
+    for asset in (
+        "favicon.png",
+        "vecten.css",
+        "fonts/Geist-Variable.ttf",
+        "fonts/GeistMono-Variable.ttf",
+    ):
+        path = f"/_vecten/assets/{asset}"
+        body = paths[f"= {path}"]
+        assert upstream in body and f"proxy_pass $vecten_gate_upstream{path};" in body
+        assert "auth_request" not in body and "limit_except GET" in body
+        assert "proxy_pass_request_headers off;" in body
+        assert 'proxy_set_header Cookie "";' in body
+    assert "return 404;" in paths["/_vecten/"]
 
 
 def test_each_login_route_asks_with_its_own_name():

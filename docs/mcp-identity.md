@@ -12,6 +12,11 @@ Postgres connections under each principal's warehouse role. A principal is a per
 record in `mcp_state`, the server's private PostgreSQL database. The HTTP admin API and CLI use
 the same identity and access services. No admin mutation is exposed as an MCP tool.
 
+Public OAuth clients can identify themselves with an HTTPS URL serving their client metadata
+document. The document names the client and its redirect URIs. The consent screen shows the
+client and callback hosts separately. Redirect URIs must match exactly, except that a native
+client using HTTP on 127.0.0.1 or ::1 may choose its listener port at startup. Dynamic registration remains available for clients that use it.
+
 The `provisioner` is the warehouse login used by MCP to create
 principals and manage their role memberships and data grants. Its allowed privileges are
 specified in the [identity contract](../.ai/openspec/specs/shared/identity-contract/spec.md).
@@ -38,7 +43,8 @@ plus the provisioner's table SELECT grant options on core/marts. It installs an 
 procedure in the configured database's `VECTEN_ACCESS` schema. The procedure accepts only
 `ANALYST` or provisioner-owned reader roles, and the convention schemas, `RAW_<SOURCE>`
 schemas and schemas matching `^(CORE|MARTS)_[A-Z][A-Z0-9]*$` (restricted areas, matched by
-pattern, so declaring an area needs no rerun), and can grant/revoke only read privileges.
+pattern). For restricted staging and snapshots, it permits new grants only for the areas enabled
+when the administrator generated the script. Regenerate and rerun it when that list changes.
 
 A schema or area grant covers tables, views, materialized views, dynamic tables, external
 tables and Iceberg tables, each with its current and future grants. On a grant, a kind the
@@ -127,6 +133,46 @@ issuer. For cloud, run
 transport is unavailable. Use the connected-clients page at `/connected-clients` to review and
 revoke the browser user's client sessions.
 
+### Microsoft Entra ID workforce sign-in for the MCP
+
+Use a single-tenant web app for the workforce directory that manages your users. On first
+sign-in, Vecten matches the token's email to an invitation or a configured administrator
+address, then binds that account to the token's issuer and subject. Entra can issue
+`xms_edov: true` when the tenant has verified ownership of the email domain. An account's
+email address can still change. Before enabling this sign-in method in Vecten, confirm that
+directory administrators control those addresses and that each invited or administrator
+address belongs to exactly one intended account. Otherwise a first sign-in could bind a
+Vecten invitation or administrator account to the wrong person.
+[Microsoft's optional claims reference](https://learn.microsoft.com/en-us/entra/identity-platform/optional-claims-reference)
+
+1. In **App registrations**, register an app for accounts in this organizational directory
+   only. Add a **Web** redirect URI of `https://mcp.<domain>/oidc/callback`, replacing
+   `<domain>` with the environment's domain.
+2. Under **Token configuration**, add the optional **ID token** claims `email` and `xms_edov`.
+   Under **Certificates & secrets**, create a client secret. Enter its **Value** at the prompt
+   for `vecten secret set MCP_OIDC_CLIENT_SECRET --env <environment>`.
+3. For the corresponding **Enterprise application**, set **Properties → Assignment required?**
+   to **Yes**, grant admin consent for the requested sign-in permissions, and assign the
+   intended users or groups under **Users and groups**.
+   [Microsoft's assignment guide](https://learn.microsoft.com/en-us/entra/identity-platform/howto-restrict-your-app-to-a-set-of-users)
+4. In the project's `vecten.toml`, set the following keys in the existing `[mcp]` section.
+   Use the **Directory (tenant) ID** and **Application (client) ID** from the app's overview.
+
+   ```toml
+   [mcp]
+   auth = "oidc"
+   oidc_issuer = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+   oidc_client_id = "<application-client-id>"
+   oidc_email_verified_claim = "xms_edov"
+   ```
+
+You can also set the claim from the CLI with
+`vecten answer mcp.oidc_email_verified_claim xms_edov`. The supported names are
+`email_verified` (the default) and `xms_edov`. Both the MCP and Airflow require the
+JSON boolean `true` in the selected claim. To enable Airflow sign-in, also register
+its callback and configure its client secret as described in the
+[Airflow sign-in guide](orchestration.md#airflow-in-a-deployed-environment).
+
 ### Browser cookies
 
 Any hostname under your domain, such as Airflow, an extension service or an analytics app, can
@@ -152,6 +198,38 @@ issuer with an `http://` URL and to the loopback tunnel to `http://127.0.0.1:800
 same cookies go by their names without `__Host-` and without `Secure`, and the panel's and
 `/apps` page's are scoped to `/admin` and `/apps`. Browsers do not separate cookies by port, so
 on a loopback address any other local server could set them.
+## Sign-in extension hooks
+
+An installed project extension can register a `vecten.mcp.sign_in` entry point. Its factory
+receives `config` by keyword and returns a dictionary containing a list of local group names
+under `groups` and a callable under `handler`. Only one extension can own a group's human
+memberships. The default group always stays local.
+
+The server calls the handler after verifying the identity of a person with a provisioned
+warehouse account. People awaiting provisioning, including the first administrator, can sign
+in without invoking hooks. The handler receives `identity`, `verified_claims` and
+`set_membership` by keyword. Password sign-in supplies an empty claims dictionary.
+
+Call `set_membership(group, True)` to add the person to a group the extension owns, or
+`set_membership(group, False)` to remove them.
+Create the group first. A write to a missing owned group has no effect. Access health lists
+the managing entry point. Local administrators can delete groups and manage service accounts.
+Removing the extension returns its memberships to local management. Existing members keep
+their warehouse roles until an administrator revokes them.
+
+Hooks run in a worker thread. The sign-in waits for them, so set timeouts on external calls.
+For a provisioned administrator, membership changes take effect after every hook returns
+successfully. If any hook raises an exception, the administrator can still open the admin panel
+to investigate. They keep their existing memberships, and the access log records a `hook_failed`
+login event followed by the usual `allowed` event.
+For other provisioned people, the same exception returns HTTP 503 and the access log records
+`denied`. Membership changes completed before the exception stay in effect for those people.
+The server log identifies the failing hook and the exception type. The next sign-in runs
+the hooks again, so handlers should tolerate retries.
+
+Disable a departing person locally to end access when they can no
+longer sign in. Directory synchronization, provider group mapping and SCIM provisioning
+belong to the Enterprise SSO extension.
 
 ## People, services, and warehouse roles
 
@@ -219,15 +297,24 @@ roles (`LOADER_ACME_DEV`, `MARKETING_ACME_DEV`) and every other environment's
 (`ANALYST_ACME_PROD`). A group's role named with such an ending is refused as well, since the
 environment adds its own suffix to it.
 
-On Snowflake, binding checks a role by its name only. The provisioner cannot read the
-privileges of a role it neither owns nor holds, so it cannot check what a bound role reaches:
-the administrator's review is the check. In a shared account the review's header names what
-else makes a role unsafe to bind: a grant on another environment's database (`ACME_PROD`) or on
-anything in it, or `USAGE` on a role named `*_<BASE>_<ENV>`. Binding accepts such a role, for
-example `FINANCE_ANALYST` with `SELECT` on `ACME_PROD`, or the role Terraform deploys with; the
-administrator refuses it. The review lists every grant through the role's hierarchy with each
-object's database, and ends with `SHOW GRANTS TO ROLE`, which also shows the grants of the last
-two hours that `ACCOUNT_USAGE` does not list yet.
+In a shared Snowflake account, the MCP checks the candidate role's current and future grants,
+including grants inherited through other roles. For example, binding `FINANCE_ANALYST` in dev
+is refused if an inherited role can read the same project's production database, `ACME_PROD`.
+The check also refuses account privileges, ownership of the environment's database, and access
+to a Vecten role or an administrator role.
+Before running the grant statement, an administrator runs the review queries printed by
+`vecten group bind` to see which privileges the group would inherit. In a dedicated Snowflake
+account, the administrator's review remains the check on the role's privileges.
+
+To install or upgrade this check, generate the SQL with `vecten mcp provisioner-script --env <env>`,
+run it in Snowflake as an administrator with `MANAGE GRANTS`, then repeat the command with
+`--confirm-run`. The installed procedure uses its owner's privileges to check the role and
+returns a verdict to the MCP. Binding and confirmation require a successful check. Each
+reconciliation checks recorded bindings again. If a later grant makes a binding unsafe, or
+Snowflake cannot verify it, `vecten issues` identifies the group, role and error. The group's
+existing access continues until a warehouse administrator corrects or revokes the grant.
+For a verification error, check that the procedure is installed and its owner still holds
+`MANAGE GRANTS`. Run `vecten reconcile --env <env>` to check again.
 
 The provisioner owns each group's role, and an owner can grant itself the roles it owns, so it
 can reach whatever a bound role reaches. A bound role must therefore never hold account-level
@@ -305,18 +392,20 @@ a schema grant covers an entire schema. This implementation accepts only the lit
 `raw_hubspot`, and the schemas of an area `vecten.toml` declares; it rejects arbitrary other
 schema names.
 
-An area grant (`vecten grant --area finance --group finance`) is a schema grant on both
-`core_finance` and `marts_finance`, applied and revoked together; one that fails on the second
-schema is rolled back on the first. dbt creates a schema only when a model lands in it, so an
+An area grant (`vecten grant --area finance --group finance`) grants `core_finance` and `marts_finance`. With
+`restricted_source_layers = true` under `[areas.finance]`, it also grants `staging_finance` and
+`snapshots_finance`. The MCP applies or revokes these together and rolls back a partial failure. dbt creates a schema only when a model lands in it, so an
 area with marts only has no `core_<area>`: the grant covers the schemas the warehouse finds,
 its result names the others as waiting, and the first reconciliation after dbt creates one
 grants it. The MCP's state records which of the area's schemas were granted, and revoking or
 rolling back the grant revokes only those, so a schema that only ever waited needs no revoke.
-On Snowflake the provisioner sees no schema it holds nothing on, so `READ_GRANT` looks the
-schema up as its owner once a grant on it has failed. `INFORMATION_SCHEMA` lists only what that
-owner may use, so a waiting schema is missing or not visible to it, and a revoke never relies
-on the lookup: one Snowflake refuses stays a failure and is retried. On Postgres, whose catalogs
-show every object to every role, a revoke on a schema or relation that is gone counts as done.
+On Snowflake an area schema waits when its USAGE grant fails and the procedure owner cannot
+see the schema. If USAGE succeeds and a later grant fails, the MCP tracks the partial grant
+until it can roll it back. An area revoke attempts each previously granted schema. If Snowflake
+refuses a revoke, the MCP keeps retrying it, including when the role shows no remaining access.
+Snowflake can hide grants from the procedure owner, and restoring a dropped object with
+`UNDROP` can restore its grants. Once the object is restored, reconciliation can revoke them.
+On Postgres a dropped schema or relation takes its grants with it.
 A schema or dataset grant on a missing object is refused, naming it. An area grant is refused
 for an area with no `[areas.<area>]` entry, and an area removed from `vecten.toml` has its
 grants revoked and forgotten, so declaring it again starts with none. Each granted schema

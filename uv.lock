@@ -285,6 +285,19 @@ wheels = [
 ]
 
 [[package]]
+name = "authlib"
+version = "1.9.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "joserfc" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a9/7c/e1963d10d1d7203ca913a20e377893ec27489db27f5115f25ff50ef7b5bd/authlib-1.9.10.tar.gz", hash = "sha256:f7453c4a3f5975f94cc55223c4d48ff9c7d8d3b4e3d727ed2549edaeb9b85d50", size = 184323, upload-time = "2026-11-20T09:31:59.097Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/93/a93953ac475b32552eed564d40632ff0ce1db4241a52d9cdcb16ae0480b7/authlib-1.9.10-py2.py3-none-any.whl", hash = "sha256:c62d10e1b23945c6d4c578a16170bfefe4879bd23d4be62edea494993dce70aa", size = 267693, upload-time = "2026-11-20T09:31:57.716Z" },
+]
+
+[[package]]
 name = "babel"
 version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -882,11 +895,11 @@ wheels = [
 
 [[package]]
 name = "filelock"
-version = "3.32.7"
+version = "4.2.12"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0f/59/e19834834cb01a32febfbb0f8a23a9088088f5d45991824ff2bc3b5e8acb/filelock-3.32.7.tar.gz", hash = "sha256:37b8a3d9811b0f9aef7e5ec5c71bb320de52df51e6ca9bcd6f5ad81187660da7", size = 225154, upload-time = "2026-09-16T00:24:20.907Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/aa/8ccff8da9a27e089727fcffd3c5b61708383217e47eb1e1b8af37b1dd166/filelock-4.2.12.tar.gz", hash = "sha256:7e7da24d3ac39268b0f156e56870001de44886318f092f9d851e692f7114d6dd", size = 680837, upload-time = "2026-11-18T01:20:03.951Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/df/31098c5aeb4d966b553641472bd55fcf5fdfac953549894b8a765ba44e91/filelock-3.32.7-py3-none-any.whl", hash = "sha256:65ff0d0190ea42038b32bda4b77834fb05be2cad4c5b9b01aa4dfb3614536e52", size = 100157, upload-time = "2026-09-16T00:24:19.543Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/c9/eb6b6528c7edb958d4c24ac47a8b94113d9de36e4cfc6eecd599b1a4f349/filelock-4.2.12-py3-none-any.whl", hash = "sha256:21decfec02f116ed4c954433cdb31f28c3b346b784543177b6d7059da2702ee9", size = 222442, upload-time = "2026-11-18T01:20:02.439Z" },
 ]
 
 [[package]]
@@ -1152,6 +1165,15 @@ wheels = [
 ]
 
 [[package]]
+name = "itsdangerous"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/cb/8ac0172223afbccb63986cc25049b154ecfb5e85932587206f42317be31d/itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173", size = 54410, upload-time = "2024-04-16T21:28:15.614Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef", size = 16234, upload-time = "2024-04-16T21:28:14.499Z" },
+]
+
+[[package]]
 name = "jaraco-classes"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1225,6 +1247,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
+]
+
+[[package]]
+name = "joserfc"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/74/31/5c3f27e82c92a7bbe1f028033ff19e0251540395c9be244c01a50de42bdb/joserfc-1.8.0.tar.gz", hash = "sha256:cbf03cb2c6db8cc5289f1ef8718842e53dba244b4c0de5fefa0c0eaee4bde8db", size = 241023, upload-time = "2026-11-03T10:45:57.948Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/7e/7ffaae13415e8f51c8e8d5d1845f2de7a27ebf2717e97a38d7e7446d6030/joserfc-1.8.0-py3-none-any.whl", hash = "sha256:176b836ac7ed9a46a88629e24076314b475f33a75d0bad7f26146e572eed7c79", size = 73147, upload-time = "2026-11-03T10:45:56.531Z" },
 ]
 
 [[package]]
@@ -3028,7 +3062,7 @@ wheels = [
 
 [[package]]
 name = "vecten"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/vecten" }
 dependencies = [
     { name = "copier" },
@@ -3050,7 +3084,7 @@ dependencies = [
 requires-dist = [
     { name = "copier", specifier = ">=9.4,<10" },
     { name = "cryptography", specifier = ">=50,<51" },
-    { name = "filelock", specifier = ">=3.32,<4" },
+    { name = "filelock", specifier = ">=4.2.1,<5" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jinja2", specifier = ">=3.1,<4" },
     { name = "packaging", specifier = ">=24,<27" },
@@ -3065,7 +3099,7 @@ requires-dist = [
 
 [[package]]
 name = "vecten-mcp"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/vecten-mcp" }
 dependencies = [
     { name = "argon2-cffi" },
@@ -3109,6 +3143,7 @@ browser = [
 ]
 dev = [
     { name = "httpx" },
+    { name = "markdown-it-py" },
     { name = "moto", extra = ["s3", "ssm"] },
     { name = "packaging" },
     { name = "psycopg", extra = ["binary"] },
@@ -3116,6 +3151,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "ruff" },
+    { name = "windbag" },
 ]
 
 [package.metadata]
@@ -3124,6 +3160,7 @@ dev = [
 browser = [{ name = "playwright", specifier = ">=1.56,<2" }]
 dev = [
     { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "markdown-it-py", specifier = ">=4.2,<5" },
     { name = "moto", extras = ["s3", "secretsmanager", "iam", "sts", "ssm", "rds"], specifier = ">=5.2,<6" },
     { name = "packaging", specifier = ">=24,<27" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3,<3.4" },
@@ -3131,38 +3168,49 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.3,<3" },
     { name = "pytest-xdist", specifier = ">=3.8,<4" },
     { name = "ruff", specifier = ">=0.17,<0.18" },
+    { name = "windbag", specifier = ">=0.2,<0.3" },
 ]
 
 [[package]]
 name = "vecten-platform"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/vecten-platform" }
 dependencies = [
+    { name = "authlib" },
     { name = "dbt-core" },
     { name = "dbt-postgres" },
     { name = "dbt-snowflake" },
     { name = "dlt", extra = ["duckdb", "filesystem", "postgres", "snowflake", "sql-database"] },
     { name = "fakesnow" },
     { name = "httpx" },
+    { name = "httpx2" },
+    { name = "itsdangerous" },
+    { name = "metricflow" },
     { name = "pyyaml" },
+    { name = "snowflake-connector-python" },
     { name = "vecten-shared" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "authlib", specifier = ">=1.9.10,<2" },
     { name = "dbt-core", specifier = ">=1.12,<1.13" },
     { name = "dbt-postgres", specifier = ">=1.11,<1.12" },
     { name = "dbt-snowflake", specifier = ">=1.12,<1.13" },
     { name = "dlt", extras = ["duckdb", "postgres", "snowflake", "sql-database", "filesystem"], specifier = ">=1.31,<1.32" },
     { name = "fakesnow", specifier = ">=0.11,<0.12" },
     { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "httpx2", specifier = ">=2.16,<3" },
+    { name = "itsdangerous", specifier = ">=2.2,<3" },
+    { name = "metricflow", specifier = ">=0.213,<0.214" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
+    { name = "snowflake-connector-python", specifier = ">=4.8,<4.9" },
     { name = "vecten-shared", editable = "packages/vecten-shared" },
 ]
 
 [[package]]
 name = "vecten-shared"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/vecten-shared" }
 dependencies = [
     { name = "boto3" },
@@ -3237,6 +3285,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a4/34/4dd12fc8bb7d61c91467ec3efe415ffa7d5456f799954b40c5bbaeae470e/werkzeug-3.1.9.tar.gz", hash = "sha256:55ca7c70a75689be937aa27f8ff4b018f06ff4838fc73045560bf0f5a1291060", size = 940188, upload-time = "2026-09-27T18:33:41.637Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/38/df03f564f43cec2684823f3cccae1a652ee7face1cbaa76fb223096e64d7/werkzeug-3.1.9-py3-none-any.whl", hash = "sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab", size = 228700, upload-time = "2026-09-27T18:33:39.685Z" },
+]
+
+[[package]]
+name = "windbag"
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/36/fbedc91c22c9fb602fe2794ba654eb565ed6aa4691c62c6572ccfe119662/windbag-0.2.0.tar.gz", hash = "sha256:548a634fbc32ddd9d296ae0af1b716979d59024a9991ca896fa57b55c920effe", size = 91949, upload-time = "2026-09-18T15:22:08.593Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/10/60/08ca2d6450bda8e5544e4ba868ea10b9ae0fbb05fb3f458944a1defcf5fa/windbag-0.2.0-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:40c0ecad1f73dac94d1d659963251d44c12790899d4c849018be7c82579c3442", size = 1868919, upload-time = "2026-09-18T15:21:59.582Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/5c/a3fe6671f9b32d96f63f1dcf1bfcd5c59c9bc1aeaec7bbf4f0f44e5f37a7/windbag-0.2.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:14ae048a3bfdd1155b3c42fa582d708dcab5ae1d8b380564fd3d57f185c51347", size = 1827635, upload-time = "2026-09-18T15:22:01.468Z" },
+    { url = "https://files.pythonhosted.org/packages/02/19/a91b6a7bbb2357ce1ce212bf62eedc1cd21caf3b2a8caa01485936bb7f35/windbag-0.2.0-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8661118e6003643ecbedb7ad15d907bee1158341e82e6a5d5695ba718c78bdc1", size = 1862421, upload-time = "2026-09-18T15:22:03.335Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/14/ec9a44179022f61b9eabe482fc065f07452b39aa779063ebe67692a5667b/windbag-0.2.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c306b581f8edfe68366cc303437fc37d0f1dfdbf58dd46d5df17462479bbd559", size = 1962160, upload-time = "2026-09-18T15:22:05.27Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/01/5e9481669145ce81864847577b3e4f823d84406f11c415f75c400d962ef4/windbag-0.2.0-py3-none-win_amd64.whl", hash = "sha256:229698d6763e00dfb1557718f3a6214c275238d4252e9c2590c20a369bc01533", size = 1827953, upload-time = "2026-09-18T15:22:06.98Z" },
 ]
 
 [[package]]

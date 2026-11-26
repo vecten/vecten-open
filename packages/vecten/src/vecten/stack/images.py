@@ -353,6 +353,14 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
     else:
         bundled_record.unlink(missing_ok=True)
     write_text_atomic(build_dir / "requirements.txt", "".join(f"{r}\n" for r in reqs))
+    skill_input = build_dir / "consumer-skills.json"
+    if config.consumer_skills:
+        write_text_atomic(
+            skill_input,
+            config.model_dump_json(include={"users", "project", "extensions", "consumer_skills"}),
+        )
+    else:
+        skill_input.unlink(missing_ok=True)
     pins = {"airflow": f'"apache-airflow=={VERSIONS.airflow_version}" ', "mcp": ""}
     for kind, pin in pins.items():
         source, lines = "requirements.txt", runtime.get(kind, reqs)
@@ -409,5 +417,12 @@ def write_project_layer(stack_dir: Path, config: VectenConfig, registry: str | N
             build_dir / f"{kind}.Dockerfile",
             f"FROM {base_image(kind, registry)}\n"
             f"{_system_step(config, kind)}{install if lines or built else ''}"
-            f"{volume_step(config, root, kind)}",
+            f"{volume_step(config, root, kind)}"
+            + (
+                "RUN --network=none "
+                "--mount=type=bind,source=consumer-skills.json,target=/tmp/consumer-skills.json "
+                "python -m vecten_shared.consumer_skills /tmp/consumer-skills.json\n"
+                if kind == "mcp" and config.consumer_skills
+                else ""
+            ),
         )

@@ -847,7 +847,7 @@ def rerun_item(env="prod"):
 def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version_is_current(
     snowflake_deploy_layer,
 ):
-    from vecten_shared.identity_setup import ACCESS_VERSION
+    from vecten_shared.identity_setup import ACCESS_VERSION, SOURCE_AREAS_VERSION
 
     root, config = snowflake_deploy_layer
     facts = deployed(config).environments["prod"]
@@ -856,9 +856,50 @@ def test_a_deployed_snowflake_asks_for_the_script_again_until_its_access_version
     assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
     dirty = GitState(has_repo=True, has_origin=True, dirty=True, ahead=False)
     assert post_deploy_items(root, config, "prod", dirty)[:2] == [PUSH, rerun_item()]
-    facts.access_version = ACCESS_VERSION - 1
-    assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
     facts.access_version = ACCESS_VERSION
+    assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
+    from vecten_shared.config import AreaDecl
+
+    config.areas["finance"] = AreaDecl(restricted_source_layers=True)
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == rerun_item()
+    facts.access_version = SOURCE_AREAS_VERSION
+    facts.access_source_areas = ["finance"]
+    config.areas["hr"] = AreaDecl(restricted_source_layers=True)
+    assert "restricted source areas" in post_deploy_items(root, config, "prod", CLEAN)[0].title
+    facts.access_source_areas.append("hr")
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == OIDC
+    assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
+
+
+def test_a_previous_local_confirmation_cannot_override_shipped_area_facts(snowflake_deploy_layer):
+    from vecten_shared.identity_setup import ACCESS_VERSION, SOURCE_AREAS_VERSION
+
+    root, config = snowflake_deploy_layer
+    facts = deployed(config).environments["prod"]
+    facts.provisioner_script_run = True
+    facts.access_version = ACCESS_VERSION
+    write_record(
+        root,
+        "provisioner-prod",
+        {
+            "confirmed": True,
+            "access_version": SOURCE_AREAS_VERSION,
+            "access_source_areas": ["hr"],
+        },
+    )
+    assert post_deploy_items(root, config, "prod", CLEAN)[0] == OIDC
+
+
+def test_shared_account_needs_the_binding_check_after_a_version_six_install(snowflake_deploy_layer):
+    from vecten_shared.identity_setup import ACCESS_VERSION, SHARED_ACCESS_VERSION
+
+    root, config = snowflake_deploy_layer
+    facts = deployed(config).environments["prod"]
+    facts.provisioner_script_run = True
+    facts.snowflake_shared_account = True
+    facts.access_version = ACCESS_VERSION
+    assert rerun_item() in post_deploy_items(root, config, "prod", CLEAN)
+    facts.access_version = SHARED_ACCESS_VERSION
     assert rerun_item() not in post_deploy_items(root, config, "prod", CLEAN)
 
 

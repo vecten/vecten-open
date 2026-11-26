@@ -12,7 +12,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from vecten_shared.airflow_resources import AirflowResources
 from vecten_shared.apps import App, app_from_json, app_to_json
+from vecten_shared.names import SKILL_NAME
 from vecten_shared.services import Service, name_problem, service_from_json, service_to_json
 
 RECORD_FILE = "extensions.lock.json"
@@ -58,10 +60,12 @@ class Extension:
     # fetch and the image build check; None for any other extension.
     git: GitOrigin | None = None
     source_sha256: str | None = None
+    consumer_skills: tuple[str, ...] = field(default=(), kw_only=True)
     # The `vecten.services` declarations, by service name.
     services: dict[str, Service] = field(default_factory=dict, hash=False)
     # The `vecten.apps` declarations, by app name.
     apps: dict[str, App] = field(default_factory=dict, hash=False)
+    airflow: AirflowResources | None = field(default=None, hash=False)
 
 
 def record_text(record: dict[str, Extension]) -> str:
@@ -73,6 +77,11 @@ def record_text(record: dict[str, Extension]) -> str:
                 "extras": sorted(entry.extras),
                 "secrets": sorted(entry.secrets),
                 "settings": entry.settings,
+                **(
+                    {"airflow": entry.airflow.model_dump(exclude_defaults=True)}
+                    if entry.airflow
+                    else {}
+                ),
                 **(
                     {
                         "source": {"path": entry.source_path},
@@ -99,6 +108,11 @@ def record_text(record: dict[str, Extension]) -> str:
                         }
                     }
                     if entry.services
+                    else {}
+                ),
+                **(
+                    {"consumer_skills": sorted(entry.consumer_skills)}
+                    if entry.consumer_skills
                     else {}
                 ),
                 **(
@@ -167,6 +181,11 @@ def parse_record(text: str) -> dict[str, Extension] | None:
                 name_problem("service", service) for service in services
             ):
                 return None
+            skills = entry.get("consumer_skills", [])
+            if not isinstance(skills, list) or not all(
+                isinstance(s, str) and SKILL_NAME.fullmatch(s) for s in skills
+            ):
+                return None
             if not isinstance(apps, dict):
                 return None
             if (
@@ -187,12 +206,16 @@ def parse_record(text: str) -> dict[str, Extension] | None:
                 extras=tuple(sorted(extras)),
                 secrets=tuple(sorted(secrets)),
                 settings=settings,
+                airflow=AirflowResources.model_validate(entry["airflow"])
+                if "airflow" in entry
+                else None,
                 source_path=path,
                 metadata_sha256=digest,
                 build_requires=tuple(build),
                 git=git,
                 source_sha256=entry.get("source_sha256") if git else None,
                 services={service: service_from_json(value) for service, value in services.items()},
+                consumer_skills=tuple(skills),
                 apps={app: app_from_json(app, value) for app, value in apps.items()},
             )
         return record

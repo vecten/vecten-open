@@ -117,7 +117,26 @@ def write_env(
     first, values = environment(case, paths, base)
     values.update(extra or {})
     lines = [f"# Source in every shell of the {paths.case} evaluation: . {paths.env_file}"]
-    if first:
+    if case.skill == "guide" and case.eval_id == 4:
+        # The checkout and the user's tool bin may both contain vecten. The case gets its
+        # own install location and only uv from the host's development tools.
+        tools = paths.dir / "tool-bin"
+        tools.mkdir(parents=True, exist_ok=True)
+        uv = shutil.which("uv", path=base.get("PATH"))
+        if not uv:
+            raise ValueError("guide-4 requires uv on PATH")
+        if not (tools / "uv").exists():
+            (tools / "uv").symlink_to(uv)
+        python = tools / "python3.14"
+        if not python.exists():
+            python.symlink_to(Path(sys.executable).resolve())
+        values.update(
+            PATH=os.pathsep.join([str(tools), "/usr/bin", "/bin"]),
+            UV_PYTHON_INSTALL_DIR=str(paths.dir / "managed-python"),
+            UV_TOOL_BIN_DIR=str(tools),
+            UV_TOOL_DIR=str(paths.dir / "tools"),
+        )
+    elif first:
         lines.append(f'export PATH={shlex.quote(os.pathsep.join(first))}":$PATH"')
     for name, value in values.items():
         if name == "PYTHONPATH":
@@ -143,8 +162,12 @@ def unresolved(names: list[str]) -> list[str]:
 def print_instructions(case: Case, paths: Paths, port: int = 443) -> None:
     say = print
     say(f"\n== vecten eval harness: {paths.case} ({case.skill} eval {case.eval_id}) ==\n")
-    say("1. In the terminal that starts Claude Code, and in the one where you type secrets:")
-    say(f"     . {paths.env_file}")
+    if case.skill == "guide" and case.eval_id == 4:
+        say("Start Claude Code in your normal terminal. Each project command must run in a")
+        say(f"fresh shell that sources {paths.env_file}; the run wrapper does this for you.")
+    else:
+        say("1. In the terminal that starts Claude Code, and in the one where you type secrets:")
+        say(f"     . {paths.env_file}")
     names = case.hostnames()
     if names:
         sed = "sed -i ''" if host_platform.system() == "Darwin" else "sed -i"
@@ -353,7 +376,9 @@ def up(
                 time.sleep(0.1)
             if server.started:
                 print(
-                    f"serving {names} on 127.0.0.1:{port}; Ctrl-C stops and cleans up", flush=True
+                    f"serving {names} on 127.0.0.1:{port}. Stop with Ctrl-C or "
+                    f"kill -INT {os.getpid()} to clean up.",
+                    flush=True,
                 )
 
         threading.Thread(target=announce, daemon=True).start()

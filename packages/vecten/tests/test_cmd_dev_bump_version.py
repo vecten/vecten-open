@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from vecten.version_bump import VERSION_FILES
+from vecten.version_bump import GUIDE_FILES, VERSION_FILES
 from vecten_shared.output import ExitCode
 from vecten_shared.versions import VERSIONS
 
@@ -35,8 +35,8 @@ def bump(invoke, root, version, *extra):
 GOLDENS = REPO / "packages/vecten/tests/fixtures/release_goldens"
 
 
-def test_the_fifteen_files_are_the_ones_a_bump_edits():
-    assert len(VERSION_FILES) == 15
+def test_the_version_files_name_the_current_release():
+    assert len(VERSION_FILES) == 18
     for rel in VERSION_FILES:
         assert VERSIONS.vecten in (REPO / rel).read_text(), rel
 
@@ -82,6 +82,8 @@ def test_bump_rewrites_every_version_and_pin(invoke, repo):
     plugin = json.loads((repo / "plugins/vecten/.claude-plugin/plugin.json").read_text())
     marketplace = json.loads((repo / ".claude-plugin/marketplace.json").read_text())
     assert plugin["version"] == marketplace["plugins"][0]["version"] == NEXT
+    for rel in GUIDE_FILES:
+        assert f"'vecten~={NEXT}'" in (repo / rel).read_text()
     lock = tomllib.loads((repo / "uv.lock").read_text())
     locked = {p["name"]: p["version"] for p in lock["package"] if p["name"] in DISTRIBUTIONS}
     assert locked == dict.fromkeys(DISTRIBUTIONS, NEXT)

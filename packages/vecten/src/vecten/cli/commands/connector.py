@@ -96,6 +96,12 @@ def run_cmd(
     record: bool = typer.Option(
         False, "--record", help="Save the extracted items as fixtures for the rendered test."
     ),
+    limit: int | None = typer.Option(
+        None, "--limit", help="Maximum rows pulled per recorded object (1–200)."
+    ),
+    record_inputs: bool = typer.Option(
+        False, "--record-inputs", help="Also save upstream JSON inputs for offline connector tests."
+    ),
     json_output: bool = JsonFlag,
 ) -> None:
     def run(ctx: CliContext) -> Result:
@@ -103,7 +109,9 @@ def run_cmd(
 
         if not name:
             raise Failure(ExitCode.USAGE, "connector run needs a source name")
-        res = run_connector(ctx.require_project(), name, object_name, record)
+        res = run_connector(
+            ctx.require_project(), name, object_name, record, limit, record_inputs=record_inputs
+        )
         if not res.ok:
             failed = "; ".join(f"{o.object} ({o.error})" for o in res.objects if not o.ok)
             # The per-object outcomes ride in details so --json shows them beside the error.
@@ -114,6 +122,27 @@ def run_cmd(
         if res.recorded:
             lines.append(f"fixtures recorded under connectors/{name}/fixtures/")
         return Result(data=res.as_data(), message="\n".join(lines))
+
+    run_command(json_output, run)
+
+
+@connector.command(
+    "check-fixtures", help="Check synthetic fixture rows and declared object names offline."
+)
+def check_synthetic(name: str, json_output: bool = JsonFlag) -> None:
+    from vecten_platform.sync.fixtures import check_fixtures
+
+    def run(ctx: CliContext) -> Result:
+        root = ctx.require_project()
+        check_connector_name(name)
+        decl = load_config(root).connector(name)
+        if decl is None:
+            raise Failure(ExitCode.CONFIG, f"unknown connector {name}")
+        counts = check_fixtures(root / "connectors" / name / "fixtures", decl.groups)
+        return Result(
+            data={"rows": counts},
+            message="\n".join(f"{obj}: {n} rows" for obj, n in counts.items()),
+        )
 
     run_command(json_output, run)
 
