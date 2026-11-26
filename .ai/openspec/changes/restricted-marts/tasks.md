@@ -8,6 +8,7 @@ ship before areas.
 - [x] 0.1 terraform: whether a `removed` block with `destroy = false` works in the fetched child module, or must sit in the thin root with a `module.` address; otherwise use the `terraform state rm` fallback of Decision 4
 - [ ] 0.2 live: which `SHOW TERSE OBJECTS` or `INFORMATION_SCHEMA.TABLES` value names a materialized view, a dynamic table, an external table and an Iceberg table
   - Partly run live for 0.1.1 (rc2, AWS): table, view, dynamic table and Iceberg table named. A materialized view not run: the sandbox account is Standard edition, and materialized views need Enterprise. An external table needs a stage and was not tried.
+  - Partly run live for 0.1.2 (rc3, AWS): an external table is `EXTERNAL TABLE` in `INFORMATION_SCHEMA.TABLES.TABLE_TYPE` and `TABLE` in `SHOW TERSE OBJECTS`. A materialized view still needs an Enterprise account.
 - [x] 0.3 live: `CREATE OR REPLACE … COPY GRANTS` keeps a per-object grant and skips the schema's future grants for a table, a view and a dynamic table; and whether dbt-snowflake 1.12 adds `COPY GRANTS` on `--full-refresh` of an incremental model
   - Live: `COPY GRANTS` kept the per-object grant and skipped the future grants for a table, a view and a dynamic table. dbt-snowflake 1.12 emits `copy grants` when `copy_grants` is set, read from its macros.
 - [x] 0.4 unit: whether fakesnow 0.11 accepts `COPY GRANTS`
@@ -58,6 +59,7 @@ ship before areas.
   - Live, 0.1.1rc2 on AWS: an area built before any grant was unreadable by every group role.
 - [ ] 3.11 deploy: declare an area, ship, grant, rebuild on a sandbox of each cloud
   - Partly run live for 0.1.1 (rc2, AWS): declare, ship, grant and rebuild on AWS with Snowflake. Scaleway not run.
+  - Partly run live for 0.1.2 (rc3, AWS): an area with restricted source layers declared, shipped and built; its grant reached `staging_`, `snapshots_` and `core_<area>` with future grants, and its revoke left none. Scaleway not run (sign-in).
 - [x] 3.13 A marts-only area ([#94](https://github.com/vecten/vecten-open/issues/94)): an area grant covers the area schemas the warehouse finds and names the others, which reconciliation grants once found; the applied record keeps the granted schemas, and a revoke or rollback revokes only those. On a grant `READ_GRANT` answers `absent` when `INFORMATION_SCHEMA` does not list the schema to its owner; a revoke never does, so the access procedures are version 5. The Postgres adapter reads `pg_namespace` and `pg_class`, so a revoke on an object that is gone there is done. Unit: fake adapters, the adapters over recorded answers, the procedure under Node
   - Live, 2026-11-20 (#116, #117): a restricted procedure owner saw neither the schema nor the reader's SELECT that an administrator saw. UNDROP restored table SELECT and schema USAGE, current SELECT and future SELECT. The version 7 procedure kept the refused revokes pending, and retrying after restoration removed the grants.
 - [x] 3.14 live: `vecten grant --area` on a Snowflake area with `MARTS_<AREA>` only; then dbt creates `CORE_<AREA>` and the next reconciliation grants it
@@ -86,6 +88,7 @@ ship before areas.
 - [x] 5.7 docker: Postgres bound role: a group member reads through it; the provisioner holds no membership in it
 - [ ] 5.8 live: Snowflake bound role: a member reads through it; `SHOW GRANTS TO ROLE PROVISIONER` unchanged; the startup check passes
   - Partly run live for 0.1.1 (rc2, AWS): binding, review query, no new provisioner grant, reconciliation leaves the role alone, the startup check passes. A member reading through the role not run.
+  - Partly run live for 0.1.2 (rc3, AWS with a shared Snowflake account): a member read a table through a bound role confirmed in the admin panel; the provisioner role gained no grant on the bound role; the MCP restarted healthy with the binding in place. Not shown: `SHOW GRANTS TO ROLE PROVISIONER` unchanged across the bind alone, since group and user creation and a build ran between the two listings. Next run: list it after setup, bind and confirm, and compare at once. The CLI's bind and confirm time out on this account (#202).
 
 ## 6. Release checks
 
