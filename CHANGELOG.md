@@ -44,6 +44,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Fixed
 
+- NGINX starts when a hostname is longer than 46 characters, as Scaleway hostnames under a
+  multi-level domain often are. It refused to start, so the ship's health check timed out.
 - The first deploy of a project whose platform builds a Snowflake warehouse no longer fails
   to sign in to Snowflake before the environment's warehouse exists.
 - MCP browser pages show the Vecten mark in browser tabs. On service hosts, the sign-out

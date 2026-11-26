@@ -178,3 +178,14 @@ def test_self_signed_key_is_written_atomically_at_0600(tmp_path, monkeypatch):
     ensure_self_signed(tmp_path, ["mcp.localhost"])
     assert ("mcp.localhost.key", 0o600) in calls
     assert (tmp_path / "certs" / "mcp.localhost.key").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("mode", ["local", "vm"])
+def test_any_dns_name_fits_the_server_name_bucket(mode):
+    # NGINX stores each name in a pointer-aligned slot of pointer + length + name, and a bucket
+    # ends with one more pointer; a DNS name runs to 253 characters.
+    longest = 253
+    slot = -(-(8 + 2 + longest) // 8) * 8
+    conf = generate_nginx_conf(["platform", "mcp"], HOSTS, mode)
+    found = re.findall(r"^server_names_hash_bucket_size (\d+);$", conf, re.M)
+    assert len(found) == 1 and int(found[0]) >= slot + 8
