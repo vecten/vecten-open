@@ -1367,8 +1367,25 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
     ```sh
     vecten update
     ~/vecten-live-tools/scripts/live/live project candidate <project> <candidate>
-    # Run the check of step 4 before pushing.
     ```
+
+    On a project with an extension, `vecten update` leaves the locks pinning the previous
+    version, and a deploy of them refuses (`requirements-airflow.lock is stale`), so lock it
+    now, before anything is pushed. `lock` runs both images through the laptop's Docker with
+    `--pull=never` and no `--platform`, so pull them for the laptop's own platform first, and
+    run it outside the wrapper:
+
+    ```sh
+    docker pull ghcr.io/vecten/vecten-airflow:<candidate>
+    docker pull ghcr.io/vecten/vecten-mcp:<candidate>
+    cd <project> && VECTEN_IMAGE_REGISTRY=ghcr.io/vecten \
+      UV_FIND_LINKS=<the four TestPyPI addresses of Candidate step 5, comma-separated> \
+      <cli>/bin/vecten lock
+    ```
+
+    `vecten extension new` needs the same two variables and runs outside the wrapper too: in
+    it, the wrapper's sandbox refuses the `.claude` folder the new extension carries. Then run
+    the check of step 4 before pushing.
 
     For an existing environment with a bound login route (including a container app), the
     upgrade must grant the setup host access to `MCP_GATE_DB_PASSWORD` before its first new
@@ -1395,23 +1412,8 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
     `update` prints `updated <previous> → <candidate>` and the files it changed. If a later
     candidate replaces this one, run `live project release <project>` before the next
     `vecten update`: update refuses workflows carrying the TestPyPI
-    patch. On a project with an extension, every `vecten update` to a new candidate leaves the
-    locks pinning the old one, and the deploy refuses (`requirements-airflow.lock is stale`).
-    Lock it after the update, outside the wrapper, since `lock` runs both images through the
-    laptop's Docker: pull them for the laptop's own platform first, because `lock` runs them
-    with `--pull=never` and no `--platform`:
-
-    ```sh
-    docker pull ghcr.io/vecten/vecten-airflow:<candidate>
-    docker pull ghcr.io/vecten/vecten-mcp:<candidate>
-    cd <project> && VECTEN_IMAGE_REGISTRY=ghcr.io/vecten \
-      UV_FIND_LINKS=<the four TestPyPI addresses of Candidate step 5, comma-separated> \
-      <cli>/bin/vecten lock
-    ```
-
-    `vecten extension new` needs the same two variables and runs outside the wrapper too: in
-    it, the wrapper's sandbox refuses the `.claude` folder the new extension carries. The plan
-    of the deploy and the result of every check that follows are the upgrade's evidence.
+    patch. The plan of the deploy and the result of every check that follows are the
+    upgrade's evidence.
 13. **The sign-in sitting.** As the next section says. Once `vecten login --complete` reports
     `authenticated: true`, answer the `vecten next` items that follow it for `prod`, as in step
     10. "Who should have access first":
