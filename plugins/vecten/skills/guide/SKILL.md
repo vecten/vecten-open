@@ -103,7 +103,7 @@ the same major and minor version. If it matches, use that executable for `next -
 If the CLI is missing or incompatible, tell the person you will install a compatible
 copy as a user tool with uv. Run `command -v uv`. If it is missing, give the person the
 [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/)
-and resume once uv is available. Run `uv tool install --upgrade --python 3.14 'vecten~=0.1.1'`.
+and resume once uv is available. Run `uv tool install --upgrade --python 3.14 'vecten~=0.1.2rc4'`.
 If uv offers only a Python prerelease, update uv using its original installation method
 and retry with stable Python 3.14. Run `uv tool dir --bin` and append `/vecten` to the
 printed directory. Use that absolute path for `version --json` and every subsequent

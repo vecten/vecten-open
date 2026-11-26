@@ -2,7 +2,7 @@
 # is the only path that changes a value here. CI checks the pyproject dependency pins,
 # the images in the generated Compose file, and the Terraform constraint and engine in
 # rendered templates against this table.
-vecten = "0.1.1"
+vecten = "0.1.2rc4"
 python = "3.14"
 
 [images]
@@ -31,7 +31,7 @@ psycopg = "3.3"
 
 [terraform]
 engine = "1.16"
-module_ref = "v0.1.1"
+module_ref = "v0.1.2rc4"
 aws_provider = "6.69"
 snowflake_provider = "2.22"
 scaleway_provider = "2.87"
