@@ -10,6 +10,7 @@ that needs a real deploy on a maintainer sandbox; everything else runs in the un
 - [x] 0.2 Confirm that pip, at the version each base image holds, applies constraints to isolated builds (`PIP_CONSTRAINT` or `--build-constraint`); otherwise settle the two-stage `--no-build-isolation` fallback.
 - [ ] 0.3 Confirm Compose `build.additional_contexts` with the pinned Compose and buildx plugins, on Docker Desktop and on both clouds' VM images, and a read-write bind mount from that context in a `RUN`.
   - Partly run live for 0.1.1: `additional_contexts` with a `RUN` bind mount from the context builds on Docker Desktop and on the AWS VM image with the pinned Compose and buildx (in-repo extensions ship there). The build mounts read-only and works on a copy (2.7); a read-write mount also builds on Docker Desktop. Scaleway's image not run.
+  - Partly run live for 0.1.2 (rc1 AWS, rc4 Scaleway): both clouds' VM images built an in-repo extension through `additional_contexts` with the pinned plugins.
 - [x] 0.4 Confirm that `pip install --no-deps -r <lock>` in both images matches today's result for an index-only project with a full-closure lock.
 
 ## 1. In-repo extensions in the records and the CLI (after #50 PR 1)
@@ -39,6 +40,7 @@ that needs a real deploy on a maintainer sandbox; everything else runs in the un
   - Partly built: `tests/test_in_repo_images_docker.py` builds the images and checks the entry points; no `docker`-tier `vecten up` of the fixture runs the DAG, builds the model, merges the document, links the skill and offers the tool.
 - [ ] 2.6 **[deploy]** AWS and Scaleway sandboxes: ship the fixture project; both hosts run the extension at the shipped commit; an arm64 VM builds it from an amd64 runner's bundle; a code-only change ships without `vecten lock`.
   - Partly run live for 0.1.1 (rc2, AWS): both hosts run the in-repo extension at the shipped commit, and a code-only change shipped without `vecten lock`. arm64 (every VM was x86_64) and Scaleway not run.
+  - Partly run live for 0.1.2 (rc1 AWS, rc4 Scaleway): both hosts ran the extension at the shipped commit, and on Scaleway a code-only change shipped without `vecten lock` and was served. The arm64 build not run.
 - [x] 2.7 Build each source extension (in-repo or git) with its own install and its own `build_requires` file, never one constraints file for all; build from a copy the image user owns, so setuptools or maturin can write into the tree. `docker` tier: two extensions pinning different hatchling versions and a setuptools one build in one image.
 
 ## 3. `vecten extension new`

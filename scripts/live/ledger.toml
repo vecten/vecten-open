@@ -1,5 +1,5 @@
 # `combos.py record <combination> <tag>` writes this file: the tag each combination last ran at.
-aws-postgres = "v0.1.0"
-aws-snowflake = "v0.1.1rc2"
+aws-postgres = "v0.1.2rc2"
+aws-snowflake = "v0.1.2rc3"
 scaleway-postgres = "v0.1.0"
 scaleway-snowflake = "v0.1.0"
