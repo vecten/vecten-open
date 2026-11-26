@@ -321,8 +321,8 @@ BEGIN
                         OR EXISTS (SELECT FROM vecten_access.helpers h
                                    WHERE h.schema_name=n.nspname))))
         AND (r.oid=n.nspowner
-             -- Old source-layer helpers must become revoke-only after an opt-out,
-             -- including helpers for roles that no longer own objects in the schema.
+             -- A source-layer schema keeps every recorded helper available, revoke-only
+             -- after an opt-out, including the helper of a role that owns nothing there.
              OR (n.nspname ~ '^(staging|snapshots)_' AND EXISTS (
                  SELECT FROM vecten_access.helpers h
                  WHERE h.schema_name=n.nspname AND h.owner_oid=r.oid))
