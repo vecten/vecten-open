@@ -25,6 +25,14 @@ __all__ = ["RECORD_LIMIT", "Recording", "fixture_files", "record_to", "replay_so
 RECORD_LIMIT = 200
 
 
+def _fixture_value(value: Any) -> str:
+    # dlt reads a `0x` string back into a binary column as hex; base64, its other form, can
+    # itself start with `0x`.
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return "0x" + bytes(value).hex()
+    return str(value)
+
+
 class Recording:
     """An `add_map` tee that only replaces the fixture once the whole object has loaded.
 
@@ -48,7 +56,7 @@ class Recording:
 
     def __call__(self, item: Any, meta=None) -> Any:
         if self.written < self.limit:
-            self._file.write(json.dumps(item, default=str) + "\n")
+            self._file.write(json.dumps(item, default=_fixture_value) + "\n")
             self.written += 1
             table_name = self.table_name
             if isinstance(meta, HintsMeta):
