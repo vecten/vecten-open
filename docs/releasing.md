@@ -840,7 +840,12 @@ command; type it again in that form.
    live-check command runs through the launcher of the tools copy, typed in exactly this form:
    `~/vecten-live-tools/scripts/live/live <subcommand> …`. Use no variable, alias or other path
    for it, and put nothing in front of it, no environment assignment and no `cd`: the
-   permission rule matches the command's text, and any other form raises a prompt. Running
+   permission rule matches the command's text, and any other form raises a prompt. The
+   launcher is the whole command, so nothing follows it either: no `;` or `&&`, no `<` or `>`,
+   and no newline or `$(…)` in its arguments, even inside quotes (give `gh pr create` a
+   `--body-file`). Such a line runs inside the command sandbox, which refuses the credential
+   home (`access: cannot read …/allow.toml: Operation not permitted`, exit 3); where a step
+   needs a redirect, run that one line with the command sandbox off, which asks. Running
    text on this page names such a command `live <subcommand>`; every command block writes it
    in full, and so do you. The subcommands are `run` (item 2), `doctor`, `show` (item 6), and
    `combos`, `cost`, `candidate` and `project`, which run `combos.py`, `cost.py`,
@@ -1306,9 +1311,10 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    vecten github push
    ```
 
-   In the full form the `>` goes at the end of the wrapper line; the wrapper and `uv` print
-   nothing on standard output, so the file holds only the SQL and its `-- then:` comments. The
-   push ships every host (not yet tried against a live account).
+   In the full form the `>` goes at the end of the wrapper line, which takes it out of the
+   launcher's own form, so that line runs with the command sandbox off (How commands run,
+   item 1). The wrapper and `uv` print nothing on standard output, so the file holds only the
+   SQL and its `-- then:` comments. The push ships every host.
 10. **Sign-in setup.** Run `vecten next --json` and answer its items for `prod`, running it
     again after each:
 
@@ -1336,6 +1342,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
       yet tried against a live account).
     - "Push the project's changes": the check of step 4, then `vecten github push`, which
       waits for the ship.
+    - "Should sync failures be posted to a webhook?": `vecten answer alert_webhook.prod no`.
     - "Sign in to the MCP as an admin": goes into [the sign-in sitting](#the-sign-in-sitting),
       step 13; so does every item that follows it, such as "Who should have access first".
 
@@ -1351,16 +1358,34 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 
     then the same with `airflow dags list-runs dbt_build` in place of the trigger, until the
     run is `success`. On Scaleway, which has no run command, the trigger goes into the sign-in
-    sitting and you read the run in the shell overlay. Either way `vecten issues --env prod`
-    lists no failure of `dbt_build` (not yet tried against a live account).
+    sitting and you read the run in the shell overlay. `vecten issues --env prod` needs
+    `vecten login`, so once the sitting's login has completed (step 13) it lists no failure of
+    `dbt_build`.
 12. **Upgrade path only.** After step 11 passes on `<previous>`, switch the project to the
     candidate CLI: from here on, `<cli>` is `<run>/cli/<candidate>`. Then:
 
     ```sh
     vecten update
     ~/vecten-live-tools/scripts/live/live project candidate <project> <candidate>
-    # Run the check of step 4 before pushing.
     ```
+
+    On a project with an extension, `vecten update` leaves the locks pinning the previous
+    version, and a deploy of them refuses (`requirements-airflow.lock is stale`), so lock it
+    now, before anything is pushed. `lock` runs both images through the laptop's Docker with
+    `--pull=never` and no `--platform`, so pull them for the laptop's own platform first, and
+    run it outside the wrapper:
+
+    ```sh
+    docker pull ghcr.io/vecten/vecten-airflow:<candidate>
+    docker pull ghcr.io/vecten/vecten-mcp:<candidate>
+    cd <project> && VECTEN_IMAGE_REGISTRY=ghcr.io/vecten \
+      UV_FIND_LINKS=<the four TestPyPI addresses of Candidate step 5, comma-separated> \
+      <cli>/bin/vecten lock
+    ```
+
+    `vecten extension new` needs the same two variables and runs outside the wrapper too: in
+    it, the wrapper's sandbox refuses the `.claude` folder the new extension carries. Then run
+    the check of step 4 before pushing.
 
     For an existing environment with a bound login route (including a container app), the
     upgrade must grant the setup host access to `MCP_GATE_DB_PASSWORD` before its first new
@@ -1387,11 +1412,8 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
     `update` prints `updated <previous> → <candidate>` and the files it changed. If a later
     candidate replaces this one, run `live project release <project>` before the next
     `vecten update`: update refuses workflows carrying the TestPyPI
-    patch. If `update` or the ship reports a lock pinning the old version, run `vecten lock` in
-    the project form with `--env-file <run>/testpypi.env` after `--no-project`, where that
-    file holds one line, `UV_FIND_LINKS=` followed by the four TestPyPI addresses of Candidate
-    step 5, comma-separated (not yet tried against a live account). The plan of the deploy and
-    the result of every check that follows are the upgrade's evidence.
+    patch. The plan of the deploy and the result of every check that follows are the
+    upgrade's evidence.
 13. **The sign-in sitting.** As the next section says. Once `vecten login --complete` reports
     `authenticated: true`, answer the `vecten next` items that follow it for `prod`, as in step
     10. "Who should have access first":
@@ -1428,10 +1450,20 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    4. <each browser check: what to open, what to look at, what to send back>
    ```
 
+   The message goes in two parts. Send step 1 alone: a gated service refuses the admin until
+   `vecten user add` has run, an administrative command needs the completed login, and the
+   device code lapses after ten minutes. Once the maintainer sends back `done`, complete the
+   login, run `vecten user add` and whatever else the remaining steps depend on (groups,
+   grants, bindings), then send the remaining steps.
 4. Carry on meanwhile with checks that need no person, on this environment or another.
 5. When the answer comes: `vecten login --env prod --complete --json` prints
    `authenticated: true`. If the device code lapsed first, run step 2 again and send only the
    new code. Record each step's answer in its row.
+6. On a shared Snowflake account, binding a role (`vecten group bind`) cannot finish from the
+   CLI: the binding check takes about 50 s and the CLI gives up at 30 s (#202). Run the bind
+   (it is recorded although the CLI reports a failure; `vecten group list` shows it pending),
+   run its grant as an administrator, and have the maintainer confirm it in the admin panel
+   (Users and groups, the group, Confirm) as a step of the second part.
 
 ### A shell on a host
 
@@ -1670,6 +1702,11 @@ through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front
    that kind with `scw <product> … list project-id=<id> -o json`, delete what the list shows,
    and write the commands into this page in the run's pull request
    (not yet tried against a live account).
+   The state bucket is versioned, and `scw object bucket delete` refuses it while old versions
+   remain (`BucketNotEmpty`, every time). Deleting versions needs the S3 API with a Scaleway
+   key, which the wrapper does not hand to `aws`, so the bucket and its two projects are a
+   hand-off: the maintainer empties the bucket in the Scaleway console (Object Storage, the
+   bucket, Empty bucket), then the agent reruns the delete and the two project deletions.
 6. Delete the repository:
    `~/vecten-live-tools/scripts/live/live run -- gh repo delete <sandbox-org>/<name> --yes`.
 7. Set the entry's `destroyed_at` in `<created>` to `<now>`. Leave `<project>` on the laptop:
@@ -1681,9 +1718,13 @@ through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front
      --created .claude/live-checks-<version>.created.json
    ```
 
-   Exit 0 proves the removal. Cloud APIs can list a just-destroyed resource for a few minutes,
-   so on an exit 1 right after a destroy, wait five minutes and sweep once more before you
-   treat a line as a leftover. Exit 1: a `leftover:` line whose project and environment are an
+   Exit 0 proves the removal. Cloud APIs can list a just-destroyed resource for a while: on
+   AWS the tagging API kept terminated instances, their volumes and rules for more than
+   twenty minutes after the destroys. So on an exit 1 right after a destroy, check each line
+   with its own service (`aws ec2 describe-instances` shows `terminated`, `describe-volumes`
+   and `describe-security-group-rules` with the project tag list nothing) before you treat it
+   as a leftover. The sweep does not list Scaleway buckets or projects either: step 5's
+   listings are that check. Exit 1: a `leftover:` line whose project and environment are an
    entry of `<created>` is the run's; remove it with the matching command above, then sweep
    again. A line of any other project is not the run's: never remove it. An exit 1 whose every
    line also appeared in the Start sweep's output counts as clean for this run, and those lines

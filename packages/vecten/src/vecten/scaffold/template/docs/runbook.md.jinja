@@ -980,12 +980,15 @@ in a way that would replace a resource, and a person reconciles the two, startin
   set it before the first deploy when you will want admin access.
 - `platform_size` sets the platform VM's tier, `small` by default, independently of `size`, and
   `instance_type_overrides` replaces the server or node type of a host or an instance by its
-  key: `platform`, `mcp`, `main`, `state` or `warehouse`.
+  key: `platform`, `mcp`, `main`, `state` or `warehouse`. vecten reads tfvars values as JSON,
+  so write the map as `instance_type_overrides = {"main": "POP2-2C-8G"}`.
 - `root_volume_size_gb` sets the size of every VM's boot volume, which holds the images and
   Docker's named volumes: 30 GB by default, and at least 30. A DEV1 type boots from its local
   SSD, so the size cannot exceed the type's local storage (40 GB on DEV1-M, 80 GB on DEV1-L);
-  a POP2 type boots from an SBS volume, which can grow but never shrink. Whether a changed size
-  is applied in place or replaces the VM is not verified, so set it before the first deploy.
+  a POP2 type boots from an SBS volume, which can grow but never shrink. A larger size grows a
+  POP2 server's volume in place; on a DEV1 type it replaces the server, and with it every
+  service volume on its local SSD, which the plan's warnings name. Set it before the first
+  deploy on DEV1.
 [%- if 'platform' in components %]
 - `dags_paused_at_creation = true` makes the environment's new DAGs start paused, so nothing
   scheduled runs until someone unpauses it in the Airflow UI. By default a deployed DAG starts
