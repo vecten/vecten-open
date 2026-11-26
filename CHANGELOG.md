@@ -5,6 +5,8 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-26
+
 ### Added
 
 - Extension MCP tools can publish a title, description and annotations such as a read-only hint to clients ([#52](https://github.com/vecten/vecten-open/issues/52)).
@@ -463,6 +465,7 @@ The first public release.
 - Published as `vecten`, `vecten-platform`, `vecten-mcp` and `vecten-shared` on PyPI and as
   `ghcr.io/vecten/vecten-airflow` and `ghcr.io/vecten/vecten-mcp`.
 
-[Unreleased]: https://github.com/vecten/vecten-open/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/vecten/vecten-open/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/vecten/vecten-open/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/vecten/vecten-open/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vecten/vecten-open/releases/tag/v0.1.0
