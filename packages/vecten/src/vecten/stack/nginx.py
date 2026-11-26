@@ -23,6 +23,9 @@ PROXY_HEADERS = """        proxy_http_version 1.1;
 # addresses that another container may take, so the name is looked up per request through
 # Docker's embedded DNS, which a variable in proxy_pass forces.
 RESOLVER = "resolver 127.0.0.11 valid=10s ipv6=off;\n"
+# NGINX's default server-name bucket holds names of up to 46 characters on a 64-bit host and
+# refuses to start past that; 512 bytes hold the longest DNS name, 253 characters.
+SERVER_NAMES_BUCKET = "server_names_hash_bucket_size 512;\n"
 
 
 def _upstream(url: str, uri: str = "", variable: str = "$upstream") -> str:
@@ -530,7 +533,8 @@ def generate_nginx_conf(
         CONNECTION_UPGRADE_MAP
         + (SERVICE_MAPS if services else "")
         + (GATE_MAPS if gated else "")
-        + RESOLVER,
+        + RESOLVER
+        + SERVER_NAMES_BUCKET,
         "server {\n    listen 80 default_server;\n    listen 443 ssl default_server;\n"
         "    server_name _;\n    ssl_reject_handshake on;\n    return 444;\n}\n",
     ]

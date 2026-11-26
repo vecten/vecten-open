@@ -614,8 +614,8 @@ def test_only_a_git_sources_files_keep_their_executable_bit():
 
 # Every tar byte is pinned with fixed agent/SQL inputs. Gzip bytes depend on the zlib build.
 UNCHANGED_BUNDLES = {
-    "platform": "4ebcfbb21ddfd6adb7fa1a48ec0fe0100c840c1a923fe2f204c512afd18a39be",
-    "mcp": "9178c6b2f0d6eacc1678595a3f42cc315d5a00baf5f8ae3dce23108260c28992",
+    "platform": "8749e931c5cc5faf6bb97a7cd380f40770f92130ee5243fed6366d786363c6d8",
+    "mcp": "955f1185fa4a166e37852963daf0b7876116fb024496fb872654cc49b858c1ab",
 }
 
 
