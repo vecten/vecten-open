@@ -26,6 +26,15 @@ agents over the Model Context Protocol, the open protocol assistants such as Cla
 data, with one warehouse identity per person and an audit of every answer. Both work on an
 existing warehouse too. An agent does the building; you lead it.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=ZTjz8s3pmAM">
+    <img src="https://img.youtube.com/vi/ZTjz8s3pmAM/maxresdefault.jpg" width="640"
+      alt="Vecten Open walkthrough: a data platform you build with your agent">
+  </a>
+  <br>
+  <em>Watch the walkthrough on YouTube.</em>
+</p>
+
 ## Five promises
 
 1. **Open source.** Apache-2.0. No licence key, no telemetry. Clone it, fork it, sell it.
