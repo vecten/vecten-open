@@ -44,6 +44,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ### Fixed
 
+- A recorded binary column replays as the same bytes. Fixtures write it as `0x` hex, which
+  the recorded column type turns back into bytes; before, replay kept the text in a variant
+  column and left the column empty.
+- `vecten dbt-build-local` accepts a connector whose only fixture is an input sample that kept
+  no rows, and replay checks that sample.
 - NGINX starts when a hostname is longer than 46 characters, as Scaleway hostnames under a
   multi-level domain often are. It refused to start, so the ship's health check timed out.
 - The first deploy of a project whose platform builds a Snowflake warehouse no longer fails

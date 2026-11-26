@@ -160,6 +160,14 @@ def _project(tmp_path):
     return tmp_path / "connectors", config
 
 
+def test_an_input_sample_that_kept_no_rows_counts_as_fixtures(tmp_path):
+    connectors_dir, config = _project(tmp_path)
+    inputs = connectors_dir / "empty" / "fixtures" / "inputs"
+    inputs.mkdir(parents=True)
+    (inputs / "company.json").write_text('{"inputs": [], "expected": []}\n')
+    assert missing_fixtures(connectors_dir, config) == []
+
+
 def test_replay_into_the_emulation_lands_raw_tables(tmp_path):
     connectors_dir, config = _project(tmp_path)
     assert missing_fixtures(connectors_dir, config) == ["empty"]

@@ -385,6 +385,32 @@ def test_recorded_json_column_survives_offline_replay(duckdb_dest, tmp_path, mon
     assert replay.default_schema.data_table_names() == ["records"]
 
 
+@dlt.source(name="crm")
+def _binary_source():
+    @dlt.resource(name="blobs")
+    def blobs():
+        yield {"id": 1, "payload": b"\x00\xffx"}
+
+    return blobs
+
+
+def test_recorded_binary_column_survives_offline_replay(duckdb_dest, tmp_path, monkeypatch):
+    import duckdb
+
+    from vecten_platform.sync.testing import replay_connector_test
+
+    fixtures = tmp_path / "crm" / "fixtures"
+    outcome = run_object("crm", _binary_source, "blobs", duckdb_dest, tmp_path / "dlt", fixtures)
+    assert outcome.ok, outcome.error
+    work = tmp_path / "work"
+    assert replay_connector_test(fixtures.parent, "crm", work, monkeypatch) == {"blobs": 1}
+    for database in (tmp_path / "wh.duckdb", work / "replay.duckdb"):
+        with duckdb.connect(str(database), read_only=True) as conn:
+            columns = {row[0]: row[1] for row in conn.execute("describe raw_crm.blobs").fetchall()}
+            assert columns["payload"] == "BLOB" and "payload__v_text" not in columns, columns
+            assert conn.execute("select payload from raw_crm.blobs").fetchall() == [(b"\x00\xffx",)]
+
+
 @dlt.source(name="crm", max_table_nesting=2)
 def _routed_source():
     @dlt.resource(name="events", table_name=lambda row: row["kind"], max_table_nesting=0)

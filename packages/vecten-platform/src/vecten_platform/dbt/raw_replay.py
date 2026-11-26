@@ -7,7 +7,7 @@ from pathlib import Path
 from vecten_platform.dbt.local_warehouse import LocalTarget
 
 # Importing the sync package turns dlt telemetry off, so it precedes every dlt import here.
-from vecten_platform.sync.fixtures import fixture_files
+from vecten_platform.sync.fixtures import fixture_files, input_sample_files
 from vecten_shared.config import VectenConfig
 from vecten_shared.output import ExitCode, Failure
 
@@ -21,6 +21,7 @@ def missing_fixtures(connectors_dir: Path, config: VectenConfig) -> list[str]:
         c.name
         for c in config.connectors
         if not fixture_files(_fixtures_dir(connectors_dir, c.name))
+        and not input_sample_files(_fixtures_dir(connectors_dir, c.name))
     ]
 
 

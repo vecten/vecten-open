@@ -11,6 +11,11 @@ def fixture_files(fixtures_dir: Path) -> list[Path]:
     return sorted(fixtures_dir.glob("*.jsonl"))
 
 
+def input_sample_files(fixtures_dir: Path) -> list[Path]:
+    """Recorded upstream inputs, which replay checks even when the connector kept no rows."""
+    return sorted((fixtures_dir / "inputs").glob("*.json"))
+
+
 def check_fixtures(fixtures_dir: Path, groups: dict[str, list[str]]) -> dict[str, int]:
     """Check the declared object names and one JSON object per nonblank line, entirely offline."""
     import json
