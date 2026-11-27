@@ -20,6 +20,7 @@ ROOT_FILES = {
     "SECURITY.md",
     "PRIVACY.md",
     "CHANGELOG.md",
+    "Makefile",
     "pyproject.toml",
     "uv.lock",
     ".python-version",
@@ -69,6 +70,9 @@ PUBLIC_AGENTS = (
     "contracts). Python 3.14 and uv.\n"
     "\n"
     "## Commands\n"
+    "\n"
+    "`make help` lists wrappers for the commands below; `make preflight` runs CI's lint and unit\n"
+    "jobs before a push.\n"
     "\n"
     "- Setup: `uv sync --locked --all-packages`\n"
     "- Lint: `uv run ruff check .` and `uv run ruff format --check .`\n"
