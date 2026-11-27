@@ -179,9 +179,15 @@ and the other files of the credential home, which live only on your laptop:
      An existing directory will do: the checks create nothing at directory level. Give every
      account that administers the subscription a password and a second sign-in method; an
      account whose only sign-in is a passkey nobody can find locks the subscription for good.
-   - Sign in as yourself (`az login`), then create the live-check service principal, Owner on
-     that one subscription, and sign the credential home's own `az` folder in as it. The secret
-     goes straight into the credential home, never into your shell history:
+   - Sign in as yourself (`az login`). `az ad sp create-for-rbac` takes over an application
+     or service principal that already has the name it is given, deleting the application's
+     passwords and making the principal Owner, so first check that both
+     `az ad app list --display-name vecten-livecheck --query '[].appId' -o tsv` and
+     `az ad sp list --display-name vecten-livecheck --query '[].appId' -o tsv` print nothing;
+     if either prints an ID, use another name below. Then create the live-check
+     service principal, Owner on that one subscription, and sign the credential home's own `az`
+     folder in as it. The secret goes straight into the credential home, never into your shell
+     history:
 
      ```sh
      SUB=<azure-subscription-id>
@@ -200,10 +206,13 @@ and the other files of the credential home, which live only on your laptop:
      secret to Terraform, whose Azure provider takes a service principal by its secret rather
      than through the `az` sign-in, and refuses to unless `az` is signed in as the same
      principal. The secret expires after a year; then `doctor` fails at its `azure` line.
-     Under your own login, `az ad sp credential reset --id <appId> --years 1 -o json >
-     $LIVE/azure/livecheck.json` replaces it, and the old one stops working at once: run the
+     The secret belongs to the application, not to its service principal, so it is replaced
+     there: under your own login, `az ad app credential reset --id <appId> --years 1 -o json >
+     $LIVE/azure/livecheck.json` removes the old one and writes the new one. Confirm that
+     `az ad app credential list --id <appId> --query 'length(@)'` prints 1 and
+     `az ad sp credential list --id <appId> --query 'length(@)'` prints 0, then run the
      `export AZURE_CONFIG_DIR`, `az login --service-principal` and `az account set` lines above
-     again, then `unset AZURE_CONFIG_DIR`.
+     again, and `unset AZURE_CONFIG_DIR`.
    - Still as the service principal, register the resource providers the deployment uses and
      create the group for the DNS zone:
 
@@ -231,8 +240,9 @@ and the other files of the credential home, which live only on your laptop:
      ```
 
    Confirm: `doctor` prints `azure ok` (Azure itself lists `<azure-subscription-id>`, in
-   `<azure-tenant-id>`, as the only subscription the service principal reaches, and `az` is
-   signed in as the principal of `livecheck.json`); `dig +short NS <azure-zone>` prints the four name servers; the Budgets page
+   `<azure-tenant-id>`, as the only subscription the service principal reaches, and `az`
+   holds no sign-in except the one of `livecheck.json`'s principal to that subscription);
+   `dig +short NS <azure-zone>` prints the four name servers; the Budgets page
    lists the budget with your email on its alert.
 
 6. **Snowflake.**
@@ -784,11 +794,13 @@ The command then runs with:
   `LOGNAME`, `SHELL`, `TZ`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, the proxy variables and the
   `LC_*` variables pass through. The wrapper sets the rest: each tool's configuration in the
   credential home (`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE=livecheck`,
-  `SCW_CONFIG_PATH`, `AZURE_CONFIG_DIR`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`), with the Azure
-  CLI's telemetry and log files off, Terraform's Azure sign-in (`ARM_CLIENT_ID`,
-  `ARM_CLIENT_SECRET`, `ARM_TENANT_ID` from `azure/livecheck.json`, refused when that file
-  names another directory than `allow.toml` or another principal than the one `az` is signed
-  in as, and `ARM_SUBSCRIPTION_ID` from `allow.toml`), a
+  `SCW_CONFIG_PATH`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`, and `AZURE_CONFIG_DIR` only when
+  `allow.toml` has `[azure]`), with the Azure CLI's telemetry, log files and token-cache
+  encryption off (so its sign-ins stay in the plain files the wrapper checks), Terraform's
+  Azure sign-in (`ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID` from
+  `azure/livecheck.json`, refused when that file names another directory than `allow.toml`,
+  or when `az` holds a sign-in of another principal or to another directory or subscription
+  than `allow.toml` names, and `ARM_SUBSCRIPTION_ID` from `allow.toml`), a
   freshly minted App token in
   `GH_TOKEN`, git's global configuration from `<credential home>/git/config`, only `gh` as
   git's credential helper for github.com, GitHub SSH remotes rewritten to HTTPS, git over
@@ -1832,7 +1844,7 @@ through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front
      --created .claude/live-checks-<version>.created.json
    ```
 
-   It purges only the deleted vaults of environments `<created>` marks destroyed, never
+   It purges only the deleted vaults of Azure environments `<created>` marks destroyed, never
    another project's, and prints `purge requested: <vault>` for each. A purge takes minutes:
    sweep again later, and the lines are gone. The other Azure destroy steps come with Azure
    deployment support in 0.2.0.

@@ -87,11 +87,25 @@ AZ_OUTPUT = f"""\
 """
 
 
-def az_profile(name=None, kind="servicePrincipal"):
-    """azure/cli/azureProfile.json as `az login` writes it, with its byte order mark."""
+def az_profile(name=None, kind="servicePrincipal", also=()):
+    """azure/cli/azureProfile.json as `az login` writes it, with its byte order mark; `also`
+    adds a sign-in of the same principal for each (tenant, subscription)."""
     user = {"name": name or AZ_APP, "type": kind}
-    subscription = {"id": SUB, "tenantId": TENANT, "isDefault": True, "user": user}
-    return "\ufeff" + json.dumps({"installationId": "x", "subscriptions": [subscription]})
+    subscriptions = [{"id": SUB, "tenantId": TENANT, "isDefault": True, "user": user}]
+    subscriptions += [
+        {"id": sub, "tenantId": tenant, "isDefault": False, "user": user} for tenant, sub in also
+    ]
+    return "\ufeff" + json.dumps({"installationId": "x", "subscriptions": subscriptions})
+
+
+def az_stored(*entries):
+    """azure/cli/service_principal_entries.json, one entry per (client id, tenant)."""
+    return json.dumps(
+        [
+            {"client_id": app, "tenant": tenant, "client_secret": AZ_SECRET}
+            for app, tenant in entries
+        ]
+    )
 
 
 # snow sql -c livecheck -q "select current_account()" --format json
@@ -225,6 +239,7 @@ def home(tmp_path):
             }
         ),
         "azure/cli/azureProfile.json": az_profile(),
+        "azure/cli/service_principal_entries.json": az_stored((AZ_APP, TENANT)),
         "github/sandbox.toml": 'app_id = "12345"\ninstallation_id = "987654"\nkey = "app.pem"\n',
         "github/upstream.toml": 'app_id = "12345"\ninstallation_id = "987655"\nkey = "app.pem"\n',
     }
@@ -343,7 +358,7 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
         "PATH": "/bin",
     }
     root = home(tmp_path)
-    env = mod().tool_env(root, base, github_token="ghs_minted")
+    env = mod().tool_env(root, base, github_token="ghs_minted", azure=True)
     assert env["AWS_PROFILE"] == "livecheck" and env["GH_TOKEN"] == "ghs_minted"
     assert (
         not {
@@ -396,6 +411,7 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
     assert env["AZURE_CONFIG_DIR"] == str(root / "azure/cli")
     assert env["AZURE_CORE_COLLECT_TELEMETRY"] == "no"
     assert env["AZURE_LOGGING_ENABLE_LOG_FILE"] == "no"
+    assert env["AZURE_CORE_ENCRYPT_TOKEN_CACHE"] == "false"
     assert env["VECTEN_LIVE"] == "1"
 
 
@@ -614,6 +630,46 @@ def test_az_signed_in_as_another_principal_than_terraforms_is_refused(tmp_path, 
     )
 
 
+OTHER_TENANT = "eeeeeeee-0000-0000-0000-000000000000"
+OTHER_SUB = "ffffffff-0000-0000-0000-000000000000"
+
+
+@pytest.mark.parametrize(
+    ("profile", "stored", "reason"),
+    [
+        (az_profile(also=[(OTHER_TENANT, OTHER_SUB)]), None, "another tenant or subscription"),
+        (az_profile(also=[(TENANT, OTHER_SUB)]), None, "another tenant or subscription"),
+        (
+            None,
+            az_stored((AZ_APP, TENANT), (AZ_APP, OTHER_TENANT)),
+            "another tenant or subscription",
+        ),
+        (None, az_stored((AZ_APP, TENANT), (OTHER_SUB, TENANT)), "not signed in as"),
+        (None, "not json", "not signed in as"),
+        (None, "", "not signed in as"),
+    ],
+)
+def test_az_holding_a_sign_in_outside_allow_toml_is_refused(tmp_path, profile, stored, reason):
+    root = home(tmp_path)
+    if profile is not None:
+        (root / "azure/cli/azureProfile.json").write_text(profile)
+    path = root / "azure/cli/service_principal_entries.json"
+    if stored == "":
+        path.unlink()
+    elif stored is not None:
+        path.write_text(stored)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert reason in result.stderr
+    assert not marker.exists()
+    doctor = access(tmp_path, "doctor")
+    assert any(
+        line.startswith("azure FAIL: ") and reason in line for line in doctor.stdout.splitlines()
+    )
+
+
 def test_a_failed_azure_sign_in_is_refused(tmp_path):
     home(tmp_path)
     marker = tmp_path / "started"
@@ -718,10 +774,11 @@ def test_without_azure_in_allow_toml_no_azure_login_is_given(tmp_path):
         ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
     )
     (tmp_path / "home/azure/livecheck.json").unlink()
-    fake_clis(tmp_path, vecten='echo "${ARM_CLIENT_ID:-unset} ${ARM_CLIENT_SECRET:-unset}"')
+    echo = 'echo "${ARM_CLIENT_ID:-unset} ${ARM_CLIENT_SECRET:-unset} ${AZURE_CONFIG_DIR:-unset}"'
+    fake_clis(tmp_path, vecten=echo)
     result = access(tmp_path, "run", "--", "vecten")
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "unset unset\n"
+    assert result.stdout == "unset unset unset\n"
 
 
 @pytest.mark.parametrize(
@@ -1015,7 +1072,7 @@ def test_secret_values_reads_no_azure_token_file_through_a_link(tmp_path):
     root = home(tmp_path)
     outside = tmp_path / "outside.json"
     outside.write_text(json.dumps([{"client_secret": "a-secret-only-a-link-reaches"}]))
-    (root / "azure/cli").mkdir(parents=True, exist_ok=True)
+    (root / "azure/cli/service_principal_entries.json").unlink()
     (root / "azure/cli/service_principal_entries.json").symlink_to(outside)
     assert "a-secret-only-a-link-reaches" not in mod().secret_values(root)
 
@@ -2233,6 +2290,16 @@ def test_check_public_in_any_other_spelling_is_refused(tmp_path, args):
     assert (result.returncode, result.stdout) == (2, "")
     assert len(result.stderr.strip().splitlines()) == 1
     assert "check-public <project>" in result.stderr
+
+
+def test_the_az_sign_in_is_given_only_where_azure_is_verified(tmp_path):
+    root = home(tmp_path)
+    m = mod()
+    base = {"PATH": "/bin", "AZURE_CONFIG_DIR": "/Users/example/.azure"}
+    assert "AZURE_CONFIG_DIR" not in m.tool_env(root, base, "ghs_minted")
+    assert "AZURE_CONFIG_DIR" not in m.tool_env(root, base, "", credentials=False, azure=True)
+    verified = m.tool_env(root, base, "ghs_minted", azure=True)
+    assert verified["AZURE_CONFIG_DIR"] == str(root / "azure/cli")
 
 
 def test_runs_without_credentials_have_a_home_of_their_own(tmp_path):

@@ -193,7 +193,11 @@ def _own_directory(path: Path) -> None:
 
 
 def tool_env(
-    home: Path, base: Mapping[str, str], github_token: str, credentials: bool = True
+    home: Path,
+    base: Mapping[str, str],
+    github_token: str,
+    credentials: bool = True,
+    azure: bool = False,
 ) -> dict[str, str]:
     # Any variable a tool reads that the wrapper did not set is a way around the credential
     # home, so only identity-free variables pass, and HOME moves so default lookups miss.
@@ -238,12 +242,18 @@ def tool_env(
             "SCW_CONFIG_PATH": str(home / "scw/config.yaml"),
             "SNOWFLAKE_HOME": str(home / "snowflake"),
             "SNOWFLAKE_DEFAULT_CONNECTION_NAME": LIVECHECK,
-            "AZURE_CONFIG_DIR": str(home / AZURE_CLI),
             # The log files would hold every command line, and telemetry is a call home.
             "AZURE_CORE_COLLECT_TELEMETRY": "no",
             "AZURE_LOGGING_ENABLE_LOG_FILE": "no",
+            # The variable outranks the az folder's own config, which a command can write, so
+            # `az` keeps its sign-ins in the plain files the wrapper checks.
+            "AZURE_CORE_ENCRYPT_TOKEN_CACHE": "false",
             "VECTEN_LIVE": "1",
         }
+    # The `az` sign-in goes only to a run that verifies it; without it `az` looks under HOME,
+    # where no sign-in is.
+    if credentials and azure:
+        env["AZURE_CONFIG_DIR"] = str(home / AZURE_CLI)
     for index, (key, value) in enumerate(git):
         env[f"GIT_CONFIG_KEY_{index}"] = key
         env[f"GIT_CONFIG_VALUE_{index}"] = value
@@ -255,6 +265,10 @@ def azure_env(home: Path, allow: dict) -> dict[str, str]:
 
     The azurerm provider and backend take a service principal by its secret, not through the
     `az` login that `vecten` and `az` use.
+
+    The probe verifies only the tenant `az` signs in to by default, and Terraform must be the
+    principal it verified; so every sign-in `az` keeps, in its profile and in its store of
+    secrets, must be that principal's, to the allowed tenant and subscription alone.
     """
     if "azure" not in allow:
         return {}
@@ -270,29 +284,56 @@ def azure_env(home: Path, allow: dict) -> dict[str, str]:
     for key in ("appId", "password", "tenant"):
         if not isinstance(login.get(key), str) or not login[key]:
             raise Refused(f"{AZURE_LOGIN} has no {key}")
-    if login["tenant"] != str(allow["azure"].get("tenant_id")):
+    tenant = str(allow["azure"].get("tenant_id"))
+    subscription = str(allow["azure"].get("subscription_id"))
+    if login["tenant"] != tenant:
         raise Refused(f"{AZURE_LOGIN} is for another tenant than allow.toml names")
-    # The probe verifies whoever `az` is signed in as; Terraform must be that same principal.
-    if _az_principals(home) != {("servicePrincipal", login["appId"])}:
+    profile = _az_profile(home)
+    stored = _az_stored(home)
+    principals = {(kind, name) for kind, name, _, _ in profile}
+    if principals != {("servicePrincipal", login["appId"])} or {app for app, _ in stored} != {
+        login["appId"]
+    }:
         raise Refused(f"{AZURE_CLI} is not signed in as the service principal of {AZURE_LOGIN}")
+    reached = {(tid, sub) for _, _, tid, sub in profile}
+    if reached != {(tenant, subscription)} or {tid for _, tid in stored} != {tenant}:
+        raise Refused(
+            f"{AZURE_CLI} holds a sign-in to another tenant or subscription than allow.toml names"
+        )
     return {
         "ARM_CLIENT_ID": login["appId"],
         "ARM_CLIENT_SECRET": login["password"],
-        "ARM_TENANT_ID": login["tenant"],
-        "ARM_SUBSCRIPTION_ID": str(allow["azure"].get("subscription_id")),
+        "ARM_TENANT_ID": tenant,
+        "ARM_SUBSCRIPTION_ID": subscription,
     }
 
 
-def _az_principals(home: Path) -> set[tuple[str, str]]:
-    """The (type, name) of every sign-in in the `az` folder's profile; empty when unreadable."""
+def _az_profile(home: Path) -> set[tuple[str, str, str, str]]:
+    """The (user type, user name, tenant, subscription) of every sign-in in the `az` folder's
+    profile; empty when unreadable."""
     text = _read_regular(home / AZURE_CLI / "azureProfile.json")
     try:
         # `az` writes the profile with a byte order mark.
         profile = json.loads((text or "").removeprefix("\ufeff"))
         return {
-            (str(entry["user"]["type"]), str(entry["user"]["name"]))
+            (
+                str(entry["user"]["type"]),
+                str(entry["user"]["name"]),
+                str(entry["tenantId"]),
+                str(entry["id"]),
+            )
             for entry in profile["subscriptions"]
         }
+    except ValueError, LookupError, TypeError:
+        return set()
+
+
+def _az_stored(home: Path) -> set[tuple[str, str]]:
+    """The (client id, tenant) of every service principal secret `az` keeps; empty when
+    unreadable."""
+    text = _read_regular(home / AZURE_CLI / "service_principal_entries.json")
+    try:
+        return {(str(entry["client_id"]), str(entry["tenant"])) for entry in json.loads(text or "")}
     except ValueError, LookupError, TypeError:
         return set()
 
@@ -643,7 +684,7 @@ def _examine(
         else:
             token = minted
             secrets.add(token)
-    env = tool_env(home, os.environ, token)
+    env = tool_env(home, os.environ, token, azure="azure" in allow)
     for name in names:
         if name in allow and name not in found:
             argv = PROBES[name]
