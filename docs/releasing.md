@@ -1,6 +1,6 @@
 # Releasing
 
-A release's live checks deploy real environments to AWS and Scaleway, on Postgres and on
+A release's live checks deploy real environments to AWS, Scaleway and Azure, on Postgres and on
 Snowflake, and an agent on your laptop runs them with access of its own to dedicated test
 accounts. This page holds all of it. [One-time setup](#one-time-setup) is the maintainer's:
 the copy of the tools the agent runs, the accounts and identities, the credential home that
@@ -17,6 +17,8 @@ confirm it, so you can stop at any item and know where you are. Have these open:
 - the AWS management account of your AWS Organization, and the AWS account that holds the
   existing sandbox DNS zone (to delegate two subdomains from it);
 - the Scaleway console, as an owner of the test organisation;
+- the Azure portal, signed in with an account that can create a subscription and holds Owner on
+  it, and the DNS provider of the parent zone of `<azure-zone>`;
 - Snowsight, as ACCOUNTADMIN of the sandbox Snowflake account;
 - GitHub, signed in as an owner of the `vecten` organisation and an administrator of
   `vecten/vecten-open`;
@@ -24,8 +26,8 @@ confirm it, so you can stop at any item and know where you are. Have these open:
 - the Google Cloud console project that holds the OAuth client the deployed environments sign
   in with;
 - a terminal at the root of a checkout of this repository, with `uv`, `aws` (version 2),
-  `scw`, `snow` (the Snowflake CLI), `gh`, `git`, `terraform`, `openssl` and `dig` on the
-  `PATH`. `terraform` is the version `terraform/` requires (`required_version`, 1.16 for
+  `scw`, `az` (the Azure CLI), `snow` (the Snowflake CLI), `gh`, `git`, `terraform`, `openssl`,
+  `jq` and `dig` on the `PATH`. `terraform` is the version `terraform/` requires (`required_version`, 1.16 for
   0.1.2); an older one refuses every plan and destroy the run makes from the laptop.
 
 This repository is public, so this page uses placeholders. The real values go in `allow.toml`
@@ -38,6 +40,9 @@ and the other files of the credential home, which live only on your laptop:
 | `<scaleway-zone>` | A new subdomain of it for Scaleway, such as `scw.<sandbox-zone>` |
 | `<livecheck-account-id>` | The 12-digit ID of the new AWS member account |
 | `<scaleway-org-id>` | The ID of the Scaleway test organisation |
+| `<azure-zone>` | A new public zone for Azure, delegated from its parent zone, such as `azure.<sandbox-zone>` |
+| `<azure-tenant-id>` | The ID of the Microsoft Entra directory (tenant) holding the Azure test subscription |
+| `<azure-subscription-id>` | The ID of the Azure subscription used only for live checks |
 | `<snowflake-account>` | What `select current_account();` returns in the sandbox account |
 | `<sandbox-org>` | The new GitHub organisation for sandbox repositories |
 | `<upstream-app>` | The slug of the GitHub App installed on `vecten/vecten-open` |
@@ -81,7 +86,8 @@ and the other files of the credential home, which live only on your laptop:
    ```sh
    umask 077
    LIVE=~/.config/vecten-livecheck
-   mkdir -p $LIVE/aws $LIVE/scw $LIVE/snowflake $LIVE/github/gh $LIVE/google $LIVE/git
+   mkdir -p $LIVE/aws $LIVE/scw $LIVE/azure/cli $LIVE/snowflake $LIVE/github/gh $LIVE/google \
+     $LIVE/git
    chmod 700 $LIVE
    touch $LIVE/allow.toml
    ```
@@ -95,8 +101,8 @@ and the other files of the credential home, which live only on your laptop:
    another directory instead, but every path on this page, and the `denyRead` and `Read` deny
    entries under [Settings](#settings), assume the default.
 
-   Confirm: `~/vecten-live-tools/scripts/live/live doctor` prints seven lines. The first is
-   the `tools ok` line of item 1; the five identity lines say
+   Confirm: `~/vecten-live-tools/scripts/live/live doctor` prints eight lines. The first is
+   the `tools ok` line of item 1; the six identity lines say
    `FAIL: not configured in allow.toml` for now; the last says `os-sandbox ok`, which proves
    this Mac can start the sandbox the wrapper runs commands in.
 
@@ -167,7 +173,66 @@ and the other files of the credential home, which live only on your laptop:
    `<scaleway-org-id>`); `dig +short NS <scaleway-zone>` prints Scaleway's name servers and the
    console shows the zone as active; the billing alert is listed.
 
-5. **Snowflake.**
+5. **Azure.**
+   - In the Azure portal, create a subscription used for nothing but live checks. Note its ID,
+     `<azure-subscription-id>`, and the ID of the directory it belongs to, `<azure-tenant-id>`.
+     An existing directory will do: the checks create nothing at directory level. Give every
+     account that administers the subscription a password and a second sign-in method; an
+     account whose only sign-in is a passkey nobody can find locks the subscription for good.
+   - Sign in as yourself (`az login`), then create the live-check service principal, Owner on
+     that one subscription, and sign the credential home's own `az` folder in as it. The secret
+     goes straight into the credential home, never into your shell history:
+
+     ```sh
+     SUB=<azure-subscription-id>
+     az ad sp create-for-rbac --name vecten-livecheck --role Owner \
+       --scopes /subscriptions/$SUB --years 1 -o json > $LIVE/azure/livecheck.json
+     export AZURE_CONFIG_DIR=$LIVE/azure/cli
+     az login --service-principal -o none \
+       -u "$(jq -r .appId $LIVE/azure/livecheck.json)" \
+       -p "$(jq -r .password $LIVE/azure/livecheck.json)" \
+       -t "$(jq -r .tenant $LIVE/azure/livecheck.json)"
+     az account set -s $SUB
+     ```
+
+     The new role takes about a minute to reach the sign-in: if `az login` says the principal
+     has no subscription, wait and run it again. Keep `livecheck.json`: the wrapper gives its
+     secret to Terraform, whose Azure provider takes a service principal by its secret rather
+     than through the `az` sign-in. The secret expires after a year; then `doctor` fails at
+     its `azure` line, and `az ad sp credential reset --id <appId> --years 1 -o json` under
+     your own login prints the new `livecheck.json`.
+   - Still as the service principal, register the resource providers the deployment uses and
+     create the group for the DNS zone:
+
+     ```sh
+     for p in Microsoft.Compute Microsoft.Network Microsoft.Storage Microsoft.KeyVault \
+         Microsoft.DBforPostgreSQL Microsoft.ManagedIdentity; do
+       az provider register -n $p -o none
+     done
+     az group create -n vecten-livecheck-dns -l polandcentral -o none
+     az network dns zone create -g vecten-livecheck-dns -n <azure-zone> -o none
+     az network dns zone show -g vecten-livecheck-dns -n <azure-zone> --query nameServers
+     unset AZURE_CONFIG_DIR
+     ```
+
+     In the parent zone of `<azure-zone>`, add an `NS` record named `<azure-zone>` whose values
+     are the four name servers the last command printed.
+   - In Cost Management, Budgets, create a monthly budget of $60 on the subscription, with an
+     alert to your email at 100% of actual cost.
+   - Add to `allow.toml`:
+
+     ```toml
+     [azure]
+     tenant_id = "<azure-tenant-id>"
+     subscription_id = "<azure-subscription-id>"
+     ```
+
+   Confirm: `doctor` prints `azure ok` (every subscription the service principal reaches is
+   `<azure-subscription-id>`, in `<azure-tenant-id>`, and `livecheck.json` names that
+   directory); `dig +short NS <azure-zone>` prints the four name servers; the Budgets page
+   lists the budget with your email on its alert.
+
+6. **Snowflake.**
    - Move your connection to the sandbox account out of your own Snowflake configuration
      (`~/.snowflake/`, `~/.config/snowflake/` or `~/Library/Application Support/snowflake/`)
      into `$LIVE/snowflake/connections.toml`, as the table `[livecheck]` (the connection the
@@ -209,7 +274,7 @@ and the other files of the credential home, which live only on your laptop:
    Confirm: `doctor` prints `snowflake ok`; `SHOW RESOURCE MONITORS;` lists
    `livecheck_monthly` at level `ACCOUNT`.
 
-6. **The GitHub sandbox organisation.**
+7. **The GitHub sandbox organisation.**
    - Create a new free organisation, `<sandbox-org>`. It holds only sandbox repositories,
      which are public, because a free organisation gives environments to public repositories
      only and `vecten bootstrap` creates one.
@@ -249,7 +314,7 @@ and the other files of the credential home, which live only on your laptop:
    reaches is in `<sandbox-org>` (none yet is fine). `github-upstream` still fails until the
    next item.
 
-7. **GitHub, `vecten/vecten-open`.**
+8. **GitHub, `vecten/vecten-open`.**
    - Create a second App, owned by the `vecten` organisation, with its webhook turned off and
      these repository permissions: Contents, Pull requests and Actions read and write; Metadata
      read. Leave Workflows at No access. Install it on `vecten/vecten-open` only. Its slug is
@@ -386,7 +451,7 @@ and the other files of the credential home, which live only on your laptop:
    credentials of the test accounts only. Do not test a ruleset by pushing a tag: a tag that
    gets through starts a publish.
 
-8. **The git identity of the agent's commits.** The wrapper gives git
+9. **The git identity of the agent's commits.** The wrapper gives git
    `$LIVE/git/config` as its global configuration when that file exists, and none otherwise.
    Give it the bot identity of `<upstream-app>`, so the agent's commits are attributed to the
    App:
@@ -401,7 +466,7 @@ and the other files of the credential home, which live only on your laptop:
 
    Confirm: `git config --file $LIVE/git/config --list` prints both lines.
 
-9. **Package indexes.** On TestPyPI, add a trusted publisher to each of the four projects
+10. **Package indexes.** On TestPyPI, add a trusted publisher to each of the four projects
    (`vecten`, `vecten-shared`, `vecten-platform`, `vecten-mcp`): GitHub, owner `vecten`,
    repository `vecten-open`, workflow `publish.yml`, environment `candidate`. On PyPI, the
    same for each of the four with environment `release`. The `publish` workflow signs in to
@@ -425,7 +490,7 @@ and the other files of the credential home, which live only on your laptop:
    [issue #22](https://github.com/vecten/vecten-open/issues/22). Record any outstanding
    confirmation there without including a token value.
 
-10. **Google sign-in.** Each combination deploys under a fixed domain, so its callback address
+11. **Google sign-in.** Each combination deploys under a fixed domain, so its callback address
     is registered once, not per run.
     - Write `$LIVE/google/hostnames.txt`, one line per combination, the combination name and
       its domain:
@@ -435,11 +500,13 @@ and the other files of the credential home, which live only on your laptop:
       aws-snowflake aws-snowflake.<aws-zone>
       scaleway-postgres scaleway-postgres.<scaleway-zone>
       scaleway-snowflake scaleway-snowflake.<scaleway-zone>
+      azure-postgres azure-postgres.<azure-zone>
+      azure-snowflake azure-snowflake.<azure-zone>
       ```
 
     - In the Google Cloud console, APIs and services, Credentials, open the OAuth client the
       deployed environments sign in with and add `https://mcp.<domain>/oidc/callback` for each
-      of the four domains to its authorised redirect URIs.
+      of the six domains to its authorised redirect URIs.
     - Copy the client's ID and its secret from the same page into the credential home, one at a
       time, so the secret never passes through your shell history. The ID is not a secret; the
       agent configures the deployed environments with it:
@@ -462,12 +529,12 @@ and the other files of the credential home, which live only on your laptop:
       ordinary address will do; a Google account made for these checks works the same, if you
       prefer to keep yours out of them.
 
-    Confirm: the client lists the four redirect URIs; `cat $LIVE/google/oidc-client-id` prints
+    Confirm: the client lists the six redirect URIs; `cat $LIVE/google/oidc-client-id` prints
     the client ID, and `oidc-client-secret` holds the secret and nothing else (check it in an
     editor rather than printing it). `~/vecten-live-tools/scripts/live/live show admin-email`
     prints the address, and `show hostname aws-postgres` the first domain.
 
-11. **`allow.toml`, complete.** It now holds the five IDs, and nothing else:
+12. **`allow.toml`, complete.** It now holds these IDs, and nothing else:
 
     ```toml
     [aws]
@@ -475,6 +542,10 @@ and the other files of the credential home, which live only on your laptop:
 
     [scaleway]
     organization_id = "<scaleway-org-id>"
+
+    [azure]
+    tenant_id = "<azure-tenant-id>"
+    subscription_id = "<azure-subscription-id>"
 
     [snowflake]
     account = "<snowflake-account>"
@@ -487,11 +558,11 @@ and the other files of the credential home, which live only on your laptop:
     Confirm: `stat -f %Sp $LIVE` prints `drwx------`, so only you can read the credential
     home.
 
-12. **Settings.** Paste the two blocks under [Settings](#settings).
+13. **Settings.** Paste the two blocks under [Settings](#settings).
 
     Confirm: `claude auto-mode config` shows the environment and allow entries.
 
-13. **The whole check.** From the root of the checkout:
+14. **The whole check.** From the root of the checkout:
 
     ```sh
     ~/vecten-live-tools/scripts/live/live doctor
@@ -503,6 +574,7 @@ and the other files of the credential home, which live only on your laptop:
     tools ok: <your home>/vecten-live-tools at <its commit>
     aws ok
     scaleway ok
+    azure ok
     snowflake ok
     github-sandbox ok
     github-upstream ok
@@ -511,9 +583,9 @@ and the other files of the credential home, which live only on your laptop:
 
     A `FAIL` line names the reason; go back to that item. Then
     `~/vecten-live-tools/scripts/live/live run -- git config --global --list` prints the
-    identity of item 8, which shows the guard passes and a command runs. Last, start a new
+    identity of item 9, which shows the guard passes and a command runs. Last, start a new
     Claude Code session in the checkout and ask it to run the same `doctor` command: it runs
-    without a permission prompt and prints the same seven lines. Ask it too to change a line
+    without a permission prompt and prints the same eight lines. Ask it too to change a line
     of `~/vecten-live-tools/scripts/live/access.py`: its edit tools are denied, and a shell
     command that writes there fails in the command sandbox.
 
@@ -563,7 +635,7 @@ are the agent's to change, and that the wrapper and candidate pushes are the age
 {
   "autoMode": {
     "environment": ["$defaults",
-      "The live-check test accounts (one AWS account, one Scaleway organisation, one Snowflake account) and every repository of the sandbox GitHub organisation exist only for release testing and are this agent's to create, change and destroy.",
+      "The live-check test accounts (one AWS account, one Scaleway organisation, one Azure subscription, one Snowflake account) and every repository of the sandbox GitHub organisation exist only for release testing and are this agent's to create, change and destroy.",
       "~/vecten-sandbox holds throwaway sandbox projects owned by this agent."],
     "allow": ["$defaults",
       "Commands run through `~/vecten-live-tools/scripts/live/live run`, typed in exactly that form with nothing in front, which refuses any identity outside the test accounts.",
@@ -631,13 +703,14 @@ and the OS sandbox, all below. Together they keep tools, and slips, away from yo
 credentials and accounts; they do not contain an agent that sets out to work around them
 ([Limits](#limits) says why). The executable list is no bound: `uv` is on it, and `uv run`
 starts any program, which the runbook itself relies on. The list only keeps the common case
-tidy. `live run -- <command>` refuses a first word outside `vecten`, `aws`, `scw`, `snow`,
-`gh`, `git`, `terraform` and `uv`, and a first word that is a path (`./vecten`,
+tidy. `live run -- <command>` refuses a first word outside `vecten`, `aws`, `scw`, `az`,
+`snow`, `gh`, `git`, `terraform` and `uv`, and a first word that is a path (`./vecten`,
 `/opt/bin/aws`): only bare names, found on `PATH`, run. `docker` is not among them: local
 Docker work needs no cloud credential, so it runs outside the wrapper.
 
 Before every command the wrapper asks each tool who it is and refuses (exit 3) unless the AWS
-account, every Scaleway project's organisation, the Snowflake account and the GitHub App's
+account, every Scaleway project's organisation, every Azure subscription the service
+principal reaches (with its directory), the Snowflake account and the GitHub App's
 repositories are the ones in `allow.toml`; a probe that fails or gives no answer within 30
 seconds refuses too. The probes get no standard input, so nothing piped to the wrapper reaches
 them. `--github upstream` uses the `vecten/vecten-open` App, and the default,
@@ -670,14 +743,15 @@ The command then runs with:
   - reading and writing, under your real home, the directories `~/.aws`, `~/.config/scw`,
     `~/.snowflake`, `~/.config/snowflake`, `~/.ssh`, `~/.config/gh`, `~/.gnupg`, `~/.kube`,
     `~/.config/gcloud`, `~/.terraform.d`, `~/Library/Keychains`,
-    `~/Library/Application Support/snowflake`, `~/.dbt`, `~/.snowsql` and `~/.config/op`, and
+    `~/Library/Application Support/snowflake`, `~/.dbt`, `~/.snowsql`, `~/.config/op` and
+    `~/.azure`, and
     the files `~/.docker/config.json`, `~/.netrc`, `~/.pypirc`, `~/.npmrc`,
     `~/.git-credentials`, `~/.config/git/credentials`, `~/.terraformrc`,
     `~/.claude/.credentials.json` and `~/.pgpass`;
   - reading any file named `.env` or `.env.<name>` anywhere under your real home, except under
     `~/vecten-sandbox`, whose projects' own `.env` files `vecten` reads;
-  - writing the credential home, except its `home/`, `home-plain/`, `snowflake/logs/` and
-    `github/gh/`, which the tools write; so no command can edit `allow.toml`, the guard's own
+  - writing the credential home, except its `home/`, `home-plain/`, `snowflake/logs/`,
+    `github/gh/` and `azure/cli/`, which the tools write; so no command can edit `allow.toml`, the guard's own
     list, or the token cache `cache/`;
   - writing anything under `~/.claude`, the agent's own settings, hooks, plugins, skills and
     memory: a wrapped command has its own home and no business there;
@@ -707,7 +781,11 @@ The command then runs with:
   `LOGNAME`, `SHELL`, `TZ`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, the proxy variables and the
   `LC_*` variables pass through. The wrapper sets the rest: each tool's configuration in the
   credential home (`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE=livecheck`,
-  `SCW_CONFIG_PATH`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`), a freshly minted App token in
+  `SCW_CONFIG_PATH`, `AZURE_CONFIG_DIR`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`), with the Azure
+  CLI's telemetry and log files off, Terraform's Azure sign-in (`ARM_CLIENT_ID`,
+  `ARM_CLIENT_SECRET`, `ARM_TENANT_ID` from `azure/livecheck.json`, refused when that file
+  names another directory than `allow.toml`, and `ARM_SUBSCRIPTION_ID` from `allow.toml`), a
+  freshly minted App token in
   `GH_TOKEN`, git's global configuration from `<credential home>/git/config`, only `gh` as
   git's credential helper for github.com, GitHub SSH remotes rewritten to HTTPS, git over
   SSH refused, and `GIT_NO_LAZY_FETCH=1`, so git fetches nothing from a promisor remote the
@@ -733,8 +811,8 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   ([What bounds a wrapped command](#what-bounds-a-wrapped-command)). It still does not contain
   an agent that deliberately works around it:
   - The profile is a list of denied places. Its write denies cover the tools copy and its
-    interpreter, the credential home outside `home/`, `home-plain/`, `snowflake/logs/` and
-    `github/gh/`, all of `~/.claude`, and the shell and git startup files, with the renaming of
+    interpreter, the credential home outside `home/`, `home-plain/`, `snowflake/logs/`,
+    `github/gh/` and `azure/cli/`, all of `~/.claude`, and the shell and git startup files, with the renaming of
     every directory above each; and, wherever a checkout lies, its `.claude` directory, settings
     files and hook, skill, command and agent trees, matched by name. A command it holds can
     still write the rest of your home directory, and read any credential file it does not
@@ -758,11 +836,11 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   Such a list can be extended but not completed, so expect the next way around rather than
   rule it out. The dependable forms of containment, a profile that allows writing only to
   named places, or a separate macOS user for the agent, are not built.
-- **A candidate's images are pushed without an approval.** Setup item 7 gives this
+- **A candidate's images are pushed without an approval.** Setup item 8 gives this
   repository's Actions the Write role on the two images, for any version of any workflow, and
   an earlier version of `publish.yml` whose `images` job runs tree code is part of this
   repository's history. The App can cause only candidates' image tags to be pushed provided
-  GitHub refuses its pushes that would run another workflow version (the test in item 7, not
+  GitHub refuses its pushes that would run another workflow version (the test in item 8, not
   yet tried against a live account): the current `images` job, the one that can push an
   image, executes no script, build backend or CLI from the tagged tree and takes the tag from
   the pushed candidate tag. What remains, as the item says: the tree's Dockerfiles run in that
@@ -770,7 +848,7 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   takes an escape from that container (building to an archive without write permission and
   pushing from a job that runs no build would close it; not built); the check that keeps a tag
   from being pushed twice is in the current workflow file only, so it holds only as far as the
-  test in item 7 does; and
+  test in item 8 does; and
   `setup-buildx-action` and `setup-qemu-action` pull the BuildKit and binfmt images by moving
   tags into the job that holds the credential, a supply-chain dependency the tree cannot
   reach.
@@ -793,7 +871,7 @@ rule and goes to the permission prompt or the auto-mode classifier. That is inte
   (in `vecten.toml` and `deploy/envs/prod.tfvars`), on a Snowflake combination the Snowflake
   account identifier (in the tfvars), the sign-in address of `google/admin.toml` (in
   `vecten.toml`'s `[mcp] admins`), the Google OAuth client ID (in `vecten.toml`; its numeric
-  prefix is the Google Cloud project number), and the bot's git identity of setup item 8 (in
+  prefix is the Google Cloud project number), and the bot's git identity of setup item 9 (in
   every commit), besides the workflow logs. That is accepted for those repositories only; the
   run deletes each one when its environment is destroyed.
 
@@ -811,7 +889,7 @@ the run's pull request.
 | `<version>` | The release, `X.Y.Z`, as in the branch `release/<version>` |
 | `<candidate>` | The candidate under test, `<version>rcN`; its tag is `v<candidate>` |
 | `<previous>` | The newest release on PyPI, the one the upgrade path starts from |
-| `<combination>` | `aws-postgres`, `aws-snowflake`, `scaleway-postgres` or `scaleway-snowflake` |
+| `<combination>` | `aws-postgres`, `aws-snowflake`, `scaleway-postgres`, `scaleway-snowflake`, `azure-postgres` or `azure-snowflake` |
 | `<run>` | `$HOME/vecten-sandbox/<version>`, the run's own directory |
 | `<cli>` | `<run>/cli/<cli version>`, a virtual environment holding one published `vecten` |
 | `<name>` | `live-X-Y-Z-<combination>`, the version's dots as hyphens: project and repository |
@@ -913,7 +991,7 @@ command; type it again in that form.
    ~/vecten-live-tools/scripts/live/live show admin-firstname        # that signs in
    ```
 
-   Exit 3 names what is missing; that is the maintainer's to add (setup items 6 and 10). None
+   Exit 3 names what is missing; that is the maintainer's to add (setup items 7 and 11). None
    of these values goes into anything checked in.
 7. `vecten deploy`, `vecten destroy`, `vecten github push` on a deployed project and
    `gh run watch` follow a workflow for many minutes, the publish run for up to three hours.
@@ -1019,7 +1097,7 @@ command; type it again in that form.
    `scripts/live/`. Each line after it is an owed combination, the ledger tag it last ran at
    and the files changed since.
    You may add a combination and say why in the results file; dropping an owed one is the
-   maintainer's decision. When `not owed` lists all four, the run has only the release's own
+   maintainer's decision. When `not owed` lists all six, the run has only the release's own
    list.
 8. Price the run, 24 hours per owed combination:
 
@@ -1116,7 +1194,7 @@ command; type it again in that form.
    `live run --github upstream -- gh run rerun <databaseId> --repo vecten/vecten-open --failed`:
    the workflow is built for that, skipping packages the index already holds and never
    pushing over a published image tag, since the `images` job asks the registry again on every
-   attempt (this rests on the test of setup item 7). A version left with one image pushed and
+   attempt (this rests on the test of setup item 8). A version left with one image pushed and
    the other missing is mended the same way, for a candidate or a release: the rerun pushes the
    missing image and leaves the existing one untouched. A failure that needs any change is a
    [finding](#findings), and its fix is cut as the next candidate number. A tag is never moved,
@@ -1162,8 +1240,9 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 
    - region: on AWS,
      `~/vecten-live-tools/scripts/live/live run -- aws configure get region`; on Scaleway,
-     `fr-par`;
-   - profile: `standard` on AWS, `minimal` on Scaleway (the profiles `live cost` priced);
+     `fr-par`; on Azure, `polandcentral`;
+   - profile: `standard` on AWS, `minimal` on Scaleway and Azure (the profiles `live cost`
+     priced);
    - on Snowflake, the account's `<ORG-ACCOUNT>` identifier:
 
      ```sh
@@ -1334,7 +1413,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
 
     - "Who is the first admin": `vecten answer mcp.admins <address>`, where `<address>` is what
       `show admin-email` prints.
-    - "Register … /oidc/callback": the address is registered already (setup item 10). Store the
+    - "Register … /oidc/callback": the address is registered already (setup item 11). Store the
       client secret from the credential home through the wrapper, then confirm:
 
       ```sh
@@ -1593,7 +1672,7 @@ starts from `<previous>` and upgrades (step 12); the others start from the candi
    bump changes do not count. The first line names the file map it read; each line after it
    names a combination and the changed files that touch it; the last, `untouched:`, the
    combinations nothing touches. Rerun the checks of the
-   combinations it names, and only those; when it names none (`untouched:` lists all four),
+   combinations it names, and only those; when it names none (`untouched:` lists all six),
    nothing reruns live.
 8. A follow-up: the maintainer opens the issue, or you open it on their word with
    `live run --github upstream -- gh issue create --repo vecten/vecten-open`; its link goes in
@@ -1739,6 +1818,20 @@ through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front
    maintainer at once. Exit 4: the sweep could not look, which is not a pass; run it
    again, and report the `could not list` lines if it persists. The sweep does not look at
    Snowflake: step 3 is that check.
+
+   On Azure a destroyed environment's Key Vaults stay soft-deleted for seven days and show as
+   `leftover: azure deleted-vault` lines of the run's own entry. Once they are the only lines
+   of the run's entries left, purge them, so a later run can reuse their names:
+
+   ```sh
+   ~/vecten-live-tools/scripts/live/live cost sweep --purge-deleted-vaults \
+     --created .claude/live-checks-<version>.created.json
+   ```
+
+   It purges only the deleted vaults of environments `<created>` marks destroyed, never
+   another project's, and prints `purge requested: <vault>` for each. A purge takes minutes:
+   sweep again later, and the lines are gone. The other Azure destroy steps come with Azure
+   deployment support in 0.2.0.
 
 ### Finish
 
