@@ -198,9 +198,12 @@ and the other files of the credential home, which live only on your laptop:
      The new role takes about a minute to reach the sign-in: if `az login` says the principal
      has no subscription, wait and run it again. Keep `livecheck.json`: the wrapper gives its
      secret to Terraform, whose Azure provider takes a service principal by its secret rather
-     than through the `az` sign-in. The secret expires after a year; then `doctor` fails at
-     its `azure` line, and `az ad sp credential reset --id <appId> --years 1 -o json` under
-     your own login prints the new `livecheck.json`.
+     than through the `az` sign-in, and refuses to unless `az` is signed in as the same
+     principal. The secret expires after a year; then `doctor` fails at its `azure` line.
+     Under your own login, `az ad sp credential reset --id <appId> --years 1 -o json >
+     $LIVE/azure/livecheck.json` replaces it, and the old one stops working at once: run the
+     `export AZURE_CONFIG_DIR`, `az login --service-principal` and `az account set` lines above
+     again, then `unset AZURE_CONFIG_DIR`.
    - Still as the service principal, register the resource providers the deployment uses and
      create the group for the DNS zone:
 
@@ -227,9 +230,9 @@ and the other files of the credential home, which live only on your laptop:
      subscription_id = "<azure-subscription-id>"
      ```
 
-   Confirm: `doctor` prints `azure ok` (every subscription the service principal reaches is
-   `<azure-subscription-id>`, in `<azure-tenant-id>`, and `livecheck.json` names that
-   directory); `dig +short NS <azure-zone>` prints the four name servers; the Budgets page
+   Confirm: `doctor` prints `azure ok` (Azure itself lists `<azure-subscription-id>`, in
+   `<azure-tenant-id>`, as the only subscription the service principal reaches, and `az` is
+   signed in as the principal of `livecheck.json`); `dig +short NS <azure-zone>` prints the four name servers; the Budgets page
    lists the budget with your email on its alert.
 
 6. **Snowflake.**
@@ -710,7 +713,7 @@ Docker work needs no cloud credential, so it runs outside the wrapper.
 
 Before every command the wrapper asks each tool who it is and refuses (exit 3) unless the AWS
 account, every Scaleway project's organisation, every Azure subscription the service
-principal reaches (with its directory), the Snowflake account and the GitHub App's
+principal reaches as Azure lists it (with its directory), the Snowflake account and the GitHub App's
 repositories are the ones in `allow.toml`; a probe that fails or gives no answer within 30
 seconds refuses too. The probes get no standard input, so nothing piped to the wrapper reaches
 them. `--github upstream` uses the `vecten/vecten-open` App, and the default,
@@ -784,7 +787,8 @@ The command then runs with:
   `SCW_CONFIG_PATH`, `AZURE_CONFIG_DIR`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`), with the Azure
   CLI's telemetry and log files off, Terraform's Azure sign-in (`ARM_CLIENT_ID`,
   `ARM_CLIENT_SECRET`, `ARM_TENANT_ID` from `azure/livecheck.json`, refused when that file
-  names another directory than `allow.toml`, and `ARM_SUBSCRIPTION_ID` from `allow.toml`), a
+  names another directory than `allow.toml` or another principal than the one `az` is signed
+  in as, and `ARM_SUBSCRIPTION_ID` from `allow.toml`), a
   freshly minted App token in
   `GH_TOKEN`, git's global configuration from `<credential home>/git/config`, only `gh` as
   git's credential helper for github.com, GitHub SSH remotes rewritten to HTTPS, git over
@@ -1849,8 +1853,8 @@ through the wrapper: put `~/vecten-live-tools/scripts/live/live run --` in front
    `<combination> = v<candidate>`.
 2. For each passed check, tick its task in `.ai/openspec/changes/<change>/tasks.md` and add one
    evidence line under it, in the form the file already uses:
-   `  - Live, <candidate> on <cloud>: <what was seen>.` A check that passed on one cloud of two
-   stays unticked, with `  - Partly run live for <version> (<candidate>, <cloud>): …`. No
+   `  - Live, <candidate> on <cloud>: <what was seen>.` A check that passed on some of the clouds
+   but not all stays unticked, with `  - Partly run live for <version> (<candidate>, <cloud>): …`. No
    account, account ID or hostname goes in.
 3. Commit, push and open the pull request:
 

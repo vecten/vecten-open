@@ -38,10 +38,10 @@ PROBES = {
     for name, command in {
         "aws": "aws sts get-caller-identity --query Account --output text",
         "scaleway": "scw account project list -o json",
-        # Refreshed from the server and with disabled ones too, so a subscription the login gained
-        # since it was cached, or one it reaches but cannot use, still counts.
-        "azure": "az account list --refresh --all"
-        ' --query "[].{tenant: tenantId, subscription: id}" -o json',
+        # The server's list, not `az account list`: its refresh falls back to the cached list and
+        # exits 0 when the sign-in fails.
+        "azure": "az rest --method get"
+        ' --url "https://management.azure.com/subscriptions?api-version=2022-12-01"',
         "snowflake": f'snow sql -c {LIVECHECK} -q "select current_account()" --format json',
         "github": 'gh api /installation/repositories --paginate --jq ".repositories[].full_name"',
     }.items()
@@ -272,12 +272,29 @@ def azure_env(home: Path, allow: dict) -> dict[str, str]:
             raise Refused(f"{AZURE_LOGIN} has no {key}")
     if login["tenant"] != str(allow["azure"].get("tenant_id")):
         raise Refused(f"{AZURE_LOGIN} is for another tenant than allow.toml names")
+    # The probe verifies whoever `az` is signed in as; Terraform must be that same principal.
+    if _az_principals(home) != {("servicePrincipal", login["appId"])}:
+        raise Refused(f"{AZURE_CLI} is not signed in as the service principal of {AZURE_LOGIN}")
     return {
         "ARM_CLIENT_ID": login["appId"],
         "ARM_CLIENT_SECRET": login["password"],
         "ARM_TENANT_ID": login["tenant"],
         "ARM_SUBSCRIPTION_ID": str(allow["azure"].get("subscription_id")),
     }
+
+
+def _az_principals(home: Path) -> set[tuple[str, str]]:
+    """The (type, name) of every sign-in in the `az` folder's profile; empty when unreadable."""
+    text = _read_regular(home / AZURE_CLI / "azureProfile.json")
+    try:
+        # `az` writes the profile with a byte order mark.
+        profile = json.loads((text or "").removeprefix("\ufeff"))
+        return {
+            (str(entry["user"]["type"]), str(entry["user"]["name"]))
+            for entry in profile["subscriptions"]
+        }
+    except ValueError, LookupError, TypeError:
+        return set()
 
 
 def _variants(path: Path) -> list[str]:
@@ -549,7 +566,11 @@ def _organizations(out: str) -> list[str]:
 
 
 def _subscriptions(out: str) -> list[str]:
-    pairs = sorted({f"{item['tenant']}/{item['subscription']}" for item in json.loads(out)})
+    listed = json.loads(out)
+    # A further page could hold another subscription.
+    if listed.get("nextLink"):
+        raise ValueError(out)
+    pairs = sorted({f"{item['tenantId']}/{item['subscriptionId']}" for item in listed["value"]})
     if not pairs:
         raise ValueError(out)
     return pairs

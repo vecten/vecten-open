@@ -70,15 +70,30 @@ SCW_OUTPUT = f"""\
   }}
 ]
 """
-# az account list --refresh --all --query "[].{tenant: tenantId, subscription: id}" -o json
+# az rest --method get --url "https://management.azure.com/subscriptions?api-version=2022-12-01"
 AZ_OUTPUT = f"""\
-[
-  {{
-    "subscription": "{SUB}",
-    "tenant": "{TENANT}"
-  }}
-]
+{{
+  "count": {{"type": "Total", "value": 1}},
+  "value": [
+    {{
+      "id": "/subscriptions/{SUB}",
+      "subscriptionId": "{SUB}",
+      "tenantId": "{TENANT}",
+      "displayName": "Example Subscription",
+      "state": "Enabled"
+    }}
+  ]
+}}
 """
+
+
+def az_profile(name=None, kind="servicePrincipal"):
+    """azure/cli/azureProfile.json as `az login` writes it, with its byte order mark."""
+    user = {"name": name or AZ_APP, "type": kind}
+    subscription = {"id": SUB, "tenantId": TENANT, "isDefault": True, "user": user}
+    return "\ufeff" + json.dumps({"installationId": "x", "subscriptions": [subscription]})
+
+
 # snow sql -c livecheck -q "select current_account()" --format json
 SNOW_OUTPUT = """\
 [
@@ -209,6 +224,7 @@ def home(tmp_path):
                 "tenant": TENANT,
             }
         ),
+        "azure/cli/azureProfile.json": az_profile(),
         "github/sandbox.toml": 'app_id = "12345"\ninstallation_id = "987654"\nkey = "app.pem"\n',
         "github/upstream.toml": 'app_id = "12345"\ninstallation_id = "987655"\nkey = "app.pem"\n',
     }
@@ -551,19 +567,71 @@ def test_another_azure_tenant_is_refused():
     ]
 
 
-def test_the_azure_probe_refreshes_and_lists_every_subscription():
-    assert mod().PROBES["azure"][:5] == ["az", "account", "list", "--refresh", "--all"]
+def test_the_azure_probe_asks_the_server_not_the_cache():
+    # `az account list --refresh` prints its cached list and exits 0 when the refresh fails.
+    probe = mod().PROBES["azure"]
+    assert probe[:2] == ["az", "rest"]
+    assert "https://management.azure.com/subscriptions?api-version=2022-12-01" in probe
 
 
 def test_the_azure_probe_reads_each_subscription_once():
-    out = json.dumps([{"tenant": TENANT, "subscription": SUB}] * 2)
-    assert mod().PARSERS["azure"](out) == [f"{TENANT}/{SUB}"]
+    item = {"subscriptionId": SUB, "tenantId": TENANT}
+    assert mod().PARSERS["azure"](json.dumps({"value": [item, item]})) == [f"{TENANT}/{SUB}"]
+
+
+def test_a_subscription_list_with_more_pages_cannot_be_told():
+    out = json.dumps({"value": [{"subscriptionId": SUB, "tenantId": TENANT}], "nextLink": "x"})
+    with pytest.raises(ValueError):
+        mod().PARSERS["azure"](out)
+
+
+@pytest.mark.parametrize(
+    "profile, reason",
+    [
+        (az_profile(name="dddddddd-0000-0000-0000-000000000000"), "not signed in as"),
+        (az_profile(name="someone@example.com", kind="user"), "not signed in as"),
+        ("not json", "not signed in as"),
+        (None, "not signed in as"),
+    ],
+)
+def test_az_signed_in_as_another_principal_than_terraforms_is_refused(tmp_path, profile, reason):
+    path = home(tmp_path) / "azure/cli/azureProfile.json"
+    if profile is None:
+        path.unlink()
+    else:
+        path.write_text(profile)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert "azure/cli is not signed in as the service principal of azure/livecheck.json" in (
+        result.stderr
+    )
+    assert not marker.exists()
+    doctor = access(tmp_path, "doctor")
+    assert any(
+        line.startswith("azure FAIL: ") and reason in line for line in doctor.stdout.splitlines()
+    )
+
+
+def test_a_failed_azure_sign_in_is_refused(tmp_path):
+    home(tmp_path)
+    marker = tmp_path / "started"
+    failing = (
+        "echo 'ERROR: AADSTS7000222: The provided client secret keys are expired.' >&2; exit 1"
+    )
+    fake_clis(tmp_path, az=failing, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert "azure: identity could not be read" in result.stderr
+    assert not marker.exists()
+    assert "azure FAIL: az exited 1" in access(tmp_path, "doctor").stdout
 
 
 def test_an_azure_login_that_reaches_no_subscription_is_refused(tmp_path):
     home(tmp_path)
     marker = tmp_path / "started"
-    fake_clis(tmp_path, az="echo '[]'", vecten=f"touch {marker}")
+    fake_clis(tmp_path, az="""echo '{"value": []}'""", vecten=f"touch {marker}")
     result = access(tmp_path, "run", "--", "vecten")
     assert result.returncode == 3
     assert "azure: identity could not be read" in result.stderr
@@ -947,7 +1015,7 @@ def test_secret_values_reads_no_azure_token_file_through_a_link(tmp_path):
     root = home(tmp_path)
     outside = tmp_path / "outside.json"
     outside.write_text(json.dumps([{"client_secret": "a-secret-only-a-link-reaches"}]))
-    (root / "azure/cli").mkdir(parents=True)
+    (root / "azure/cli").mkdir(parents=True, exist_ok=True)
     (root / "azure/cli/service_principal_entries.json").symlink_to(outside)
     assert "a-secret-only-a-link-reaches" not in mod().secret_values(root)
 
