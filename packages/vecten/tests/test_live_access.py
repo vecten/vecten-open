@@ -119,7 +119,7 @@ DENIED_TEXT = (
     ' (subpath "/Users/example/.terraform.d") (subpath "/Users/example/Library/Keychains")'
     ' (subpath "/Users/example/Library/Application Support/snowflake")'
     ' (subpath "/Users/example/.dbt") (subpath "/Users/example/.snowsql")'
-    ' (subpath "/Users/example/.config/op")'
+    ' (subpath "/Users/example/.config/op") (subpath "/Users/example/.azure")'
     ' (literal "/Users/example/.docker/config.json") (literal "/Users/example/.netrc")'
     ' (literal "/Users/example/.pypirc") (literal "/Users/example/.npmrc")'
     ' (literal "/Users/example/.git-credentials")'
@@ -131,7 +131,8 @@ DENIED_TEXT = (
     '(allow file-write* (subpath "/Users/example/.config/vecten-livecheck/home")'
     ' (subpath "/Users/example/.config/vecten-livecheck/home-plain")'
     ' (subpath "/Users/example/.config/vecten-livecheck/snowflake/logs")'
-    ' (subpath "/Users/example/.config/vecten-livecheck/github/gh"))'
+    ' (subpath "/Users/example/.config/vecten-livecheck/github/gh")'
+    ' (subpath "/Users/example/.config/vecten-livecheck/azure/cli"))'
     '(deny file-write* (literal "/Users/example/.zshrc") (literal "/Users/example/.zprofile")'
     ' (literal "/Users/example/.zshenv") (literal "/Users/example/.bashrc")'
     ' (literal "/Users/example/.bash_profile") (literal "/Users/example/.profile")'
@@ -168,6 +169,13 @@ CREDENTIAL_VARIABLES = {
     "SCW_CONFIG_PATH",
     "SNOWFLAKE_HOME",
     "SNOWFLAKE_DEFAULT_CONNECTION_NAME",
+    "AZURE_CONFIG_DIR",
+    "AZURE_CORE_COLLECT_TELEMETRY",
+    "AZURE_LOGGING_ENABLE_LOG_FILE",
+    "ARM_CLIENT_ID",
+    "ARM_CLIENT_SECRET",
+    "ARM_TENANT_ID",
+    "ARM_SUBSCRIPTION_ID",
     "VECTEN_LIVE",
 }
 LAUNCHER = REPO / "scripts/live/live"
@@ -288,6 +296,15 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
         "SCW_ACCESS_KEY": "a",
         "SCW_SECRET_KEY": "s",
         "SCW_PROFILE": "personal",
+        "AZURE_CONFIG_DIR": "/Users/example/.azure",
+        "AZURE_CLIENT_ID": "personal",
+        "AZURE_CLIENT_SECRET": "personal",
+        "AZURE_TENANT_ID": "personal",
+        "AZURE_SUBSCRIPTION_ID": "personal",
+        "ARM_CLIENT_ID": "personal",
+        "ARM_CLIENT_SECRET": "personal",
+        "ARM_USE_CLI": "true",
+        "ARM_SUBSCRIPTION_ID": "personal",
         "SNOWFLAKE_CONNECTIONS": "[personal]",
         "SNOWFLAKE_CONNECTIONS_PERSONAL_PASSWORD": "p",
         "AWS_ROLE_ARN": "arn:aws:iam::222222222222:role/personal",
@@ -323,6 +340,14 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
             "SCW_ACCESS_KEY",
             "SCW_SECRET_KEY",
             "SCW_PROFILE",
+            "AZURE_CLIENT_ID",
+            "AZURE_CLIENT_SECRET",
+            "AZURE_TENANT_ID",
+            "AZURE_SUBSCRIPTION_ID",
+            "ARM_CLIENT_ID",
+            "ARM_CLIENT_SECRET",
+            "ARM_USE_CLI",
+            "ARM_SUBSCRIPTION_ID",
             "SNOWFLAKE_CONNECTIONS",
             "SNOWFLAKE_CONNECTIONS_PERSONAL_PASSWORD",
             "AWS_ROLE_ARN",
@@ -352,6 +377,9 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
     assert env["SNOWFLAKE_HOME"] == str(root / "snowflake")
     assert env["SNOWFLAKE_DEFAULT_CONNECTION_NAME"] == "livecheck"
     assert env["GH_CONFIG_DIR"] == str(root / "github/gh")
+    assert env["AZURE_CONFIG_DIR"] == str(root / "azure/cli")
+    assert env["AZURE_CORE_COLLECT_TELEMETRY"] == "no"
+    assert env["AZURE_LOGGING_ENABLE_LOG_FILE"] == "no"
     assert env["VECTEN_LIVE"] == "1"
 
 
@@ -599,6 +627,63 @@ def test_the_command_sees_only_the_test_credentials(tmp_path):
     result = access(tmp_path, "run", "--github", "upstream", "--", "vecten", env=personal)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "livecheck unset ghs_fake_upstream_token\n"
+
+
+def test_the_command_gets_terraforms_azure_login_from_the_credential_home(tmp_path):
+    home(tmp_path)
+    echo = 'echo "$ARM_CLIENT_ID $ARM_TENANT_ID $ARM_SUBSCRIPTION_ID ${ARM_CLIENT_SECRET:+set}"'
+    fake_clis(tmp_path, vecten=echo)
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{AZ_APP} {TENANT} {SUB} set\n"
+
+
+def test_terraforms_azure_login_is_the_client_secret_itself(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path, vecten='[ "$ARM_CLIENT_SECRET" = "$1" ]')
+    assert access(tmp_path, "run", "--", "vecten", AZ_SECRET).returncode == 0
+
+
+def test_without_azure_in_allow_toml_no_azure_login_is_given(tmp_path):
+    allow = home(tmp_path) / "allow.toml"
+    allow.write_text(
+        ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
+    )
+    (tmp_path / "home/azure/livecheck.json").unlink()
+    fake_clis(tmp_path, vecten='echo "${ARM_CLIENT_ID:-unset} ${ARM_CLIENT_SECRET:-unset}"')
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "unset unset\n"
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (None, "no azure/livecheck.json in the credential home"),
+        ("not json", "azure/livecheck.json is not JSON"),
+        (json.dumps({"appId": AZ_APP, "tenant": TENANT}), "azure/livecheck.json has no password"),
+        (
+            json.dumps({"appId": AZ_APP, "password": AZ_SECRET, "tenant": ORG}),
+            "azure/livecheck.json is for another tenant than allow.toml names",
+        ),
+    ],
+)
+def test_an_unusable_azure_login_file_is_a_refusal(tmp_path, content, reason):
+    path = home(tmp_path) / "azure/livecheck.json"
+    if content is None:
+        path.unlink()
+    else:
+        path.write_text(content)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert reason in result.stderr
+    assert AZ_SECRET not in result.stderr
+    assert not marker.exists()
+    doctor = access(tmp_path, "doctor")
+    assert doctor.returncode == 1
+    assert f"azure FAIL: {reason}" in doctor.stdout.splitlines()
 
 
 def test_a_hanging_probe_is_a_refusal(tmp_path):
@@ -1064,6 +1149,8 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
     real = tmp_path / "real"
     (real / ".aws").mkdir(parents=True)
     (real / ".aws/credentials").write_text("[default]\n")
+    (real / ".azure").mkdir()
+    (real / ".azure/msal_token_cache.json").write_text("{}\n")
     (real / ".netrc").write_text("machine example.invalid\n")
     (real / "notes.txt").write_text("readable\n")
     (real / ".pgpass").write_text("localhost:5432:*:example:example\n")
@@ -1099,6 +1186,7 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
             return sandboxed("/bin/sh", "-c", 'printf x >> "$1"', "sh", str(path))
 
         assert sandboxed("/bin/cat", str(real / ".aws/credentials")) != 0
+        assert sandboxed("/bin/cat", str(real / ".azure/msal_token_cache.json")) != 0
         assert sandboxed("/bin/cat", str(real / ".netrc")) != 0
         assert sandboxed("/bin/cat", str(real / "notes.txt")) == 0
         assert sandboxed("/bin/cat", str(real / ".pgpass")) != 0

@@ -27,6 +27,10 @@ IDENTITIES = ("aws", "scaleway", "azure", "snowflake", "github")
 GITHUB_MODES = ("sandbox", "upstream")
 # The AWS profile and the Snowflake connection the credential home defines.
 LIVECHECK = "livecheck"
+# The `az` configuration folder, logged in as the live-check service principal, and that
+# principal's own credentials as `az ad sp create-for-rbac` printed them.
+AZURE_CLI = "azure/cli"
+AZURE_LOGIN = "azure/livecheck.json"
 PROBE_TIMEOUT = 30.0
 TOKEN_COMMAND = [sys.executable, "-I", str(Path(__file__).with_name("github_app.py")), "token"]
 PROBES = {
@@ -88,7 +92,7 @@ DENIED = (
         for path in (
             ".aws", ".config/scw", ".snowflake", ".config/snowflake", ".ssh", ".config/gh",
             ".gnupg", ".kube", ".config/gcloud", ".terraform.d", "Library/Keychains",
-            "Library/Application Support/snowflake", ".dbt", ".snowsql", ".config/op",
+            "Library/Application Support/snowflake", ".dbt", ".snowsql", ".config/op", ".azure",
         )
     ),
     *(
@@ -107,7 +111,7 @@ ENV_FILES = r"^{home}/(.*/)?\.env(\.[^/]+)?$"
 REGEX_SPECIAL = frozenset(".^$|?*+()[]{}")
 # What the wrapped tools write in the credential home; the rest of it, `allow.toml` and the
 # token cache above all, is the guard's own and stays unwritable.
-LIVE_WRITABLE = ("home", "home-plain", "snowflake/logs", "github/gh")
+LIVE_WRITABLE = ("home", "home-plain", "snowflake/logs", "github/gh", "azure/cli")
 # Files that steer every later shell or git under the real home, and the trees of the agent's
 # own settings, hooks, plugins and memory.
 HOME_UNWRITABLE = (
@@ -228,12 +232,46 @@ def tool_env(
             "SCW_CONFIG_PATH": str(home / "scw/config.yaml"),
             "SNOWFLAKE_HOME": str(home / "snowflake"),
             "SNOWFLAKE_DEFAULT_CONNECTION_NAME": LIVECHECK,
+            "AZURE_CONFIG_DIR": str(home / AZURE_CLI),
+            # The log files would hold every command line, and telemetry is a call home.
+            "AZURE_CORE_COLLECT_TELEMETRY": "no",
+            "AZURE_LOGGING_ENABLE_LOG_FILE": "no",
             "VECTEN_LIVE": "1",
         }
     for index, (key, value) in enumerate(git):
         env[f"GIT_CONFIG_KEY_{index}"] = key
         env[f"GIT_CONFIG_VALUE_{index}"] = value
     return env
+
+
+def azure_env(home: Path, allow: dict) -> dict[str, str]:
+    """Terraform's login to the test subscription, from the service principal's own file.
+
+    The azurerm provider and backend take a service principal by its secret, not through the
+    `az` login that `vecten` and `az` use.
+    """
+    if "azure" not in allow:
+        return {}
+    text = _read_regular(home / AZURE_LOGIN)
+    if text is None:
+        raise Refused(f"no {AZURE_LOGIN} in the credential home")
+    try:
+        login = json.loads(text)
+    except ValueError:
+        login = None
+    if not isinstance(login, dict):
+        raise Refused(f"{AZURE_LOGIN} is not JSON")
+    for key in ("appId", "password", "tenant"):
+        if not isinstance(login.get(key), str) or not login[key]:
+            raise Refused(f"{AZURE_LOGIN} has no {key}")
+    if login["tenant"] != str(allow["azure"].get("tenant_id")):
+        raise Refused(f"{AZURE_LOGIN} is for another tenant than allow.toml names")
+    return {
+        "ARM_CLIENT_ID": login["appId"],
+        "ARM_CLIENT_SECRET": login["password"],
+        "ARM_TENANT_ID": login["tenant"],
+        "ARM_SUBSCRIPTION_ID": str(allow["azure"].get("subscription_id")),
+    }
 
 
 def _variants(path: Path) -> list[str]:
@@ -622,6 +660,7 @@ def _run(
     if cwd is not None and not cwd.is_dir():
         raise Refused(f"--cwd {cwd} is not a directory")
     source = _stdin_file(home, stdin_file) if stdin_file is not None else None
+    terraform_azure = azure_env(home, allow)
     secrets = secret_values(home)
     private = _private_tmp(home)
     sandbox = _os_sandbox(private)
@@ -631,6 +670,7 @@ def _run(
         lines = [*problems, *(f"{name}: {reason}" for name, reason in reasons.items())]
         raise Refused(redact("refused:\n  " + "\n  ".join(lines), secrets))
     env["TMPDIR"] = str(private)
+    env |= terraform_azure
     command = [*sandbox, *command]
     try:
         if source is not None:
@@ -695,6 +735,11 @@ def _doctor() -> int:
             if problems:
                 reason = reasons.get(name) or problems[0].partition(": ")[2]
                 line = f"FAIL: {redact(reason, secrets)}"
+            elif name == "azure":
+                try:
+                    azure_env(home, allow)
+                except Refused as refused:
+                    line = f"FAIL: {refused}"
         failed |= line != "ok"
         print(f"{title} {line}")
     line = "absent (not macOS)"
