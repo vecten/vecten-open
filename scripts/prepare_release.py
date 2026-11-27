@@ -29,6 +29,7 @@ ROOT_FILES = {
     "conftest.py",
     "scripts/prepare_release.py",
     "scripts/check_extension_wheels.py",
+    "scripts/preflight.py",
 }
 PUBLIC_DIRS = {"packages", "terraform", "images", "plugins", ".claude-plugin", ".github"}
 # Listed one by one, so a doc added under docs/ stays internal until it is named here.

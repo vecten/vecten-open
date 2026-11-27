@@ -72,4 +72,5 @@ plugin: ## Render the plugin and docs/agent-guide.md from the skills
 hooks: ## Enable the repository's pre-commit hook in this clone
 	git config --local core.hooksPath .githooks
 
-preflight: sync lint comments wheels versions test ## CI's lint and unit jobs, before a push
+preflight: ## CI's lint and unit jobs, before a push: one line per step, failing logs, a summary
+	@uv run --no-project python scripts/preflight.py
