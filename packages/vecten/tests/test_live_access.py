@@ -900,6 +900,58 @@ def test_secret_values_skips_identifiers_and_keeps_credentials(tmp_path):
     } <= secrets
 
 
+def test_secret_values_takes_azure_secrets_and_leaves_its_identifiers(tmp_path):
+    root = home(tmp_path)
+    token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.exampleAccessTokenPayload.signature"
+    client_secret = "Az8Q~anotherExampleClientSecret00000000"
+    target = "https://management.core.windows.net//.default"
+    log_line = "command args: account list --refresh --all --query ..."
+    cache_key = f"-login.microsoftonline.com-accesstoken-{AZ_APP}-{TENANT}-{target}"
+    files = {
+        "azure/cli/azureProfile.json": json.dumps(
+            {"subscriptions": [{"id": SUB, "tenantId": TENANT, "name": "Example Subscription"}]}
+        ),
+        "azure/cli/commands/26-11-27.10-00-00.account_list.1.log": f"{log_line}\n",
+        "azure/cli/msal_token_cache.json": json.dumps(
+            {
+                "AccessToken": {
+                    cache_key: {
+                        "credential_type": "AccessToken",
+                        "secret": token,
+                        "client_id": AZ_APP,
+                        "environment": "login.microsoftonline.com",
+                        "realm": TENANT,
+                        "target": target,
+                        "token_type": "Bearer",
+                        "cached_at": "1764237600",
+                        "expires_on": "1764241200",
+                    }
+                }
+            }
+        ),
+        "azure/cli/service_principal_entries.json": json.dumps(
+            [{"client_id": AZ_APP, "tenant": TENANT, "client_secret": client_secret}]
+        ),
+    }
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text)
+    secrets = mod().secret_values(root)
+    assert {AZ_SECRET, token, client_secret} <= secrets
+    identifiers = {"vecten-livecheck", AZ_APP, TENANT, SUB, "Example Subscription", target}
+    identifiers |= {"login.microsoftonline.com", log_line, cache_key}
+    assert not identifiers & secrets
+
+
+def test_secret_values_reads_no_azure_token_file_through_a_link(tmp_path):
+    root = home(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps([{"client_secret": "a-secret-only-a-link-reaches"}]))
+    (root / "azure/cli").mkdir(parents=True)
+    (root / "azure/cli/service_principal_entries.json").symlink_to(outside)
+    assert "a-secret-only-a-link-reaches" not in mod().secret_values(root)
+
+
 def test_redact_replaces_every_secret_of_eight_or_more_characters():
     text = "key abcdefgh and abcdefghijkl and short1"
     assert mod().redact(text, {"abcdefgh", "abcdefghijkl", "short1"}) == (

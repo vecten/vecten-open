@@ -136,7 +136,12 @@ TMP_KEPT = 86400
 NOT_SECRET = (
     ("allow.toml",), ("google", "hostnames.txt"), ("google", "oidc-client-id"),
     ("snowflake", "logs"), ("github", "gh"), ("git", "config"), ("home",), ("home-plain",),
-    ("google", "admin.toml"),
+    ("google", "admin.toml"), ("azure", "cli"),
+)  # fmt: skip
+# The `az` folder holds logs, command history and a profile of IDs, which would read as secrets;
+# its secrets are in these two files, the token cache and the service principal's own secret.
+TOKEN_FILES = (
+    ("azure", "cli", "msal_token_cache.json"), ("azure", "cli", "service_principal_entries.json"),
 )  # fmt: skip
 SSH_REFUSED = "sh -c 'echo \"access: git over SSH is refused; use https://\" >&2; exit 1'"
 MIN_SECRET = 16
@@ -146,7 +151,8 @@ MIN_REDACTED = 8
 IDENTIFIER_KEYS = frozenset(
     "account accountname user username role warehouse database schema host region default_region"
     " default_zone default_organization_id default_project_id authenticator private_key_file"
-    " private_key_path expires_at app_id installation_id output".split()
+    " private_key_path expires_at app_id installation_id output appid displayname tenant client_id"
+    " environment realm target".split()
 )
 QUOTED = re.compile(r"""(["'])(.*?)\1""")
 ASSIGNED = re.compile(r"^([\w.-]+)\s*[=:]\s*([^=\s].*)$")
@@ -485,6 +491,8 @@ def secret_values(home: Path) -> set[str]:
         for path in (here / name for name in names):
             if not _skipped(home, path):
                 values |= _secrets_in(path)
+    for relative in TOKEN_FILES:
+        values |= _secrets_in(home.joinpath(*relative))
     return values
 
 
@@ -510,7 +518,8 @@ def _secrets_in(path: Path) -> set[str]:
         data = json.loads(text)
     except ValueError:
         data = None
-    if isinstance(data, dict):
+    # A one-line JSON list would otherwise pass for a TOML table header below.
+    if isinstance(data, dict | list):
         return _secrets_in_json(data)
     for line in (raw.strip() for raw in text.splitlines()):
         if line.startswith("[") and line.endswith("]"):
