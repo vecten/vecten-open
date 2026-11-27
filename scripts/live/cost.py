@@ -277,7 +277,8 @@ def _tag_value(tags: Sequence[str], wanted: str) -> str | None:
 
 
 def _azure_tags(item: dict) -> tuple[str | None, str | None]:
-    tags = item.get("tags") or {}
+    # Azure matches tag names in any case and returns them in the case they were written with.
+    tags = {str(key).lower(): value for key, value in (item.get("tags") or {}).items()}
     return tags.get(TAG), tags.get(ENV_TAG)
 
 
@@ -404,13 +405,15 @@ def real_listers(owner: Callable[[str], tuple[str, str | None]]) -> dict[tuple[s
         return found
 
     def azure_resources() -> list[Found]:
-        # A leftover group is reported once, not once more for each resource inside it; group
-        # names are case-insensitive and Azure reports them in either case.
-        grouped = {g["name"].lower() for g in run_json(AZ_GROUPS) if _azure_tags(g)[0]}
+        # A resource is reported with its group, not on its own, only when it carries the
+        # group's own tags; group names are case-insensitive and Azure reports them in either
+        # case.
+        groups = {g["name"].lower(): _azure_tags(g) for g in run_json(AZ_GROUPS)}
         found = []
         for resource in run_json(AZ_RESOURCES):
             project, env = _azure_tags(resource)
-            if project and str(resource.get("resourceGroup", "")).lower() not in grouped:
+            group = groups.get(str(resource.get("resourceGroup", "")).lower())
+            if project and group != (project, env):
                 found.append(Found("resource", resource["id"], project, env))
         return found
 
@@ -471,10 +474,15 @@ def sweep(
 def purge_deleted_vaults(
     leftovers: Sequence[Leftover], environments: Sequence[Environment]
 ) -> tuple[list[str], list[str]]:
-    """Ask Azure to purge each soft-deleted vault among `leftovers` that a destroyed environment
-    of the run left, so a recycled sandbox can reuse its name; another project's vault is never
-    the run's to remove. Return the vaults asked for and a line for each that failed."""
-    destroyed = {(e.project, e.env) for e in environments if e.destroyed_at is not None}
+    """Ask Azure to purge each soft-deleted vault among `leftovers` that a destroyed Azure
+    environment of the run left, so a recycled sandbox can reuse its name; another project's
+    vault is never the run's to remove, nor one whose tags only an AWS or Scaleway environment
+    matches. Return the vaults asked for and a line for each that failed."""
+    destroyed = {
+        (e.project, e.env)
+        for e in environments
+        if e.destroyed_at is not None and e.combination.startswith("azure-")
+    }
     names = {
         item.name
         for item in leftovers
