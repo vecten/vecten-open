@@ -355,6 +355,13 @@ and the other files of the credential home, which live only on your laptop:
      PyPI is not exposed the same way, since its trusted publisher is bound to the `release`
      environment.
 
+     The `release-page` job asks for `contents: write` on the workflow's own token, to create
+     the version's GitHub Release, and needs no setting: a job's `permissions` grant it. The job
+     waits for `verify`, which waits for the packages job, so it only runs once the `release`
+     environment approval has gone through, and a candidate's run never gets to it. It checks
+     out nothing and runs only a pinned action, `gh` and its own shell. The notes come from the
+     tagged tree, as text the `target` job rendered without write access.
+
    Confirm: `doctor` prints `github-upstream ok` (the App reaches exactly
    `vecten/vecten-open`). With your own `gh` (not yet tried against a live account):
 
@@ -1828,7 +1835,8 @@ Only once no decision is open and the maintainer has merged the fixes and the ti
 6. The rest is the maintainer's: they merge, push the tag `v<version>` and approve the
    `publish` run in the `release` environment (CONTRIBUTING.md, Releasing). A release takes
    one approval, for the packages; the images build after it and can take long, up to three
-   hours; the release is done when the run's `verify` job is green.
+   hours; the release is done when the run's `release-page` job, the last after `verify`, is
+   green.
 7. Once the release is published, delete the run's candidate branches on
    `vecten/vecten-open`, one for each candidate the Run block lists; the candidate tags stay:
 
