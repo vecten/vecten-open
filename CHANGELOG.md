@@ -5,6 +5,11 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 
 ## [Unreleased]
 
+### Added
+
+- Each release gets a GitHub Release page with its changelog section, the install command and
+  the image references. Release candidates get none.
+
 ## [0.1.2] - 2026-11-26
 
 ### Added

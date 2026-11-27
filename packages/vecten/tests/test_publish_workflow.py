@@ -184,8 +184,9 @@ def test_the_shared_actions_carry_the_versions_table_pins():
 
 
 def test_no_job_reads_a_repository_secret_but_the_token():
-    assert WORKFLOW_TEXT.count("secrets") == WORKFLOW_TEXT.count("secrets.GITHUB_TOKEN") == 1
-    assert "secrets.GITHUB_TOKEN" in str(JOBS["images"]["steps"])
+    assert WORKFLOW_TEXT.count("secrets") == WORKFLOW_TEXT.count("secrets.GITHUB_TOKEN") == 2
+    readers = [name for name, job in JOBS.items() if "secrets.GITHUB_TOKEN" in str(job["steps"])]
+    assert readers == ["images", "release-page"]
 
 
 def runs():
@@ -295,7 +296,8 @@ def test_only_the_publishing_jobs_hold_write_permissions():
     assert WORKFLOW["permissions"] == {"contents": "read"}
     assert JOBS["packages"]["permissions"] == {"contents": "read", "id-token": "write"}
     assert JOBS["images"]["permissions"] == {"contents": "read", "packages": "write"}
-    for name in JOBS.keys() - PUBLISHING:
+    assert JOBS["release-page"]["permissions"] == {"contents": "write"}
+    for name in JOBS.keys() - PUBLISHING - {"release-page"}:
         assert "write" not in str(JOBS[name].get("permissions", {})), name
     writers = [n for n, j in JOBS.items() if j.get("permissions", {}).get("packages") == "write"]
     assert writers == ["images"]
@@ -616,3 +618,117 @@ def test_verify_waits_for_each_published_hash():
     (compare,) = [s["run"] for s in JOBS["verify"]["steps"] if "sha256sum" in s.get("run", "")]
     assert "deadline=$((SECONDS + 300))" in compare
     assert '&& [ -n "$published" ]; do' in compare
+
+
+def test_a_release_s_notes_are_rendered_before_anything_is_published():
+    steps = JOBS["target"]["steps"]
+    (target,) = [s for s in steps if s.get("id") == "target"]
+    (render,) = [s for s in steps if "release_notes.py" in s.get("run", "")]
+    (upload,) = [s for s in steps if s.get("uses", "").startswith("actions/upload-artifact@")]
+    assert steps.index(target) < steps.index(render) < steps.index(upload)
+    for step in (render, upload):
+        assert step["if"] == "steps.target.outputs.target == 'release'"
+    assert render["env"] == {"VERSION": "${{ steps.target.outputs.version }}"}
+    assert render["run"].strip() == (
+        'python3 scripts/release_notes.py "$VERSION" > "$RUNNER_TEMP/release-notes.md"'
+    )
+    assert upload["with"]["name"] == "release-notes"
+    assert upload["with"]["path"] == "${{ runner.temp }}/release-notes.md"
+    assert upload["with"]["if-no-files-found"] == "error"
+
+
+def test_the_release_page_is_made_for_a_release_once_verify_succeeded():
+    job = JOBS["release-page"]
+    assert job["needs"] == ["target", "verify"]
+    assert job["if"] == "needs.target.outputs.target == 'release'"
+
+
+def test_the_release_page_job_runs_nothing_from_the_tagged_tree():
+    steps = JOBS["release-page"]["steps"]
+    actions = [s["uses"].split("@")[0] for s in steps if "uses" in s]
+    assert actions == ["actions/download-artifact"]
+    assert steps[0]["with"] == {"name": "release-notes", "path": "notes"}
+    (script,) = [s["run"] for s in steps if "run" in s]
+    for command in ("python", "uv ", "scripts/", "git "):
+        assert command not in script, command
+
+
+def release_page_step():
+    (step,) = [s for s in JOBS["release-page"]["steps"] if "run" in s]
+    return step
+
+
+FAKE_GH = """\
+#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_ARGS"
+if [ "$2" = view ]; then
+  printf '%s\\n' "$FAKE_OUTPUT" >&2
+  exit "$FAKE_STATUS"
+fi
+exit 0
+"""
+
+
+def run_release_page_step(tmp_path, status, message):
+    step = release_page_step()
+    assert step["env"] == {
+        "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
+        "GH_REPO": "${{ github.repository }}",
+        "TAG": "${{ github.ref_name }}",
+        "VERSION": "${{ needs.target.outputs.version }}",
+    }
+    script = tmp_path / "release-page.sh"
+    script.write_text(step["run"])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(FAKE_GH)
+    gh.chmod(0o755)
+    args = tmp_path / "args"
+    args.write_text("")
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "TAG": "v0.1.2",
+        "VERSION": "0.1.2",
+        "FAKE_ARGS": str(args),
+        "FAKE_OUTPUT": message,
+        "FAKE_STATUS": str(status),
+    }
+    result = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return result, args.read_text().splitlines()
+
+
+def test_a_missing_release_page_is_created_from_the_rendered_notes(tmp_path):
+    result, calls = run_release_page_step(tmp_path, 1, "release not found")
+    assert result.returncode == 0, result.stderr
+    assert calls == [
+        "release view v0.1.2 --json tagName",
+        "release create v0.1.2 --verify-tag --title Vecten Open 0.1.2"
+        " --notes-file notes/release-notes.md",
+    ]
+
+
+def test_an_existing_release_page_is_left_as_it_is(tmp_path):
+    result, calls = run_release_page_step(tmp_path, 0, '{"tagName":"v0.1.2"}')
+    assert result.returncode == 0, result.stderr
+    assert calls == ["release view v0.1.2 --json tagName"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "HTTP 401: Bad credentials (https://api.github.com/repos/vecten/vecten-open/releases)",
+        "error connecting to api.github.com",
+    ],
+)
+def test_a_lookup_that_cannot_answer_is_never_read_as_absent(tmp_path, message):
+    result, calls = run_release_page_step(tmp_path, 1, message)
+    assert result.returncode != 0
+    assert calls == ["release view v0.1.2 --json tagName"]
+    assert "refused" in result.stderr and message in result.stderr

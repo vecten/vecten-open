@@ -144,14 +144,15 @@ distributions share one, and the tag is `v<version>`.
 3. Tag the merge commit `v<version>` with an annotated tag and push the tag. The Terraform
    modules are fetched by this tag, so nothing deploys from the version before it exists.
    Pushing the tag starts the `publish` workflow, which refuses a tag that does not name the
-   version in the tree or does not sit on `main`.
+   version in the tree, does not sit on `main` or has no section of its own in the changelog.
 4. Approve the `publish` run in the `release` environment. A release takes one approval, for
    the packages: the run waits for it before anything is published, then publishes the
    packages to PyPI. The images build after that with no approval of their own and can take
    long (up to three hours: the arm64 builds run under emulation); they are pushed to
    `ghcr.io/vecten` and checked to hold both platforms. The `verify` job then installs the
-   published version, and the release is done when `verify` is green. Nothing is published by
-   hand. The one-time setup the workflow relies on is in `docs/releasing.md`.
+   published version. Once `verify` is green, the `release-page` job creates the version's
+   GitHub Release from its changelog section, and the release is done when that job is green.
+   A candidate gets no Release. Nothing is published by hand. The one-time setup the workflow relies on is in `docs/releasing.md`.
 5. Rename the merged branch to `release/<next patch>`. Its open pull requests follow the
    rename; deleting the branch would move them onto `main`.
 

@@ -31,6 +31,19 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: python3 scripts/publish_target.py "$TAG"
+      # A release whose changelog holds no section for it is refused here, before anything is
+      # published. A candidate gets no Release page, so no notes.
+      - if: steps.target.outputs.target == 'release'
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: python3 scripts/release_notes.py "$VERSION" > "$RUNNER_TEMP/release-notes.md"
+      - if: steps.target.outputs.target == 'release'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+          overwrite: true
 
   # The `release` environment's required reviewers hold a release here until a maintainer
   # approves; each index trusts this workflow only from its own environment.
@@ -232,3 +245,37 @@ jobs:
             echo "$file built $built published $published"
             [ "$built" = "$published" ]
           done
+
+  # The release's GitHub Release page, once verify has installed the published version. The job
+  # checks out nothing and runs only a pinned action, gh and its own shell, so the token that can
+  # write the repository's contents reaches no script from the tagged tree. A page that exists is
+  # left as it is: a rerun neither fails on it nor overwrites notes edited by hand. gh answers
+  # "release not found" only for a 404, and any other failure stops the job.
+  release-page:
+    needs: [target, verify]
+    if: needs.target.outputs.target == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.target.outputs.version }}
+        run: |
+          if output=$(gh release view "$TAG" --json tagName 2>&1); then
+            echo "the Release for $TAG exists; it is left as it is"
+          elif [[ $output == "release not found" ]]; then
+            gh release create "$TAG" --verify-tag --title "Vecten Open $VERSION" \
+              --notes-file notes/release-notes.md
+          else
+            echo "refused: looking up the Release for $TAG failed: $output" >&2
+            exit 1
+          fi
