@@ -15,8 +15,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
-COMBOS = ("aws-postgres", "aws-snowflake", "scaleway-postgres", "scaleway-snowflake")
-PROFILE = {"aws": "standard", "scaleway": "minimal"}
+COMBOS = (
+    "aws-postgres",
+    "aws-snowflake",
+    "scaleway-postgres",
+    "scaleway-snowflake",
+    "azure-postgres",
+    "azure-snowflake",
+)
+PROFILE = {"aws": "standard", "scaleway": "minimal", "azure": "minimal"}
 CEILING_USD = 60
 HOURS_PER_MONTH = 730
 REFUSED = 2
@@ -80,6 +87,14 @@ SCW_DATABASES = [
     "-o",
     "json",
 ]
+# Bootstrap and the Terraform root tag everything they make on Azure with `vecten:project` and
+# `vecten:env`, a soft-deleted vault included, and Azure's names are partly hashes, so the tags
+# alone tell what is the project's. Each listing covers the whole subscription, every region.
+AZ_GROUPS = ["az", "group", "list", "-o", "json"]
+AZ_RESOURCES = ["az", "resource", "list", "-o", "json"]
+AZ_DELETED_VAULTS = ["az", "keyvault", "list-deleted", "--resource-type", "vault", "-o", "json"]
+# A purge takes minutes; the next sweep shows whether it finished.
+AZ_PURGE = ["az", "keyvault", "purge", "--no-wait"]
 # Bootstrap's own names: `-<suffix>` after a `vecten-<project>-<env>` prefix.
 OWNED_SUFFIX = re.compile(r"-(deploy|plan|boundary|platform|mcp|main|state(-\d{12})?)")
 
@@ -233,7 +248,8 @@ def _first(text: str) -> str:
     return lines[0] if lines else "no message"
 
 
-def run_json(cmd: Sequence[str]) -> object:
+def run_cloud(cmd: Sequence[str]) -> str:
+    """The standard output of a cloud command that succeeded."""
     try:
         result = subprocess.run(list(cmd), capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
@@ -242,8 +258,13 @@ def run_json(cmd: Sequence[str]) -> object:
         raise ListingError(f"{cmd[0]} did not run: {error.strerror or error}") from None
     if result.returncode != 0:
         raise ListingError(f"{cmd[0]} exited {result.returncode}: {_last(result.stderr)}")
+    return result.stdout
+
+
+def run_json(cmd: Sequence[str]) -> object:
+    stdout = run_cloud(cmd)
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout)
     except ValueError:
         raise ListingError(f"{cmd[0]} printed output that is not JSON") from None
 
@@ -254,6 +275,11 @@ def _tag_value(tags: Sequence[str], wanted: str) -> str | None:
         if key == wanted and value:
             return value
     return None
+
+
+def _azure_tags(item: dict) -> tuple[str | None, str | None]:
+    tags = item.get("tags") or {}
+    return tags.get(TAG), tags.get(ENV_TAG)
 
 
 def real_listers(owner: Callable[[str], tuple[str, str | None]]) -> dict[tuple[str, str], Lister]:
@@ -370,6 +396,33 @@ def real_listers(owner: Callable[[str], tuple[str, str | None]]) -> dict[tuple[s
             raise PartialListing(out, failures)
         return out
 
+    def azure_groups() -> list[Found]:
+        found = []
+        for group in run_json(AZ_GROUPS):
+            project, env = _azure_tags(group)
+            if project:
+                found.append(Found("resource-group", group["name"], project, env))
+        return found
+
+    def azure_resources() -> list[Found]:
+        # A leftover group is reported once, not once more for each resource inside it; group
+        # names are case-insensitive and Azure reports them in either case.
+        grouped = {g["name"].lower() for g in run_json(AZ_GROUPS) if _azure_tags(g)[0]}
+        found = []
+        for resource in run_json(AZ_RESOURCES):
+            project, env = _azure_tags(resource)
+            if project and str(resource.get("resourceGroup", "")).lower() not in grouped:
+                found.append(Found("resource", resource["id"], project, env))
+        return found
+
+    def azure_deleted_vaults() -> list[Found]:
+        found = []
+        for vault in run_json(AZ_DELETED_VAULTS):
+            project, env = _azure_tags(vault.get("properties") or {})
+            if project:
+                found.append(Found("deleted-vault", vault["name"], project, env))
+        return found
+
     return {
         ("aws", "tagged"): aws_tagged,
         ("aws", "secret"): aws_secrets,
@@ -381,6 +434,9 @@ def real_listers(owner: Callable[[str], tuple[str, str | None]]) -> dict[tuple[s
         ("scaleway", "project"): scw_projects,
         ("scaleway", "application"): scw_applications,
         ("scaleway", "api-key"): scw_keys,
+        ("azure", "resource-group"): azure_groups,
+        ("azure", "resource"): azure_resources,
+        ("azure", "deleted-vault"): azure_deleted_vaults,
     }
 
 
@@ -411,6 +467,33 @@ def sweep(
             Leftover(cloud, kind, f.name, f.project, f.env) for f in found if not accounted(f)
         ]
     return SweepResult(leftovers, failed)
+
+
+def purge_deleted_vaults(leftovers: Sequence[Leftover]) -> tuple[list[str], list[str]]:
+    """Ask Azure to purge each soft-deleted vault among `leftovers`, so a recycled sandbox can
+    reuse its name; return the vaults asked for and a line for each that failed."""
+    names = {
+        item.name for item in leftovers if (item.cloud, item.kind) == ("azure", "deleted-vault")
+    }
+    if not names:
+        return [], []
+    try:
+        listed = run_json(AZ_DELETED_VAULTS)
+    except ListingError as error:
+        return [], [f"could not purge azure deleted vaults: {_first(str(error))}"]
+    requested, failed = [], []
+    for vault in listed:
+        name = vault.get("name")
+        if name not in names:
+            continue
+        location = str((vault.get("properties") or {}).get("location"))
+        try:
+            run_cloud([*AZ_PURGE, "--name", name, "--location", location])
+        except ListingError as error:
+            failed.append(f"could not purge azure deleted-vault {name}: {_first(str(error))}")
+        else:
+            requested.append(name)
+    return requested, failed
 
 
 def load_created(path: Path) -> list[Environment]:
@@ -479,27 +562,35 @@ def run_spent(
     return _over_ceiling({c: per[c] for c in COMBOS if c in per}, as_json)
 
 
-def run_sweep(path: Path, as_json: bool, listers: dict[tuple[str, str], Lister] | None) -> int:
+def run_sweep(
+    path: Path,
+    as_json: bool,
+    listers: dict[tuple[str, str], Lister] | None,
+    purge: bool = False,
+) -> int:
     environments = load_created(path)
     result = sweep(environments, listers or real_listers(owner_of(environments)))
+    requested, purge_failed = purge_deleted_vaults(result.leftovers) if purge else ([], [])
+    failed = [*result.failed, *purge_failed]
     if as_json:
-        print(
-            json.dumps(
-                {
-                    "leftovers": [leftover._asdict() for leftover in result.leftovers],
-                    "failed": result.failed,
-                }
-            )
-        )
+        document = {
+            "leftovers": [leftover._asdict() for leftover in result.leftovers],
+            "failed": failed,
+        }
+        if purge:
+            document["purge_requested"] = requested
+        print(json.dumps(document))
     else:
-        for line in result.failed:
+        for line in failed:
             print(line)
         for item in result.leftovers:
             where = f"project {item.project}" + (f", env {item.env}" if item.env else "")
             print(f"leftover: {item.cloud} {item.kind} {item.name} ({where})")
-        if not result.failed and not result.leftovers:
+        for name in requested:
+            print(f"purge requested: {name}")
+        if not failed and not result.leftovers:
             print("nothing left")
-    if result.failed:
+    if failed:
         return LISTING_FAILED
     return 1 if result.leftovers else 0
 
@@ -520,6 +611,11 @@ def main(
     sweeper = commands.add_parser("sweep", help="list what no live environment accounts for")
     for sub in (spent, sweeper):
         sub.add_argument("--created", type=Path, required=True)
+    sweeper.add_argument(
+        "--purge-deleted-vaults",
+        action="store_true",
+        help="purge the soft-deleted Azure vaults the sweep finds; this cannot be undone",
+    )
     for sub in (est, spent, sweeper):
         sub.add_argument("--json", action="store_true", help="print one JSON document only")
     args = parser.parse_args(argv)
@@ -537,7 +633,7 @@ def main(
             return run_estimate(args.combinations, args.hours, args.json, price)
         if args.command == "spent":
             return run_spent(args.created, args.json, price, now or datetime.now(UTC))
-        return run_sweep(args.created, args.json, listers)
+        return run_sweep(args.created, args.json, listers, args.purge_deleted_vaults)
     except Refused as error:
         print(f"cost: {error}", file=sys.stderr)
         return REFUSED
