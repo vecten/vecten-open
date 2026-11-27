@@ -88,6 +88,22 @@ def test_hard_wrapped_lines_are_joined_and_blocks_kept_apart():
     assert "  A second paragraph of the item, wrapped too." in lines
 
 
+def test_a_line_after_a_closing_fence_is_not_joined_to_it():
+    changelog = (
+        "## [0.2.0] - 2026-12-01\n\n- Run this:\n\n  ```sh\n  vecten up\n  ```\n"
+        "  Then sign in,\n  as before.\n\n### Fixed\n\n- A fix.\n"
+    )
+    lines = notes("0.2.0", changelog).splitlines()
+    assert lines[2:8] == [
+        "  ```sh",
+        "  vecten up",
+        "  ```",
+        "  Then sign in, as before.",
+        "",
+        "### Fixed",
+    ]
+
+
 def test_the_footer_names_the_install_the_images_and_the_compare_link():
     footer = notes("0.2.0").split("\n---\n")[1]
     assert footer.strip().splitlines() == [

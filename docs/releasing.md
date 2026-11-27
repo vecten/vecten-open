@@ -1835,7 +1835,8 @@ Only once no decision is open and the maintainer has merged the fixes and the ti
 6. The rest is the maintainer's: they merge, push the tag `v<version>` and approve the
    `publish` run in the `release` environment (CONTRIBUTING.md, Releasing). A release takes
    one approval, for the packages; the images build after it and can take long, up to three
-   hours; the release is done when the run's `verify` job is green.
+   hours; the release is done when the run's `release-page` job, the last after `verify`, is
+   green.
 7. Once the release is published, delete the run's candidate branches on
    `vecten/vecten-open`, one for each candidate the Run block lists; the candidate tags stay:
 

@@ -248,9 +248,11 @@ jobs:
 
   # The release's GitHub Release page, once verify has installed the published version. The job
   # checks out nothing and runs only a pinned action, gh and its own shell, so the token that can
-  # write the repository's contents reaches no script from the tagged tree. A page that exists is
-  # left as it is: a rerun neither fails on it nor overwrites notes edited by hand. gh answers
-  # "release not found" only for a 404, and any other failure stops the job.
+  # write the repository's contents reaches no script from the tagged tree. One GraphQL query
+  # finds a published Release and a draft alike: a published one is left as it is, so a rerun
+  # neither fails on it nor overwrites notes edited by hand; a draft stops the job, since its page
+  # is private until a maintainer publishes it. Only a query that succeeded and found no Release
+  # leads to a create, and gh exits non-zero on any error the query returns.
   release-page:
     needs: [target, verify]
     if: needs.target.outputs.target == 'release'
@@ -270,12 +272,25 @@ jobs:
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.target.outputs.version }}
         run: |
-          if output=$(gh release view "$TAG" --json tagName 2>&1); then
-            echo "the Release for $TAG exists; it is left as it is"
-          elif [[ $output == "release not found" ]]; then
-            gh release create "$TAG" --verify-tag --title "Vecten Open $VERSION" \
-              --notes-file notes/release-notes.md
-          else
-            echo "refused: looking up the Release for $TAG failed: $output" >&2
-            exit 1
-          fi
+          query='query($owner: String!, $name: String!, $tag: String!) {
+            repository(owner: $owner, name: $name) { release(tagName: $tag) { isDraft } }
+          }'
+          draft=$(gh api graphql -f query="$query" -f owner="${GH_REPO%%/*}" \
+            -f name="${GH_REPO#*/}" -f tag="$TAG" --jq '.data.repository.release.isDraft')
+          case $draft in
+            false)
+              echo "the Release for $TAG exists; it is left as it is"
+              ;;
+            true)
+              echo "refused: the Release for $TAG is a draft; publish it on GitHub, then rerun" >&2
+              exit 1
+              ;;
+            "")
+              gh release create "$TAG" --verify-tag --title "Vecten Open $VERSION" \
+                --notes-file notes/release-notes.md
+              ;;
+            *)
+              echo "refused: looking up the Release for $TAG answered $draft" >&2
+              exit 1
+              ;;
+          esac

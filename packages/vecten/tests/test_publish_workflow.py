@@ -658,18 +658,29 @@ def release_page_step():
     return step
 
 
+# Mimics gh: `api graphql --jq` prints the draft flag, nothing for no Release, and exits
+# non-zero on an error; every call is recorded, the lookup by the fields it names.
 FAKE_GH = """\
 #!/bin/sh
-printf '%s\\n' "$*" >> "$FAKE_ARGS"
-if [ "$2" = view ]; then
-  printf '%s\\n' "$FAKE_OUTPUT" >&2
-  exit "$FAKE_STATUS"
+if [ "$1" = api ]; then
+  fields=""
+  for arg in "$@"; do
+    case $arg in owner=*|name=*|tag=*) fields="$fields $arg" ;; esac
+  done
+  printf '%s %s%s\\n' "$1" "$2" "$fields" >> "$FAKE_ARGS"
+  if [ "$FAKE_STATUS" != 0 ]; then
+    printf '%s\\n' "$FAKE_OUTPUT" >&2
+    exit "$FAKE_STATUS"
+  fi
+  [ -z "$FAKE_OUTPUT" ] || printf '%s\\n' "$FAKE_OUTPUT"
+  exit 0
 fi
-exit 0
+printf '%s\\n' "$*" >> "$FAKE_ARGS"
 """
+LOOKUP = "api graphql owner=vecten name=vecten-open tag=v0.1.2"
 
 
-def run_release_page_step(tmp_path, status, message):
+def run_release_page_step(tmp_path, status, output):
     step = release_page_step()
     assert step["env"] == {
         "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
@@ -688,10 +699,11 @@ def run_release_page_step(tmp_path, status, message):
     args.write_text("")
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "GH_REPO": "vecten/vecten-open",
         "TAG": "v0.1.2",
         "VERSION": "0.1.2",
         "FAKE_ARGS": str(args),
-        "FAKE_OUTPUT": message,
+        "FAKE_OUTPUT": output,
         "FAKE_STATUS": str(status),
     }
     result = subprocess.run(
@@ -704,31 +716,47 @@ def run_release_page_step(tmp_path, status, message):
     return result, args.read_text().splitlines()
 
 
+def test_the_lookup_asks_for_the_release_s_draft_flag_in_one_query():
+    script = release_page_step()["run"]
+    assert "release(tagName: $tag) { isDraft }" in script
+    assert "--jq '.data.repository.release.isDraft'" in script
+    assert "gh release view" not in script
+
+
 def test_a_missing_release_page_is_created_from_the_rendered_notes(tmp_path):
-    result, calls = run_release_page_step(tmp_path, 1, "release not found")
+    result, calls = run_release_page_step(tmp_path, 0, "")
     assert result.returncode == 0, result.stderr
     assert calls == [
-        "release view v0.1.2 --json tagName",
+        LOOKUP,
         "release create v0.1.2 --verify-tag --title Vecten Open 0.1.2"
         " --notes-file notes/release-notes.md",
     ]
 
 
-def test_an_existing_release_page_is_left_as_it_is(tmp_path):
-    result, calls = run_release_page_step(tmp_path, 0, '{"tagName":"v0.1.2"}')
+def test_a_published_release_page_is_left_as_it_is(tmp_path):
+    result, calls = run_release_page_step(tmp_path, 0, "false")
     assert result.returncode == 0, result.stderr
-    assert calls == ["release view v0.1.2 --json tagName"]
+    assert calls == [LOOKUP]
+
+
+def test_a_draft_release_page_stops_the_job_for_the_maintainer_to_publish(tmp_path):
+    result, calls = run_release_page_step(tmp_path, 0, "true")
+    assert result.returncode != 0
+    assert calls == [LOOKUP]
+    assert "refused" in result.stderr and "draft" in result.stderr
 
 
 @pytest.mark.parametrize(
-    "message",
+    "status, output",
     [
-        "HTTP 401: Bad credentials (https://api.github.com/repos/vecten/vecten-open/releases)",
-        "error connecting to api.github.com",
+        (1, "HTTP 401: Bad credentials (https://api.github.com/graphql)"),
+        (1, "gh: Could not resolve to a Repository with the name 'vecten/vecten-open'."),
+        (1, "error connecting to api.github.com"),
+        (0, "unexpected"),
     ],
 )
-def test_a_lookup_that_cannot_answer_is_never_read_as_absent(tmp_path, message):
-    result, calls = run_release_page_step(tmp_path, 1, message)
+def test_a_lookup_that_cannot_answer_is_never_read_as_absent(tmp_path, status, output):
+    result, calls = run_release_page_step(tmp_path, status, output)
     assert result.returncode != 0
-    assert calls == ["release view v0.1.2 --json tagName"]
-    assert "refused" in result.stderr and message in result.stderr
+    assert calls == [LOOKUP]
+    assert output in result.stderr

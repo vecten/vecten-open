@@ -22,6 +22,8 @@ ABSOLUTE = re.compile(r"[a-z][a-z0-9+.-]*:|#|/", re.I)
 INLINE_LINK = re.compile(r"\]\(([^)\s]+)\)")
 # A line opening a block of its own, which the line before it never continues.
 BLOCK_START = re.compile(r"\s*([-*+]|\d+\.)\s|#|>|\||```|\[[^\]]+\]:")
+# A line whose block ends with it, which the line after it never continues.
+WHOLE_LINE = re.compile(r"\s*(#|```|\||\[[^\]]+\]:)")
 
 
 def section(changelog: str, version: str) -> str:
@@ -60,7 +62,7 @@ def unwrap(text: str) -> str:
             and line.strip()
             and lines
             and lines[-1].strip()
-            and not lines[-1].lstrip().startswith("#")
+            and not WHOLE_LINE.match(lines[-1])
             and not BLOCK_START.match(line)
         )
         if joins:
