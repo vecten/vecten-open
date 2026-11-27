@@ -762,6 +762,14 @@ def test_the_command_gets_terraforms_azure_login_from_the_credential_home(tmp_pa
     assert result.stdout == f"{AZ_APP} {TENANT} {SUB} set\n"
 
 
+def test_a_run_with_azure_verified_tells_the_sweep_so(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path, vecten='echo "${VECTEN_LIVE_AZURE:-unset}"')
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "1\n"
+
+
 def test_terraforms_azure_login_is_the_client_secret_itself(tmp_path):
     home(tmp_path)
     fake_clis(tmp_path, vecten='[ "$ARM_CLIENT_SECRET" = "$1" ]')
@@ -774,11 +782,46 @@ def test_without_azure_in_allow_toml_no_azure_login_is_given(tmp_path):
         ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
     )
     (tmp_path / "home/azure/livecheck.json").unlink()
-    echo = 'echo "${ARM_CLIENT_ID:-unset} ${ARM_CLIENT_SECRET:-unset} ${AZURE_CONFIG_DIR:-unset}"'
+    echo = 'echo "${ARM_CLIENT_ID:-unset} ${ARM_CLIENT_SECRET:-unset} ${VECTEN_LIVE_AZURE:-unset}"'
     fake_clis(tmp_path, vecten=echo)
     result = access(tmp_path, "run", "--", "vecten")
     assert result.returncode == 0, result.stderr
     assert result.stdout == "unset unset unset\n"
+
+
+def without_azure(tmp_path):
+    allow = home(tmp_path) / "allow.toml"
+    allow.write_text(
+        ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
+    )
+
+
+def test_without_azure_in_allow_toml_az_is_refused(tmp_path):
+    without_azure(tmp_path)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, az=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "az", "account", "show")
+    assert result.returncode == 3
+    assert "az needs [azure] in allow.toml" in result.stderr
+    assert not marker.exists()
+
+
+def test_without_azure_in_allow_toml_each_run_has_an_empty_az_folder_of_its_own(tmp_path):
+    without_azure(tmp_path)
+    fake_clis(
+        tmp_path,
+        vecten='ls -A "$AZURE_CONFIG_DIR"; echo "$AZURE_CONFIG_DIR"'
+        '; touch "$AZURE_CONFIG_DIR/azureProfile.json"',
+    )
+    first = access(tmp_path, "run", "--", "vecten")
+    second = access(tmp_path, "run", "--", "vecten")
+    assert first.returncode == 0 and second.returncode == 0, first.stderr + second.stderr
+    # `ls -A` printed nothing, so the folder each run starts with is empty.
+    assert len(first.stdout.splitlines()) == len(second.stdout.splitlines()) == 1
+    first_dir, second_dir = Path(first.stdout.strip()), Path(second.stdout.strip())
+    assert first_dir != second_dir
+    assert second_dir.parent.parent == tmp_path / "home/home/tmp"
+    assert not second_dir.is_relative_to(tmp_path / "home/azure")
 
 
 @pytest.mark.parametrize(
@@ -2300,6 +2343,8 @@ def test_the_az_sign_in_is_given_only_where_azure_is_verified(tmp_path):
     assert "AZURE_CONFIG_DIR" not in m.tool_env(root, base, "", credentials=False, azure=True)
     verified = m.tool_env(root, base, "ghs_minted", azure=True)
     assert verified["AZURE_CONFIG_DIR"] == str(root / "azure/cli")
+    assert verified["VECTEN_LIVE_AZURE"] == "1"
+    assert "VECTEN_LIVE_AZURE" not in m.tool_env(root, {**base, "VECTEN_LIVE_AZURE": "1"}, "")
 
 
 def test_runs_without_credentials_have_a_home_of_their_own(tmp_path):

@@ -92,6 +92,7 @@ SCW_DATABASES = [
 AZ_GROUPS = ["az", "group", "list", "-o", "json"]
 AZ_RESOURCES = ["az", "resource", "list", "-o", "json"]
 AZ_DELETED_VAULTS = ["az", "keyvault", "list-deleted", "--resource-type", "vault", "-o", "json"]
+AZURE_UNVERIFIED = "allow.toml has no [azure], so the wrapper verified no Azure identity"
 # A purge takes minutes; the next sweep shows whether it finished.
 AZ_PURGE = ["az", "keyvault", "purge", "--no-wait"]
 # Bootstrap's own names: `-<suffix>` after a `vecten-<project>-<env>` prefix.
@@ -442,17 +443,21 @@ def real_listers(owner: Callable[[str], tuple[str, str | None]]) -> dict[tuple[s
     }
 
 
+def _cloud(environment: Environment) -> str:
+    return environment.combination.split("-")[0]
+
+
 def sweep(
     environments: Sequence[Environment], listers: dict[tuple[str, str], Lister]
 ) -> SweepResult:
     live = [e for e in environments if e.destroyed_at is None]
-    live_pairs = {(e.project, e.env) for e in live}
-    live_projects = {e.project for e in live}
+    live_envs = {(_cloud(e), e.project, e.env) for e in live}
+    live_projects = {(_cloud(e), e.project) for e in live}
 
-    def accounted(found: Found) -> bool:
+    def accounted(cloud: str, found: Found) -> bool:
         if found.env is None:
-            return found.project in live_projects
-        return (found.project, found.env) in live_pairs
+            return (cloud, found.project) in live_projects
+        return (cloud, found.project, found.env) in live_envs
 
     leftovers: list[Leftover] = []
     failed: list[str] = []
@@ -466,7 +471,9 @@ def sweep(
             failed.append(f"could not list {cloud} {kind}: {_first(str(error))}")
             continue
         leftovers += [
-            Leftover(cloud, kind, f.name, f.project, f.env) for f in found if not accounted(f)
+            Leftover(cloud, kind, f.name, f.project, f.env)
+            for f in found
+            if not accounted(cloud, f)
         ]
     return SweepResult(leftovers, failed)
 
@@ -481,7 +488,7 @@ def purge_deleted_vaults(
     destroyed = {
         (e.project, e.env)
         for e in environments
-        if e.destroyed_at is not None and e.combination.startswith("azure-")
+        if e.destroyed_at is not None and _cloud(e) == "azure"
     }
     names = {
         item.name
@@ -583,20 +590,36 @@ def run_sweep(
     purge: bool = False,
 ) -> int:
     environments = load_created(path)
-    result = sweep(environments, listers or real_listers(owner_of(environments)))
+    table = listers or real_listers(owner_of(environments))
+    # The wrapper sets the marker only when it has verified the Azure identity; without it `az`
+    # would answer for whatever sign-in it finds.
+    skipped = [] if os.environ.get("VECTEN_LIVE_AZURE") == "1" else ["azure"]
+    if skipped and purge:
+        raise Refused(f"cannot purge deleted vaults: {AZURE_UNVERIFIED}")
+    table = {key: lister for key, lister in table.items() if key[0] not in skipped}
+    result = sweep(environments, table)
     requested, purge_failed = (
         purge_deleted_vaults(result.leftovers, environments) if purge else ([], [])
     )
     failed = [*result.failed, *purge_failed]
+    # A skipped cloud that the created file deployed to cannot have been proven clean.
+    failed += [
+        f"could not list {cloud}: the created file has {cloud} environments and {AZURE_UNVERIFIED}"
+        for cloud in skipped
+        if any(_cloud(e) == cloud for e in environments)
+    ]
     if as_json:
         document = {
             "leftovers": [leftover._asdict() for leftover in result.leftovers],
             "failed": failed,
+            "skipped": skipped,
         }
         if purge:
             document["purge_requested"] = requested
         print(json.dumps(document))
     else:
+        for cloud in skipped:
+            print(f"{cloud} not swept: {AZURE_UNVERIFIED}")
         for line in failed:
             print(line)
         for item in result.leftovers:
@@ -605,7 +628,7 @@ def run_sweep(
         for name in requested:
             print(f"purge requested: {name}")
         if not failed and not result.leftovers:
-            print("nothing left")
+            print("nothing left on the clouds swept" if skipped else "nothing left")
     if failed:
         return LISTING_FAILED
     return 1 if result.leftovers else 0

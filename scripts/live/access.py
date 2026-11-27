@@ -250,10 +250,11 @@ def tool_env(
             "AZURE_CORE_ENCRYPT_TOKEN_CACHE": "false",
             "VECTEN_LIVE": "1",
         }
-    # The `az` sign-in goes only to a run that verifies it; without it `az` looks under HOME,
-    # where no sign-in is.
+    # The `az` sign-in, and the marker that tells the sweep Azure was verified, go only to a run
+    # that verifies the Azure identity.
     if credentials and azure:
         env["AZURE_CONFIG_DIR"] = str(home / AZURE_CLI)
+        env["VECTEN_LIVE_AZURE"] = "1"
     for index, (key, value) in enumerate(git):
         env[f"GIT_CONFIG_KEY_{index}"] = key
         env[f"GIT_CONFIG_VALUE_{index}"] = value
@@ -730,6 +731,8 @@ def _run(
     allow = _load_allow(home)
     if cwd is not None and not cwd.is_dir():
         raise Refused(f"--cwd {cwd} is not a directory")
+    if command[0] == "az" and "azure" not in allow:
+        raise Refused("az needs [azure] in allow.toml, so that its identity is verified")
     source = _stdin_file(home, stdin_file) if stdin_file is not None else None
     terraform_azure = azure_env(home, allow)
     secrets = secret_values(home)
@@ -741,6 +744,12 @@ def _run(
         lines = [*problems, *(f"{name}: {reason}" for name, reason in reasons.items())]
         raise Refused(redact("refused:\n  " + "\n  ".join(lines), secrets))
     env["TMPDIR"] = str(private)
+    if "azure" not in allow:
+        # A sign-in a tool leaves in a folder that outlives the run would answer the next run's
+        # `az` unverified, so this run's folder is new and empty.
+        unverified = private / "azure"
+        unverified.mkdir(mode=0o700)
+        env["AZURE_CONFIG_DIR"] = str(unverified)
     env |= terraform_azure
     command = [*sandbox, *command]
     try:

@@ -28,8 +28,10 @@ def mod():
 
 @pytest.fixture(autouse=True)
 def wrapped(monkeypatch):
-    """Every test runs as the wrapper runs it, but those that remove the marker."""
+    """Every test runs as the wrapper runs it with Azure verified, but those that remove a
+    marker."""
     monkeypatch.setenv("VECTEN_LIVE", "1")
+    monkeypatch.setenv("VECTEN_LIVE_AZURE", "1")
 
 
 def entry(project="acme", env="prod", combination="aws-postgres", destroyed_at=None, **extra):
@@ -576,7 +578,10 @@ def test_a_failing_scaleway_project_is_a_failed_listing_that_names_it(monkeypatc
     m = mod()
     outputs = scw_outputs(m) | {scw(m.SCW_INSTANCES, "p2"): Fail("quota")}
     table = real(monkeypatch, outputs)
-    result = sweep([entry()], {("scaleway", "instance"): table[("scaleway", "instance")]})
+    result = sweep(
+        [entry(combination="scaleway-postgres")],
+        {("scaleway", "instance"): table[("scaleway", "instance")]},
+    )
     assert result.failed == [
         "could not list scaleway instance: project vecten-acme-prod-state (p2): scw exited 1: quota"
     ]
@@ -870,3 +875,82 @@ def test_only_a_destroyed_azure_environment_lets_its_vaults_be_purged(
     code = m.main(["sweep", "--created", str(created), "--purge-deleted-vaults"], listers=table)
     assert purged == []
     assert code == 1
+
+
+def test_a_live_environment_accounts_only_for_its_own_clouds_resources():
+    table = listers(
+        **{
+            "azure:resource-group": lambda: [found("resource-group", "g", "acme", "prod")],
+            "azure:deleted-vault": lambda: [found("deleted-vault", "v", "acme")],
+            "aws:secret": lambda: [found("secret", "vecten/acme/prod/x", "acme", "prod")],
+            "aws:role": lambda: [found("role", "vecten-acme-deploy", "acme")],
+        }
+    )
+    result = sweep([entry(combination="aws-postgres")], table)
+    assert [(item.cloud, item.name) for item in result.leftovers] == [
+        ("azure", "g"),
+        ("azure", "v"),
+    ]
+
+
+@pytest.mark.parametrize("live", ["azure-postgres", "scaleway-postgres"])
+def test_an_aws_resource_is_not_accounted_for_by_another_clouds_environment(live):
+    table = listers(
+        **{
+            "aws:secret": lambda: [found("secret", "vecten/acme/prod/x", "acme", "prod")],
+            "aws:role": lambda: [found("role", "vecten-acme-deploy", "acme")],
+            "scaleway:instance": lambda: [found("instance", "i", "acme", "prod")],
+            "azure:resource-group": lambda: [found("resource-group", "g", "acme", "prod")],
+        }
+    )
+    result = sweep([entry(combination=live)], table)
+    own = live.split("-")[0]
+    assert {item.cloud for item in result.leftovers} == {"aws", "scaleway", "azure"} - {own}
+
+
+def test_without_a_verified_azure_identity_the_sweep_skips_azure_and_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("VECTEN_LIVE_AZURE")
+
+    def never():
+        raise AssertionError("an Azure listing ran")
+
+    table = listers(
+        **{"azure:resource-group": never, "azure:resource": never, "azure:deleted-vault": never}
+    )
+    created = write_created(tmp_path, entry())
+    assert mod().main(["sweep", "--created", str(created)], listers=table) == 0
+    out = capsys.readouterr().out
+    assert "azure not swept: allow.toml has no [azure]" in out
+    assert "nothing left on the clouds swept" in out
+    assert mod().main(["sweep", "--created", str(created), "--json"], listers=table) == 0
+    assert json.loads(capsys.readouterr().out)["skipped"] == ["azure"]
+
+
+@pytest.mark.parametrize("destroyed_at", [None, DESTROYED])
+def test_a_skipped_azure_sweep_of_a_run_with_azure_environments_is_a_failed_listing(
+    tmp_path, monkeypatch, capsys, destroyed_at
+):
+    monkeypatch.delenv("VECTEN_LIVE_AZURE")
+    m = mod()
+    created = write_created(
+        tmp_path, entry(combination="azure-postgres", destroyed_at=destroyed_at)
+    )
+    assert m.main(["sweep", "--created", str(created)], listers=listers()) == m.LISTING_FAILED
+    out = capsys.readouterr().out
+    assert "could not list azure: the created file has azure environments" in out
+    assert "nothing left" not in out
+
+
+def test_without_a_verified_azure_identity_a_purge_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("VECTEN_LIVE_AZURE")
+    m = mod()
+    purged = purging(monkeypatch, {tuple(m.AZ_DELETED_VAULTS): vaults(("vgone-mcp", GONE))})
+    created = write_created(
+        tmp_path, entry(project="gone", combination="azure-postgres", destroyed_at=DESTROYED)
+    )
+    code = m.main(["sweep", "--created", str(created), "--purge-deleted-vaults"])
+    assert code == m.REFUSED
+    assert purged == []
+    assert "allow.toml has no [azure]" in capsys.readouterr().err

@@ -727,7 +727,10 @@ principal reaches as Azure lists it (with its directory), the Snowflake account 
 repositories are the ones in `allow.toml`; a probe that fails or gives no answer within 30
 seconds refuses too. The probes get no standard input, so nothing piped to the wrapper reaches
 them. `--github upstream` uses the `vecten/vecten-open` App, and the default,
-`--github sandbox`, the sandbox organisation's.
+`--github sandbox`, the sandbox organisation's. Without `[azure]` in `allow.toml` nothing
+verifies an Azure identity, so `live run -- az …` is refused, and `live cost sweep` skips
+Azure (it prints `azure not swept`, and exits 4 when `<created>` has an Azure environment)
+and refuses `--purge-deleted-vaults` (exit 2).
 
 Two options shape the command itself. `--cwd <directory>` runs it in that directory (the probes
 still run where the wrapper started), which must exist. `--stdin-file <path>` gives it a file
@@ -794,8 +797,9 @@ The command then runs with:
   `LOGNAME`, `SHELL`, `TZ`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, the proxy variables and the
   `LC_*` variables pass through. The wrapper sets the rest: each tool's configuration in the
   credential home (`AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_PROFILE=livecheck`,
-  `SCW_CONFIG_PATH`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`, and `AZURE_CONFIG_DIR` only when
-  `allow.toml` has `[azure]`), with the Azure CLI's telemetry, log files and token-cache
+  `SCW_CONFIG_PATH`, `SNOWFLAKE_HOME`, `GH_CONFIG_DIR`, and `AZURE_CONFIG_DIR`, which names
+  `azure/cli/` only when `allow.toml` has `[azure]` and otherwise a new empty folder for each
+  run), with the Azure CLI's telemetry, log files and token-cache
   encryption off (so its sign-ins stay in the plain files the wrapper checks), Terraform's
   Azure sign-in (`ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID` from
   `azure/livecheck.json`, refused when that file names another directory than `allow.toml`,
@@ -1098,8 +1102,8 @@ command; type it again in that form.
    ```
 
    Exit 0 (`nothing left`): carry on. Exit 1: each `leftover:` line is something no
-   environment of this run accounts for. It is not the run's: never destroy it. Copy the lines
-   into the results file, send them to the maintainer, and carry on. Exit 4: a listing failed
+   environment of this run on the same cloud accounts for. It is not the run's: never destroy
+   it. Copy the lines into the results file, send them to the maintainer, and carry on. Exit 4: a listing failed
    and the sweep could not look. That is not a pass: run it once more, and if it fails again,
    send the `could not list` lines to the maintainer and stop, since the run could not prove
    its own clean-up either. Exit 2: the created file is malformed; fix it.
