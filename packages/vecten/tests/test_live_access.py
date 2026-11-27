@@ -1692,7 +1692,8 @@ def throwaway_repository(root, ledger_tag="v1"):
     git(root, "add", "terraform")
     git(root, *IDENTITY, "commit", "-q", "-m", "second")
     (root / "scripts/live").mkdir(parents=True)
-    combos = ("aws-postgres", "aws-snowflake", "scaleway-postgres", "scaleway-snowflake")
+    combos = ("aws", "scaleway", "azure")
+    combos = [f"{cloud}-{warehouse}" for cloud in combos for warehouse in ("postgres", "snowflake")]
     ledger = "".join(f'{name} = "{ledger_tag}"\n' for name in combos)
     (root / "scripts/live/ledger.toml").write_text(ledger)
     return root

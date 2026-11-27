@@ -87,9 +87,8 @@ SCW_DATABASES = [
     "-o",
     "json",
 ]
-# Bootstrap and the Terraform root tag everything they make on Azure with `vecten:project` and
-# `vecten:env`, a soft-deleted vault included, and Azure's names are partly hashes, so the tags
-# alone tell what is the project's. Each listing covers the whole subscription, every region.
+# Azure names are partly hashes, so only the `vecten:project` and `vecten:env` tags, which a
+# soft-deleted vault keeps, tell whose a resource is. Each listing spans every region.
 AZ_GROUPS = ["az", "group", "list", "-o", "json"]
 AZ_RESOURCES = ["az", "resource", "list", "-o", "json"]
 AZ_DELETED_VAULTS = ["az", "keyvault", "list-deleted", "--resource-type", "vault", "-o", "json"]
