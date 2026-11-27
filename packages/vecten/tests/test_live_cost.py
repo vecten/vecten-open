@@ -28,8 +28,10 @@ def mod():
 
 @pytest.fixture(autouse=True)
 def wrapped(monkeypatch):
-    """Every test runs as the wrapper runs it, but those that remove the marker."""
+    """Every test runs as the wrapper runs it with Azure verified, but those that remove a
+    marker."""
     monkeypatch.setenv("VECTEN_LIVE", "1")
+    monkeypatch.setenv("VECTEN_LIVE_AZURE", "1")
 
 
 def entry(project="acme", env="prod", combination="aws-postgres", destroyed_at=None, **extra):
@@ -81,8 +83,12 @@ def test_profiles_follow_the_cloud():
         calls.append((cloud, profile, warehouse))
         return 0.0
 
-    mod().estimate(["aws-snowflake", "scaleway-postgres"], 1, monthly)
-    assert calls == [("aws", "standard", "snowflake"), ("scaleway", "minimal", "postgres")]
+    mod().estimate(["aws-snowflake", "scaleway-postgres", "azure-snowflake"], 1, monthly)
+    assert calls == [
+        ("aws", "standard", "snowflake"),
+        ("scaleway", "minimal", "postgres"),
+        ("azure", "minimal", "snowflake"),
+    ]
 
 
 def test_over_the_ceiling_exits_3_and_says_ask(capsys):
@@ -572,7 +578,10 @@ def test_a_failing_scaleway_project_is_a_failed_listing_that_names_it(monkeypatc
     m = mod()
     outputs = scw_outputs(m) | {scw(m.SCW_INSTANCES, "p2"): Fail("quota")}
     table = real(monkeypatch, outputs)
-    result = sweep([entry()], {("scaleway", "instance"): table[("scaleway", "instance")]})
+    result = sweep(
+        [entry(combination="scaleway-postgres")],
+        {("scaleway", "instance"): table[("scaleway", "instance")]},
+    )
     assert result.failed == [
         "could not list scaleway instance: project vecten-acme-prod-state (p2): scw exited 1: quota"
     ]
@@ -662,3 +671,286 @@ def test_a_leftover_line_names_the_environment_when_known(tmp_path, capsys):
     code = mod().main(["sweep", "--created", str(created)], listers=table)
     assert code == 1
     assert "aws role r (project acme, env old)" in capsys.readouterr().out
+
+
+SUBSCRIPTION = "/subscriptions/00000000-0000-0000-0000-000000000000"
+ACME = {"vecten:project": "acme", "vecten:env": "prod"}
+GONE = {"vecten:project": "gone", "vecten:env": "prod"}
+
+
+def azure_outputs(m):
+    """`az group list`, `az resource list` and `az keyvault list-deleted` as documented."""
+    return {
+        tuple(m.AZ_GROUPS): [
+            {"name": "vecten-acme-prod", "location": "polandcentral", "tags": ACME},
+            {"name": "NetworkWatcherRG", "location": "polandcentral", "tags": None},
+        ],
+        tuple(m.AZ_RESOURCES): [
+            {
+                "id": f"{SUBSCRIPTION}/resourceGroups/VECTEN-ACME-PROD/providers/x/y/web",
+                "name": "web",
+                "resourceGroup": "VECTEN-ACME-PROD",
+                "tags": ACME,
+            },
+            {
+                "id": f"{SUBSCRIPTION}/resourceGroups/vecten-livecheck-dns/providers/x/y/stray",
+                "name": "stray",
+                "resourceGroup": "vecten-livecheck-dns",
+                "tags": GONE,
+            },
+            {
+                "id": f"{SUBSCRIPTION}/resourceGroups/vecten-livecheck-dns/providers/x/y/zone",
+                "name": "zone",
+                "resourceGroup": "vecten-livecheck-dns",
+                "tags": {},
+            },
+        ],
+        tuple(m.AZ_DELETED_VAULTS): [
+            {
+                "name": "vabcdef0123456-mcp",
+                "properties": {"location": "polandcentral", "tags": GONE},
+            },
+            {"name": "someone-elses", "properties": {"location": "polandcentral", "tags": {}}},
+        ],
+    }
+
+
+def test_azure_groups_resources_and_deleted_vaults_are_found_by_tag(monkeypatch):
+    m = mod()
+    table = real(monkeypatch, azure_outputs(m))
+    assert table[("azure", "resource-group")]() == [
+        found("resource-group", "vecten-acme-prod", "acme", "prod")
+    ]
+    assert table[("azure", "resource")]() == [
+        found(
+            "resource",
+            f"{SUBSCRIPTION}/resourceGroups/vecten-livecheck-dns/providers/x/y/stray",
+            "gone",
+            "prod",
+        )
+    ]
+    assert table[("azure", "deleted-vault")]() == [
+        found("deleted-vault", "vabcdef0123456-mcp", "gone", "prod")
+    ]
+
+
+def test_a_resource_another_environment_tagged_inside_a_tagged_group_is_found(monkeypatch):
+    m = mod()
+    outputs = azure_outputs(m)
+    inside = f"{SUBSCRIPTION}/resourceGroups/vecten-acme-prod/providers/x/y/other"
+    outputs[tuple(m.AZ_RESOURCES)] = [
+        {"id": inside, "name": "other", "resourceGroup": "vecten-acme-prod", "tags": GONE},
+        {
+            "id": f"{inside}-env",
+            "name": "env",
+            "resourceGroup": "vecten-acme-prod",
+            "tags": {"vecten:project": "acme", "vecten:env": "dev"},
+        },
+    ]
+    table = real(monkeypatch, outputs)
+    assert table[("azure", "resource")]() == [
+        found("resource", inside, "gone", "prod"),
+        found("resource", f"{inside}-env", "acme", "dev"),
+    ]
+
+
+def test_azure_tag_names_match_in_any_case_and_keep_their_values(monkeypatch):
+    m = mod()
+    shouting = {"Vecten:Project": "Acme", "VECTEN:ENV": "Prod"}
+    outputs = {
+        tuple(m.AZ_GROUPS): [{"name": "g", "tags": shouting}],
+        tuple(m.AZ_RESOURCES): [
+            {"id": "r", "name": "r", "resourceGroup": "elsewhere", "tags": shouting}
+        ],
+        tuple(m.AZ_DELETED_VAULTS): [{"name": "v", "properties": {"tags": shouting}}],
+    }
+    table = real(monkeypatch, outputs)
+    assert table[("azure", "resource-group")]() == [found("resource-group", "g", "Acme", "Prod")]
+    assert table[("azure", "resource")]() == [found("resource", "r", "Acme", "Prod")]
+    assert table[("azure", "deleted-vault")]() == [found("deleted-vault", "v", "Acme", "Prod")]
+
+
+def test_a_failing_azure_listing_is_a_failed_listing(monkeypatch):
+    m = mod()
+    table = real(monkeypatch, {tuple(m.AZ_GROUPS): Fail("AuthorizationFailed")})
+    result = sweep([entry()], {("azure", "resource-group"): table[("azure", "resource-group")]})
+    assert result.failed == [
+        "could not list azure resource-group: az exited 1: AuthorizationFailed"
+    ]
+
+
+def purging(monkeypatch, outputs, failing=()):
+    """Answer listings from `outputs`; record each purge, failing those of the named vaults."""
+    m = mod()
+    purged = []
+
+    def run(cmd, **kw):
+        if cmd[: len(m.AZ_PURGE)] == m.AZ_PURGE:
+            purged.append(cmd)
+            name = cmd[cmd.index("--name") + 1]
+            return Run(returncode=1, stderr="Conflict") if name in failing else Run()
+        return Run(stdout=json.dumps(outputs[tuple(cmd)]))
+
+    monkeypatch.setattr(m.subprocess, "run", run)
+    return purged
+
+
+def vaults(*entries):
+    return [
+        {"name": name, "properties": {"location": "polandcentral", "tags": tags}}
+        for name, tags in entries
+    ]
+
+
+DESTROYED = "2026-11-19T11:00:00+00:00"
+STRAY = {"vecten:project": "stray", "vecten:env": "prod"}
+
+
+def test_purge_requests_only_the_deleted_vaults_of_the_runs_destroyed_environments(
+    tmp_path, monkeypatch, capsys
+):
+    m = mod()
+    listed = vaults(("vlive-mcp", ACME), ("vgone-mcp", GONE), ("vstray-mcp", STRAY))
+    purged = purging(monkeypatch, {tuple(m.AZ_DELETED_VAULTS): listed})
+    table = listers(
+        **{"azure:deleted-vault": m.real_listers(lambda n: "")[("azure", "deleted-vault")]}
+    )
+    created = write_created(
+        tmp_path,
+        entry(combination="azure-postgres"),
+        entry(project="gone", combination="azure-postgres", destroyed_at=DESTROYED),
+    )
+    code = m.main(["sweep", "--created", str(created), "--purge-deleted-vaults"], listers=table)
+    out = capsys.readouterr().out
+    assert purged == [[*m.AZ_PURGE, "--name", "vgone-mcp", "--location", "polandcentral"]]
+    assert "purge requested: vgone-mcp" in out
+    assert "leftover: azure deleted-vault vstray-mcp (project stray, env prod)" in out
+    assert code == 1
+
+
+def test_without_the_flag_nothing_is_purged(tmp_path, monkeypatch):
+    m = mod()
+    purged = purging(monkeypatch, {tuple(m.AZ_DELETED_VAULTS): vaults(("vgone-mcp", GONE))})
+    table = listers(
+        **{"azure:deleted-vault": m.real_listers(lambda n: "")[("azure", "deleted-vault")]}
+    )
+    created = write_created(tmp_path, entry())
+    assert m.main(["sweep", "--created", str(created)], listers=table) == 1
+    assert purged == []
+
+
+def test_a_failed_purge_exits_4_and_names_the_vault(tmp_path, monkeypatch, capsys):
+    m = mod()
+    listed = vaults(("vgone-mcp", GONE), ("vgone-setup", GONE))
+    purging(monkeypatch, {tuple(m.AZ_DELETED_VAULTS): listed}, failing={"vgone-mcp"})
+    table = listers(
+        **{"azure:deleted-vault": m.real_listers(lambda n: "")[("azure", "deleted-vault")]}
+    )
+    created = write_created(
+        tmp_path, entry(project="gone", combination="azure-postgres", destroyed_at=DESTROYED)
+    )
+    code = m.main(
+        ["sweep", "--created", str(created), "--purge-deleted-vaults", "--json"], listers=table
+    )
+    document = json.loads(capsys.readouterr().out)
+    assert code == 4
+    assert document["purge_requested"] == ["vgone-setup"]
+    assert document["failed"] == [
+        "could not purge azure deleted-vault vgone-mcp: az exited 1: Conflict"
+    ]
+
+
+@pytest.mark.parametrize("combination", ["aws-postgres", "scaleway-snowflake"])
+def test_only_a_destroyed_azure_environment_lets_its_vaults_be_purged(
+    tmp_path, monkeypatch, combination
+):
+    m = mod()
+    purged = purging(monkeypatch, {tuple(m.AZ_DELETED_VAULTS): vaults(("vgone-mcp", GONE))})
+    table = listers(
+        **{"azure:deleted-vault": m.real_listers(lambda n: "")[("azure", "deleted-vault")]}
+    )
+    created = write_created(
+        tmp_path, entry(project="gone", combination=combination, destroyed_at=DESTROYED)
+    )
+    code = m.main(["sweep", "--created", str(created), "--purge-deleted-vaults"], listers=table)
+    assert purged == []
+    assert code == 1
+
+
+def test_a_live_environment_accounts_only_for_its_own_clouds_resources():
+    table = listers(
+        **{
+            "azure:resource-group": lambda: [found("resource-group", "g", "acme", "prod")],
+            "azure:deleted-vault": lambda: [found("deleted-vault", "v", "acme")],
+            "aws:secret": lambda: [found("secret", "vecten/acme/prod/x", "acme", "prod")],
+            "aws:role": lambda: [found("role", "vecten-acme-deploy", "acme")],
+        }
+    )
+    result = sweep([entry(combination="aws-postgres")], table)
+    assert [(item.cloud, item.name) for item in result.leftovers] == [
+        ("azure", "g"),
+        ("azure", "v"),
+    ]
+
+
+@pytest.mark.parametrize("live", ["azure-postgres", "scaleway-postgres"])
+def test_an_aws_resource_is_not_accounted_for_by_another_clouds_environment(live):
+    table = listers(
+        **{
+            "aws:secret": lambda: [found("secret", "vecten/acme/prod/x", "acme", "prod")],
+            "aws:role": lambda: [found("role", "vecten-acme-deploy", "acme")],
+            "scaleway:instance": lambda: [found("instance", "i", "acme", "prod")],
+            "azure:resource-group": lambda: [found("resource-group", "g", "acme", "prod")],
+        }
+    )
+    result = sweep([entry(combination=live)], table)
+    own = live.split("-")[0]
+    assert {item.cloud for item in result.leftovers} == {"aws", "scaleway", "azure"} - {own}
+
+
+def test_without_a_verified_azure_identity_the_sweep_skips_azure_and_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("VECTEN_LIVE_AZURE")
+
+    def never():
+        raise AssertionError("an Azure listing ran")
+
+    table = listers(
+        **{"azure:resource-group": never, "azure:resource": never, "azure:deleted-vault": never}
+    )
+    created = write_created(tmp_path, entry())
+    assert mod().main(["sweep", "--created", str(created)], listers=table) == 0
+    out = capsys.readouterr().out
+    assert "azure not swept: allow.toml has no [azure]" in out
+    assert "nothing left on the clouds swept" in out
+    assert mod().main(["sweep", "--created", str(created), "--json"], listers=table) == 0
+    assert json.loads(capsys.readouterr().out)["skipped"] == ["azure"]
+
+
+@pytest.mark.parametrize("destroyed_at", [None, DESTROYED])
+def test_a_skipped_azure_sweep_of_a_run_with_azure_environments_is_a_failed_listing(
+    tmp_path, monkeypatch, capsys, destroyed_at
+):
+    monkeypatch.delenv("VECTEN_LIVE_AZURE")
+    m = mod()
+    created = write_created(
+        tmp_path, entry(combination="azure-postgres", destroyed_at=destroyed_at)
+    )
+    assert m.main(["sweep", "--created", str(created)], listers=listers()) == m.LISTING_FAILED
+    out = capsys.readouterr().out
+    assert "could not list azure: the created file has azure environments" in out
+    assert "nothing left" not in out
+
+
+def test_without_a_verified_azure_identity_a_purge_is_refused(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("VECTEN_LIVE_AZURE")
+    m = mod()
+    purged = purging(monkeypatch, {tuple(m.AZ_DELETED_VAULTS): vaults(("vgone-mcp", GONE))})
+    created = write_created(
+        tmp_path, entry(project="gone", combination="azure-postgres", destroyed_at=DESTROYED)
+    )
+    code = m.main(["sweep", "--created", str(created), "--purge-deleted-vaults"])
+    assert code == m.REFUSED
+    assert purged == []
+    assert "allow.toml has no [azure]" in capsys.readouterr().err

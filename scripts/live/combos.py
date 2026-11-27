@@ -16,13 +16,21 @@ from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
-COMBOS = ("aws-postgres", "aws-snowflake", "scaleway-postgres", "scaleway-snowflake")
-DEFAULT = {"aws": "aws-snowflake", "scaleway": "scaleway-postgres"}
+COMBOS = (
+    "aws-postgres",
+    "aws-snowflake",
+    "scaleway-postgres",
+    "scaleway-snowflake",
+    "azure-postgres",
+    "azure-snowflake",
+)
+DEFAULT = {"aws": "aws-snowflake", "scaleway": "scaleway-postgres", "azure": "azure-postgres"}
 SCOPES = (
     "none",
     "shared",
     "cloud:aws",
     "cloud:scaleway",
+    "cloud:azure",
     "warehouse:snowflake",
     "warehouse:postgres",
 )
@@ -126,7 +134,7 @@ def git_changed(tag: str) -> list[str]:
 
 
 def touched(changed: list[str], rules: list[Rule]) -> dict[str, list[str]]:
-    """The changed files that touch each combination, every shared file touching all four."""
+    """The changed files that touch each combination, every shared file touching all of them."""
     result: dict[str, list[str]] = {}
     for combo in COMBOS:
         cloud, warehouse = combo.split("-")

@@ -20,11 +20,17 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import NoReturn
 
-ALLOWED_EXECUTABLES = frozenset({"vecten", "aws", "scw", "snow", "gh", "git", "terraform", "uv"})
-IDENTITIES = ("aws", "scaleway", "snowflake", "github")
+ALLOWED_EXECUTABLES = frozenset(
+    {"vecten", "aws", "scw", "az", "snow", "gh", "git", "terraform", "uv"}
+)
+IDENTITIES = ("aws", "scaleway", "azure", "snowflake", "github")
 GITHUB_MODES = ("sandbox", "upstream")
 # The AWS profile and the Snowflake connection the credential home defines.
 LIVECHECK = "livecheck"
+# The `az` configuration folder, logged in as the live-check service principal, and that
+# principal's own credentials as `az ad sp create-for-rbac` printed them.
+AZURE_CLI = "azure/cli"
+AZURE_LOGIN = "azure/livecheck.json"
 PROBE_TIMEOUT = 30.0
 TOKEN_COMMAND = [sys.executable, "-I", str(Path(__file__).with_name("github_app.py")), "token"]
 PROBES = {
@@ -32,6 +38,10 @@ PROBES = {
     for name, command in {
         "aws": "aws sts get-caller-identity --query Account --output text",
         "scaleway": "scw account project list -o json",
+        # The server's list, not `az account list`: its refresh falls back to the cached list and
+        # exits 0 when the sign-in fails.
+        "azure": "az rest --method get"
+        ' --url "https://management.azure.com/subscriptions?api-version=2022-12-01"',
         "snowflake": f'snow sql -c {LIVECHECK} -q "select current_account()" --format json',
         "github": 'gh api /installation/repositories --paginate --jq ".repositories[].full_name"',
     }.items()
@@ -82,7 +92,7 @@ DENIED = (
         for path in (
             ".aws", ".config/scw", ".snowflake", ".config/snowflake", ".ssh", ".config/gh",
             ".gnupg", ".kube", ".config/gcloud", ".terraform.d", "Library/Keychains",
-            "Library/Application Support/snowflake", ".dbt", ".snowsql", ".config/op",
+            "Library/Application Support/snowflake", ".dbt", ".snowsql", ".config/op", ".azure",
         )
     ),
     *(
@@ -101,7 +111,7 @@ ENV_FILES = r"^{home}/(.*/)?\.env(\.[^/]+)?$"
 REGEX_SPECIAL = frozenset(".^$|?*+()[]{}")
 # What the wrapped tools write in the credential home; the rest of it, `allow.toml` and the
 # token cache above all, is the guard's own and stays unwritable.
-LIVE_WRITABLE = ("home", "home-plain", "snowflake/logs", "github/gh")
+LIVE_WRITABLE = ("home", "home-plain", "snowflake/logs", "github/gh", "azure/cli")
 # Files that steer every later shell or git under the real home, and the trees of the agent's
 # own settings, hooks, plugins and memory.
 HOME_UNWRITABLE = (
@@ -126,7 +136,12 @@ TMP_KEPT = 86400
 NOT_SECRET = (
     ("allow.toml",), ("google", "hostnames.txt"), ("google", "oidc-client-id"),
     ("snowflake", "logs"), ("github", "gh"), ("git", "config"), ("home",), ("home-plain",),
-    ("google", "admin.toml"),
+    ("google", "admin.toml"), ("azure", "cli"),
+)  # fmt: skip
+# The `az` folder holds logs, command history and a profile of IDs, which would read as secrets;
+# its secrets are in these two files, the token cache and the service principal's own secret.
+TOKEN_FILES = (
+    ("azure", "cli", "msal_token_cache.json"), ("azure", "cli", "service_principal_entries.json"),
 )  # fmt: skip
 SSH_REFUSED = "sh -c 'echo \"access: git over SSH is refused; use https://\" >&2; exit 1'"
 MIN_SECRET = 16
@@ -136,7 +151,8 @@ MIN_REDACTED = 8
 IDENTIFIER_KEYS = frozenset(
     "account accountname user username role warehouse database schema host region default_region"
     " default_zone default_organization_id default_project_id authenticator private_key_file"
-    " private_key_path expires_at app_id installation_id output".split()
+    " private_key_path expires_at app_id installation_id output appid displayname tenant client_id"
+    " environment realm target".split()
 )
 QUOTED = re.compile(r"""(["'])(.*?)\1""")
 ASSIGNED = re.compile(r"^([\w.-]+)\s*[=:]\s*([^=\s].*)$")
@@ -177,7 +193,11 @@ def _own_directory(path: Path) -> None:
 
 
 def tool_env(
-    home: Path, base: Mapping[str, str], github_token: str, credentials: bool = True
+    home: Path,
+    base: Mapping[str, str],
+    github_token: str,
+    credentials: bool = True,
+    azure: bool = False,
 ) -> dict[str, str]:
     # Any variable a tool reads that the wrapper did not set is a way around the credential
     # home, so only identity-free variables pass, and HOME moves so default lookups miss.
@@ -222,12 +242,101 @@ def tool_env(
             "SCW_CONFIG_PATH": str(home / "scw/config.yaml"),
             "SNOWFLAKE_HOME": str(home / "snowflake"),
             "SNOWFLAKE_DEFAULT_CONNECTION_NAME": LIVECHECK,
+            # The log files would hold every command line, and telemetry is a call home.
+            "AZURE_CORE_COLLECT_TELEMETRY": "no",
+            "AZURE_LOGGING_ENABLE_LOG_FILE": "no",
+            # The variable outranks the az folder's own config, which a command can write, so
+            # `az` keeps its sign-ins in the plain files the wrapper checks.
+            "AZURE_CORE_ENCRYPT_TOKEN_CACHE": "false",
             "VECTEN_LIVE": "1",
         }
+    # The `az` sign-in, and the marker that tells the sweep Azure was verified, go only to a run
+    # that verifies the Azure identity.
+    if credentials and azure:
+        env["AZURE_CONFIG_DIR"] = str(home / AZURE_CLI)
+        env["VECTEN_LIVE_AZURE"] = "1"
     for index, (key, value) in enumerate(git):
         env[f"GIT_CONFIG_KEY_{index}"] = key
         env[f"GIT_CONFIG_VALUE_{index}"] = value
     return env
+
+
+def azure_env(home: Path, allow: dict) -> dict[str, str]:
+    """Terraform's login to the test subscription, from the service principal's own file.
+
+    The azurerm provider and backend take a service principal by its secret, not through the
+    `az` login that `vecten` and `az` use.
+
+    The probe verifies only the tenant `az` signs in to by default, and Terraform must be the
+    principal it verified; so every sign-in `az` keeps, in its profile and in its store of
+    secrets, must be that principal's, to the allowed tenant and subscription alone.
+    """
+    if "azure" not in allow:
+        return {}
+    text = _read_regular(home / AZURE_LOGIN)
+    if text is None:
+        raise Refused(f"no {AZURE_LOGIN} in the credential home")
+    try:
+        login = json.loads(text)
+    except ValueError:
+        login = None
+    if not isinstance(login, dict):
+        raise Refused(f"{AZURE_LOGIN} is not JSON")
+    for key in ("appId", "password", "tenant"):
+        if not isinstance(login.get(key), str) or not login[key]:
+            raise Refused(f"{AZURE_LOGIN} has no {key}")
+    tenant = str(allow["azure"].get("tenant_id"))
+    subscription = str(allow["azure"].get("subscription_id"))
+    if login["tenant"] != tenant:
+        raise Refused(f"{AZURE_LOGIN} is for another tenant than allow.toml names")
+    profile = _az_profile(home)
+    stored = _az_stored(home)
+    principals = {(kind, name) for kind, name, _, _ in profile}
+    if principals != {("servicePrincipal", login["appId"])} or {app for app, _ in stored} != {
+        login["appId"]
+    }:
+        raise Refused(f"{AZURE_CLI} is not signed in as the service principal of {AZURE_LOGIN}")
+    reached = {(tid, sub) for _, _, tid, sub in profile}
+    if reached != {(tenant, subscription)} or {tid for _, tid in stored} != {tenant}:
+        raise Refused(
+            f"{AZURE_CLI} holds a sign-in to another tenant or subscription than allow.toml names"
+        )
+    return {
+        "ARM_CLIENT_ID": login["appId"],
+        "ARM_CLIENT_SECRET": login["password"],
+        "ARM_TENANT_ID": tenant,
+        "ARM_SUBSCRIPTION_ID": subscription,
+    }
+
+
+def _az_profile(home: Path) -> set[tuple[str, str, str, str]]:
+    """The (user type, user name, tenant, subscription) of every sign-in in the `az` folder's
+    profile; empty when unreadable."""
+    text = _read_regular(home / AZURE_CLI / "azureProfile.json")
+    try:
+        # `az` writes the profile with a byte order mark.
+        profile = json.loads((text or "").removeprefix("\ufeff"))
+        return {
+            (
+                str(entry["user"]["type"]),
+                str(entry["user"]["name"]),
+                str(entry["tenantId"]),
+                str(entry["id"]),
+            )
+            for entry in profile["subscriptions"]
+        }
+    except ValueError, LookupError, TypeError:
+        return set()
+
+
+def _az_stored(home: Path) -> set[tuple[str, str]]:
+    """The (client id, tenant) of every service principal secret `az` keeps; empty when
+    unreadable."""
+    text = _read_regular(home / AZURE_CLI / "service_principal_entries.json")
+    try:
+        return {(str(entry["client_id"]), str(entry["tenant"])) for entry in json.loads(text or "")}
+    except ValueError, LookupError, TypeError:
+        return set()
 
 
 def _variants(path: Path) -> list[str]:
@@ -371,6 +480,11 @@ def _problem(name: str, allowed: dict, value: str | list[str], github: str) -> s
         others = sorted(set(value) - {str(allowed.get("organization_id"))})
         if others:
             return f"organization {', '.join(others)} is not the live-check organization"
+    if name == "azure":
+        expected = f"{allowed.get('tenant_id')}/{allowed.get('subscription_id')}"
+        others = sorted(set(value) - {expected})
+        if others:
+            return f"subscription {', '.join(others)} is not the live-check subscription"
     # Snowflake account locators are case-insensitive.
     if name == "snowflake" and value.upper() != str(allowed.get("account")).upper():
         return f"account {value} is not the live-check account"
@@ -436,6 +550,8 @@ def secret_values(home: Path) -> set[str]:
         for path in (here / name for name in names):
             if not _skipped(home, path):
                 values |= _secrets_in(path)
+    for relative in TOKEN_FILES:
+        values |= _secrets_in(home.joinpath(*relative))
     return values
 
 
@@ -461,7 +577,8 @@ def _secrets_in(path: Path) -> set[str]:
         data = json.loads(text)
     except ValueError:
         data = None
-    if isinstance(data, dict):
+    # A one-line JSON list would otherwise pass for a TOML table header below.
+    if isinstance(data, dict | list):
         return _secrets_in_json(data)
     for line in (raw.strip() for raw in text.splitlines()):
         if line.startswith("[") and line.endswith("]"):
@@ -490,6 +607,17 @@ def _organizations(out: str) -> list[str]:
     return organizations
 
 
+def _subscriptions(out: str) -> list[str]:
+    listed = json.loads(out)
+    # A further page could hold another subscription.
+    if listed.get("nextLink"):
+        raise ValueError(out)
+    pairs = sorted({f"{item['tenantId']}/{item['subscriptionId']}" for item in listed["value"]})
+    if not pairs:
+        raise ValueError(out)
+    return pairs
+
+
 def _snowflake_account(out: str) -> str:
     rows = json.loads(out)
     if rows and isinstance(rows[0], list):
@@ -504,6 +632,7 @@ def _repositories(out: str) -> list[str]:
 PARSERS: dict[str, Callable[[str], str | list[str]]] = {
     "aws": _text,
     "scaleway": _organizations,
+    "azure": _subscriptions,
     "snowflake": _snowflake_account,
     "github": _repositories,
 }
@@ -556,7 +685,7 @@ def _examine(
         else:
             token = minted
             secrets.add(token)
-    env = tool_env(home, os.environ, token)
+    env = tool_env(home, os.environ, token, azure="azure" in allow)
     for name in names:
         if name in allow and name not in found:
             argv = PROBES[name]
@@ -602,7 +731,10 @@ def _run(
     allow = _load_allow(home)
     if cwd is not None and not cwd.is_dir():
         raise Refused(f"--cwd {cwd} is not a directory")
+    if command[0] == "az" and "azure" not in allow:
+        raise Refused("az needs [azure] in allow.toml, so that its identity is verified")
     source = _stdin_file(home, stdin_file) if stdin_file is not None else None
+    terraform_azure = azure_env(home, allow)
     secrets = secret_values(home)
     private = _private_tmp(home)
     sandbox = _os_sandbox(private)
@@ -612,6 +744,13 @@ def _run(
         lines = [*problems, *(f"{name}: {reason}" for name, reason in reasons.items())]
         raise Refused(redact("refused:\n  " + "\n  ".join(lines), secrets))
     env["TMPDIR"] = str(private)
+    if "azure" not in allow:
+        # A sign-in a tool leaves in a folder that outlives the run would answer the next run's
+        # `az` unverified, so this run's folder is new and empty.
+        unverified = private / "azure"
+        unverified.mkdir(mode=0o700)
+        env["AZURE_CONFIG_DIR"] = str(unverified)
+    env |= terraform_azure
     command = [*sandbox, *command]
     try:
         if source is not None:
@@ -663,7 +802,7 @@ def _doctor() -> int:
     allow = _load_allow(home)
     secrets = secret_values(home)
     sandbox = _os_sandbox()
-    checks = [(name, "sandbox", name) for name in ("aws", "scaleway", "snowflake")]
+    checks = [(name, "sandbox", name) for name in ("aws", "scaleway", "azure", "snowflake")]
     checks += [("github", mode, f"github-{mode}") for mode in GITHUB_MODES]
     failed = not tools.startswith("tools ok: ")
     for name, github, title in checks:
@@ -676,6 +815,11 @@ def _doctor() -> int:
             if problems:
                 reason = reasons.get(name) or problems[0].partition(": ")[2]
                 line = f"FAIL: {redact(reason, secrets)}"
+            elif name == "azure":
+                try:
+                    azure_env(home, allow)
+                except Refused as refused:
+                    line = f"FAIL: {refused}"
         failed |= line != "ok"
         print(f"{title} {line}")
     line = "absent (not macOS)"

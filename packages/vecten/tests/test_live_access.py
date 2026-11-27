@@ -20,13 +20,20 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / "scripts/live/access.py"
 ORG = "00000000-0000-0000-0000-000000000000"
+TENANT = "aaaaaaaa-0000-0000-0000-000000000000"
+SUB = "bbbbbbbb-0000-0000-0000-000000000000"
 AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+AZ_APP = "cccccccc-0000-0000-0000-000000000000"
+AZ_SECRET = "Az8Q~exampleClientSecretValue0000000000"
 
 ALLOW_TOML = f"""\
 [aws]
 account_id = "111111111111"
 [scaleway]
 organization_id = "{ORG}"
+[azure]
+tenant_id = "{TENANT}"
+subscription_id = "{SUB}"
 [snowflake]
 account = "EXAMPLE"
 [github]
@@ -36,12 +43,14 @@ upstream_repo = "vecten/vecten-open"
 ALLOW = {
     "aws": {"account_id": "111111111111"},
     "scaleway": {"organization_id": ORG},
+    "azure": {"tenant_id": TENANT, "subscription_id": SUB},
     "snowflake": {"account": "EXAMPLE"},
     "github": {"sandbox_org": "example-sandbox", "upstream_repo": "vecten/vecten-open"},
 }
 GOOD = {
     "aws": "111111111111",
     "scaleway": [ORG],
+    "azure": [f"{TENANT}/{SUB}"],
     "snowflake": "EXAMPLE",
     "github": ["example-sandbox/demo-aws-postgres"],
 }
@@ -61,6 +70,44 @@ SCW_OUTPUT = f"""\
   }}
 ]
 """
+# az rest --method get --url "https://management.azure.com/subscriptions?api-version=2022-12-01"
+AZ_OUTPUT = f"""\
+{{
+  "count": {{"type": "Total", "value": 1}},
+  "value": [
+    {{
+      "id": "/subscriptions/{SUB}",
+      "subscriptionId": "{SUB}",
+      "tenantId": "{TENANT}",
+      "displayName": "Example Subscription",
+      "state": "Enabled"
+    }}
+  ]
+}}
+"""
+
+
+def az_profile(name=None, kind="servicePrincipal", also=()):
+    """azure/cli/azureProfile.json as `az login` writes it, with its byte order mark; `also`
+    adds a sign-in of the same principal for each (tenant, subscription)."""
+    user = {"name": name or AZ_APP, "type": kind}
+    subscriptions = [{"id": SUB, "tenantId": TENANT, "isDefault": True, "user": user}]
+    subscriptions += [
+        {"id": sub, "tenantId": tenant, "isDefault": False, "user": user} for tenant, sub in also
+    ]
+    return "\ufeff" + json.dumps({"installationId": "x", "subscriptions": subscriptions})
+
+
+def az_stored(*entries):
+    """azure/cli/service_principal_entries.json, one entry per (client id, tenant)."""
+    return json.dumps(
+        [
+            {"client_id": app, "tenant": tenant, "client_secret": AZ_SECRET}
+            for app, tenant in entries
+        ]
+    )
+
+
 # snow sql -c livecheck -q "select current_account()" --format json
 SNOW_OUTPUT = """\
 [
@@ -101,7 +148,7 @@ DENIED_TEXT = (
     ' (subpath "/Users/example/.terraform.d") (subpath "/Users/example/Library/Keychains")'
     ' (subpath "/Users/example/Library/Application Support/snowflake")'
     ' (subpath "/Users/example/.dbt") (subpath "/Users/example/.snowsql")'
-    ' (subpath "/Users/example/.config/op")'
+    ' (subpath "/Users/example/.config/op") (subpath "/Users/example/.azure")'
     ' (literal "/Users/example/.docker/config.json") (literal "/Users/example/.netrc")'
     ' (literal "/Users/example/.pypirc") (literal "/Users/example/.npmrc")'
     ' (literal "/Users/example/.git-credentials")'
@@ -113,7 +160,8 @@ DENIED_TEXT = (
     '(allow file-write* (subpath "/Users/example/.config/vecten-livecheck/home")'
     ' (subpath "/Users/example/.config/vecten-livecheck/home-plain")'
     ' (subpath "/Users/example/.config/vecten-livecheck/snowflake/logs")'
-    ' (subpath "/Users/example/.config/vecten-livecheck/github/gh"))'
+    ' (subpath "/Users/example/.config/vecten-livecheck/github/gh")'
+    ' (subpath "/Users/example/.config/vecten-livecheck/azure/cli"))'
     '(deny file-write* (literal "/Users/example/.zshrc") (literal "/Users/example/.zprofile")'
     ' (literal "/Users/example/.zshenv") (literal "/Users/example/.bashrc")'
     ' (literal "/Users/example/.bash_profile") (literal "/Users/example/.profile")'
@@ -150,6 +198,13 @@ CREDENTIAL_VARIABLES = {
     "SCW_CONFIG_PATH",
     "SNOWFLAKE_HOME",
     "SNOWFLAKE_DEFAULT_CONNECTION_NAME",
+    "AZURE_CONFIG_DIR",
+    "AZURE_CORE_COLLECT_TELEMETRY",
+    "AZURE_LOGGING_ENABLE_LOG_FILE",
+    "ARM_CLIENT_ID",
+    "ARM_CLIENT_SECRET",
+    "ARM_TENANT_ID",
+    "ARM_SUBSCRIPTION_ID",
     "VECTEN_LIVE",
 }
 LAUNCHER = REPO / "scripts/live/live"
@@ -175,6 +230,16 @@ def home(tmp_path):
         ),
         "scw/config.yaml": "secret_key: 22222222-2222-2222-2222-222222222222\nregion: fr-par\n",
         "snowflake/config.toml": '[connections.livecheck]\npassword = "correct-horse-pony"\n',
+        "azure/livecheck.json": json.dumps(
+            {
+                "appId": AZ_APP,
+                "displayName": "vecten-livecheck",
+                "password": AZ_SECRET,
+                "tenant": TENANT,
+            }
+        ),
+        "azure/cli/azureProfile.json": az_profile(),
+        "azure/cli/service_principal_entries.json": az_stored((AZ_APP, TENANT)),
         "github/sandbox.toml": 'app_id = "12345"\ninstallation_id = "987654"\nkey = "app.pem"\n',
         "github/upstream.toml": 'app_id = "12345"\ninstallation_id = "987655"\nkey = "app.pem"\n',
     }
@@ -202,6 +267,7 @@ def fake_clis(tmp_path, **overrides):
     bodies = {
         "aws": printing(AWS_OUTPUT),
         "scw": printing(SCW_OUTPUT),
+        "az": printing(AZ_OUTPUT),
         "snow": printing(SNOW_OUTPUT),
         "gh": (
             'case "$GH_TOKEN" in\n'
@@ -261,6 +327,15 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
         "SCW_ACCESS_KEY": "a",
         "SCW_SECRET_KEY": "s",
         "SCW_PROFILE": "personal",
+        "AZURE_CONFIG_DIR": "/Users/example/.azure",
+        "AZURE_CLIENT_ID": "personal",
+        "AZURE_CLIENT_SECRET": "personal",
+        "AZURE_TENANT_ID": "personal",
+        "AZURE_SUBSCRIPTION_ID": "personal",
+        "ARM_CLIENT_ID": "personal",
+        "ARM_CLIENT_SECRET": "personal",
+        "ARM_USE_CLI": "true",
+        "ARM_SUBSCRIPTION_ID": "personal",
         "SNOWFLAKE_CONNECTIONS": "[personal]",
         "SNOWFLAKE_CONNECTIONS_PERSONAL_PASSWORD": "p",
         "AWS_ROLE_ARN": "arn:aws:iam::222222222222:role/personal",
@@ -283,7 +358,7 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
         "PATH": "/bin",
     }
     root = home(tmp_path)
-    env = mod().tool_env(root, base, github_token="ghs_minted")
+    env = mod().tool_env(root, base, github_token="ghs_minted", azure=True)
     assert env["AWS_PROFILE"] == "livecheck" and env["GH_TOKEN"] == "ghs_minted"
     assert (
         not {
@@ -296,6 +371,14 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
             "SCW_ACCESS_KEY",
             "SCW_SECRET_KEY",
             "SCW_PROFILE",
+            "AZURE_CLIENT_ID",
+            "AZURE_CLIENT_SECRET",
+            "AZURE_TENANT_ID",
+            "AZURE_SUBSCRIPTION_ID",
+            "ARM_CLIENT_ID",
+            "ARM_CLIENT_SECRET",
+            "ARM_USE_CLI",
+            "ARM_SUBSCRIPTION_ID",
             "SNOWFLAKE_CONNECTIONS",
             "SNOWFLAKE_CONNECTIONS_PERSONAL_PASSWORD",
             "AWS_ROLE_ARN",
@@ -325,6 +408,10 @@ def test_inherited_credentials_never_reach_the_command(tmp_path):
     assert env["SNOWFLAKE_HOME"] == str(root / "snowflake")
     assert env["SNOWFLAKE_DEFAULT_CONNECTION_NAME"] == "livecheck"
     assert env["GH_CONFIG_DIR"] == str(root / "github/gh")
+    assert env["AZURE_CONFIG_DIR"] == str(root / "azure/cli")
+    assert env["AZURE_CORE_COLLECT_TELEMETRY"] == "no"
+    assert env["AZURE_LOGGING_ENABLE_LOG_FILE"] == "no"
+    assert env["AZURE_CORE_ENCRYPT_TOKEN_CACHE"] == "false"
     assert env["VECTEN_LIVE"] == "1"
 
 
@@ -481,6 +568,139 @@ def test_another_scaleway_organization_is_refused():
     ]
 
 
+def test_another_azure_subscription_is_refused():
+    other = f"{TENANT}/99999999-9999-9999-9999-999999999999"
+    found = {**GOOD, "azure": [f"{TENANT}/{SUB}", other]}
+    assert mod().violations(ALLOW, found, "sandbox") == [
+        f"azure: subscription {other} is not the live-check subscription"
+    ]
+
+
+def test_another_azure_tenant_is_refused():
+    other = f"99999999-9999-9999-9999-999999999999/{SUB}"
+    assert mod().violations(ALLOW, {**GOOD, "azure": [other]}, "sandbox") == [
+        f"azure: subscription {other} is not the live-check subscription"
+    ]
+
+
+def test_the_azure_probe_asks_the_server_not_the_cache():
+    # `az account list --refresh` prints its cached list and exits 0 when the refresh fails.
+    probe = mod().PROBES["azure"]
+    assert probe[:2] == ["az", "rest"]
+    assert "https://management.azure.com/subscriptions?api-version=2022-12-01" in probe
+
+
+def test_the_azure_probe_reads_each_subscription_once():
+    item = {"subscriptionId": SUB, "tenantId": TENANT}
+    assert mod().PARSERS["azure"](json.dumps({"value": [item, item]})) == [f"{TENANT}/{SUB}"]
+
+
+def test_a_subscription_list_with_more_pages_cannot_be_told():
+    out = json.dumps({"value": [{"subscriptionId": SUB, "tenantId": TENANT}], "nextLink": "x"})
+    with pytest.raises(ValueError):
+        mod().PARSERS["azure"](out)
+
+
+@pytest.mark.parametrize(
+    "profile, reason",
+    [
+        (az_profile(name="dddddddd-0000-0000-0000-000000000000"), "not signed in as"),
+        (az_profile(name="someone@example.com", kind="user"), "not signed in as"),
+        ("not json", "not signed in as"),
+        (None, "not signed in as"),
+    ],
+)
+def test_az_signed_in_as_another_principal_than_terraforms_is_refused(tmp_path, profile, reason):
+    path = home(tmp_path) / "azure/cli/azureProfile.json"
+    if profile is None:
+        path.unlink()
+    else:
+        path.write_text(profile)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert "azure/cli is not signed in as the service principal of azure/livecheck.json" in (
+        result.stderr
+    )
+    assert not marker.exists()
+    doctor = access(tmp_path, "doctor")
+    assert any(
+        line.startswith("azure FAIL: ") and reason in line for line in doctor.stdout.splitlines()
+    )
+
+
+OTHER_TENANT = "eeeeeeee-0000-0000-0000-000000000000"
+OTHER_SUB = "ffffffff-0000-0000-0000-000000000000"
+
+
+@pytest.mark.parametrize(
+    ("profile", "stored", "reason"),
+    [
+        (az_profile(also=[(OTHER_TENANT, OTHER_SUB)]), None, "another tenant or subscription"),
+        (az_profile(also=[(TENANT, OTHER_SUB)]), None, "another tenant or subscription"),
+        (
+            None,
+            az_stored((AZ_APP, TENANT), (AZ_APP, OTHER_TENANT)),
+            "another tenant or subscription",
+        ),
+        (None, az_stored((AZ_APP, TENANT), (OTHER_SUB, TENANT)), "not signed in as"),
+        (None, "not json", "not signed in as"),
+        (None, "", "not signed in as"),
+    ],
+)
+def test_az_holding_a_sign_in_outside_allow_toml_is_refused(tmp_path, profile, stored, reason):
+    root = home(tmp_path)
+    if profile is not None:
+        (root / "azure/cli/azureProfile.json").write_text(profile)
+    path = root / "azure/cli/service_principal_entries.json"
+    if stored == "":
+        path.unlink()
+    elif stored is not None:
+        path.write_text(stored)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert reason in result.stderr
+    assert not marker.exists()
+    doctor = access(tmp_path, "doctor")
+    assert any(
+        line.startswith("azure FAIL: ") and reason in line for line in doctor.stdout.splitlines()
+    )
+
+
+def test_a_failed_azure_sign_in_is_refused(tmp_path):
+    home(tmp_path)
+    marker = tmp_path / "started"
+    failing = (
+        "echo 'ERROR: AADSTS7000222: The provided client secret keys are expired.' >&2; exit 1"
+    )
+    fake_clis(tmp_path, az=failing, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert "azure: identity could not be read" in result.stderr
+    assert not marker.exists()
+    assert "azure FAIL: az exited 1" in access(tmp_path, "doctor").stdout
+
+
+def test_an_azure_login_that_reaches_no_subscription_is_refused(tmp_path):
+    home(tmp_path)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, az="""echo '{"value": []}'""", vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert "azure: identity could not be read" in result.stderr
+    assert not marker.exists()
+
+
+def test_az_is_an_allowed_command(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path)
+    script(tmp_path / "bin/az", f'[ "$1" = version ] && exit 5\n{printing(AZ_OUTPUT)}')
+    assert access(tmp_path, "run", "--", "az", "version").returncode == 5
+
+
 def test_a_sandbox_token_that_reaches_another_owner_is_refused():
     found = {**GOOD, "github": ["example-sandbox/demo", "vecten/vecten-open"]}
     assert mod().violations(ALLOW, found, "sandbox") == [
@@ -531,6 +751,107 @@ def test_the_command_sees_only_the_test_credentials(tmp_path):
     result = access(tmp_path, "run", "--github", "upstream", "--", "vecten", env=personal)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "livecheck unset ghs_fake_upstream_token\n"
+
+
+def test_the_command_gets_terraforms_azure_login_from_the_credential_home(tmp_path):
+    home(tmp_path)
+    echo = 'echo "$ARM_CLIENT_ID $ARM_TENANT_ID $ARM_SUBSCRIPTION_ID ${ARM_CLIENT_SECRET:+set}"'
+    fake_clis(tmp_path, vecten=echo)
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{AZ_APP} {TENANT} {SUB} set\n"
+
+
+def test_a_run_with_azure_verified_tells_the_sweep_so(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path, vecten='echo "${VECTEN_LIVE_AZURE:-unset}"')
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "1\n"
+
+
+def test_terraforms_azure_login_is_the_client_secret_itself(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path, vecten='[ "$ARM_CLIENT_SECRET" = "$1" ]')
+    assert access(tmp_path, "run", "--", "vecten", AZ_SECRET).returncode == 0
+
+
+def test_without_azure_in_allow_toml_no_azure_login_is_given(tmp_path):
+    allow = home(tmp_path) / "allow.toml"
+    allow.write_text(
+        ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
+    )
+    (tmp_path / "home/azure/livecheck.json").unlink()
+    echo = 'echo "${ARM_CLIENT_ID:-unset} ${ARM_CLIENT_SECRET:-unset} ${VECTEN_LIVE_AZURE:-unset}"'
+    fake_clis(tmp_path, vecten=echo)
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "unset unset unset\n"
+
+
+def without_azure(tmp_path):
+    allow = home(tmp_path) / "allow.toml"
+    allow.write_text(
+        ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
+    )
+
+
+def test_without_azure_in_allow_toml_az_is_refused(tmp_path):
+    without_azure(tmp_path)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, az=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "az", "account", "show")
+    assert result.returncode == 3
+    assert "az needs [azure] in allow.toml" in result.stderr
+    assert not marker.exists()
+
+
+def test_without_azure_in_allow_toml_each_run_has_an_empty_az_folder_of_its_own(tmp_path):
+    without_azure(tmp_path)
+    fake_clis(
+        tmp_path,
+        vecten='ls -A "$AZURE_CONFIG_DIR"; echo "$AZURE_CONFIG_DIR"'
+        '; touch "$AZURE_CONFIG_DIR/azureProfile.json"',
+    )
+    first = access(tmp_path, "run", "--", "vecten")
+    second = access(tmp_path, "run", "--", "vecten")
+    assert first.returncode == 0 and second.returncode == 0, first.stderr + second.stderr
+    # `ls -A` printed nothing, so the folder each run starts with is empty.
+    assert len(first.stdout.splitlines()) == len(second.stdout.splitlines()) == 1
+    first_dir, second_dir = Path(first.stdout.strip()), Path(second.stdout.strip())
+    assert first_dir != second_dir
+    assert second_dir.parent.parent == tmp_path / "home/home/tmp"
+    assert not second_dir.is_relative_to(tmp_path / "home/azure")
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (None, "no azure/livecheck.json in the credential home"),
+        ("not json", "azure/livecheck.json is not JSON"),
+        (json.dumps({"appId": AZ_APP, "tenant": TENANT}), "azure/livecheck.json has no password"),
+        (
+            json.dumps({"appId": AZ_APP, "password": AZ_SECRET, "tenant": ORG}),
+            "azure/livecheck.json is for another tenant than allow.toml names",
+        ),
+    ],
+)
+def test_an_unusable_azure_login_file_is_a_refusal(tmp_path, content, reason):
+    path = home(tmp_path) / "azure/livecheck.json"
+    if content is None:
+        path.unlink()
+    else:
+        path.write_text(content)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert reason in result.stderr
+    assert AZ_SECRET not in result.stderr
+    assert not marker.exists()
+    doctor = access(tmp_path, "doctor")
+    assert doctor.returncode == 1
+    assert f"azure FAIL: {reason}" in doctor.stdout.splitlines()
 
 
 def test_a_hanging_probe_is_a_refusal(tmp_path):
@@ -747,6 +1068,58 @@ def test_secret_values_skips_identifiers_and_keeps_credentials(tmp_path):
     } <= secrets
 
 
+def test_secret_values_takes_azure_secrets_and_leaves_its_identifiers(tmp_path):
+    root = home(tmp_path)
+    token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.exampleAccessTokenPayload.signature"
+    client_secret = "Az8Q~anotherExampleClientSecret00000000"
+    target = "https://management.core.windows.net//.default"
+    log_line = "command args: account list --refresh --all --query ..."
+    cache_key = f"-login.microsoftonline.com-accesstoken-{AZ_APP}-{TENANT}-{target}"
+    files = {
+        "azure/cli/azureProfile.json": json.dumps(
+            {"subscriptions": [{"id": SUB, "tenantId": TENANT, "name": "Example Subscription"}]}
+        ),
+        "azure/cli/commands/26-11-27.10-00-00.account_list.1.log": f"{log_line}\n",
+        "azure/cli/msal_token_cache.json": json.dumps(
+            {
+                "AccessToken": {
+                    cache_key: {
+                        "credential_type": "AccessToken",
+                        "secret": token,
+                        "client_id": AZ_APP,
+                        "environment": "login.microsoftonline.com",
+                        "realm": TENANT,
+                        "target": target,
+                        "token_type": "Bearer",
+                        "cached_at": "1764237600",
+                        "expires_on": "1764241200",
+                    }
+                }
+            }
+        ),
+        "azure/cli/service_principal_entries.json": json.dumps(
+            [{"client_id": AZ_APP, "tenant": TENANT, "client_secret": client_secret}]
+        ),
+    }
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text)
+    secrets = mod().secret_values(root)
+    assert {AZ_SECRET, token, client_secret} <= secrets
+    identifiers = {"vecten-livecheck", AZ_APP, TENANT, SUB, "Example Subscription", target}
+    identifiers |= {"login.microsoftonline.com", log_line, cache_key}
+    assert not identifiers & secrets
+
+
+def test_secret_values_reads_no_azure_token_file_through_a_link(tmp_path):
+    root = home(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps([{"client_secret": "a-secret-only-a-link-reaches"}]))
+    (root / "azure/cli/service_principal_entries.json").unlink()
+    (root / "azure/cli/service_principal_entries.json").symlink_to(outside)
+    assert "a-secret-only-a-link-reaches" not in mod().secret_values(root)
+
+
 def test_redact_replaces_every_secret_of_eight_or_more_characters():
     text = "key abcdefgh and abcdefghijkl and short1"
     assert mod().redact(text, {"abcdefgh", "abcdefghijkl", "short1"}) == (
@@ -764,6 +1137,7 @@ def test_doctor_reports_every_identity_and_fails_on_one(tmp_path):
         TOOLS_OK,
         "aws ok",
         f"scaleway FAIL: organization {other} is not the live-check organization",
+        "azure ok",
         "snowflake ok",
         "github-sandbox ok",
         "github-upstream ok",
@@ -793,11 +1167,23 @@ def test_doctor_fails_an_identity_missing_from_allow_toml(tmp_path):
         TOOLS_OK,
         "aws ok",
         "scaleway FAIL: not configured in allow.toml",
+        "azure ok",
         "snowflake ok",
         "github-sandbox ok",
         "github-upstream ok",
         "os-sandbox ok",
     ]
+
+
+def test_doctor_fails_azure_missing_from_allow_toml(tmp_path):
+    allow = home(tmp_path) / "allow.toml"
+    allow.write_text(
+        ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
+    )
+    fake_clis(tmp_path)
+    result = access(tmp_path, "doctor")
+    assert result.returncode == 1
+    assert "azure FAIL: not configured in allow.toml" in result.stdout.splitlines()
 
 
 def test_doctor_fails_when_the_os_sandbox_cannot_start(tmp_path):
@@ -891,7 +1277,7 @@ def test_on_macos_probes_and_command_run_inside_the_os_sandbox(tmp_path):
     )
     calls = invocations(record)
     assert all(call[:2] == ["-p", profile] for call in calls)
-    assert [call[2] for call in calls] == ["aws", "scw", "snow", "gh", "vecten"]
+    assert [call[2] for call in calls] == ["aws", "scw", "az", "snow", "gh", "vecten"]
     assert calls[-1][2:] == ["vecten", "status"]
 
 
@@ -983,6 +1369,8 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
     real = tmp_path / "real"
     (real / ".aws").mkdir(parents=True)
     (real / ".aws/credentials").write_text("[default]\n")
+    (real / ".azure").mkdir()
+    (real / ".azure/msal_token_cache.json").write_text("{}\n")
     (real / ".netrc").write_text("machine example.invalid\n")
     (real / "notes.txt").write_text("readable\n")
     (real / ".pgpass").write_text("localhost:5432:*:example:example\n")
@@ -1018,6 +1406,7 @@ def test_the_os_sandbox_denies_the_credential_files_and_sockets(tmp_path):
             return sandboxed("/bin/sh", "-c", 'printf x >> "$1"', "sh", str(path))
 
         assert sandboxed("/bin/cat", str(real / ".aws/credentials")) != 0
+        assert sandboxed("/bin/cat", str(real / ".azure/msal_token_cache.json")) != 0
         assert sandboxed("/bin/cat", str(real / ".netrc")) != 0
         assert sandboxed("/bin/cat", str(real / "notes.txt")) == 0
         assert sandboxed("/bin/cat", str(real / ".pgpass")) != 0
@@ -1471,7 +1860,8 @@ def throwaway_repository(root, ledger_tag="v1"):
     git(root, "add", "terraform")
     git(root, *IDENTITY, "commit", "-q", "-m", "second")
     (root / "scripts/live").mkdir(parents=True)
-    combos = ("aws-postgres", "aws-snowflake", "scaleway-postgres", "scaleway-snowflake")
+    combos = ("aws", "scaleway", "azure")
+    combos = [f"{cloud}-{warehouse}" for cloud in combos for warehouse in ("postgres", "snowflake")]
     ledger = "".join(f'{name} = "{ledger_tag}"\n' for name in combos)
     (root / "scripts/live/ledger.toml").write_text(ledger)
     return root
@@ -1943,6 +2333,18 @@ def test_check_public_in_any_other_spelling_is_refused(tmp_path, args):
     assert (result.returncode, result.stdout) == (2, "")
     assert len(result.stderr.strip().splitlines()) == 1
     assert "check-public <project>" in result.stderr
+
+
+def test_the_az_sign_in_is_given_only_where_azure_is_verified(tmp_path):
+    root = home(tmp_path)
+    m = mod()
+    base = {"PATH": "/bin", "AZURE_CONFIG_DIR": "/Users/example/.azure"}
+    assert "AZURE_CONFIG_DIR" not in m.tool_env(root, base, "ghs_minted")
+    assert "AZURE_CONFIG_DIR" not in m.tool_env(root, base, "", credentials=False, azure=True)
+    verified = m.tool_env(root, base, "ghs_minted", azure=True)
+    assert verified["AZURE_CONFIG_DIR"] == str(root / "azure/cli")
+    assert verified["VECTEN_LIVE_AZURE"] == "1"
+    assert "VECTEN_LIVE_AZURE" not in m.tool_env(root, {**base, "VECTEN_LIVE_AZURE": "1"}, "")
 
 
 def test_runs_without_credentials_have_a_home_of_their_own(tmp_path):

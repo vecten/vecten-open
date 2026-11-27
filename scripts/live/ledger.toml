@@ -3,3 +3,6 @@ aws-postgres = "v0.1.2rc2"
 aws-snowflake = "v0.1.2rc3"
 scaleway-postgres = "v0.1.0"
 scaleway-snowflake = "v0.1.0"
+# Never run: the earliest tag, so every change since counts and both are owed.
+azure-postgres = "v0.1.0"
+azure-snowflake = "v0.1.0"

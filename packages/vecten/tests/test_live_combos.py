@@ -33,6 +33,8 @@ LEDGER = {
     "aws-snowflake": "v1",
     "scaleway-postgres": "v1",
     "scaleway-snowflake": "v1",
+    "azure-postgres": "v1",
+    "azure-snowflake": "v1",
 }
 
 
@@ -41,6 +43,9 @@ LEDGER = {
     [
         ("terraform/aws/hosts.tf", "cloud:aws"),
         ("terraform/scaleway/modules/host/agent/apply.py", "cloud:scaleway"),
+        ("terraform/azure/hosts.tf", "cloud:azure"),
+        ("packages/vecten/src/vecten/deploy/azure/ship.py", "cloud:azure"),
+        ("terraform/azure/postgres.tf", "cloud:azure"),
         ("packages/vecten/src/vecten/deploy/vm/apply.py", "shared"),
         ("packages/vecten-mcp/src/vecten_mcp/warehouse/snowflake.py", "warehouse:snowflake"),
         (
@@ -87,7 +92,15 @@ def test_a_cloud_file_owes_both_of_that_clouds_combinations():
 
 def test_a_warehouse_file_owes_both_of_that_warehouses_combinations():
     owed = mod().owed(LEDGER, changes(v1=["packages/x/snowflake.py"]), RULES)
-    assert set(owed) == {"aws-snowflake", "scaleway-snowflake"}
+    assert set(owed) == {"aws-snowflake", "scaleway-snowflake", "azure-snowflake"}
+
+
+def test_an_azure_file_owes_only_the_azure_combinations():
+    owed = mod().owed(LEDGER, changes(v1=["terraform/azure/hosts.tf"]), RULES)
+    assert owed == {
+        "azure-postgres": ["terraform/azure/hosts.tf"],
+        "azure-snowflake": ["terraform/azure/hosts.tf"],
+    }
 
 
 def test_a_shared_change_owes_each_clouds_default():
@@ -95,6 +108,7 @@ def test_a_shared_change_owes_each_clouds_default():
     assert owed == {
         "aws-snowflake": ["images/mcp/Dockerfile"],
         "scaleway-postgres": ["images/mcp/Dockerfile"],
+        "azure-postgres": ["images/mcp/Dockerfile"],
     }
 
 
@@ -103,12 +117,13 @@ def test_an_unmapped_new_directory_owes_combinations_and_is_named():
     assert owed == {
         "aws-snowflake": ["brand-new/thing.py"],
         "scaleway-postgres": ["brand-new/thing.py"],
+        "azure-postgres": ["brand-new/thing.py"],
     }
 
 
 def test_a_shared_change_rides_on_a_combination_already_owed():
     owed = mod().owed(LEDGER, changes(v1=["packages/x/postgres.py", "images/Dockerfile"]), RULES)
-    assert set(owed) == {"aws-postgres", "scaleway-postgres"}
+    assert set(owed) == {"aws-postgres", "scaleway-postgres", "azure-postgres"}
     assert owed["aws-postgres"] == ["packages/x/postgres.py"]
 
 
@@ -121,7 +136,7 @@ def test_each_combination_is_measured_from_its_own_tag():
 
 
 def test_a_shared_change_before_the_default_ran_is_covered():
-    ledger = {**LEDGER, "aws-snowflake": "v2", "scaleway-postgres": "v2"}
+    ledger = {**LEDGER, "aws-snowflake": "v2", "scaleway-postgres": "v2", "azure-postgres": "v2"}
     owed = mod().owed(ledger, changes(v1=["images/Dockerfile"], v2=[]), RULES)
     assert owed == {}
 
@@ -136,6 +151,7 @@ def test_the_real_map_loads_in_order():
         "none",
         "cloud:aws",
         "cloud:scaleway",
+        "cloud:azure",
         "warehouse:snowflake",
         "warehouse:postgres",
     ]
@@ -219,7 +235,7 @@ def test_plan_json_is_only_the_json(clone, tmp_path):
             "scaleway-postgres": {"since": "v1", "files": ["terraform/scaleway/main.tf"]},
             "scaleway-snowflake": {"since": "v1", "files": ["terraform/scaleway/main.tf"]},
         },
-        "not_owed": ["aws-postgres", "aws-snowflake"],
+        "not_owed": ["aws-postgres", "aws-snowflake", "azure-postgres", "azure-snowflake"],
     }
 
 
@@ -330,7 +346,7 @@ def test_affected_names_only_the_combinations_the_fix_touches(candidates):
             "scaleway-postgres": ["terraform/scaleway/main.tf"],
             "scaleway-snowflake": ["terraform/scaleway/main.tf"],
         },
-        "untouched": ["aws-postgres", "aws-snowflake"],
+        "untouched": ["aws-postgres", "aws-snowflake", "azure-postgres", "azure-snowflake"],
     }
 
 
@@ -346,6 +362,8 @@ def test_affected_prints_each_touched_combination_then_the_untouched(candidates)
         "aws-snowflake        2 files: images/mcp/Dockerfile, packages/x/snowflake.py",
         "scaleway-postgres    1 files: images/mcp/Dockerfile",
         "scaleway-snowflake   2 files: images/mcp/Dockerfile, packages/x/snowflake.py",
+        "azure-postgres       1 files: images/mcp/Dockerfile",
+        "azure-snowflake      2 files: images/mcp/Dockerfile, packages/x/snowflake.py",
         "untouched: none",
     ]
 
@@ -357,7 +375,8 @@ def test_a_docs_only_fix_touches_nothing(candidates):
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
         MAP_LINE,
-        "untouched: aws-postgres, aws-snowflake, scaleway-postgres, scaleway-snowflake",
+        "untouched: aws-postgres, aws-snowflake, scaleway-postgres, scaleway-snowflake,"
+        " azure-postgres, azure-snowflake",
     ]
 
 
@@ -402,7 +421,8 @@ def test_a_ledger_in_the_checkout_worked_in_is_the_default(clone, tmp_path):
     assert planned.returncode == 0, planned.stderr
     assert planned.stdout.splitlines() == [
         f"ledger {ledger}, map {local / 'filemap.toml'}",
-        "not owed: aws-postgres, aws-snowflake, scaleway-postgres, scaleway-snowflake",
+        "not owed: aws-postgres, aws-snowflake, scaleway-postgres, scaleway-snowflake,"
+        " azure-postgres, azure-snowflake",
     ]
     git(clone, "tag", "v3")
     recorded = from_tools(here, clone, "record", "aws-snowflake", "v3")

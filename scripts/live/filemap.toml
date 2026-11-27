@@ -11,6 +11,9 @@ paths = ["terraform/aws/**", "packages/vecten/src/vecten/deploy/aws/**"]
 scope = "cloud:scaleway"
 paths = ["terraform/scaleway/**", "packages/vecten/src/vecten/deploy/scaleway/**"]
 [[rule]]
+scope = "cloud:azure"
+paths = ["terraform/azure/**", "packages/vecten/src/vecten/deploy/azure/**"]
+[[rule]]
 scope = "warehouse:snowflake"
 paths = ["terraform/snowflake/**", "**/*snowflake*", "**/*snowflake*/**"]
 [[rule]]
