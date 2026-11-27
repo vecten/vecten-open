@@ -20,13 +20,20 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 SCRIPT = REPO / "scripts/live/access.py"
 ORG = "00000000-0000-0000-0000-000000000000"
+TENANT = "aaaaaaaa-0000-0000-0000-000000000000"
+SUB = "bbbbbbbb-0000-0000-0000-000000000000"
 AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+AZ_APP = "cccccccc-0000-0000-0000-000000000000"
+AZ_SECRET = "Az8Q~exampleClientSecretValue0000000000"
 
 ALLOW_TOML = f"""\
 [aws]
 account_id = "111111111111"
 [scaleway]
 organization_id = "{ORG}"
+[azure]
+tenant_id = "{TENANT}"
+subscription_id = "{SUB}"
 [snowflake]
 account = "EXAMPLE"
 [github]
@@ -36,12 +43,14 @@ upstream_repo = "vecten/vecten-open"
 ALLOW = {
     "aws": {"account_id": "111111111111"},
     "scaleway": {"organization_id": ORG},
+    "azure": {"tenant_id": TENANT, "subscription_id": SUB},
     "snowflake": {"account": "EXAMPLE"},
     "github": {"sandbox_org": "example-sandbox", "upstream_repo": "vecten/vecten-open"},
 }
 GOOD = {
     "aws": "111111111111",
     "scaleway": [ORG],
+    "azure": [f"{TENANT}/{SUB}"],
     "snowflake": "EXAMPLE",
     "github": ["example-sandbox/demo-aws-postgres"],
 }
@@ -58,6 +67,15 @@ SCW_OUTPUT = f"""\
     "created_at": "2026-01-01T00:00:00.000000Z",
     "updated_at": "2026-01-01T00:00:00.000000Z",
     "description": ""
+  }}
+]
+"""
+# az account list --refresh --all --query "[].{tenant: tenantId, subscription: id}" -o json
+AZ_OUTPUT = f"""\
+[
+  {{
+    "subscription": "{SUB}",
+    "tenant": "{TENANT}"
   }}
 ]
 """
@@ -175,6 +193,14 @@ def home(tmp_path):
         ),
         "scw/config.yaml": "secret_key: 22222222-2222-2222-2222-222222222222\nregion: fr-par\n",
         "snowflake/config.toml": '[connections.livecheck]\npassword = "correct-horse-pony"\n',
+        "azure/livecheck.json": json.dumps(
+            {
+                "appId": AZ_APP,
+                "displayName": "vecten-livecheck",
+                "password": AZ_SECRET,
+                "tenant": TENANT,
+            }
+        ),
         "github/sandbox.toml": 'app_id = "12345"\ninstallation_id = "987654"\nkey = "app.pem"\n',
         "github/upstream.toml": 'app_id = "12345"\ninstallation_id = "987655"\nkey = "app.pem"\n',
     }
@@ -202,6 +228,7 @@ def fake_clis(tmp_path, **overrides):
     bodies = {
         "aws": printing(AWS_OUTPUT),
         "scw": printing(SCW_OUTPUT),
+        "az": printing(AZ_OUTPUT),
         "snow": printing(SNOW_OUTPUT),
         "gh": (
             'case "$GH_TOKEN" in\n'
@@ -479,6 +506,47 @@ def test_another_scaleway_organization_is_refused():
     assert mod().violations(ALLOW, {**GOOD, "scaleway": [ORG, other]}, "sandbox") == [
         f"scaleway: organization {other} is not the live-check organization"
     ]
+
+
+def test_another_azure_subscription_is_refused():
+    other = f"{TENANT}/99999999-9999-9999-9999-999999999999"
+    found = {**GOOD, "azure": [f"{TENANT}/{SUB}", other]}
+    assert mod().violations(ALLOW, found, "sandbox") == [
+        f"azure: subscription {other} is not the live-check subscription"
+    ]
+
+
+def test_another_azure_tenant_is_refused():
+    other = f"99999999-9999-9999-9999-999999999999/{SUB}"
+    assert mod().violations(ALLOW, {**GOOD, "azure": [other]}, "sandbox") == [
+        f"azure: subscription {other} is not the live-check subscription"
+    ]
+
+
+def test_the_azure_probe_refreshes_and_lists_every_subscription():
+    assert mod().PROBES["azure"][:5] == ["az", "account", "list", "--refresh", "--all"]
+
+
+def test_the_azure_probe_reads_each_subscription_once():
+    out = json.dumps([{"tenant": TENANT, "subscription": SUB}] * 2)
+    assert mod().PARSERS["azure"](out) == [f"{TENANT}/{SUB}"]
+
+
+def test_an_azure_login_that_reaches_no_subscription_is_refused(tmp_path):
+    home(tmp_path)
+    marker = tmp_path / "started"
+    fake_clis(tmp_path, az="echo '[]'", vecten=f"touch {marker}")
+    result = access(tmp_path, "run", "--", "vecten")
+    assert result.returncode == 3
+    assert "azure: identity could not be read" in result.stderr
+    assert not marker.exists()
+
+
+def test_az_is_an_allowed_command(tmp_path):
+    home(tmp_path)
+    fake_clis(tmp_path)
+    script(tmp_path / "bin/az", f'[ "$1" = version ] && exit 5\n{printing(AZ_OUTPUT)}')
+    assert access(tmp_path, "run", "--", "az", "version").returncode == 5
 
 
 def test_a_sandbox_token_that_reaches_another_owner_is_refused():
@@ -764,6 +832,7 @@ def test_doctor_reports_every_identity_and_fails_on_one(tmp_path):
         TOOLS_OK,
         "aws ok",
         f"scaleway FAIL: organization {other} is not the live-check organization",
+        "azure ok",
         "snowflake ok",
         "github-sandbox ok",
         "github-upstream ok",
@@ -793,11 +862,23 @@ def test_doctor_fails_an_identity_missing_from_allow_toml(tmp_path):
         TOOLS_OK,
         "aws ok",
         "scaleway FAIL: not configured in allow.toml",
+        "azure ok",
         "snowflake ok",
         "github-sandbox ok",
         "github-upstream ok",
         "os-sandbox ok",
     ]
+
+
+def test_doctor_fails_azure_missing_from_allow_toml(tmp_path):
+    allow = home(tmp_path) / "allow.toml"
+    allow.write_text(
+        ALLOW_TOML.replace(f'[azure]\ntenant_id = "{TENANT}"\nsubscription_id = "{SUB}"\n', "")
+    )
+    fake_clis(tmp_path)
+    result = access(tmp_path, "doctor")
+    assert result.returncode == 1
+    assert "azure FAIL: not configured in allow.toml" in result.stdout.splitlines()
 
 
 def test_doctor_fails_when_the_os_sandbox_cannot_start(tmp_path):
@@ -891,7 +972,7 @@ def test_on_macos_probes_and_command_run_inside_the_os_sandbox(tmp_path):
     )
     calls = invocations(record)
     assert all(call[:2] == ["-p", profile] for call in calls)
-    assert [call[2] for call in calls] == ["aws", "scw", "snow", "gh", "vecten"]
+    assert [call[2] for call in calls] == ["aws", "scw", "az", "snow", "gh", "vecten"]
     assert calls[-1][2:] == ["vecten", "status"]
 
 

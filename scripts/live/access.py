@@ -20,8 +20,10 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import NoReturn
 
-ALLOWED_EXECUTABLES = frozenset({"vecten", "aws", "scw", "snow", "gh", "git", "terraform", "uv"})
-IDENTITIES = ("aws", "scaleway", "snowflake", "github")
+ALLOWED_EXECUTABLES = frozenset(
+    {"vecten", "aws", "scw", "az", "snow", "gh", "git", "terraform", "uv"}
+)
+IDENTITIES = ("aws", "scaleway", "azure", "snowflake", "github")
 GITHUB_MODES = ("sandbox", "upstream")
 # The AWS profile and the Snowflake connection the credential home defines.
 LIVECHECK = "livecheck"
@@ -32,6 +34,10 @@ PROBES = {
     for name, command in {
         "aws": "aws sts get-caller-identity --query Account --output text",
         "scaleway": "scw account project list -o json",
+        # Refreshed from the server and with disabled ones too, so a subscription the login gained
+        # since it was cached, or one it reaches but cannot use, still counts.
+        "azure": "az account list --refresh --all"
+        ' --query "[].{tenant: tenantId, subscription: id}" -o json',
         "snowflake": f'snow sql -c {LIVECHECK} -q "select current_account()" --format json',
         "github": 'gh api /installation/repositories --paginate --jq ".repositories[].full_name"',
     }.items()
@@ -371,6 +377,11 @@ def _problem(name: str, allowed: dict, value: str | list[str], github: str) -> s
         others = sorted(set(value) - {str(allowed.get("organization_id"))})
         if others:
             return f"organization {', '.join(others)} is not the live-check organization"
+    if name == "azure":
+        expected = f"{allowed.get('tenant_id')}/{allowed.get('subscription_id')}"
+        others = sorted(set(value) - {expected})
+        if others:
+            return f"subscription {', '.join(others)} is not the live-check subscription"
     # Snowflake account locators are case-insensitive.
     if name == "snowflake" and value.upper() != str(allowed.get("account")).upper():
         return f"account {value} is not the live-check account"
@@ -490,6 +501,13 @@ def _organizations(out: str) -> list[str]:
     return organizations
 
 
+def _subscriptions(out: str) -> list[str]:
+    pairs = sorted({f"{item['tenant']}/{item['subscription']}" for item in json.loads(out)})
+    if not pairs:
+        raise ValueError(out)
+    return pairs
+
+
 def _snowflake_account(out: str) -> str:
     rows = json.loads(out)
     if rows and isinstance(rows[0], list):
@@ -504,6 +522,7 @@ def _repositories(out: str) -> list[str]:
 PARSERS: dict[str, Callable[[str], str | list[str]]] = {
     "aws": _text,
     "scaleway": _organizations,
+    "azure": _subscriptions,
     "snowflake": _snowflake_account,
     "github": _repositories,
 }
@@ -663,7 +682,7 @@ def _doctor() -> int:
     allow = _load_allow(home)
     secrets = secret_values(home)
     sandbox = _os_sandbox()
-    checks = [(name, "sandbox", name) for name in ("aws", "scaleway", "snowflake")]
+    checks = [(name, "sandbox", name) for name in ("aws", "scaleway", "azure", "snowflake")]
     checks += [("github", mode, f"github-{mode}") for mode in GITHUB_MODES]
     failed = not tools.startswith("tools ok: ")
     for name, github, title in checks:
