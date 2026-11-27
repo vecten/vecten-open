@@ -469,11 +469,18 @@ def sweep(
     return SweepResult(leftovers, failed)
 
 
-def purge_deleted_vaults(leftovers: Sequence[Leftover]) -> tuple[list[str], list[str]]:
-    """Ask Azure to purge each soft-deleted vault among `leftovers`, so a recycled sandbox can
-    reuse its name; return the vaults asked for and a line for each that failed."""
+def purge_deleted_vaults(
+    leftovers: Sequence[Leftover], environments: Sequence[Environment]
+) -> tuple[list[str], list[str]]:
+    """Ask Azure to purge each soft-deleted vault among `leftovers` that a destroyed environment
+    of the run left, so a recycled sandbox can reuse its name; another project's vault is never
+    the run's to remove. Return the vaults asked for and a line for each that failed."""
+    destroyed = {(e.project, e.env) for e in environments if e.destroyed_at is not None}
     names = {
-        item.name for item in leftovers if (item.cloud, item.kind) == ("azure", "deleted-vault")
+        item.name
+        for item in leftovers
+        if (item.cloud, item.kind) == ("azure", "deleted-vault")
+        and (item.project, item.env) in destroyed
     }
     if not names:
         return [], []
@@ -570,7 +577,9 @@ def run_sweep(
 ) -> int:
     environments = load_created(path)
     result = sweep(environments, listers or real_listers(owner_of(environments)))
-    requested, purge_failed = purge_deleted_vaults(result.leftovers) if purge else ([], [])
+    requested, purge_failed = (
+        purge_deleted_vaults(result.leftovers, environments) if purge else ([], [])
+    )
     failed = [*result.failed, *purge_failed]
     if as_json:
         document = {
@@ -614,7 +623,8 @@ def main(
     sweeper.add_argument(
         "--purge-deleted-vaults",
         action="store_true",
-        help="purge the soft-deleted Azure vaults the sweep finds; this cannot be undone",
+        help="purge the soft-deleted Azure vaults of the created file's destroyed environments;"
+        " this cannot be undone",
     )
     for sub in (est, spent, sweeper):
         sub.add_argument("--json", action="store_true", help="print one JSON document only")

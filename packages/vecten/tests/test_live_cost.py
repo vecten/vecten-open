@@ -761,18 +761,29 @@ def vaults(*entries):
     ]
 
 
-def test_purge_requests_only_the_leftover_deleted_vaults(tmp_path, monkeypatch, capsys):
+DESTROYED = "2026-11-19T11:00:00+00:00"
+STRAY = {"vecten:project": "stray", "vecten:env": "prod"}
+
+
+def test_purge_requests_only_the_deleted_vaults_of_the_runs_destroyed_environments(
+    tmp_path, monkeypatch, capsys
+):
     m = mod()
-    listed = vaults(("vlive-mcp", ACME), ("vgone-mcp", GONE))
+    listed = vaults(("vlive-mcp", ACME), ("vgone-mcp", GONE), ("vstray-mcp", STRAY))
     purged = purging(monkeypatch, {tuple(m.AZ_DELETED_VAULTS): listed})
     table = listers(
         **{"azure:deleted-vault": m.real_listers(lambda n: "")[("azure", "deleted-vault")]}
     )
-    created = write_created(tmp_path, entry(combination="azure-postgres"))
+    created = write_created(
+        tmp_path,
+        entry(combination="azure-postgres"),
+        entry(project="gone", combination="azure-postgres", destroyed_at=DESTROYED),
+    )
     code = m.main(["sweep", "--created", str(created), "--purge-deleted-vaults"], listers=table)
     out = capsys.readouterr().out
     assert purged == [[*m.AZ_PURGE, "--name", "vgone-mcp", "--location", "polandcentral"]]
     assert "purge requested: vgone-mcp" in out
+    assert "leftover: azure deleted-vault vstray-mcp (project stray, env prod)" in out
     assert code == 1
 
 
@@ -794,7 +805,7 @@ def test_a_failed_purge_exits_4_and_names_the_vault(tmp_path, monkeypatch, capsy
     table = listers(
         **{"azure:deleted-vault": m.real_listers(lambda n: "")[("azure", "deleted-vault")]}
     )
-    created = write_created(tmp_path, entry())
+    created = write_created(tmp_path, entry(project="gone", destroyed_at=DESTROYED))
     code = m.main(
         ["sweep", "--created", str(created), "--purge-deleted-vaults", "--json"], listers=table
     )
