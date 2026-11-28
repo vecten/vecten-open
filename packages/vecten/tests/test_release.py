@@ -49,6 +49,7 @@ def source(tmp_path):
         "AGENTS.md": "Private decisions\n",
         "CONTRIBUTING.md": "# Contributing\n",
         "SECURITY.md": "# Security\n",
+        "Makefile": "help:\n",
         ".github/ISSUE_TEMPLATE/bug.yml": "name: Bug\n",
         "LICENSE": "Apache License\n",
         "docs/GLOSSARY.md": "# Glossary\n",
@@ -93,7 +94,7 @@ def test_export_has_no_internal_material_or_history(tmp_path):
     agents = (dest / "AGENTS.md").read_text()
     assert "Private" not in agents and UNIT_SELECTION in agents
     assert len(agents.splitlines()) < 60
-    for rel in ("CONTRIBUTING.md", "SECURITY.md", ".github/ISSUE_TEMPLATE/bug.yml"):
+    for rel in ("CONTRIBUTING.md", "SECURITY.md", "Makefile", ".github/ISSUE_TEMPLATE/bug.yml"):
         assert (dest / rel).is_file(), rel
     assert subprocess.check_output(["git", "status", "--porcelain"], cwd=root) == b""
 

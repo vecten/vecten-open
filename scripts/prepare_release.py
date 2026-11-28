@@ -20,6 +20,7 @@ ROOT_FILES = {
     "SECURITY.md",
     "PRIVACY.md",
     "CHANGELOG.md",
+    "Makefile",
     "pyproject.toml",
     "uv.lock",
     ".python-version",
@@ -28,6 +29,7 @@ ROOT_FILES = {
     "conftest.py",
     "scripts/prepare_release.py",
     "scripts/check_extension_wheels.py",
+    "scripts/preflight.py",
 }
 PUBLIC_DIRS = {"packages", "terraform", "images", "plugins", ".claude-plugin", ".github"}
 # Listed one by one, so a doc added under docs/ stays internal until it is named here.
@@ -69,6 +71,9 @@ PUBLIC_AGENTS = (
     "contracts). Python 3.14 and uv.\n"
     "\n"
     "## Commands\n"
+    "\n"
+    "`make help` lists wrappers for the commands below; `make preflight` runs CI's lint and unit\n"
+    "jobs before a push.\n"
     "\n"
     "- Setup: `uv sync --locked --all-packages`\n"
     "- Lint: `uv run ruff check .` and `uv run ruff format --check .`\n"

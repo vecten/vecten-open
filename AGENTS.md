@@ -6,6 +6,9 @@ contracts). Python 3.14 and uv.
 
 ## Commands
 
+`make help` lists wrappers for the commands below; `make preflight` runs CI's lint and unit
+jobs before a push.
+
 - Setup: `uv sync --locked --all-packages`
 - Lint: `uv run ruff check .` and `uv run ruff format --check .`
 - Comment lint: `uv run windbag check --staged` (or `--all` for the full tree). To enable the staged check in a fresh clone,

@@ -42,6 +42,10 @@ are out of sync.
 
 ## Tests
 
+`make preflight` runs what CI's lint and unit jobs run: the lock sync, ruff, the comment lint
+on what your branch adds, the wheel and versions checks, and the unit suite. `make help` lists
+the other targets, one per command below.
+
 Lint with `uv run ruff check .` and `uv run ruff format --check .`. The unit suite runs with no
 services:
 

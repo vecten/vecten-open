@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 
@@ -52,6 +54,14 @@ def pytest_collection_modifyitems(config, items):
     if dropped:
         config.hook.pytest_deselected(items=dropped)
     items[:] = kept
+
+
+@pytest.fixture(autouse=True)
+def _isolated_git_config(monkeypatch):
+    # CI has no global Git config. A developer's signing, ignore file or hooks would otherwise
+    # change what the tests' repositories hold and fail tests that pass in CI.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
 
 @pytest.fixture(autouse=True)
