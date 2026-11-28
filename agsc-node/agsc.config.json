@@ -1,0 +1,16 @@
+{
+  "build": {
+    "out": "www/"
+  },
+  "bundle": {
+    "id": "vecten-open-docs",
+    "license_prose": "Apache-2.0",
+    "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+    "operator": "human:33538982-andreibesleaga"
+  },
+  "site": {
+    "base": "http://localhost/",
+    "title": "Vecten Open documentation"
+  },
+  "spec_version": "1.1.0"
+}
