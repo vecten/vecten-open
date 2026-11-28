@@ -1,0 +1,7 @@
+# AGSC-01-37: a credential is never tracked.
+.env
+.env.*
+!.env.example
+www/
+dist/
+node_modules/
