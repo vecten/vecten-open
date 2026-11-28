@@ -10,6 +10,12 @@ follow [Semantic Versioning](https://semver.org/); in the 0.x series a minor rel
 - Each release gets a GitHub Release page with its changelog section, the install command and
   the image references. Release candidates get none.
 
+### Fixed
+
+- `vecten update` no longer depends on your own Git config. With tag signing on it failed, and
+  with a global ignore matching a template file (such as `.env*`) it silently dropped the
+  upstream change to that file without reporting a conflict.
+
 ## [0.1.2] - 2026-11-26
 
 ### Added

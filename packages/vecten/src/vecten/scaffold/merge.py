@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -12,6 +13,9 @@ from copier import run_update
 from vecten_shared.output import ExitCode, Failure
 
 MERGE_ANSWERS = ".vecten-merge-answers.yml"
+# The snapshots must hold exactly the files given, whatever the user's own Git config says:
+# a global ignore would drop template files and tag signing would fail the pristine tags.
+ISOLATED_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 def git(root: Path, *args: str) -> None:
@@ -29,6 +33,7 @@ def git(root: Path, *args: str) -> None:
             *args,
         ],
         cwd=root,
+        env={**os.environ, **ISOLATED_GIT_ENV},
         capture_output=True,
         text=True,
     )

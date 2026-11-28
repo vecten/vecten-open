@@ -209,6 +209,27 @@ def test_three_way_file_cases(tmp_path, case):
         assert conflicts == ["a.txt"]
 
 
+def test_three_way_merge_ignores_the_users_git_config(tmp_path, monkeypatch):
+    from vecten.scaffold.merge import merge_snapshots
+
+    ignored = tmp_path / "global-ignore"
+    ignored.write_text(".env*\n")
+    hostile = tmp_path / "global-gitconfig"
+    hostile.write_text(
+        "[commit]\n\tgpgsign = true\n"
+        "[tag]\n\tgpgsign = true\n"
+        "[gpg]\n\tprogram = /nonexistent/gpg\n"
+        f"[core]\n\texcludesFile = {ignored}\n"
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(hostile))
+    work = tmp_path / "work"
+    work.mkdir()
+    old = {".env.example": "A=1\n", "README.md": "readme\n"}
+    new = {".env.example": "A=1\nB=2\n", "README.md": "readme\n"}
+    merged, conflicts = merge_snapshots(work, old, new, old.copy())
+    assert (merged, conflicts) == (new, [])
+
+
 def test_init_deploy_bad_pristine_config_changes_nothing(invoke, tmp_path, monkeypatch):
     assert invoke("init", "p", "--name", "demo", "--users", "3", "--source", "demo").exit_code == 0
     root = tmp_path / "p"
